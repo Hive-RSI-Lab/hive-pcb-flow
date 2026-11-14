@@ -426,6 +426,8 @@ round, pinned and swept before those rules are:
    written since (known boards, not an independent test), and round N
    blind. Round N is known once read: the next round of rules gets round
    N+1.
+5. Add the round's misses to `docs/miss-taxonomy.md`, one class per check,
+   and re-rank it: the next rules go to the top classes.
 """
 
 
