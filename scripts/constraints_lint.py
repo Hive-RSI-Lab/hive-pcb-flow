@@ -15,10 +15,17 @@ prompt used to carry that trap as prose; lumina-carrier's P1 close validated
     artifact itself is broken.
   warnings (exit 0, advisory) - unknown keys with no close documented match:
     ad-hoc envelope prose at the top level and entry extras (the power.json
-    thermal_constraints notes/role class); scout candidates lists over the
-    6-entry contract (research-component-scout.md).
+    thermal_constraints role class); scout candidates lists over the
+    6-entry contract (research-component-scout.md). planes[],
+    length_groups[] and teardrops stop their consumer on an unknown key,
+    and the warning says so. A "<word>_note(s)" key is prose, never a
+    misspelling (esd's exempt_notes beside exempt_nets).
   keys starting with '_' are the comment convention (_comment, _p8_basis,
     _p2_original_*) and are allowed at every level, never reported.
+  "note" and "notes" are prose on any entry or object section, with any
+    value, and are never reported either - except where the consumer
+    stops on unknown keys: planes[] (both), length_groups[] ("notes", which
+    reads as a misspelling of its own "note" key) and teardrops (both).
 
 Envelope aliases: power_constraints / thermal_constraints / voltage_constraints
 (research-power-architect's power.json) validate as power / thermal / voltages.
@@ -54,7 +61,8 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
         "optional": {"k": "num", "t_rise_ns": "num",
                      "return_via_radius_mm": "num", "impedance_ohm": "num",
                      # check_via_stubs (#478)
-                     "data_rate_mbps": "num", "f_max_ghz": "num"},
+                     "data_rate_mbps": "num", "f_max_ghz": "num",
+                     "rise_ps": "num"},
     },
     "power": {
         "required": {"net": "str", "current_a": "num"},
@@ -64,7 +72,19 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
                      # switch-node rules (#924, #923 point 6)
                      "min_width_mm": "num", "switch_node": "switch_node",
                      # check_kelvin sense taps (#936)
-                     "sense_pads": "pad_map"},
+                     "sense_pads": "pad_map",
+                     # check_current: the parts feeding the rail and each
+                     # load's current; return_net for the synthesized return
+                     "source": "str_or_list", "loads": "num_map",
+                     "return_net": "str",
+                     # check_irdrop
+                     "source_ref": "str", "sinks": "sinks", "cell_mm": "num",
+                     "irdrop_mv_max": "num", "jmax_a_per_mm": "num",
+                     # check_pdn_z (pdnlib)
+                     "voltage": "num", "pdn_target_mohm": "num",
+                     "transient_a": "num", "ripple_pct": "num",
+                     "f_max_mhz": "num", "edge_ns": "num",
+                     "package": "package", "vrm": "vrm"},
     },
     "diff_pairs": {
         "required": {"p": "str", "n": "str"},
@@ -75,7 +95,15 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
                      "max_phase_skew_mm": "num", "phase_window_mm": "num",
                      "rise_ps": "num",
                      # check_via_stubs (#478)
-                     "t_rise_ns": "num", "data_rate_mbps": "num"},
+                     "t_rise_ns": "num", "data_rate_mbps": "num",
+                     "f_max_ghz": "num",
+                     # check_diffpair: a sense pair's kind, its limits
+                     "kind": "str", "coupling_factor": "num",
+                     "max_sense_uncoupled_mm": "num", "max_via_asym": "num",
+                     "impedance_tol_pct": "num",
+                     "max_width_imbalance_pct": "num",
+                     # route_critical: the layers the pair may use
+                     "layers": "str_list"},
     },
     # via_backdrill + check_via_stubs (#478): opt-in controlled-depth drilling
     "backdrill": {
@@ -83,6 +111,13 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
         "optional": {"drill_mm": "num", "depth_tol_mm": "num",
                      "max_stub_mm": "num", "vendor": "str", "reason": "str",
                      "t_rise_ns": "num", "data_rate_mbps": "num",
+                     "f_max_ghz": "num", "rise_ps": "num"},
+    },
+    # route_critical + check_via_stubs: single-ended RF nets
+    "rf": {
+        "required": {"net": "str"},
+        "optional": {"impedance_ohm": "num", "t_rise_ns": "num",
+                     "rise_ps": "num", "data_rate_mbps": "num",
                      "f_max_ghz": "num"},
     },
     # route_cleanup --snap-only leaves these nets as routed
@@ -149,13 +184,38 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
         "required": {"topology": "str"},
         "optional": {"block": "str", "name": "str", "operating_point": "map"},
     },
+    # check_creepage: a net's working voltage beside voltages[]; an entry
+    # without a voltage is skipped
+    "nets": {
+        "required": {"net": "str"},
+        "optional": {"voltage": "num"},
+    },
+    # check_power_path + check_kelvin: a declared current from one part to
+    # another across a net
+    "power_paths": {
+        "required": {"net": "str", "from": "str", "to": "str",
+                     "current_a": "num"},
+        "optional": {"dt_c": "num"},
+    },
+    # check_mate_pins (+ cablelib): a connector and its mate, on this board
+    # or on mate_pcb
+    "mating_pairs": {
+        "required": {"ref": "str", "mate_ref": "str"},
+        "optional": {"mount": "mount", "mate_pcb": "str", "rotation": "num",
+                     "net_map": "str_map", "cable": "cable"},
+    },
 }
+# sections whose consumer stops on a key it doesn't know: no note/notes
+# prose there, and the unknown-key warning names the consumer
+STRICT = {"planes": "planes_gen", "length_groups": "check_length_groups",
+          "teardrops": "teardroplib"}
 PLACEMENT: dict[str, dict[str, dict[str, str]]] = {
     "edges": {"required": {"ref": "str", "edge": "edge"},
               "optional": {"pos": "num", "rot": "num"}},
     "groups": {"required": {"name": "str", "anchor": "str",
                             "members": "str_list"},
-               "optional": {}},
+               # placelib: a placement template the anchor's cluster takes
+               "optional": {"template": "str"}},
     # rect-or-poly requirement enforced separately
     "keepouts": {"required": {},
                  "optional": {"rect": "rect", "poly": "point_list",
@@ -182,21 +242,86 @@ PLACEMENT: dict[str, dict[str, dict[str, str]]] = {
                            "corridor": "rect_list"},
               "optional": {"mate_refs": "str_list", "reason": "str"}},
 }
+# placement's scalar keys: place_seed (a decoupling cap may go on the back
+# under its IC unless false) and placelib (the courtyard margin around pads)
+PLACEMENT_SCALARS = {"fixed": "str_list", "backside_decoupling": "bool",
+                     "pad_margin_mm": "num"}
 OVERRIDE = {"required": {"near": "pair", "radius_mm": "num",
                          "current_a": "num"}, "optional": {}}
 COATINGS = {"none", "soldermask", "conformal"}
 EDGES = {"left", "right", "top", "bottom"}
 SIDES = {"front", "back"}
-ENCLOSURE = {"box_mm": "num_list", "stl": "str_or_list", "wall_mm": "num",
-             "k_w_mk": "num", "material": "str", "tg_c": "num",
-             "room_c": "num", "other_w": "num", "inlet_mm2": "num",
-             "riser_mm2": "num", "outlet_mm2": "num", "stack_mm": "num",
-             "floor": "str"}
-SCHEMA_TOP_KEYS = set(SECTIONS) | {"placement", "coating", "antennas", "pcb_antennas", "si",
-                                   "enclosure", "ambient_c", "ambient_min_c",
-                                   "cable_pf", "pin_modes", "io_supply", "ddr",
-                                   "testpoints", "rf_match", "surge", "isolation",
-                                   "mechanical", "transformers", "pinouts"}
+MOUNTS = {"stack", "flip", "cable"}           # check_mate_pins MOUNTS
+CABLE_MAPS = {"straight", "reversed", "rows_swapped"}   # cablelib MAPS
+CONTACTS = {"top", "bottom", "dual"}          # cablelib socket contact side
+ENTRIES = {"tabs", "leads"}                   # cablelib: where a cable enters
+# entries nested inside an entry: spec -> (kind, shape). A "list" holds
+# entries, an "object" is one, a "map" names each ({ref: entry}).
+NESTED: dict[str, tuple[str, dict]] = {
+    "overrides": ("list", OVERRIDE),
+    # check_irdrop: the parts drawing the rail's current
+    "sinks": ("list", {"required": {"ref": "str", "current_a": "num"},
+                       "optional": {}}),
+    # pdnlib: the die and package the rail feeds, and its regulator
+    "package": ("object", {"required": {"l_pkg_nh": "num", "c_die_nf": "num"},
+                           "optional": {"r_pkg_mohm": "num",
+                                        "r_die_mohm": "num"}}),
+    "vrm": ("object", {"required": {},
+                       "optional": {"r_out_mohm": "num", "l_out_nh": "num",
+                                    "f_bw_khz": "num"}}),
+    # cablelib: the cable between a mating pair (kind discrete, ffc, fpc)
+    "cable": ("object", {"required": {},
+                         "optional": {"kind": "str", "type": "str",
+                                      "pin_map": "pin_map", "ends": "ends",
+                                      "name": "str", "part": "str",
+                                      "length_mm": "num", "pitch_mm": "num"}}),
+    "ends": ("map", {"required": {},
+                     "optional": {"contact": "contact", "entry": "entry",
+                                  "source": "str"}}),
+    # releaselib + verify_all: a gate or check declared not applicable
+    "not_applicable": ("map", {"required": {"reason": "str",
+                                            "approved": "str"},
+                               "optional": {}}),
+}
+# object sections at the top level, linted like an entry
+TOP_OBJECTS: dict[str, dict] = {
+    "enclosure": {"required": {}, "optional": {
+        "box_mm": "num_list", "stl": "str_or_list", "wall_mm": "num",
+        "k_w_mk": "num", "material": "str", "tg_c": "num", "room_c": "num",
+        "other_w": "num", "inlet_mm2": "num", "riser_mm2": "num",
+        "outlet_mm2": "num", "stack_mm": "num", "floor": "str"}},
+    # check_esd: the connectors a zap enters, and how far a clamp may sit
+    "esd": {"required": {}, "optional": {
+        "connectors": "str_list", "internal": "str_list",
+        "exempt_nets": "str_list", "clamps": "str_list", "level_kv": "num",
+        "corridor_mm": "num", "corridor_v": "num",
+        "victim_abs_max_v": "num_or_map"}},
+    # check_power_path + sim_inrush: the USB PD contract the input carries
+    "pd_source": {"required": {}, "optional": {"contract_a": "num",
+                                               "contract_v": "num"}},
+    # teardroplib DEFAULTS: every key it takes, and no other
+    "teardrops": {"required": {}, "optional": {
+        "enabled": "bool", "required": "opt_bool", "vias": "bool",
+        "pth": "bool", "smd": "bool", "fine_pitch_mm": "num",
+        "nets": "str_list", "exclude_nets": "str_list",
+        "length_ratio": "num", "max_length_mm": "num", "width_ratio": "num",
+        "max_width_mm": "num", "filter_ratio": "num", "curved": "bool"}},
+    "release": {"required": {},
+                "optional": {"not_applicable": "not_applicable"}},
+    "verification": {"required": {},
+                     "optional": {"not_applicable": "not_applicable"}},
+}
+ENCLOSURE = TOP_OBJECTS["enclosure"]["optional"]
+# read with `.get(key) or {}`, so null means "none"; check_thermal indexes
+# an enclosure it finds, so that one must be an object
+NULL_OK = set(TOP_OBJECTS) - {"enclosure"}
+TOP_NUMBERS = {"ambient_c", "ambient_min_c",
+               "stencil_mm"}      # check_paste: the stencil's thickness
+SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
+    "placement", "coating", "antennas", "pcb_antennas", "si", "cable_pf",
+    "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
+    "isolation", "mechanical", "transformers", "pinouts"}
+PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
                     "voltage_constraints": "voltages"}
@@ -267,8 +392,6 @@ def _type_ok(spec: str, v) -> bool:
         return isinstance(v, list) and all(
             isinstance(o, dict) and set(o) <= {"dx", "dy", "rot"}
             and all(_is_num(x) for x in o.values()) for o in v)
-    if spec == "overrides":
-        return isinstance(v, list)
     if spec == "switch_node":   # true, or {ref, layer, keep_away, keep_away_mm}
         if isinstance(v, bool):
             return True
@@ -284,6 +407,29 @@ def _type_ok(spec: str, v) -> bool:
         return isinstance(v, dict) and all(     # number/str/bool values
             isinstance(k, str) and (_is_num(x) or isinstance(x, (str, bool)))
             for k, x in v.items())
+    if spec == "num_map":   # {ref: amps}
+        return isinstance(v, dict) and all(_is_num(x) for x in v.values())
+    if spec == "str_map":   # {net: mate net}
+        return isinstance(v, dict) and all(
+            isinstance(x, str) for x in v.values())
+    if spec == "num_or_map":    # one number, or {net glob: number}
+        return _is_num(v) or _type_ok("num_map", v)
+    if spec == "opt_bool":  # true, false, or null (decided by the consumer)
+        return v is None or isinstance(v, bool)
+    if spec == "mount":
+        return isinstance(v, str) and v in MOUNTS
+    if spec == "pin_map":   # a named map, or {pin: mate pin}
+        return (isinstance(v, str) and v in CABLE_MAPS) or (
+            isinstance(v, dict) and all(
+                isinstance(x, (str, int)) and not isinstance(x, bool)
+                for x in v.values()))
+    if spec == "contact":
+        return isinstance(v, str) and v in CONTACTS
+    if spec == "entry":
+        return isinstance(v, str) and v in ENTRIES
+    if spec in NESTED:      # entries: entry() lints each one's keys
+        kind = NESTED[spec][0]
+        return isinstance(v, list) if kind == "list" else isinstance(v, dict)
     return False  # unknown spec = programmer error, fail loud
 
 
@@ -300,28 +446,41 @@ class _FileLint:
             kind=kind, file=self.path, json_path=json_path))
 
     # -- key auditing -------------------------------------------------------
-    def _unknown_key(self, key: str, known: set[str], json_path: str) -> None:
+    def _unknown_key(self, key: str, known: set[str], json_path: str,
+                     strict: str | None = None) -> None:
         """Misspelled (close match to a documented key) = error; else warn."""
         close = difflib.get_close_matches(
             key, sorted(known), n=1, cutoff=CLOSE_MATCH_CUTOFF)
         # "<key>_note" beside a documented key is prose about it (linux-
-        # computer's length_groups_note), not a misspelling of it
+        # computer's length_groups_note), not a misspelling of it; nor is any
+        # "<word>_notes" (esd's exempt_notes is not exempt_nets misspelled)
         stem, _, tail = key.rpartition("_")
-        if close and stem in known and tail in ANNOTATION_SUFFIXES:
+        if close and tail in ANNOTATION_SUFFIXES and (
+                stem in known or (stem and tail in PROSE_KEYS)):
             close = []
         if close:
+            why = (f"{strict} stops on unknown keys" if strict
+                   else "unknown keys are silently ignored by consumers")
             self.add("error", "misspelled_key",
                      f"{json_path}: unknown key '{key}' - did you mean "
-                     f"'{close[0]}'? (unknown keys are silently ignored "
-                     f"by consumers)", json_path)
+                     f"'{close[0]}'? ({why})", json_path)
+        elif strict:
+            self.add("warning", "unknown_key",
+                     f"{json_path}: key '{key}' is not in "
+                     f"constraints_schema.md - {strict} stops on unknown keys",
+                     json_path)
         else:
             self.add("warning", "unknown_key",
                      f"{json_path}: key '{key}' is not in "
                      "constraints_schema.md - consumers will ignore it",
                      json_path)
 
-    def entry(self, shape: dict, entry, json_path: str) -> None:
-        """Validate one object entry against a required/optional key spec."""
+    def entry(self, shape: dict, entry, json_path: str,
+              strict: str | None = None) -> None:
+        """Validate one object entry against a required/optional key spec.
+
+        `strict` names a consumer that stops on a key it doesn't know: there
+        note/notes are no prose, and an unknown key's warning names it."""
         if not isinstance(entry, dict):
             self.add("error", "bad_entry",
                      f"{json_path}: entry must be an object, got "
@@ -337,20 +496,38 @@ class _FileLint:
                 self.add("error", "bad_type",
                          f"{json_path}.{key}: expected {spec}, got "
                          f"{json.dumps(entry[key])[:60]}", f"{json_path}.{key}")
+            else:
+                self._nested(spec, entry[key], f"{json_path}.{key}")
         for key, val in entry.items():
             if key.startswith("_") or key in shape["required"]:
                 continue
             if key in shape["optional"]:
-                if not _type_ok(shape["optional"][key], val):
+                spec = shape["optional"][key]
+                if not _type_ok(spec, val):
                     self.add("error", "bad_type",
-                             f"{json_path}.{key}: expected "
-                             f"{shape['optional'][key]}, got "
+                             f"{json_path}.{key}: expected {spec}, got "
                              f"{json.dumps(val)[:60]}", f"{json_path}.{key}")
-                elif key == "overrides":
-                    for i, ov in enumerate(val):
-                        self.entry(OVERRIDE, ov, f"{json_path}.overrides[{i}]")
+                else:
+                    self._nested(spec, val, f"{json_path}.{key}")
+            elif key in PROSE_KEYS and not strict:
+                continue
             else:
-                self._unknown_key(key, known, json_path)
+                self._unknown_key(key, known, json_path, strict)
+
+    def _nested(self, spec: str, val, json_path: str) -> None:
+        """Lint the entries a NESTED spec holds (its type is checked)."""
+        if spec not in NESTED:
+            return
+        kind, shape = NESTED[spec]
+        if kind == "object":
+            self.entry(shape, val, json_path)
+        elif kind == "list":
+            for i, e in enumerate(val):
+                self.entry(shape, e, f"{json_path}[{i}]")
+        else:   # map: {name: entry}
+            for name, e in val.items():
+                if not str(name).startswith("_"):
+                    self.entry(shape, e, f"{json_path}.{name}")
 
     def section(self, name: str, value, json_path: str) -> None:
         if not isinstance(value, list):
@@ -359,7 +536,8 @@ class _FileLint:
                      f"{type(value).__name__}", json_path)
             return
         for i, e in enumerate(value):
-            self.entry(SECTIONS[name], e, f"{json_path}[{i}]")
+            self.entry(SECTIONS[name], e, f"{json_path}[{i}]",
+                       STRICT.get(name))
 
     def placement(self, value, json_path: str) -> None:
         if not isinstance(value, dict):
@@ -368,13 +546,16 @@ class _FileLint:
                      f"{type(value).__name__}", json_path)
             return
         for key, val in value.items():
-            if key.startswith("_"):
+            if key.startswith("_") or key in PROSE_KEYS:
                 continue
-            if key == "fixed":
-                if not _type_ok("str_list", val):
+            if key in PLACEMENT_SCALARS:
+                spec = PLACEMENT_SCALARS[key]
+                if not _type_ok(spec, val):
+                    what = ("a list of refdes strings" if key == "fixed"
+                            else spec)
                     self.add("error", "bad_type",
-                             f"{json_path}.fixed: expected a list of refdes "
-                             "strings", f"{json_path}.fixed")
+                             f"{json_path}.{key}: expected {what}",
+                             f"{json_path}.{key}")
             elif key in PLACEMENT:
                 if not isinstance(val, list):
                     self.add("error", "bad_type",
@@ -389,7 +570,7 @@ class _FileLint:
                         self.add("error", "missing_key",
                                  f"{p}: keepout needs 'rect' or 'poly'", p)
             else:
-                self._unknown_key(key, set(PLACEMENT) | {"fixed"},
+                self._unknown_key(key, set(PLACEMENT) | set(PLACEMENT_SCALARS),
                                   f"{json_path}.{key}")
 
     def top(self, data) -> list[str]:
@@ -415,14 +596,15 @@ class _FileLint:
                              f"{path}: coating must be one of "
                              f"{sorted(COATINGS)}, got {json.dumps(val)[:40]}",
                              path)
-            elif key == "enclosure":
-                if not isinstance(val, dict):
+            elif key in TOP_OBJECTS:
+                if val is None and key in NULL_OK:
+                    pass
+                elif not isinstance(val, dict):
                     self.add("error", "bad_type",
-                             f"{path}: enclosure must be an object", path)
+                             f"{path}: {key} must be an object", path)
                 else:
-                    self.entry({"required": {}, "optional": ENCLOSURE},
-                               val, path)
-            elif key in ("ambient_c", "ambient_min_c"):
+                    self.entry(TOP_OBJECTS[key], val, path, STRICT.get(key))
+            elif key in TOP_NUMBERS:
                 if not _is_num(val):
                     self.add("error", "bad_type",
                              f"{path}: {key} must be a number", path)
@@ -498,7 +680,7 @@ class _FileLint:
                     or (k == "fixture" and isinstance(v, bool))
                     or (k == "nets" and isinstance(v, list)
                         and all(isinstance(n, str) for n in v))
-                    or k in ("note", "reason")
+                    or k in ("note", "notes", "reason")
                     for k, v in val.items())
                 if not ok:
                     self.add("error", "bad_type",

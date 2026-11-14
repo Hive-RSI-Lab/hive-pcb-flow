@@ -1,0 +1,280 @@
+{
+  "_comment": "Every key a checker reads on a constraints section, each with a value its consumer takes. Not one consistent board: entries that take one of two alternatives (rating or theta_ja_c_w, a str or an object reference) appear twice. tests/test_constraints_consumer_keys.py holds this file to the scan of scripts/ and to constraints_lint at 0 errors, 0 warnings.",
+  "ambient_c": 25,
+  "ambient_min_c": -10,
+  "stencil_mm": 0.12,
+  "coating": "soldermask",
+  "antennas": {"AE1": "pcb", "AE2": "external"},
+  "cable_pf": {"J1": 50, "J2": 0},
+  "pin_modes": {"U1": {"PA0": "analog", "3": "push_pull"}},
+  "io_supply": {"U1": "VDDIO"},
+  "high_speed": [
+    {"net": "/CLK", "reference": "GND", "k": 3, "t_rise_ns": 1.0,
+     "return_via_radius_mm": 1.5, "impedance_ohm": 50,
+     "data_rate_mbps": 100, "f_max_ghz": 0.5},
+    {"net": "/DATA", "reference": {"default": "GND"}, "rise_ps": 400,
+     "note": "a map reference names a plane per layer, default for the rest"}
+  ],
+  "power": [
+    {"net": "+3V3", "current_a": 1.2, "dt_c": 10, "via_amps": 0.5,
+     "pdn": true, "plane_fed": true, "tap_current_a": 0.3,
+     "overrides": [{"near": [10, 12], "radius_mm": 3, "current_a": 2.0}],
+     "min_width_mm": 0.4, "source": ["U2"], "loads": {"U1": 0.8, "U3": 0.4},
+     "return_net": "GND", "source_ref": "U2",
+     "sinks": [{"ref": "U1", "current_a": 0.8}], "cell_mm": 0.5,
+     "irdrop_mv_max": 30, "jmax_a_per_mm": 10, "voltage": 3.3,
+     "pdn_target_mohm": 50, "transient_a": 0.5, "ripple_pct": 3,
+     "f_max_mhz": 100, "edge_ns": 2,
+     "package": {"l_pkg_nh": 0.5, "c_die_nf": 2, "r_pkg_mohm": 5,
+                 "r_die_mohm": 10},
+     "vrm": {"r_out_mohm": 5, "l_out_nh": 100, "f_bw_khz": 50},
+     "note": "notes on an entry are prose"},
+    {"net": "/LX", "current_a": 2.0,
+     "switch_node": {"ref": "L1", "layer": "F.Cu", "keep_away": ["/FB"],
+                     "keep_away_mm": 1.0}},
+    {"net": "+5V", "current_a": 1.0, "source": "J1",
+     "sense_pads": {"U2.4": "R5.1"}}
+  ],
+  "power_paths": [
+    {"net": "+5V", "from": "J1", "to": "U2", "current_a": 1.5, "dt_c": 10}
+  ],
+  "pd_source": {"contract_a": 3, "contract_v": 5},
+  "diff_pairs": [
+    {"p": "/USB_D+", "n": "/USB_D-", "base": "/USB_D", "impedance_ohm": 90,
+     "gap_mm": 0.15, "max_skew_mm": 0.15, "max_uncoupled_mm": 5,
+     "term_pair_mm": 2, "max_phase_skew_mm": 0.5, "phase_window_mm": 5,
+     "rise_ps": 200, "data_rate_mbps": 480, "f_max_ghz": 1.2,
+     "layers": ["F.Cu", "B.Cu"],
+     "operating_point": {"vin_v": 5, "vout_v": 3.3, "fsw_khz": 500,
+                         "bus_irms_a": 0.8, "bus_irms_source": "datasheet"}},
+    {"p": "/SNS_P", "n": "/SNS_N", "kind": "sense", "coupling_factor": 0.8,
+     "max_sense_uncoupled_mm": 3, "max_via_asym": 0,
+     "impedance_tol_pct": 10, "max_width_imbalance_pct": 10,
+     "t_rise_ns": 2,
+     "operating_point": {"vin_v": 12, "vout_v": 5, "fsw_khz": 400,
+                         "iout_a": 2, "duty": 0.42, "bus_net": "+12V"}}
+  ],
+  "backdrill": [
+    {"net": "/USB_D+", "drill_mm": 0.35, "depth_tol_mm": 0.1,
+     "max_stub_mm": 0.25, "vendor": "generic", "reason": "stub resonance",
+     "t_rise_ns": 0.1, "data_rate_mbps": 5000, "f_max_ghz": 2.5},
+    {"net": "/USB_D-", "rise_ps": 100}
+  ],
+  "rf": [
+    {"net": "/RF_OUT", "impedance_ohm": 50, "t_rise_ns": 0.1,
+     "data_rate_mbps": 2, "f_max_ghz": 2.5},
+    {"net": "/RF_ANT", "rise_ps": 100}
+  ],
+  "length_match": [{"nets": ["/CLK", "/DATA"], "tol_mm": 1,
+                    "reason": "snap-only leaves them as routed"}],
+  "length_groups": [
+    {"name": "DQ0", "nets": ["/DQ*"], "ref_net": "/DQS0", "ref_stat": "max",
+     "tol_mm": 0.5, "window_mm": [0.1, 1.0], "max_mm": 40, "min_mm": 5,
+     "not_longer_than": ["/CK"], "terminals": ["U1", "U3"],
+     "severity": "error", "note": "the one prose key this section takes"},
+    {"name": "ADDR", "nets": ["/A*"], "ref_nets": ["/CK_P", "/CK_N"]}
+  ],
+  "voltages": [{"net": "+12V", "voltage": 12, "min": 10.8}],
+  "voltage_pairs": [{"a": "+12V", "b": "GND", "voltage": 12,
+                     "why": "input to return"}],
+  "nets": [{"net": "+12V", "voltage": 12}],
+  "thermal": [
+    {"ref": "U2", "power_w": 1.5, "net": "GND", "dt_c": 40, "min_vias": 6,
+     "airflow_lfm": 100,
+     "rating": {"current_a": 3, "dcr_ohm": 0.02, "rise_c": 40,
+                "source": "datasheet"},
+     "slug": "EP", "tj_max_c": 125, "power_max_w": 2.5,
+     "governor": "firmware current limit"},
+    {"ref": "U3", "power_w": 0.8, "airflow_m_s": 0.5, "theta_ja_c_w": 45,
+     "theta_source": "datasheet",
+     "heatsink": {"source": "datasheet", "theta_sa_c_w": 20, "hold": "clip",
+                  "mount_refs": "H1,H2", "spreading_c_w": 1,
+                  "theta_jc_c_w": 2, "interface_c_w": 0.5,
+                  "part": "HS-GENERIC-20"}},
+    {"ref": "U4", "power_w": 0.5,
+     "heatsink": {"source": "datasheet", "theta_sa_c_w": 15, "hold": "clip",
+                  "mount_refs": "H3", "spreading_c_w": 1, "theta_jc_c_w": 2,
+                  "interface_mm": 0.5, "interface_k_w_mk": 3,
+                  "contact_mm2": 100, "ref": "HS1"}}
+  ],
+  "ripple": [
+    {"ref": "C1", "irms_a": 1.2, "rated_irms_a": 2, "freq_multiplier": 1.4,
+     "source": "datasheet", "irms_max_a": 1.5, "life_h": 2000,
+     "rated_c": 105, "life_min_h": 20000, "chem": "polymer"}
+  ],
+  "planes": [
+    {"layer": "In1.Cu", "net": "GND", "region": [0, 0, 50, 40],
+     "priority": 1, "min_island_mm2": 2, "clearance": 0.3, "min_width": 0.25,
+     "connect": "thermal"}
+  ],
+  "package_ratings": [
+    {"ref": "U5", "clearance_mm": 0.3, "why": "rated at its own pitch",
+     "pads_only": true, "layer": "F.Cu"}
+  ],
+  "channels": [
+    {"source": "CH1", "targets": ["CH2", "CH3"], "name": "grid",
+     "transform": "grid", "pitch": [20, 0], "route": true, "margin_mm": 1,
+     "reason": "identical channels"},
+    {"source": ["U10", "R10"], "targets": [["U11", "R11"]], "name": "listed",
+     "offsets": [{"dx": 20, "dy": 0, "rot": 180}], "origin": [10, 10]}
+  ],
+  "blocks": [
+    {"topology": "buck", "block": "input", "name": "main buck",
+     "operating_point": {"vin_v": 12, "vout_v": 5, "fsw_khz": 500,
+                         "iout_a": 2, "duty": 0.42, "bus_net": "+12V"}},
+    {"topology": "buck", "block": "bus",
+     "operating_point": {"bus_irms_a": 1.1, "bus_irms_source": "datasheet"}}
+  ],
+  "mating_pairs": [
+    {"ref": "J1", "mate_ref": "J1", "mount": "stack", "mate_pcb": "mate",
+     "rotation": 180, "net_map": {"/A": "/B"}},
+    {"ref": "J2", "mate_ref": "J3", "mount": "cable",
+     "cable": {"kind": "ffc", "type": "A", "pin_map": "reversed",
+               "ends": {"J2": {"contact": "top", "entry": "tabs",
+                               "source": "datasheet"}},
+               "name": "flex", "part": "FFC-GENERIC-10", "length_mm": 100,
+               "pitch_mm": 0.5}}
+  ],
+  "placement": {
+    "fixed": ["J1"],
+    "backside_decoupling": true,
+    "pad_margin_mm": 0.25,
+    "edges": [{"ref": "J1", "edge": "left", "pos": 10, "rot": 90}],
+    "groups": [{"name": "osc", "anchor": "U1", "members": ["Y1", "C3"],
+                "template": "crystal"}],
+    "keepouts": [
+      {"rect": [0, 0, 5, 5], "side": "front", "reason": "mounting hole",
+       "copper": {"tracks": true, "vias": true, "pours": false},
+       "name": "hole", "layers": ["F.Cu"]},
+      {"poly": [[10, 0], [15, 0], [15, 5]], "copper": true}
+    ],
+    "separation": [{"a": ["U1"], "b": ["L1"], "min_mm": 5,
+                    "reason": "magnetic field"}],
+    "corridors": [{"a": "U1", "b": "J2", "width_mm": 3, "net": "/DATA",
+                   "reason": "keep clear"}],
+    "sides": [{"ref": "U4", "side": "back", "reason": "height"}],
+    "mates": [{"ref": "J3", "mate": "U7", "corridor": [[20, 0, 30, 10]],
+               "mate_refs": ["U7"], "reason": "flex tail"}]
+  },
+  "enclosure": {
+    "box_mm": [100, 60, 30], "stl": "case.stl", "wall_mm": 2, "k_w_mk": 0.2,
+    "material": "PETG", "tg_c": 80, "room_c": 25, "other_w": 0.5,
+    "inlet_mm2": 50, "riser_mm2": 50, "outlet_mm2": 50, "stack_mm": 10,
+    "floor": "feet"
+  },
+  "esd": {
+    "connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
+    "clamps": ["D1"], "level_kv": 8, "corridor_mm": 10, "corridor_v": 30,
+    "victim_abs_max_v": {"/USB*": 6}
+  },
+  "teardrops": {
+    "enabled": true, "required": null, "vias": true, "pth": true,
+    "smd": true, "fine_pitch_mm": 0.5, "nets": ["*"], "exclude_nets": [],
+    "length_ratio": 0.5, "max_length_mm": 1, "width_ratio": 1,
+    "max_width_mm": 2, "filter_ratio": 0.9, "curved": true
+  },
+  "release": {"not_applicable": {"sim": {
+    "reason": "no analog stage", "approved": "A. Reviewer 2026-11-14"}}},
+  "verification": {"not_applicable": {"check_thermal": {
+    "reason": "under 0.1 W", "approved": "A. Reviewer 2026-11-14"}}},
+  "mechanical": {
+    "allow_body_overlap": [{"refs": ["J1", "U1"], "why": "nested by design",
+                            "up_to_mm": 0.5}],
+    "allow_off_board": [{"refs": ["J1"], "why": "overhangs the edge"}]
+  },
+  "pinouts": [{"ref": "J4", "standard": "audio-trs"}],
+  "testpoints": {
+    "probe_mm": 1.0, "fixture_mm": 0.8, "pitch_mm": 2.54, "body_mm": 1,
+    "body_h_ratio": 0.5, "edge_mm": 3, "max_via_drill_mm": 0.6,
+    "min_coverage_pct": 90, "fixture": true, "nets": ["*"]
+  },
+  "rf_match": [
+    {"load": "AE1", "zin": "22-j31@2.45G", "band_hz": [2.4e9, 2.5e9],
+     "z0": 50, "rl_db": 10, "model": "ideal"},
+    {"net": "/RF_ANT", "s1p": "antenna.s1p", "band_hz": [2.4e9, 2.5e9]}
+  ],
+  "surge": {
+    "environment": "residential",
+    "ports": {"J1": {"kind": "dc_power", "cable_m": 3, "outdoor": false,
+                     "level_kv": 0.5, "earthed": false, "eft_kv": 0.5,
+                     "nets": ["+12V"]}},
+    "clamps": {"D1": {"vrwm": 15, "vbr": 16.7, "vc": 24, "ipp_a": 25,
+                      "ppk_w": 600}},
+    "abs_max": {"U2.3": 30}
+  },
+  "isolation": {
+    "domains": {"A": {"nets": ["+12V", "GND"]},
+                "B": {"nets": ["/ISO_*"]}},
+    "barriers": [
+      {"name": "main", "between": ["A", "B"], "standard": "iec62368-1",
+       "grade": "reinforced", "working_v_rms": 250, "peak_v": 354,
+       "pollution_degree": 2, "material_group": "IIIa", "altitude_m": 2000,
+       "column": "general", "impulse_v": 2500, "withstand_v_rms": 3000,
+       "min_clearance_mm": 4, "min_creepage_mm": 5, "inner_min_mm": 0.4,
+       "solid_min_mm": 0.4, "slot_earns_creepage": true},
+      {"name": "mains", "between": ["A", "B"], "standard": "iec60664-1",
+       "grade": "basic", "working_v_rms": 250, "pollution_degree": 2,
+       "material_group": "IIIa", "mains_v_rms": 230,
+       "overvoltage_category": "II"}
+    ],
+    "parts": {"U5": {"grade": "reinforced", "working_v_rms": 400,
+                     "withstand_v_rms": 5000, "peak_v": 566,
+                     "impulse_v": 6000, "creepage_mm": 8,
+                     "source": "datasheet"}},
+    "floating": []
+  },
+  "transformers": {"T1": {"topology": "flyback", "turns": {"1-2": 7}}},
+  "pcb_antennas": [
+    {"name": "AE1", "refs": ["AE1"], "nets": ["/RF_ANT"],
+     "poly": [[0, 0], [10, 0], [10, 3], [0, 3]], "feed": [1, 1], "rot": 0,
+     "layer": "F.Cu", "band_hz": [2.4e9, 2.5e9], "min_efficiency": 0.5,
+     "ground_nets": ["GND"], "keepout_mm": 3,
+     "keepout": [[0, 0], [12, 0], [12, 5], [0, 5]], "short": [2, 1],
+     "short_contact_mm": 0.5, "short_reach_mm": 1, "over_ground": false,
+     "ground_edge": {"height_mm": 4, "tol_mm": 0.5}, "edge_max_mm": 1,
+     "sim": "antenna_sim.json", "geometry_tol_pct": 10,
+     "reference": "generic_ifa"},
+    {"name": "AE2", "feed": [20, 1],
+     "reference": {"source": "app note", "polys": [[[0, 0], [8, 0], [8, 2]]],
+                   "anchor": [0, 0], "ground_mm": 4, "area_tol_pct": 10}}
+  ],
+  "si": {
+    "nets": {
+      "/CLK": {"class": "osc_clock", "t_rise_ns": 1.5, "clock": true,
+               "driver": "U1", "driver_ohm": 30, "z0_ohm": 50,
+               "z0_tol_pct": 10, "zdiff": false, "zdiff_ohm": 100,
+               "zdiff_tol_pct": 10, "reference": "GND", "aggressor": true,
+               "swing_v": 3.3, "victim": "analog", "noise_margin_v": 0.4,
+               "c_in_pf": 5, "r_in_ohm": 1000000},
+      "/ADC_IN": {"class": "osc_clock", "t_rise_ns": 2, "clock": false,
+                  "driver": "U2", "driver_ohm": 50, "z0_ohm": 50,
+                  "z0_tol_pct": 10, "zdiff": false, "zdiff_ohm": 100,
+                  "zdiff_tol_pct": 10, "reference": {"default": "GND"},
+                  "aggressor": false, "swing_v": 1.8, "victim": "analog",
+                  "noise_margin_v": 0.2, "c_in_pf": 10, "r_in_ohm": 10000}
+    },
+    "ignore": ["/TEST*"],
+    "victims": ["/ADC_IN"],
+    "groups": [{"name": "bus", "nets": ["/D*"], "ui_ns": 10}],
+    "xtalk_sim_top": 3
+  },
+  "ddr": {
+    "controller": "U1", "dram": "U3",
+    "controller_part": "SOC-GENERIC", "dram_part": "DRAM-GENERIC",
+    "rate_mts": 800,
+    "input_levels": {"data": "AC160", "addr": "AC160"},
+    "slew_vns": {"dq": 1.0, "dqs": 2.0, "addr": 1.0, "ck": 2.0},
+    "allowances_ps": {"isi": 20, "xtalk": 15, "vref": 10},
+    "timing": "1T",
+    "controller_terms": {"out_skew_ps": 50, "write_calibration": true,
+                         "cal_step_tck": 0.25, "write_leveling": true,
+                         "leveling_range_tck": [0.0, 3.99],
+                         "max_rate_mts": 1066},
+    "groups": [
+      {"name": "DQ0", "kind": "dq", "strobe": "DQS0", "nets": ["/DQ0"]},
+      {"name": "ADDR", "kind": "addr", "clock": "CK", "nets": ["/A0"]},
+      {"name": "DQS0", "kind": "dqs", "clock": "CK",
+       "nets": ["/DQS0_P", "/DQS0_N"]}
+    ]
+  }
+}

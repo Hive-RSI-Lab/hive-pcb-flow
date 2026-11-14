@@ -272,6 +272,22 @@ What moved where:
   reports it as `dfm_net_tie_open`, which the tester can't see. A tie still
   named apart is a `dfm_net_short` with `tie` set and says how to fix it
   (`tests/test_netlist_compare.py`).
+- `scripts/constraints_lint.py` knows every key the checkers read. Its
+  shapes were a hand-kept copy that fell behind: one real board's
+  constraints.json drew 30 warnings, each about a key some checker reads.
+  `tests/_constraint_reads.py` scans `scripts/` statically for every
+  constant key read off a constraints document (`d["k"]`, `d.get("k")`,
+  `"k" in d`, through helpers and across modules).
+  `tests/fixtures/constraints_all_keys.json` holds every path read and the
+  lint passes it with no error or warning, and
+  `reference/constraints_schema.md` names every key, so a new `.get("key")`
+  fails a test until all three know it. `note` and `notes` are prose on any
+  entry or object except the strict sections (`planes[]`,
+  `length_groups[]`, `teardrops`); a `<word>_notes` key warns as unknown,
+  not as a misspelling. A top-level object may be null, meaning none, except
+  `enclosure`. That board now draws no warning
+  (`tests/test_constraints_consumer_keys.py`,
+  `tests/test_constraints_lint.py`).
 
 `requirements.lock`, `LICENSE` and `NOTICE` came from upstream's repo root,
 and so did `docs/failure-modes.yaml` (`bench --scorecard-corpus` maps
