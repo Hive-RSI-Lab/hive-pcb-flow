@@ -34,7 +34,10 @@ comes from JLC's record, as nothing in the foreign tree holds it), check_thermal
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
-copy of it. A catch for another script is reported as not run.
+copy of it. A catch for another script is reported as not run. A board
+older than KiCad 6 (`module` footprints, which geom doesn't read) is first
+brought to the current format by `kicad-cli pcb upgrade` on a copy in the run
+dir, as intake does to every board; the board checks read that copy.
 """
 from __future__ import annotations
 
@@ -130,37 +133,72 @@ def matches(violation: dict, catch: dict) -> bool:
     return not refs or bool(refs & set(violation.get("refs") or ()))
 
 
+def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The board a check reads: the revision's own file, or, for one older
+    than KiCad 6 (a `module`-era file, which geom reads no footprints from),
+    a copy `kicad-cli pcb upgrade` brought to the current format, as intake
+    does to every board it takes in. The copy sits in the run dir and is
+    reused while the source is unchanged."""
+    import hashlib
+    import re
+    src = repo / b[rev]["pcb"]
+    head = src.read_text(encoding="utf-8", errors="replace")[:400]
+    m = re.search(r"\(version\s+(\d+)\)", head)
+    if m and int(m.group(1)) >= 20211014:  # KiCad 6's first board format
+        return src
+    dest = empty.parent / f"{rev}-upgraded.kicad_pcb"
+    stamp = dest.with_suffix(".src")
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()
+    if dest.is_file() and stamp.is_file() and stamp.read_text() == digest:
+        return dest
+    sys.path.insert(0, str(SCRIPTS / "lib"))
+    import env
+    cli = env.find_kicad_cli()
+    if not cli:
+        raise SystemExit(f"{b['id']} {rev}: a pre-KiCad-6 board needs kicad-cli "
+                         "to upgrade (bin/hwde env)")
+    import shutil
+    shutil.copyfile(src, dest)
+    r = subprocess.run([str(cli), "pcb", "upgrade", str(dest)],
+                       capture_output=True, text=True, timeout=900)
+    if r.returncode != 0:
+        raise SystemExit(f"{b['id']} {rev}: kicad-cli pcb upgrade failed: "
+                         f"{(r.stderr or r.stdout).strip()[-200:]}")
+    stamp.write_text(digest)
+    return dest
+
+
 def _netlist_audit(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["netlist_audit.py", "--sch", str(repo / b[rev]["sch"]),
             "--constraints", str(empty)]
 
 
 def _check_mate_pins(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
-    return ["check_mate_pins.py", "--pcb", str(repo / b[rev]["pcb"]),
+    return ["check_mate_pins.py", "--pcb", str(_pcb(b, rev, repo, empty)),
             "--constraints", str(empty)]
 
 
 def _check_current(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
-    return ["check_current.py", "--pcb", str(repo / b[rev]["pcb"]),
+    return ["check_current.py", "--pcb", str(_pcb(b, rev, repo, empty)),
             "--constraints", str(empty)]
 
 
 def _check_connector_fit(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
-    return ["check_connector_fit.py", "--pcb", str(repo / b[rev]["pcb"])]
+    return ["check_connector_fit.py", "--pcb", str(_pcb(b, rev, repo, empty))]
 
 
 def _check_silk(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
-    return ["check_silk.py", "--pcb", str(repo / b[rev]["pcb"])]
+    return ["check_silk.py", "--pcb", str(_pcb(b, rev, repo, empty))]
 
 
 def _check_bom_sync(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
-    return ["check_bom_sync.py", "--pcb", str(repo / b[rev]["pcb"]), "--live"]
+    return ["check_bom_sync.py", "--pcb", str(_pcb(b, rev, repo, empty)), "--live"]
 
 
 def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board alone: with no thermal entry it screens the power ICs
     reference/thermal_parts.yaml knows (#884)."""
-    return ["check_thermal.py", "--pcb", str(repo / b[rev]["pcb"]),
+    return ["check_thermal.py", "--pcb", str(_pcb(b, rev, repo, empty)),
             "--constraints", str(empty)]
 
 
@@ -183,7 +221,7 @@ def _check_straps(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
         subprocess.run([str(cli), "sch", "export", "netlist", "-o", str(net),
                         str(sch)], capture_output=True, text=True,
                        timeout=900, check=True)
-    return ["check_straps.py", "--pcb", str(repo / b[rev]["pcb"]),
+    return ["check_straps.py", "--pcb", str(_pcb(b, rev, repo, empty)),
             "--netlist", str(net)]
 
 
@@ -201,7 +239,7 @@ def _dfm(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     stage = empty.parent / f"{rev}-cpl"
     (stage / "easyeda").mkdir(parents=True, exist_ok=True)
     shutil.copyfile(repo / src, stage / "CPL.csv")
-    return ["dfm_check.py", "--pcb", str(repo / b[rev]["pcb"]),
+    return ["dfm_check.py", "--pcb", str(_pcb(b, rev, repo, empty)),
             "--cpl", str(stage / "CPL.csv"), "--no-polarity",
             "--skip", "copper,drill,silk,castellation,zone_fill,netlist"]
 

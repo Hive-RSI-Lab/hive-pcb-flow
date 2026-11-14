@@ -14,9 +14,9 @@ the number that says how the flow does on a board it has never seen.
 
 ## Count
 
-- Training: 24 of 41 caught (24 caught, 13 missed, 4 not_static).
-- Holdout, blind: 1 of 13 caught (1 caught, 12 missed).
-- Holdout, with the rules written since: 1 of 13 caught (1 caught, 12 missed).
+- Training: 26 of 42 caught (26 caught, 12 missed, 4 not_static).
+- Holdout, blind: 1 of 12 caught (1 caught, 11 missed).
+- Holdout, with the rules written since: 1 of 12 caught (1 caught, 11 missed).
 
 ## Training set
 
@@ -121,7 +121,7 @@ the number that says how the flow does on a board it has never seen.
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | sizif-1: JTAG header pinout differs from the Altera standard | SCH (standard connector pinout) | missed | off-board and standard connector pinouts, with the mate stated (#1027) |
-| sizif-2: J3 header's silkscreen is wrong | DFA (silk labels) | missed | check_silk reading a header's labels against its pins' nets (#1028) |
+| sizif-2: J3 header's silkscreen is wrong | DFA (silk labels) | caught on rev A, gone on rev B (`check_silk` pin_label_wrong) |  |
 
 ### ambient: rev_c -> rev_d
 
@@ -131,15 +131,15 @@ the number that says how the flow does on a board it has never seen.
 |---|---|---|---|
 | ambient-1: no pull-ups on SWDIO and SWDCLK | SCH (datasheet pin state) | not_static | At the pinned commit rev_c's own files already carry the fix: its ambient.sch, kicad_pcb, shipped .net and BOM all have R7 and R8, 100k from /SAM4L_SWDIO and /SAM4L_SWDCLK to +3V3, as rev_d has R1 and R2. The files were patched after the boards were made, so none holds the defect and no check can see it (#1044). The errata's other line, "Random trace on pin32?", is a question with no stated fix, so it is not judged. |
 
-## Holdout set
-
 ### one-rom-fire28: fire-28-a2 -> fire-28-a3
 
-[https://github.com/piersfinlayson/one-rom](https://github.com/piersfinlayson/one-rom) at `1b189260d85a`, CERN-OHL-W-2.0; errata `hardware/pcb/verified/fire-28-a2/README.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/piersfinlayson/one-rom](https://github.com/piersfinlayson/one-rom) at `1b189260d85a`, CERN-OHL-W-2.0; errata `hardware/pcb/verified/fire-28-a2/README.md`.
 
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| one-rom-1: SWD header silk labels CLK and DIO swapped | SILK (pin label vs net) | missed | missed | check_silk reading a header's labels against its pins' nets (#1028) |
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| one-rom-1: SWD header silk labels CLK and DIO swapped | SILK (pin label vs net) | caught on rev A, gone on rev B (`check_silk` pin_label_wrong) | Swept blind as a holdout board (missed, with the flow at db43cb8), then moved here: check_silk's per-pin pin_label_wrong form (#1028) was written knowing this defect, so its catch is a training catch. The blind and swept fields are kept as the record. |
+
+## Holdout set
 
 ### netscore-main: main-board v3.0 -> main-board v3.1
 

@@ -32,6 +32,15 @@ One concern: silkscreen that will not assemble or read.
    pin_labels_missing (warning, one per part): the cable goes on in any
    order and the motor runs backwards or not at all (minuet v3 J8, the fan
    motor's three phases, no A/B/C on the board).
+ - PIN LABEL NETS (#1028): silk by a connector that names its pins names
+   one wrongly - pin_label_wrong (warning). A stacked legend (one name a
+   line, owned by the connector within LABEL_MM most of whose nets it
+   names, judged only on a single row of pins) must name them in order down
+   the row (errata corpus sizif-2: rev C's "+12 / G / G / +5" for +12V,
+   VCC, +9V, GND, +5V). A one-word label within PIN_LABEL_MM of a pin
+   and nearest one it doesn't name, while it names another pin of the part
+   LABEL_SLACK_MM or more farther off, is the per-pin form. Names compare by _norm (3V3 = +3.3V, G = GND,
+   CLK on SWCLK); unnamed nets (Net-(...)) are never named.
 
 Silk geometry is parsed here (not in geom.py, which is copper-only): top-level
 gr_text / gr_line / gr_poly / gr_rect / gr_circle / gr_arc on *.SilkS, plus the
@@ -148,13 +157,15 @@ def _silk_side(layer: str):
 
 class Silk:
     __slots__ = ("side", "kind", "geom", "text", "height", "thickness", "pos",
-                 "ref")
+                 "ref", "angle", "size", "just")
 
     def __init__(self, side, kind, g, text=None, height=0.0, thickness=0.0,
-                 pos=None, ref=None):
+                 pos=None, ref=None, angle=0.0, size=(0.0, 0.0),
+                 just=(0, 0)):
         self.side, self.kind, self.geom = side, kind, g
         self.text, self.height, self.thickness = text, height, thickness
-        self.pos, self.ref = pos, ref
+        self.pos, self.ref, self.angle = pos, ref, angle
+        self.size, self.just = size, just
 
 
 def _text_box(cx, cy, angle, text, size_x, size_y, thickness,
@@ -285,7 +296,8 @@ def _text_item(node, fx, fy, fangle, side, text) -> Silk | None:
     th = _nums(th_node)[0] if th_node is not None and _nums(th_node) else 0.15
     hj, vj = _justify(eff)
     g = _text_box(cx, cy, angle, text, sx, sy, th, hj, vj)
-    return Silk(side, "text", g, text=text, height=sy, thickness=th, pos=(cx, cy))
+    return Silk(side, "text", g, text=text, height=sy, thickness=th,
+                pos=(cx, cy), angle=angle, size=(sx, sy), just=(hj, vj))
 
 
 def parse_silk(root) -> list[Silk]:
@@ -342,10 +354,16 @@ def parse_silk(root) -> list[Silk]:
                     if g is not None and not g.is_empty:
                         items.append(Silk(side, kind.replace("fp_", ""), g,
                                           thickness=w))
+        fref = None      # KiCad 7+: a Reference property; KiCad 6: fp_text
         for prop in _kids(fp, "property"):
             pv = _strs(prop)
             if len(pv) >= 2 and pv[0] == "Reference":
                 fref = pv[1]
+        for node in _kids(fp, "fp_text"):
+            tv = _strs(node)
+            if fref is None and len(node) > 2 and _tok(node[1]) == "reference" \
+                    and tv:
+                fref = tv[-1]
         for it in items[first:]:
             it.ref = fref
     return items
@@ -577,6 +595,190 @@ def check_pin_labels(bg: geom.BoardGeom, silks: list[Silk]) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------ pin labels vs nets
+
+GND_NAMES = {"G", "GND", "GROUND", "0V", "VSS"}
+LABEL_SLACK_MM = 0.5  # a label this much nearer another pin is that pin's
+PIN_LABEL_MM = 1.5    # a one-word pin label sits this close to its pin's pad
+ROW_ACROSS_MM = 1.0   # pads within this of one line (across it) are one row
+
+
+def _norm(name: str | None) -> str:
+    """A net name or a silk word in one spelling: the last path part, upper
+    case, no leading +, no ~{} or overbar marks, GND for any ground word, and
+    a voltage as N.NV (3V3, 3.3, +3.3V -> 3.3V; 12, +12V -> 12V)."""
+    n = (name or "").rsplit("/", 1)[-1].strip().upper()
+    n = re.sub(r"[~{}]", "", n).lstrip("+")
+    if n in GND_NAMES:
+        return "GND"
+    m = re.fullmatch(r"(\d+)V(\d+)", n)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}V"
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)V?", n)
+    if m:
+        return f"{m.group(1)}V"
+    return n
+
+
+def _named(net: str | None) -> bool:
+    n = (net or "").rsplit("/", 1)[-1]
+    return bool(n) and not re.match(r"(?i)(Net-\(|unconnected-)", n)
+
+
+def _names(token: str, net: str | None) -> bool:
+    """Does a silk word name this net: the same, or one ends with the other
+    (CLK on SWCLK, at 3 letters or more)."""
+    if not _named(net):
+        return False
+    t, n = _norm(token), _norm(net)
+    if not t:
+        return False
+    if t == n:
+        return True
+    short, long_ = sorted((t, n), key=len)
+    return len(short) >= 3 and long_.endswith(short)
+
+
+LINE_PITCH = 1.62     # KiCad's interline, x text height
+
+
+def _block(s) -> Polygon:
+    """The box of a text over all its lines (Silk.geom is one line's, as
+    wide as the whole string): lines LINE_PITCH x height apart, the block
+    justified on the anchor as KiCad does."""
+    lines = s.text.split("\n")
+    if len(lines) < 2:
+        return s.geom
+    sx, sy = s.size if s.size[1] else (1.0, 1.0)
+    hj, vj = s.just
+    w = max(len(ln) for ln in lines) * CHAR_W * sx + s.thickness
+    h = (len(lines) - 1) * LINE_PITCH * sy + TEXT_H * sy + s.thickness
+    ox, oy = -hj * w / 2.0, -vj * h / 2.0
+    b = box(ox - w / 2.0, oy - h / 2.0, ox + w / 2.0, oy + h / 2.0)
+    b = affinity.rotate(b, -(s.angle or 0.0), origin=(0, 0), use_radians=False)
+    return affinity.translate(b, s.pos[0], s.pos[1])
+
+
+def _label_owner(g, conns: dict, all_pads) -> str | None:
+    """The connector a silk text labels: the part whose pad is nearest it,
+    if that is a connector and within LABEL_MM."""
+    near = min(all_pads, key=lambda p: g.distance(p.poly), default=None)
+    if near is None or near.ref not in conns:
+        return None
+    return near.ref if g.distance(near.poly) <= LABEL_MM else None
+
+
+def _stack_owner(g, conns: dict, lines: list[str]) -> str | None:
+    """The connector a stacked label lists: a legend often sits past the
+    end of the row, nearer some other part's pad, so of the connectors
+    within LABEL_MM take the one most of whose nets the lines name (ties to
+    the nearer)."""
+    best, key = None, None
+    for ref, pads in conns.items():
+        d = min(g.distance(p.poly) for p in pads)
+        if d > LABEL_MM:
+            continue
+        n = sum(1 for ln in lines if ln and any(_names(ln, p.net) for p in pads))
+        k = (n, -d)
+        if n >= 2 and (key is None or k > key):
+            best, key = ref, k
+    return best
+
+
+def check_label_nets(bg: geom.BoardGeom, silks: list[Silk]) -> list[dict]:
+    """pin_label_wrong (#1028, errata corpus sizif-2): silk beside a
+    connector names its pins, and a name sits on the wrong pin. Two forms:
+    a stacked label (one name per line, read down the text) whose names
+    don't follow the pins in order down the row, and a one-word label
+    nearest a pin whose net it doesn't name while another pin's net is the
+    one it names. A label is judged only when it reads as one: at least two
+    of a stack's lines, and half of them, name a net of the connector."""
+    out = []
+    all_pads = [p for p in bg.pads_of() if p.ref]
+    conns = {}
+    for p in all_pads:
+        if CONNECTOR_REF.match(p.ref):
+            conns.setdefault(p.ref, []).append(p)
+    refs = {p.ref for p in all_pads}
+    texts = [s for s in silks if s.kind == "text" and s.text
+             and s.text.strip() not in refs]
+    for s in texts:
+        g = _block(s)
+        lines = [ln.strip() for ln in s.text.split("\n")]
+        ref = (_stack_owner(g, conns, lines) if len(lines) >= 2
+               else _label_owner(g, conns, all_pads))
+        if ref is None:
+            continue
+        pads = conns[ref]
+        if len(lines) >= 2:
+            v = _stack(s, ref, pads, lines)
+        else:
+            v = _single(s, ref, pads, lines[0])
+        if v:
+            out.append(v)
+    return out
+
+
+def _stack(s, ref, pads, lines):
+    a = math.radians(s.angle or 0.0)
+    down = (math.sin(a), math.cos(a))      # KiCad: y down, angle CCW
+    along = lambda p: p.center[0] * down[0] + p.center[1] * down[1]  # noqa: E731
+    across = [p.center[0] * down[1] - p.center[1] * down[0] for p in pads]
+    if len(pads) < 2 or max(across) - min(across) > ROW_ACROSS_MM:
+        return None                          # not one row down the text
+    row = sorted(pads, key=along)
+    cand = [[i for i, p in enumerate(row) if _names(ln, p.net)]
+            if ln and "..." not in ln else [] for ln in lines]
+    named = [c for c in cand if c]
+    if len(named) < 2 or 2 * len(named) < sum(1 for ln in lines if ln):
+        return None
+    last, bad = -1, None
+    for ln, c in zip(lines, cand):
+        if not c:
+            continue
+        nxt = [i for i in c if i > last]
+        if not nxt:
+            bad = ln
+            break
+        last = nxt[0]
+    if bad is None:
+        return None
+    pins = ", ".join(f"{p.number} {(p.net or '').rsplit('/', 1)[-1]}"
+                     for p in row)
+    label = " / ".join(ln for ln in lines if ln)
+    return violation(
+        SCRIPT, "warning", s.pos, f"{s.side}.SilkS", None, [ref],
+        f"silk label \"{label}\" beside {ref} names its pins out of order: "
+        f"down the row they are {pins}, and \"{bad}\" has no pin left to "
+        "name below the ones before it. A cable made to the silk goes on "
+        "wrong", SCRIPT, kind="pin_label_wrong", silk_text=s.text,
+        form="stack", lines=len([ln for ln in lines if ln]), pins=len(row))
+
+
+def _single(s, ref, pads, word):
+    if not word or " " in word:
+        return None
+    hits = [p for p in pads if _names(word, p.net)]
+    if not hits:
+        return None
+    pt = s.geom.centroid     # the anchor can be the text's end (justify)
+    near = min(pads, key=lambda p: pt.distance(Point(p.center)))
+    if near in hits or _names(word, near.net):
+        return None
+    if s.geom.distance(near.poly) > PIN_LABEL_MM:
+        return None                          # not beside a pin: some other note
+    best = min(hits, key=lambda p: pt.distance(Point(p.center)))
+    gap = pt.distance(Point(best.center)) - pt.distance(Point(near.center))
+    if gap < LABEL_SLACK_MM:
+        return None
+    return violation(
+        SCRIPT, "warning", s.pos, f"{s.side}.SilkS", near.net, [ref],
+        f"silk label \"{word}\" sits by {ref} pin {near.number} "
+        f"({near.net}) but names pin {best.number}'s net ({best.net}), "
+        f"{gap:.1f} mm farther away", SCRIPT, kind="pin_label_wrong",
+        silk_text=s.text, form="pin", pin=near.number, named_pin=best.number)
+
+
 # ------------------------------------------------------------ CLI
 
 def run(argv=None):
@@ -592,6 +794,7 @@ def run(argv=None):
     violations = run_checks(bg, silks)
     violations.extend(check_attribution(bg, root))
     violations.extend(check_pin_labels(bg, silks))
+    violations.extend(check_label_nets(bg, silks))
 
     off_silk = refdes_off_silk(root)
     payload = checklib.report(

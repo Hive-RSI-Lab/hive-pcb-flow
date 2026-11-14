@@ -471,8 +471,8 @@ boards:
     summary: J3 header's silkscreen is wrong
     source_quote: "Incorrect silkscreen for J3 header"
     fault_class: DFA (silk labels)
-    verdict: missed
-    follow_up: "check_silk reading a header's labels against its pins' nets (#1028)"
+    verdict: caught
+    catch: {script: check_silk, kind: pin_label_wrong, refs: [J3]}
 - id: ambient
   url: https://github.com/lab11/signpost
   commit: f8f9efe01185763a943f949eddcd1a2ed87dd32c
@@ -502,7 +502,6 @@ boards:
 # designer's own words. Errata a later revision did not fix are left out (no
 # rev B to tell a catch from a rule that fires on everything); each board's
 # note says which.
-holdout:
 - id: one-rom-fire28
   url: https://github.com/piersfinlayson/one-rom
   commit: 1b189260d85a5feced19e969399986f5f1d1cabe
@@ -521,8 +520,14 @@ holdout:
     source_quote: "The silkscreen on this revision mislabels the SWD CLK and DIO pins.  The CLK is DIO and DIO is CLK."
     fault_class: SILK (pin label vs net)
     blind: missed
-    verdict: missed
-    follow_up: "check_silk reading a header's labels against its pins' nets (#1028)"
+    verdict: caught
+    catch: {script: check_silk, kind: pin_label_wrong, refs: [J2]}
+    note: >-
+      Swept blind as a holdout board (missed, with the flow at db43cb8), then
+      moved here: check_silk's per-pin pin_label_wrong form (#1028) was
+      written knowing this defect, so its catch is a training catch. The
+      blind and swept fields are kept as the record.
+holdout:
 - id: netscore-main
   url: https://github.com/arcticlula/Netscore
   commit: 4426f309aab51d447e32f062f66db48317256ff4

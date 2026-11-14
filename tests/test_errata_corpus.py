@@ -364,3 +364,44 @@ def test_a_revision_kept_only_in_history_gets_its_own_checkout(tmp_path):
     b = {"id": "h", "commit": "b" * 40, "rev_a": {"commit": "a" * 40}, "rev_b": {}}
     assert ec.repo_dir(tmp_path, b, "rev_a").name == "h@" + "a" * 12
     assert ec.repo_dir(tmp_path, b, "rev_b") == ec.repo_dir(tmp_path, b)
+
+
+def test_a_kicad6_board_is_read_as_it_is(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "x.kicad_pcb").write_text("(kicad_pcb (version 20211014))")
+    b = {"id": "x", "rev_a": {"pcb": "x.kicad_pcb"}}
+    empty = tmp_path / "run" / "constraints.json"
+    empty.parent.mkdir()
+    assert ec._pcb(b, "rev_a", repo, empty) == repo / "x.kicad_pcb"
+
+
+def test_a_pre_kicad6_board_is_upgraded_once_into_the_run_dir(tmp_path, monkeypatch):
+    # sizif rev C, ambient, cmm2-jlc, smart-lcc, lofence: `module`-era files
+    # geom saw no pads on until they were upgraded
+    import env
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    src = repo / "old.kicad_pcb"
+    src.write_text("(kicad_pcb (version 20171130) (module x))")
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        Path(cmd[-1]).write_text("(kicad_pcb (version 20240108) (footprint x))")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    import subprocess
+    monkeypatch.setattr(env, "find_kicad_cli", lambda: "kicad-cli")
+    monkeypatch.setattr(ec.subprocess, "run", fake_run)
+    b = {"id": "old", "rev_a": {"pcb": "old.kicad_pcb"}}
+    empty = tmp_path / "run" / "constraints.json"
+    empty.parent.mkdir()
+    got = ec._pcb(b, "rev_a", repo, empty)
+    assert got == empty.parent / "rev_a-upgraded.kicad_pcb"
+    assert calls and calls[0][1:3] == ["pcb", "upgrade"]
+    assert "footprint" in got.read_text() and "module" in src.read_text()
+    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 1
+    src.write_text("(kicad_pcb (version 20171130) (module y))")
+    ec._pcb(b, "rev_a", repo, empty)
+    assert len(calls) == 2                       # source changed: redone
