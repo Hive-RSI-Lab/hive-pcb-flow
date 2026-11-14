@@ -151,6 +151,55 @@ def test_gates_name_what_got_worse():
         == ["unconnected B: 0 -> 1", "unconnected: 1 -> 2"]
 
 
+def _vat(source, check, net, *pts, severity="error"):
+    items = [{"msg": f"item {i}", "pos": list(pt), "uuid": f"u{i}-{pt[0]}"}
+             for i, pt in enumerate(pts)]
+    return {"source": source, "check": check, "severity": severity,
+            "net": net, "layer": "F.Cu", "msg": f"{check} here",
+            "pos": items[0]["pos"] if items else None, "items": items}
+
+
+def test_new_violations_name_what_the_gate_counts():
+    old = _vat("drc", "track_dangling", "A", (1, 1))
+    clr = _vat("drc", "clearance", "A", (2, 2), (2, 3))
+    unc = _vat("unconnected", "unconnected_items", "A", (0, 0), (0, 1))
+    drc0 = {"violations": [old, clr, unc]}
+    # the same violations, one moved by less than 1e-3: none is new
+    nudged = _vat("drc", "track_dangling", "A", (1.0004, 1))
+    assert pr.new_violations(drc0, {"violations": [nudged, clr, unc]}) == []
+    # a check whose count did not grow is not listed, though one moved
+    moved = _vat("drc", "clearance", "A", (2, 2.5), (2, 3))
+    assert pr.new_violations(drc0, {"violations": [old, moved, unc]}) == []
+    new = _vat("drc", "track_dangling", "B", (5, 5))
+    warn = _vat("drc", "silk_overlap", None, (3, 3), severity="warning")
+    excl = _vat("drc", "clearance", "C", (9, 9), severity="exclusion")
+    unc_b = _vat("unconnected", "unconnected_items", "B", (4, 4), (4, 5))
+    drc1 = {"violations": [old, new, clr, warn, excl, unc, unc_b]}
+    got = pr.new_violations(drc0, drc1)
+    assert [(v["key"], v["net"]) for v in got] == [
+        ("drc:track_dangling", "B"), ("drc:silk_overlap", None),
+        ("unconnected", "B")]
+    assert got[0]["items"] == [{"msg": "item 0", "pos": [5, 5],
+                                "uuid": "u0-5"}]
+    # every line the gate writes has its violations here
+    assert pr.gates(drc0, drc1, {}) == [
+        "DRC drc:silk_overlap: 0 -> 1", "DRC drc:track_dangling: 1 -> 2",
+        "unconnected B: 0 -> 1", "unconnected: 1 -> 2"]
+
+    # REPORT.md lists them: where, net, the items' uuids, and a cut
+    p = {"status": "violations", "board": "b.kicad_pcb", "refs": ["U1"],
+         "ops": 1, "applied": False, "worse": pr.gates(drc0, drc1, {}),
+         "new_violations": got}
+    md = pr.report_md(p)
+    assert "- drc:track_dangling at (5.000, 5.000) on F.Cu, net B:" \
+        " track_dangling here (items u0-5)" in md
+    assert md.index("Worse than before") < md.index("New violations")
+    p["new_violations"] = got[:1] * (pr.SHOWN + 2)
+    md = pr.report_md(p)
+    assert md.count("- drc:track_dangling at") == pr.SHOWN
+    assert "- and 2 more in part_repair.json" in md
+
+
 def test_dangling_prunes_only_free_copper_in_the_window(u1):
     pcb, bg = u1
     nets = {"B", "C"}
@@ -344,3 +393,33 @@ def test_live_a_net_that_will_not_join_writes_nothing(kicad, tmp_path,
                    for f in (pr.RIP_FILE, pr.PLACE_FILE, pr.ROUTE_FILE))
     assert "Would not join" in (out / "REPORT.md").read_text(
         encoding="utf-8")
+
+
+def test_live_a_worse_board_writes_nothing_and_names_why(kicad, tmp_path,
+                                                         monkeypatch):
+    fake = {"source": "drc", "check": "track_dangling", "severity": "warning",
+            "pos": [27.0, 50.3], "layer": "F.Cu", "net": "/HV_B",
+            "msg": "Track has an unconnected end",
+            "items": [{"msg": "Track [/HV_B] on F.Cu", "pos": [27.0, 50.3],
+                       "uuid": "test-uuid"}]}
+    real = pr.gates
+
+    def gates(drc0, drc1, isl):  # the repaired board's DRC finds one more
+        drc1["violations"].append(fake)
+        return real(drc0, drc1, isl)
+    monkeypatch.setattr(pr, "gates", gates)
+    pcb = _copy(tmp_path, "kicad")
+    before = pcb.read_bytes()
+    out = tmp_path / "out"
+    assert pr.main(["--pcb", str(pcb), "--op", json.dumps(RENUMBER),
+                    "--out", str(out), "--apply"]) == 1
+    p = json.loads((out / "part_repair.json").read_text(encoding="utf-8"))
+    assert p["status"] == "violations" and not p["applied"]
+    assert any(w.startswith("DRC drc:track_dangling: ") for w in p["worse"])
+    assert [v["items"][0]["uuid"] for v in p["new_violations"]] \
+        == ["test-uuid"]
+    assert pcb.read_bytes() == before
+    assert not any((out / f).exists()
+                   for f in (pr.RIP_FILE, pr.PLACE_FILE, pr.ROUTE_FILE))
+    md = (out / "REPORT.md").read_text(encoding="utf-8")
+    assert "Worse than before" in md and "(items test-uuid)" in md

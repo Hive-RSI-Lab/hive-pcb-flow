@@ -46,7 +46,9 @@ which replay on --pcb in this order:
 An op file with nothing in it is not written (and its step is skipped).
 --apply does all three at once: DIR/work/B replaces --pcb, on a pass only and
 only if --pcb has not changed since the run began. Always in DIR: REPORT.md,
-part_repair.json, and base/, trial/ and work/ with their boards. Zones are
+part_repair.json, and base/, trial/ and work/ with their boards. When DRC got
+worse, both list the new violations on work/B (where, which net, the items'
+uuids), so the next try knows what to rip or move. Zones are
 refilled, not reshaped: a PATCH_<net> zone (zone_patch) whose fill met an
 old pad and meets no new pad of its net is named in the report's notes.
 
@@ -65,6 +67,7 @@ import math
 import os
 import shutil
 import sys
+from collections import Counter
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -91,6 +94,7 @@ from checklib import CheckError  # noqa: E402
 
 MARGIN = 2.0   # mm round a part's old and new pads: the rip window
 TOL = 1e-3     # mm
+SHOWN = 40     # new violations listed in REPORT.md (all in part_repair.json)
 RIP_FILE = "01-rip.route_edit.json"
 PLACE_FILE = "02-place.place_edit.json"
 ROUTE_FILE = "03-route.route_edit.json"
@@ -484,6 +488,58 @@ def gates(drc0: dict, drc1: dict, isl: dict) -> list[str]:
     return worse
 
 
+def _vsig(v: dict) -> tuple:
+    pts = sorted(tuple(round(c, 3) for c in it["pos"])
+                 for it in v.get("items") or [] if it.get("pos"))
+    return v.get("source"), v.get("check"), v.get("net"), tuple(pts)
+
+
+def new_violations(drc0: dict, drc1: dict) -> list[dict]:
+    """The after violations behind gates' DRC and unconnected lines.
+
+    For each source:check that counts more errors or warnings than before,
+    and each net with more unconnected items, the after violations that no
+    before violation matches by check, net and item positions: where to
+    look on DIR/work/B, and the uuids of the items to rip or reroute. One
+    that only moved is listed too (it matches nothing before)."""
+    i0, i1 = route_improve.issue_counts(drc0), route_improve.issue_counts(drc1)
+    grew = {k for k, n in i1.items() if n > i0.get(k, 0)}
+    u0, u1 = rf.unconnected_by_net(drc0), rf.unconnected_by_net(drc1)
+    grew_net = {k for k, n in u1.items() if n > u0.get(k, 0)}
+    before = Counter(_vsig(v) for v in drc0["violations"])
+    out = []
+    for v in drc1["violations"]:
+        if v.get("source") == "unconnected":
+            key = "unconnected"
+            if (v.get("net") or "") not in grew_net:
+                continue
+        else:
+            key = f"{v.get('source')}:{v.get('check')}"
+            if v.get("severity") not in ("error", "warning") \
+                    or key not in grew:
+                continue
+        sig = _vsig(v)
+        if before[sig]:
+            before[sig] -= 1
+            continue
+        out.append({"key": key, "severity": v.get("severity"),
+                    "pos": v.get("pos"), "layer": v.get("layer"),
+                    "net": v.get("net"), "msg": v.get("msg"),
+                    "items": [{"msg": it.get("msg"), "pos": it.get("pos"),
+                               "uuid": it.get("uuid")}
+                              for it in v.get("items") or []]})
+    return out
+
+
+def _vline(v: dict) -> str:
+    at = f" at ({v['pos'][0]:.3f}, {v['pos'][1]:.3f})" if v.get("pos") else ""
+    on = ", ".join(x for x in (v.get("layer") and f"on {v['layer']}",
+                               v.get("net") and f"net {v['net']}") if x)
+    uu = [it["uuid"] for it in v.get("items") or [] if it.get("uuid")]
+    return (f"{v['key']}{at}{' ' + on if on else ''}: {v.get('msg') or ''}"
+            + (f" (items {', '.join(uu)})" if uu else ""))
+
+
 def _write_ops(path: Path, ops: list) -> None:
     path.write_text(json.dumps({"version": 1, "ops": ops}, indent=1) + "\n",
                     encoding="utf-8")
@@ -629,6 +685,7 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
     if worse:
         payload["status"] = "violations"
         payload["worse"] = worse
+        payload["new_violations"] = new_violations(drc0, drc1)
         return _finish(payload, out)
 
     files = []
@@ -686,6 +743,13 @@ def report_md(p: dict) -> str:
                       ("worse", "Worse than before")):
         if p.get(key):
             lines += [f"{head}:", ""] + [f"- {x}" for x in p[key]] + [""]
+    nv = p.get("new_violations") or []
+    if nv:
+        lines += ["New violations (on work/, none like them before):", ""] \
+            + [f"- {_vline(v)}" for v in nv[:SHOWN]]
+        if len(nv) > SHOWN:
+            lines.append(f"- and {len(nv) - SHOWN} more in part_repair.json")
+        lines.append("")
     if p.get("drc"):
         b, a = p["drc"]["before"], p["drc"]["after"]
         lines += [f"DRC total {b.get('total')} -> {a.get('total')}.", ""]
