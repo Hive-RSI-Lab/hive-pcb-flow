@@ -17,7 +17,7 @@ only for the round's first reading: each round is swept once.
 
 - Training: 35 of 42 caught (35 caught, 3 missed, 4 not_static).
 - Holdout round 1, blind: 1 of 12 caught (1 caught, 11 missed).
-- Holdout round 1, with the rules written since: 1 of 12 caught (1 caught, 11 missed).
+- Holdout round 1, with the rules written since: 2 of 12 caught (2 caught, 10 missed).
 - Holdout round 2, blind: 1 of 26 caught (1 caught, 25 missed).
 - Holdout round 2, with the rules written since: 1 of 26 caught (1 caught, 25 missed).
 
@@ -177,8 +177,8 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| netscore-1: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT | SCH (part orientation) | missed | missed | a power-path part's orientation against the power flow (#1085) |
-| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | missed | missed | a power-path part's orientation against the power flow (#1085) |
+| netscore-1: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT | SCH (part orientation) | missed | caught on rev A, gone on rev B, since #1085 (`netlist_audit` power_path_body_diode) | Not an independent catch: the rule was written after this defect was read, though seeded from datasheets (TI SLVA139, Microchip AN1149), not from this board. The warning is on v3.0 and gone on v3.1. |
+| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | missed | missed | protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors |
 
 ### netscore-big: display-board-big v2.0 -> display-board-big v3.0
 
