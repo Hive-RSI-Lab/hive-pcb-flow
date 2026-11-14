@@ -81,8 +81,10 @@ def load(path: Path = MANIFEST, section: str = "boards") -> list[dict]:
                 raise SystemExit(f"{b['id']} {r}: commit must be a full sha")
         if section == "holdout":
             sw = b.get("swept") or {}
-            if len(str(sw.get("flow", ""))) != 40 or not sw.get("date"):
-                raise SystemExit(f"{b['id']}: a holdout board needs swept: {{flow: SHA, date}}")
+            if len(str(sw.get("flow", ""))) != 40 or not sw.get("date") \
+                    or not isinstance(sw.get("round"), int) or sw["round"] < 1:
+                raise SystemExit(f"{b['id']}: a holdout board needs swept: "
+                                 f"{{flow: SHA, date, round: N}}")
         for d in b["defects"]:
             if d.get("verdict") not in VERDICTS:
                 raise SystemExit(f"{d['id']}: verdict not one of {sorted(VERDICTS)}")
@@ -369,7 +371,8 @@ def _board_rows(cache: Path, b: dict, blind: bool) -> list[str]:
     lines = [f"### {b['id']}: {b['rev_a']['name']} -> {b['rev_b']['name']}", "",
              f"[{b['url']}]({b['url']}) at `{b['commit'][:12]}`, {b['licence']}; "
              f"errata `{b['source']}`." + (
-                 f" Swept blind with pcb-flow `{b['swept']['flow'][:12]}` on "
+                 f" Holdout round {b['swept']['round']}, swept blind with "
+                 f"pcb-flow `{b['swept']['flow'][:12]}` on "
                  f"{b['swept']['date']}." if blind else ""), "",
              head, "|---|---|" + ("---|" if blind else "") + "---|---|"]
     for d in b["defects"]:
@@ -396,6 +399,36 @@ def _counts(boards: list[dict], field: str) -> tuple[str, int, int]:
             count.get("caught", 0), total)
 
 
+ROUNDS = """\
+## A new holdout round
+
+A holdout board stays blind only until its findings are read against its
+errata; after that its defects are known, and a rule written later is no
+longer tested by it. So each round of rules is scored on a fresh holdout
+round, pinned and swept before those rules are:
+
+1. Before the round's rules are scored, an agent who has not read the
+   boards picks about 20 errata from boards nobody here has read, chosen as
+   the earlier rounds were: a public KiCad repository with a licence
+   (`fetch` upgrades a pre-KiCad-6 board with kicad-cli), where a later
+   revision fixes a defect the designer's own errata quote, both revisions
+   pinned to a commit, and no repository an earlier round or the training
+   set holds.
+2. Each goes under `holdout:` with `swept: {flow: SHA, date, round: N}`,
+   SHA being main as it stands, and its defects with the designer's quote,
+   before anyone reads the findings. `errata_corpus.py sweep ID...` runs
+   every check on both revisions.
+3. Each defect's `blind` is then judged from that sweep alone and never
+   changes. Rules written after it may still catch it (`verdict`, with the
+   rule in `caught_by`); a rule seeded from a holdout defect moves its board
+   to `boards:`.
+4. Report three numbers: training, the earlier rounds with the rules
+   written since (known boards, not an independent test), and round N
+   blind. Round N is known once read: the next round of rules gets round
+   N+1.
+"""
+
+
 def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None) -> str:
     holdout = holdout or []
     lines = ["# The real-errata corpus", "",
@@ -408,21 +441,26 @@ def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None) ->
              "from, not how they do on a new board. **Holdout**: boards no rule was written",
              "from, swept with every check before their findings were read against the",
              "errata; the *blind* column is that first judgement and never changes. It is",
-             "the number that says how the flow does on a board it has never seen.", ""]
+             "the number that says how the flow does on a board it has never seen, and",
+             "only for the round's first reading: each round is swept once.", ""]
     tr, tc, tn = _counts(boards, "verdict")
     lines += ["## Count", "", f"- Training: {tc} of {tn} caught ({tr})."]
-    if holdout:
-        hb, bc, bn = _counts(holdout, "blind")
-        hv, vc, _ = _counts(holdout, "verdict")
-        lines += [f"- Holdout, blind: {bc} of {bn} caught ({hb}).",
-                  f"- Holdout, with the rules written since: {vc} of {bn} caught ({hv})."]
-    lines += ["", "## Training set", ""]
+    rounds = sorted({b["swept"]["round"] for b in holdout})
+    for r in rounds:
+        hr = [b for b in holdout if b["swept"]["round"] == r]
+        hb, bc, bn = _counts(hr, "blind")
+        hv, vc, _ = _counts(hr, "verdict")
+        lines += [f"- Holdout round {r}, blind: {bc} of {bn} caught ({hb}).",
+                  f"- Holdout round {r}, with the rules written since: "
+                  f"{vc} of {bn} caught ({hv})."]
+    lines += ["", ROUNDS, "## Training set", ""]
     for b in boards:
         lines += _board_rows(cache, b, False)
-    if holdout:
-        lines += ["## Holdout set", ""]
+    for r in rounds:
+        lines += [f"## Holdout round {r}", ""]
         for b in holdout:
-            lines += _board_rows(cache, b, True)
+            if b["swept"]["round"] == r:
+                lines += _board_rows(cache, b, True)
     return "\n".join(lines)
 
 

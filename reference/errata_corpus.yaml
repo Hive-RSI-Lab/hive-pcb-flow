@@ -563,7 +563,7 @@ boards:
           pcb: hardware/pcb/verified/fire-28-a3/kicad/fire-28-a3.kicad_pcb,
           cpl: hardware/pcb/verified/fire-28-a3/fab/fire-28-a3-top-pos.csv}
   source: hardware/pcb/verified/fire-28-a2/README.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   defects:
   - id: one-rom-1
     summary: SWD header silk labels CLK and DIO swapped
@@ -589,7 +589,7 @@ holdout:
           pcb: hardware/pcb/v3.1/main-board/main-board.kicad_pcb,
           cpl: hardware/pcb/v3.1/main-board/production/positions.csv}
   source: hardware/docs/versions.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   note: >-
     v3.1 fixes both in the schematic only; its PCB is v3.0's. The C9
     footprint polarity ("pad 1 (the footprint's +) is on GND") is on v3.1
@@ -620,7 +620,7 @@ holdout:
           pcb: hardware/pcb/v3.0/display-board-big/display-board.kicad_pcb,
           cpl: hardware/pcb/v3.0/display-board-big/production/positions.csv}
   source: hardware/docs/versions.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   note: >-
     The DCSCK-on-shift-clock fault is reworked on v3.0 boards too, so it is
     not judged.
@@ -641,7 +641,7 @@ holdout:
   rev_b: {name: Rev 3, sch: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_sch,
           pcb: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_pcb}
   source: hardware/byte_hamr/rev2_errata.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   defects:
   - id: byte-hamr-1
     summary: U14 SN74LVC8T245 drives the Apple II slot's wired-OR lines (IRQ, NMI, DMA, INH, RES) push-pull, DIR and OE tied to GND
@@ -661,7 +661,7 @@ holdout:
           sch: CMM2-JLC.sch, pcb: CMM2-JLC.kicad_pcb,
           cpl: gerbers/RevB/CMM2-JLC/CMM2-JLC_cpl_jlc.csv}
   source: README.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   note: >-
     Each revision is a commit ("Add final-2 revA gerber", "Rev B: Hook up
     SDRAM address line A12"). The SRV05 pin-1 mark and the reversed Nunchuck
@@ -695,7 +695,7 @@ holdout:
   rev_b: {name: Rev B, commit: 8a939a5f3801481efa9ddee81d55864d9bed8a62,
           sch: pcb/smart-lcc/smart-lcc.sch, pcb: pcb/smart-lcc/smart-lcc.kicad_pcb}
   source: pcb/errata.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   note: >-
     Each revision is a commit ("Added Mk 1 manufacturing data", "Rev B as
     sent to manufacturing"); the licence is pcb/LICENSE.
@@ -730,7 +730,7 @@ holdout:
   rev_b: {name: rev2, sch: rev2/fc980c-controller.kicad_sch, pcb: rev2/fc980c-controller.kicad_pcb,
           cpl: rev2/jlcpcb/production_files/CPL-fc980c-controller.csv}
   source: README.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   note: The licence is rev1/LICENSE.txt and the README's "CERN OHL-S v2".
   defects:
   - id: fc980c-1
@@ -754,7 +754,7 @@ holdout:
   rev_a: {name: rev_a, sch: rev_a/hardware/kicad/lofence.sch, pcb: rev_a/hardware/kicad/lofence.kicad_pcb}
   rev_b: {name: rev_b, sch: rev_b/hardware/kicad/lofence.sch, pcb: rev_b/hardware/kicad/lofence.kicad_pcb}
   source: rev_b/errata.txt
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   note: >-
     The errata's other lines are a part left unpopulated, a divider the
     designer would do differently, and a BOM value; none is a fix rev_b's
@@ -778,7 +778,7 @@ holdout:
           pcb: PCBs/v2.0/Breakout/KiCAD/MRF-Pro-v8-breakout.kicad_pcb,
           cpl: PCBs/v2.0/Breakout/JLCPCB/positions.csv}
   source: Documentation/hardware-errata/lidar-stage1-decoupling.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
   defects:
   - id: identidem-1
     summary: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it
@@ -787,3 +787,298 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "a connector feeding an off-board pulsed load with no capacitor near it (#1090)"
+# Holdout round 2: pinned and swept blind before the rules from #1085 on were scored.
+- id: ice1usb-r01
+  url: https://github.com/osmocom/osmo-e1-hardware
+  commit: 85acea8b6d656add7c098d51f816f4ac34084fa2
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: icE1usb r0.1, sch: hardware/icE1usb/r0.1/icE1usb.sch, pcb: hardware/icE1usb/r0.1/icE1usb.kicad_pcb}
+  rev_b: {name: icE1usb r1.0, sch: hardware/icE1usb/r1.0/icE1usb.sch, pcb: hardware/icE1usb/r1.0/icE1usb.kicad_pcb}
+  source: hardware/icE1usb/ecn.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: ice1usb-r01-1
+    summary: SPI flash footprint is the wide SO8; the part is the narrow one
+    source_quote: "Flash footprint is wrong. The selected flash is not using the \"wide\" variant of SO8."
+    fault_class: LIB (wrong footprint variant)
+    blind: missed
+    verdict: missed
+    follow_up: "the footprint against the part's package: a SPI flash MPN in SOIC-8 150 mil on a 208 mil SO8 footprint"
+  - id: ice1usb-r01-2
+    summary: NT/TE selection pin header wired wrongly
+    source_quote: "The NT/TE selection pin-header is completely wrong"
+    fault_class: SCH (wrong header wiring)
+    blind: missed
+    verdict: missed
+    follow_up: "a stated jumper map for configuration headers, so their wiring can be checked"
+- id: ice1usb-r10
+  url: https://github.com/osmocom/osmo-e1-hardware
+  commit: 85acea8b6d656add7c098d51f816f4ac34084fa2
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: icE1usb r1.0, sch: hardware/icE1usb/r1.0/icE1usb.sch, pcb: hardware/icE1usb/r1.0/icE1usb.kicad_pcb}
+  rev_b: {name: icE1usb r1.1, sch: hardware/icE1usb/r1.1/icE1usb.kicad_sch, pcb: hardware/icE1usb/r1.1/icE1usb.kicad_pcb}
+  source: hardware/icE1usb/ecn.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: ice1usb-r10-1
+    summary: GPS I2C shares the extension port's lines and the GPS module drives them as a master; r1.1 adds jumpers
+    source_quote: "The I2C connection to the GPS conflicts with usage for the extension port. Turns out the chinese GPS module act as a master on those lines."
+    fault_class: SCH (bus conflict, no isolation)
+    blind: missed
+    verdict: missed
+    follow_up: "I2C masters per bus: a module that drives I2C as a master (from its datasheet) sharing lines with an off-board port"
+- id: zxdiag-v10
+  url: https://github.com/derekfountain/zx-spectrum-diagnostics
+  commit: a6d874e92e14834dd6f81a66c2ae44a377eacba6
+  licence: GPL-3.0
+  rev_a: {name: v1.0, commit: 80e1018182639653b5e81a10dac66d1ddd4cdd03, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
+  rev_b: {name: v1.1, commit: a6d874e92e14834dd6f81a66c2ae44a377eacba6, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
+  source: pcb/errata.txt
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: zxdiag-v10-1
+    summary: Edge connector footprint has its rows about 2.5 mm apart instead of 5 mm
+    source_quote: "Wrong footprint for the Spectrum edge connector. I used zxbus:ZX_Bus_Pin_Header, which is two rows of pin headers about 2.5mm apart. They should be 5mm apart."
+    fault_class: LIB (wrong footprint geometry)
+    blind: missed
+    verdict: missed
+    follow_up: "an edge connector's row spacing against the mating connector's"
+  - id: zxdiag-v10-2
+    summary: Edge connector header holes too small for the pins
+    source_quote: "Further, the holes are too small."
+    fault_class: PCB (drill size)
+    blind: missed
+    verdict: missed
+    follow_up: "check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint"
+- id: zxdiag-v11
+  url: https://github.com/derekfountain/zx-spectrum-diagnostics
+  commit: 1d701d1ba594a27bab07d94cc576350a4e535c09
+  licence: GPL-3.0
+  rev_a: {name: v1.1, commit: a6d874e92e14834dd6f81a66c2ae44a377eacba6, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
+  rev_b: {name: v1.2, commit: 1d701d1ba594a27bab07d94cc576350a4e535c09, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
+  source: pcb/errata.txt
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: zxdiag-v11-1
+    summary: /IORQ not connected to the Pico
+    source_quote: "Missing off /IORQ was a mistake."
+    fault_class: SCH (missing connection)
+    blind: missed
+    verdict: missed
+    follow_up: "a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico"
+  - id: zxdiag-v11-2
+    summary: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V
+    source_quote: "Due to the standard 1N4148 diodes I used for clamping the -5V input to the Pico, I have the possibility of -0.7V going into the ADC. The minimum allowed by the Pico is -0.5V."
+    fault_class: SCH (input beyond absolute maximum)
+    blind: missed
+    verdict: missed
+    follow_up: "a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC)"
+  - id: zxdiag-v11-3
+    summary: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference
+    source_quote: "The top of the -5V voltage divider comes from +5V, which is from the system under test and hence isn't reliable."
+    fault_class: SCH (reference from an unreliable rail)
+    blind: missed
+    verdict: missed
+    follow_up: "a measurement divider whose reference comes from an off-board rail"
+- id: pico-if1-v10
+  url: https://github.com/derekfountain/zx-spectrum-pico-interface-one
+  commit: 7d1be0cb53fe19f4c43f2c90e31ed24b3ee89d19
+  licence: GPL-2.0
+  rev_a: {name: v1.0, commit: 0ccc1a10e388caf57d66576753b5436b80c99b33, sch: srom/srom.kicad_sch, pcb: srom/srom.kicad_pcb}
+  rev_b: {name: v1.1, commit: 9ac8699a4d5c1a6a73c1dd15ce1137b2ef6402d7, sch: srom/srom.kicad_sch, pcb: srom/srom.kicad_pcb}
+  source: errata.txt
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: pico-if1-v10-1
+    summary: Transistor Q1 footprint rotated 90 degrees
+    source_quote: "Transistor Q1 is rotated. Needs turning 90deg anticlockwise."
+    fault_class: PCB (part rotation)
+    blind: caught
+    verdict: caught
+    catch: {script: netlist_audit, kind: sot23_pinout, refs: [Q1]}
+    note: >-
+      The erratum calls it a rotation; the flow names the same part's fault
+      as pin order (an E-B-C symbol on a B-E-C SOT-23), and the finding is
+      gone on rev B. Counted caught on the part and the fault.
+  - id: pico-if1-v10-2
+    summary: Data bus level shifter direction on /RD instead of ROM_READ_INV
+    source_quote: "The direction for the data bus level shifter needs to be ROM_READ_INV, not /RD."
+    fault_class: SCH (wrong net)
+    blind: missed
+    verdict: missed
+    follow_up: "a level shifter's DIR pin checked against a stated direction (read strobe) net"
+  - id: pico-if1-v10-3
+    summary: GND via for U4 pin 19 (/OE) sits under the chip where it can't be reached
+    source_quote: "Move the GND via from pin 19 on U4, it's under the chip and I can't get to it. This is /OE."
+    fault_class: PCB (via placement)
+    blind: missed
+    verdict: missed
+    follow_up: "a via under a part's body tying one of its own pins, on a hand-built board"
+- id: pico-if1-v13
+  url: https://github.com/derekfountain/zx-spectrum-pico-interface-one
+  commit: 7d1be0cb53fe19f4c43f2c90e31ed24b3ee89d19
+  licence: GPL-2.0
+  rev_a: {name: v1.3, commit: a8e8439e5f3d5466313a7ae8f92c5a9d4ebe5d77, sch: srom/srom.kicad_sch, pcb: srom/srom.kicad_pcb}
+  rev_b: {name: v1.4, commit: 65d046d3552024503588587d0b167d4eb13605a8, sch: srom/srom.kicad_sch, pcb: srom/srom.kicad_pcb}
+  source: errata.txt
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: pico-if1-v13-1
+    summary: OLED CLK and SDA transposed
+    source_quote: "OLED CLK and SDA signals are transposed."
+    fault_class: SCH (swapped signals)
+    blind: missed
+    verdict: missed
+    follow_up: "a module footprint's pin labels against the module's pin order (SDA/SCK on OLED modules)"
+  - id: pico-if1-v13-2
+    summary: SD card reader card-detect pin not connected
+    source_quote: "SD Card reader card detect pin needs connecting up."
+    fault_class: SCH (missing connection)
+    blind: missed
+    verdict: missed
+    follow_up: "a per-part list of pins that must be connected (SD socket card-detect)"
+- id: gcm-v50
+  url: https://github.com/JonathSpirit/GCM
+  commit: d33fcd27bed27621cedde043fbc9fd96f63cd549
+  licence: CERN-OHL-W-2.0
+  rev_a: {name: V5.0, commit: 31abb530bd4c9ba995e866ab1447c6a4ae9b642c, sch: Project_GCM.sch, pcb: Project_GCM.kicad_pcb}
+  rev_b: {name: V5.1, commit: d33fcd27bed27621cedde043fbc9fd96f63cd549, sch: Project_GCM.sch, pcb: Project_GCM.kicad_pcb}
+  source: CHANGELOG
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: gcm-v50-1
+    summary: U12 on the BWRITE1 bus, in conflict with U40; V5.1 moves it to BWRITE2
+    source_quote: "Fix conflict between U40 and U12, the BWRITE1 bus have been replaced by BWRITE2 on U12"
+    fault_class: SCH (bus conflict)
+    blind: missed
+    verdict: missed
+    follow_up: "bus contention: two drivers enabled by one bus strobe (U12 and U40 on BWRITE1)"
+  - id: gcm-v50-2
+    summary: A symbol's pins flipped and out of order, causing a clock problem
+    source_quote: "Fix a symbol issue where pins was flipped and not ordered causing a clock problem"
+    fault_class: LIB (symbol pinout)
+    blind: missed
+    verdict: missed
+    follow_up: "symbol pin numbers against the datasheet for logic ICs check_pinouts does not know"
+  - id: gcm-v50-3
+    summary: J7 on the wrong footprint
+    source_quote: "Footprint of J7 have been correctly replaced"
+    fault_class: LIB (wrong footprint)
+    blind: missed
+    verdict: missed
+    follow_up: "the footprint against the part's MPN package"
+  - id: gcm-v50-4
+    summary: J12 the wrong gender; V5.1 uses a male connector
+    source_quote: "J12 have been correctly replaced with a male connector"
+    fault_class: PCB (connector gender)
+    blind: missed
+    verdict: missed
+    follow_up: "connector gender against a stated mating side"
+- id: gp8b-v50
+  url: https://github.com/JonathSpirit/GP8B
+  commit: 6335b5a59bfc2553559fee35edc3b826b83e146f
+  licence: CERN-OHL-W-2.0
+  rev_a: {name: V5.0, commit: b6e3ff0a42202cad634200a7e15061f29bf76aa4, sch: Project_GP8B.sch, pcb: Project_GP8B.kicad_pcb}
+  rev_b: {name: V5.1, commit: 6335b5a59bfc2553559fee35edc3b826b83e146f, sch: Project_GP8B.sch, pcb: Project_GP8B.kicad_pcb}
+  source: CHANGELOG
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: gp8b-v50-1
+    summary: J1 not a male connector
+    source_quote: "J1 wasn't a male connector"
+    fault_class: PCB (connector gender)
+    blind: missed
+    verdict: missed
+    follow_up: "connector gender against a stated mating side"
+  - id: gp8b-v50-2
+    summary: ADDSCR_CLK not sending the right pulses to the motherboard
+    source_quote: "ADDSCR_CLK was not sending the right pulses to the motherboard"
+    fault_class: SCH (wrong net)
+    blind: missed
+    verdict: missed
+    follow_up: "the erratum does not name the fault; read the v5.0 to v5.1 ADDSCR_CLK change to find a rule"
+- id: mdbt-micro-50q
+  url: https://github.com/siderakb/mdbt-micro
+  commit: 7821d9046258f650ddf8d9424e21c6a3fc065c32
+  licence: MIT
+  rev_a: {name: 50q-v1.1, commit: bfe8530801c43ba67b6d7adea17d13b99677be56, sch: MDBTMicro_50Q/MDBTMicro_50Q.kicad_sch, pcb: MDBTMicro_50Q/MDBTMicro_50Q.kicad_pcb}
+  rev_b: {name: 50q-v1.2, commit: 51e4fb3beae6bf5ce8edd638668a67f5f40aba8f, sch: MDBTMicro_50Q/MDBTMicro_50Q.kicad_sch, pcb: MDBTMicro_50Q/MDBTMicro_50Q.kicad_pcb}
+  source: Changelog.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: mdbt-micro-50q-1
+    summary: Pro Micro 2.54 mm header holes 0.7 mm, too small; 1 mm in v1.2
+    source_quote: "Fixed the ProMicro board 2.54mm pin headers hole size from 0.7mm to 1mm."
+    fault_class: DFM (hole size)
+    blind: missed
+    verdict: missed
+    follow_up: "check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why"
+- id: flexgrid-v4
+  url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
+  commit: d3529287a8998dba79bdf6f593d1d67532386edc
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: V4 as ordered, commit: 2dc7881049a434334ef6d609ab18f7a98c45d129, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  rev_b: {name: V4-2, commit: a5997da259c307a4a0a97f9a49eea153a3eb2127, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  source: KiCad/OM-FlexGrid V4/README.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: flexgrid-v4-1
+    summary: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC
+    source_quote: "The V4 KiCad schematic wired the USBLC6 with pin 2 on VBUS and pin 5 on GND. The actual chip pinout is the other way around (pin 2 = GND, pin 5 = VCC)."
+    fault_class: SCH (pin function vs datasheet)
+    blind: missed
+    verdict: missed
+    follow_up: "pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts"
+  - id: flexgrid-v4-2
+    summary: 29 vias inside SMD pads that wick solder in reflow
+    source_quote: "The June layout had 29 vias sitting inside SMD pads (ESP32 module pads, mux, LDO, charger, buttons, microSD socket, several resistors). An unplugged via inside a pad wicks solder away from the joint during reflow."
+    fault_class: DFM (via in pad)
+    blind: missed
+    verdict: missed
+    follow_up: "via-in-pad on SMD pads without fill or tent (dfm)"
+- id: flexgrid-v3
+  url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
+  commit: d3529287a8998dba79bdf6f593d1d67532386edc
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: V3, sch: KiCad/OM-FlexGrid V3/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V3/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  rev_b: {name: V4, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  source: KiCad/OM-FlexGrid V4/README.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: flexgrid-v3-1
+    summary: 1N5819 and 1N4007 on D_SOD-123F; the fab stocks the SOD-123 W parts
+    source_quote: "**1N5819 and 1N4007** previously used the `D_SOD-123F` footprint. LCSC primarily stocks the `1N5819W` and `1N4007W` variants in **SOD-123** (no `F` suffix)."
+    fault_class: LIB (wrong footprint variant)
+    blind: missed
+    verdict: missed
+    follow_up: "the footprint against the stocked part's package (SOD-123F against SOD-123W)"
+  - id: flexgrid-v3-2
+    summary: C9 (100 uF) on an 0603 footprint that cannot hold the part
+    source_quote: "**C9 (100 uF)** previously sat on an 0603 footprint that cannot physically host a 100 uF cap."
+    fault_class: LIB (footprint too small for part)
+    blind: missed
+    verdict: missed
+    follow_up: "capacitance against case size: no 100 uF part comes in 0603"
+- id: healthmonitor
+  url: https://github.com/konstantinosfragkoulis/HealthMonitor
+  commit: 2d22f3d8d10ca25a549e55dbbcf16ec4b56cc00f
+  licence: MIT
+  rev_a: {name: HM-Rev1, sch: hardware/HM-Rev1/HM-Rev1.kicad_sch, pcb: hardware/HM-Rev1/HM-Rev1.kicad_pcb}
+  rev_b: {name: HM-Rev2, sch: hardware/HM-Rev2/HM-Collector-Rev2.kicad_sch, pcb: hardware/HM-Rev2/HM-Collector-Rev2.kicad_pcb}
+  source: hardware/HM-Rev1/ERRATA.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: healthmonitor-1
+    summary: AD8232 missing its 4.7 uF capacitor between IOUT and SW
+    source_quote: "One 4.7 uF capacitor is missing between IOUT and SW"
+    fault_class: SCH (missing component)
+    blind: missed
+    verdict: missed
+    follow_up: "a part's required external parts from its datasheet (AD8232's IOUT to SW capacitor)"
+  - id: healthmonitor-2
+    summary: AD8232 resistor and capacitor between REFIN and GND wired wrongly
+    source_quote: "One resistor and one capacitor are wired incorrectly between REFIN and GND"
+    fault_class: SCH (wrong connectivity)
+    blind: missed
+    verdict: missed
+    follow_up: "a reference pin's network against the datasheet's typical circuit (AD8232 REFIN)"

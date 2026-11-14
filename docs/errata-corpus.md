@@ -10,13 +10,43 @@ they catch, so its count says how well the checks fit what they were built
 from, not how they do on a new board. **Holdout**: boards no rule was written
 from, swept with every check before their findings were read against the
 errata; the *blind* column is that first judgement and never changes. It is
-the number that says how the flow does on a board it has never seen.
+the number that says how the flow does on a board it has never seen, and
+only for the round's first reading: each round is swept once.
 
 ## Count
 
 - Training: 35 of 42 caught (35 caught, 3 missed, 4 not_static).
-- Holdout, blind: 1 of 12 caught (1 caught, 11 missed).
-- Holdout, with the rules written since: 1 of 12 caught (1 caught, 11 missed).
+- Holdout round 1, blind: 1 of 12 caught (1 caught, 11 missed).
+- Holdout round 1, with the rules written since: 1 of 12 caught (1 caught, 11 missed).
+- Holdout round 2, blind: 1 of 26 caught (1 caught, 25 missed).
+- Holdout round 2, with the rules written since: 1 of 26 caught (1 caught, 25 missed).
+
+## A new holdout round
+
+A holdout board stays blind only until its findings are read against its
+errata; after that its defects are known, and a rule written later is no
+longer tested by it. So each round of rules is scored on a fresh holdout
+round, pinned and swept before those rules are:
+
+1. Before the round's rules are scored, an agent who has not read the
+   boards picks about 20 errata from boards nobody here has read, chosen as
+   the earlier rounds were: a public KiCad repository with a licence
+   (`fetch` upgrades a pre-KiCad-6 board with kicad-cli), where a later
+   revision fixes a defect the designer's own errata quote, both revisions
+   pinned to a commit, and no repository an earlier round or the training
+   set holds.
+2. Each goes under `holdout:` with `swept: {flow: SHA, date, round: N}`,
+   SHA being main as it stands, and its defects with the designer's quote,
+   before anyone reads the findings. `errata_corpus.py sweep ID...` runs
+   every check on both revisions.
+3. Each defect's `blind` is then judged from that sweep alone and never
+   changes. Rules written after it may still catch it (`verdict`, with the
+   rule in `caught_by`); a rule seeded from a holdout defect moves its board
+   to `boards:`.
+4. Report three numbers: training, the earlier rounds with the rules
+   written since (known boards, not an independent test), and round N
+   blind. Round N is known once read: the next round of rules gets round
+   N+1.
 
 ## Training set
 
@@ -80,7 +110,7 @@ the number that says how the flow does on a board it has never seen.
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | echoplayer-1: USB3320C ID pin grounded on a device-only board, so the core starts as a host | SCH (datasheet pin state) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): USB3320 ID grounded makes an A-device (DS00001792F Table 2-1, 5.6.1), a warning as a host board may mean it. rev1.1 ties U8's ID to 3V3, as the datasheet allows. |
-| echoplayer-2: HP/LO 3.5 mm jacks wired against the standard headphone pinout | LIB (standard connector pinout) | caught (not run here) (`check_pinouts` pinout_mismatch) | check_pinouts reads J4's pads T/R1/R2/S from their names: rev1 has the tip on /audio/hp_com and left on R1 (J5, the line out, has its tip on GND and fires too); rev1.1 has both in the CTIA order. |
+| echoplayer-2: HP/LO 3.5 mm jacks wired against the standard headphone pinout | LIB (standard connector pinout) | caught on rev A, gone on rev B (`check_pinouts` pinout_mismatch) | check_pinouts reads J4's pads T/R1/R2/S from their names: rev1 has the tip on /audio/hp_com and left on R1 (J5, the line out, has its tip on GND and fires too); rev1.1 has both in the CTIA order. |
 | echoplayer-3: ESD diodes D1-D4 load the SDMMC lines past the bus's capacitance limit | SI (bus capacitive load) | caught on rev A, gone on rev B (`netlist_audit` bus_cap_load) | reference/bus_load.yaml (#1031): a CESD3V3AP is 120 pF typ at 0 V (JSCJ rev C), four times the 30 pF an SD host side may add (NXP AN10911 Table 2). rev A is pinned at e14b09d, the board as built: the errata commit a0d0b02 also marked D1-D4 DNP in r1-rev1, and the rule leaves a DNP part out, as it isn't fitted. r1-rev1.1 has no clamps on the SDMMC lines. |
 
 ### bedlift: v0.2 -> v1
@@ -89,12 +119,12 @@ the number that says how the flow does on a board it has never seen.
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| bedlift-1: lift actuator connectors J8/J9 pins 2 and 3 swapped, reversing the hall sensors' supply | SCH (off-board connector pinout) | caught_with_constraints (not run here) (`check_pinouts` pinout_mismatch, with constraints) | v0.2 has pin 2 on VHALL and pin 3 on GND; v1 has pin 2 on GND and pin 3 on +5V. Only the actuator's own pinout says which is right, so the catch states the mate (reference/connector_pinouts.yaml bedlift-lift-actuator) on J8 (v1's actuator connector is J10). |
+| bedlift-1: lift actuator connectors J8/J9 pins 2 and 3 swapped, reversing the hall sensors' supply | SCH (off-board connector pinout) | caught on rev A, gone on rev B (`check_pinouts` pinout_mismatch, with constraints) | v0.2 has pin 2 on VHALL and pin 3 on GND; v1 has pin 2 on GND and pin 3 on +5V. Only the actuator's own pinout says which is right, so the catch states the mate (reference/connector_pinouts.yaml bedlift-lift-actuator) on J8 (v1's actuator connector is J10). |
 | bedlift-2: DRV8434S nSCS tied to GND, but the part needs a falling edge to start each SPI frame | SCH (datasheet pin state) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): DRV8434S nSCS must be driven, as each frame needs it high between (SLOSE70 7.5.1.2). v0.2 ties U7-U10's nSCS to GND; v1 drives them from the MCU. |
 | bedlift-3: DRV8434S STEP not on a hardware-timer pin, so stall detection sees jitter | FW-HW (pin function) | not_static | the DRV8434S also takes steps over SPI, and which timer the firmware gives STEP is its own choice; no pin table rules the wiring out (#1032). |
 | bedlift-4: DRV8434S VREF wired straight to DVDD, 5 V where 3.3 V is recommended | SCH (datasheet pin range) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): DRV8434S VREF is limited to 3.3 V and DVDD is 5 V (SLOSE70 6.3, 8.2.2.2), so VREF on the part's own DVDD fires. v1 feeds it through a divider. |
 | bedlift-5: LIFT1 IN2 on an MCU pin with no timer channel, so the motor cannot be driven by PWM | FW-HW (pin function) | caught on rev A, gone on rev B (`netlist_audit` mcu_pwm_timer) | reference/mcu_pins.yaml (#1032): with PMODE high both DRV8874s are in PWM mode (SLVSF66A Table 2), and v0.2's four inputs (PB0, PA15, PC6, PA8) fit no single timer of the STM32C031. v1's PA0-PA3 all sit on TIM1 of its STM32C051. A warning. |
-| bedlift-6: actuator hall sensors powered at 3.3 V where they are meant for 5 V | SCH (off-board part supply) | caught_with_constraints (not run here) (`check_pinouts` pinout_supply_volts, with constraints) | /VHALL is U4's output (a 74LVC1G17 on +3.3V), so check_pinouts puts it at 3.3 V against the 5 V the actuator row asks on its supply pin; v1 feeds pin 3 from +5V. |
+| bedlift-6: actuator hall sensors powered at 3.3 V where they are meant for 5 V | SCH (off-board part supply) | caught on rev A, gone on rev B (`check_pinouts` pinout_supply_volts, with constraints) | /VHALL is U4's output (a 74LVC1G17 on +3.3V), so check_pinouts puts it at 3.3 V against the 5 V the actuator row asks on its supply pin; v1 feeds pin 3 from +5V. |
 
 ### pdlc: v1 -> v2
 
@@ -120,7 +150,7 @@ the number that says how the flow does on a board it has never seen.
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| sizif-1: JTAG header pinout differs from the Altera standard | SCH (standard connector pinout) | caught (not run here) (`check_pinouts` pinout_mismatch) | A KiCad 5 legacy schematic, read through lib/legacy_net. J11's net names follow the Altera pinout on both revisions; the fault is at the FPGA end (rev.C puts /TCK on U6's TDO, /TDI on its TCK, /TDO on its TDI). check_pinouts judges each header pin by the JTAG pin function it meets on the IC, so rev.C fires and rev.C1 is clean. |
+| sizif-1: JTAG header pinout differs from the Altera standard | SCH (standard connector pinout) | caught on rev A, gone on rev B (`check_pinouts` pinout_mismatch) | A KiCad 5 legacy schematic, read through lib/legacy_net. J11's net names follow the Altera pinout on both revisions; the fault is at the FPGA end (rev.C puts /TCK on U6's TDO, /TDI on its TCK, /TDO on its TDI). check_pinouts judges each header pin by the JTAG pin function it meets on the IC, so rev.C fires and rev.C1 is clean. |
 | sizif-2: J3 header's silkscreen is wrong | DFA (silk labels) | caught on rev A, gone on rev B (`check_silk` pin_label_wrong) |  |
 
 ### ambient: rev_c -> rev_d
@@ -139,11 +169,11 @@ the number that says how the flow does on a board it has never seen.
 |---|---|---|---|
 | one-rom-1: SWD header silk labels CLK and DIO swapped | SILK (pin label vs net) | caught on rev A, gone on rev B (`check_silk` pin_label_wrong) | Swept blind as a holdout board (missed, with the flow at db43cb8), then moved here: check_silk's per-pin pin_label_wrong form (#1028) was written knowing this defect, so its catch is a training catch. The blind and swept fields are kept as the record. |
 
-## Holdout set
+## Holdout round 1
 
 ### netscore-main: main-board v3.0 -> main-board v3.1
 
-[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
@@ -152,7 +182,7 @@ the number that says how the flow does on a board it has never seen.
 
 ### netscore-big: display-board-big v2.0 -> display-board-big v3.0
 
-[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
@@ -160,7 +190,7 @@ the number that says how the flow does on a board it has never seen.
 
 ### byte-hamr: Rev 2 -> Rev 3
 
-[https://github.com/robertrico/project_byte_hamr](https://github.com/robertrico/project_byte_hamr) at `f3e105fb7585`, MIT; errata `hardware/byte_hamr/rev2_errata.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/robertrico/project_byte_hamr](https://github.com/robertrico/project_byte_hamr) at `f3e105fb7585`, MIT; errata `hardware/byte_hamr/rev2_errata.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
@@ -168,7 +198,7 @@ the number that says how the flow does on a board it has never seen.
 
 ### cmm2-jlc: Rev.A -> Rev.B
 
-[https://github.com/Manawyrm/CMM2-JLC](https://github.com/Manawyrm/CMM2-JLC) at `318b012b10ac`, GPL-3.0; errata `README.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/Manawyrm/CMM2-JLC](https://github.com/Manawyrm/CMM2-JLC) at `318b012b10ac`, GPL-3.0; errata `README.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
@@ -177,7 +207,7 @@ the number that says how the flow does on a board it has never seen.
 
 ### smart-lcc: Rev A -> Rev B
 
-[https://github.com/magnusnordlander/smart-lcc](https://github.com/magnusnordlander/smart-lcc) at `8f4f0c26a3d1`, CERN-OHL-P-2.0; errata `pcb/errata.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/magnusnordlander/smart-lcc](https://github.com/magnusnordlander/smart-lcc) at `8f4f0c26a3d1`, CERN-OHL-P-2.0; errata `pcb/errata.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
@@ -186,7 +216,7 @@ the number that says how the flow does on a board it has never seen.
 
 ### fc980c: rev1 -> rev2
 
-[https://github.com/wlhlm/fc980c-controller](https://github.com/wlhlm/fc980c-controller) at `6e5bdc90e227`, CERN-OHL-S-2.0; errata `README.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/wlhlm/fc980c-controller](https://github.com/wlhlm/fc980c-controller) at `6e5bdc90e227`, CERN-OHL-S-2.0; errata `README.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
@@ -195,7 +225,7 @@ the number that says how the flow does on a board it has never seen.
 
 ### lofence: rev_a -> rev_b
 
-[https://github.com/kiu/lofence](https://github.com/kiu/lofence) at `9a1d09bd57b8`, MIT; errata `rev_b/errata.txt`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/kiu/lofence](https://github.com/kiu/lofence) at `9a1d09bd57b8`, MIT; errata `rev_b/errata.txt`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
@@ -203,8 +233,120 @@ the number that says how the flow does on a board it has never seen.
 
 ### identidem-breakout: MRF-Pro-v7.5 breakout -> MRF-Pro-v8 breakout
 
-[https://github.com/acornelissen/IDENTIDEM.design-MRF2](https://github.com/acornelissen/IDENTIDEM.design-MRF2) at `e495d6494dc6`, GPL-3.0; errata `Documentation/hardware-errata/lidar-stage1-decoupling.md`. Swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/acornelissen/IDENTIDEM.design-MRF2](https://github.com/acornelissen/IDENTIDEM.design-MRF2) at `e495d6494dc6`, GPL-3.0; errata `Documentation/hardware-errata/lidar-stage1-decoupling.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | identidem-1: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it | PI (local decoupling) | missed | missed | a connector feeding an off-board pulsed load with no capacitor near it (#1090) |
+
+## Holdout round 2
+
+### ice1usb-r01: icE1usb r0.1 -> icE1usb r1.0
+
+[https://github.com/osmocom/osmo-e1-hardware](https://github.com/osmocom/osmo-e1-hardware) at `85acea8b6d65`, CERN-OHL-S-2.0; errata `hardware/icE1usb/ecn.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| ice1usb-r01-1: SPI flash footprint is the wide SO8; the part is the narrow one | LIB (wrong footprint variant) | missed | missed | the footprint against the part's package: a SPI flash MPN in SOIC-8 150 mil on a 208 mil SO8 footprint |
+| ice1usb-r01-2: NT/TE selection pin header wired wrongly | SCH (wrong header wiring) | missed | missed | a stated jumper map for configuration headers, so their wiring can be checked |
+
+### ice1usb-r10: icE1usb r1.0 -> icE1usb r1.1
+
+[https://github.com/osmocom/osmo-e1-hardware](https://github.com/osmocom/osmo-e1-hardware) at `85acea8b6d65`, CERN-OHL-S-2.0; errata `hardware/icE1usb/ecn.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| ice1usb-r10-1: GPS I2C shares the extension port's lines and the GPS module drives them as a master; r1.1 adds jumpers | SCH (bus conflict, no isolation) | missed | missed | I2C masters per bus: a module that drives I2C as a master (from its datasheet) sharing lines with an off-board port |
+
+### zxdiag-v10: v1.0 -> v1.1
+
+[https://github.com/derekfountain/zx-spectrum-diagnostics](https://github.com/derekfountain/zx-spectrum-diagnostics) at `a6d874e92e14`, GPL-3.0; errata `pcb/errata.txt`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| zxdiag-v10-1: Edge connector footprint has its rows about 2.5 mm apart instead of 5 mm | LIB (wrong footprint geometry) | missed | missed | an edge connector's row spacing against the mating connector's |
+| zxdiag-v10-2: Edge connector header holes too small for the pins | PCB (drill size) | missed | missed | check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint |
+
+### zxdiag-v11: v1.1 -> v1.2
+
+[https://github.com/derekfountain/zx-spectrum-diagnostics](https://github.com/derekfountain/zx-spectrum-diagnostics) at `1d701d1ba594`, GPL-3.0; errata `pcb/errata.txt`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | missed | missed | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico |
+| zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | missed | missed | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
+| zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | missed | missed | a measurement divider whose reference comes from an off-board rail |
+
+### pico-if1-v10: v1.0 -> v1.1
+
+[https://github.com/derekfountain/zx-spectrum-pico-interface-one](https://github.com/derekfountain/zx-spectrum-pico-interface-one) at `7d1be0cb53fe`, GPL-2.0; errata `errata.txt`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| pico-if1-v10-1: Transistor Q1 footprint rotated 90 degrees | PCB (part rotation) | caught | caught (not run here) (`netlist_audit` sot23_pinout) | The erratum calls it a rotation; the flow names the same part's fault as pin order (an E-B-C symbol on a B-E-C SOT-23), and the finding is gone on rev B. Counted caught on the part and the fault. |
+| pico-if1-v10-2: Data bus level shifter direction on /RD instead of ROM_READ_INV | SCH (wrong net) | missed | missed | a level shifter's DIR pin checked against a stated direction (read strobe) net |
+| pico-if1-v10-3: GND via for U4 pin 19 (/OE) sits under the chip where it can't be reached | PCB (via placement) | missed | missed | a via under a part's body tying one of its own pins, on a hand-built board |
+
+### pico-if1-v13: v1.3 -> v1.4
+
+[https://github.com/derekfountain/zx-spectrum-pico-interface-one](https://github.com/derekfountain/zx-spectrum-pico-interface-one) at `7d1be0cb53fe`, GPL-2.0; errata `errata.txt`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| pico-if1-v13-1: OLED CLK and SDA transposed | SCH (swapped signals) | missed | missed | a module footprint's pin labels against the module's pin order (SDA/SCK on OLED modules) |
+| pico-if1-v13-2: SD card reader card-detect pin not connected | SCH (missing connection) | missed | missed | a per-part list of pins that must be connected (SD socket card-detect) |
+
+### gcm-v50: V5.0 -> V5.1
+
+[https://github.com/JonathSpirit/GCM](https://github.com/JonathSpirit/GCM) at `d33fcd27bed2`, CERN-OHL-W-2.0; errata `CHANGELOG`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| gcm-v50-1: U12 on the BWRITE1 bus, in conflict with U40; V5.1 moves it to BWRITE2 | SCH (bus conflict) | missed | missed | bus contention: two drivers enabled by one bus strobe (U12 and U40 on BWRITE1) |
+| gcm-v50-2: A symbol's pins flipped and out of order, causing a clock problem | LIB (symbol pinout) | missed | missed | symbol pin numbers against the datasheet for logic ICs check_pinouts does not know |
+| gcm-v50-3: J7 on the wrong footprint | LIB (wrong footprint) | missed | missed | the footprint against the part's MPN package |
+| gcm-v50-4: J12 the wrong gender; V5.1 uses a male connector | PCB (connector gender) | missed | missed | connector gender against a stated mating side |
+
+### gp8b-v50: V5.0 -> V5.1
+
+[https://github.com/JonathSpirit/GP8B](https://github.com/JonathSpirit/GP8B) at `6335b5a59bfc`, CERN-OHL-W-2.0; errata `CHANGELOG`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| gp8b-v50-1: J1 not a male connector | PCB (connector gender) | missed | missed | connector gender against a stated mating side |
+| gp8b-v50-2: ADDSCR_CLK not sending the right pulses to the motherboard | SCH (wrong net) | missed | missed | the erratum does not name the fault; read the v5.0 to v5.1 ADDSCR_CLK change to find a rule |
+
+### mdbt-micro-50q: 50q-v1.1 -> 50q-v1.2
+
+[https://github.com/siderakb/mdbt-micro](https://github.com/siderakb/mdbt-micro) at `7821d9046258`, MIT; errata `Changelog.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| mdbt-micro-50q-1: Pro Micro 2.54 mm header holes 0.7 mm, too small; 1 mm in v1.2 | DFM (hole size) | missed | missed | check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why |
+
+### flexgrid-v4: V4 as ordered -> V4-2
+
+[https://github.com/Open-Muscle/OpenMuscle-FlexGrid](https://github.com/Open-Muscle/OpenMuscle-FlexGrid) at `d3529287a899`, CERN-OHL-S-2.0; errata `KiCad/OM-FlexGrid V4/README.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | missed | missed | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
+| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | missed | missed | via-in-pad on SMD pads without fill or tent (dfm) |
+
+### flexgrid-v3: V3 -> V4
+
+[https://github.com/Open-Muscle/OpenMuscle-FlexGrid](https://github.com/Open-Muscle/OpenMuscle-FlexGrid) at `d3529287a899`, CERN-OHL-S-2.0; errata `KiCad/OM-FlexGrid V4/README.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| flexgrid-v3-1: 1N5819 and 1N4007 on D_SOD-123F; the fab stocks the SOD-123 W parts | LIB (wrong footprint variant) | missed | missed | the footprint against the stocked part's package (SOD-123F against SOD-123W) |
+| flexgrid-v3-2: C9 (100 uF) on an 0603 footprint that cannot hold the part | LIB (footprint too small for part) | missed | missed | capacitance against case size: no 100 uF part comes in 0603 |
+
+### healthmonitor: HM-Rev1 -> HM-Rev2
+
+[https://github.com/konstantinosfragkoulis/HealthMonitor](https://github.com/konstantinosfragkoulis/HealthMonitor) at `2d22f3d8d10c`, MIT; errata `hardware/HM-Rev1/ERRATA.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
+
+| defect | class | blind sweep | pcb-flow on rev A | follow-up |
+|---|---|---|---|---|
+| healthmonitor-1: AD8232 missing its 4.7 uF capacitor between IOUT and SW | SCH (missing component) | missed | missed | a part's required external parts from its datasheet (AD8232's IOUT to SW capacitor) |
+| healthmonitor-2: AD8232 resistor and capacitor between REFIN and GND wired wrongly | SCH (wrong connectivity) | missed | missed | a reference pin's network against the datasheet's typical circuit (AD8232 REFIN) |

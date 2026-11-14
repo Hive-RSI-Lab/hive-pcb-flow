@@ -67,7 +67,8 @@ def test_every_catch_has_a_runner():
                 assert d["catch"]["script"] in ec.RUNNERS, d["id"]
 
 
-def _holdout_manifest(tmp_path, swept=True, blind="missed", verdict="missed", **extra):
+def _holdout_manifest(tmp_path, swept=True, blind="missed", verdict="missed",
+                      rnd=1, **extra):
     d = {"id": "h-1", "summary": "s", "source_quote": "q", "fault_class": "c",
          "verdict": verdict, "follow_up": "#1", **extra}
     if blind:
@@ -76,7 +77,7 @@ def _holdout_manifest(tmp_path, swept=True, blind="missed", verdict="missed", **
          "rev_a": {"name": "A", "sch": "a/x.kicad_sch"},
          "rev_b": {"name": "B", "sch": "b/x.kicad_sch"}, "defects": [d]}
     if swept:
-        b["swept"] = {"flow": "1" * 40, "date": "2026-11-14"}
+        b["swept"] = {"flow": "1" * 40, "date": "2026-11-14", "round": rnd}
     import yaml
     m = tmp_path / "m.yaml"
     m.write_text(yaml.safe_dump({"boards": [], "holdout": [b]}))
@@ -85,7 +86,7 @@ def _holdout_manifest(tmp_path, swept=True, blind="missed", verdict="missed", **
 
 def test_holdout_needs_the_sweep_and_a_blind_verdict(tmp_path):
     assert ec.load(_holdout_manifest(tmp_path), "holdout")[0]["id"] == "h"
-    for bad in ({"swept": False}, {"blind": None}, {"blind": "caught_with_constraints"},
+    for bad in ({"swept": False}, {"rnd": None}, {"rnd": 0}, {"blind": None}, {"blind": "caught_with_constraints"},
                 {"verdict": "caught", "catch": {"script": "check_silk", "kind": "k"}}):
         try:
             ec.load(_holdout_manifest(tmp_path, **bad), "holdout")
@@ -102,10 +103,27 @@ def test_the_holdout_has_its_own_blind_count(tmp_path):
     m = _holdout_manifest(tmp_path, verdict="caught", caught_by="#9",
                           catch={"script": "check_silk", "kind": "k"})
     t = ec.table(tmp_path, ec.load(), ec.load(m, "holdout"))
-    assert "- Holdout, blind: 0 of 1 caught (1 missed)." in t
-    assert "- Holdout, with the rules written since: 1 of 1 caught" in t
-    assert t.index("## Training set") < t.index("## Holdout set")
+    assert "- Holdout round 1, blind: 0 of 1 caught (1 missed)." in t
+    assert "- Holdout round 1, with the rules written since: 1 of 1 caught" in t
+    assert t.index("## Training set") < t.index("## Holdout round 1")
+    assert "## A new holdout round" in t
     assert "since #9" in t
+
+
+def test_each_holdout_round_is_counted_apart(tmp_path):
+    import yaml
+    one = yaml.safe_load(_holdout_manifest(tmp_path).read_text())["holdout"][0]
+    two = yaml.safe_load(_holdout_manifest(tmp_path, blind="caught", verdict="caught",
+                                           rnd=2, catch={"script": "check_silk",
+                                                         "kind": "k"}
+                                           ).read_text())["holdout"][0]
+    two["id"], two["defects"][0]["id"] = "h2", "h2-1"
+    m = tmp_path / "two.yaml"
+    m.write_text(yaml.safe_dump({"boards": [], "holdout": [one, two]}))
+    t = ec.table(tmp_path, [], ec.load(m, "holdout"))
+    assert "- Holdout round 1, blind: 0 of 1 caught (1 missed)." in t
+    assert "- Holdout round 2, blind: 1 of 1 caught (1 caught)." in t
+    assert t.index("## Holdout round 1") < t.index("## Holdout round 2")
 
 
 def test_sweep_keeps_what_the_fix_removed(tmp_path, monkeypatch):
