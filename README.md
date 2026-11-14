@@ -10,6 +10,7 @@ An agent designs a PCB from a written brief: research, architecture, parts, sche
 - `bin/pcb-flow`: runs the scripts in a Hive sandbox with the Hive's KiCad 10 and freerouting (`pcb-flow check` first)
 - The first board made with it: [boards/hwde-led-test/](boards/hwde-led-test/)
 - [docs/errata-corpus.md](docs/errata-corpus.md): public boards whose rev B fixed a rev A defect, and which of those defects pcb-flow's checks catch on rev A (`bin/pcb-flow errata_corpus fetch|run|table`)
+- [docs/miss-taxonomy.md](docs/miss-taxonomy.md): the corpus misses grouped by the check that would see them, ranked by count times how much of a board the check judges
 - [docs/research/](docs/research/README.md): current research turned into checks: `bin/pcb-flow papers` scans the topics in `reference/research/watch.yaml`, reads legitimate open copies (the rest go on [the person's list](docs/research/paywalled.md)), and gives each claim pcb-flow's own verdict, with the test that reached it; only reproduced claims become [guidelines](docs/research/guidelines.md)
 - [docs/route-quality.md](docs/route-quality.md): a layout judged as good, not only legal: `route_quality` scores each net class against its shortest 45-degree routes, `route_improve` re-routes the worst nets in rounds and stops when a round stops gaining
 
