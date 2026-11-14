@@ -1105,6 +1105,15 @@ def _io_overvoltage(nets: dict, comps: dict,
 _PG_FUNC_RE = re.compile(
     r"^(PG|PGOOD\d*|PGD|POK|PWRGD|PWR_?GOOD|PWR_?OK|PGOOD_?\w)$", re.I)
 _NOT_A_READER_RE = re.compile(r"^(R|RN|C|L|FB|D|LED|TP|JP|SJ|H|MH)\d")
+# A part with a load-switch pin (inrush slew, current limit or monitor, fault
+# timer) and no converter or regulator pin is an eFuse, hot-swap controller
+# or load switch: its output is its input switched through, not a rail it
+# brings into regulation, and its power-good only says the FET is on. TI's
+# TPS1663 (SLVSET9G 8.3.8): PGOOD "can be used for enable-disable control of
+# the downstream loads"; pin table: "If PGOOD is unused, then connect to GND
+# or leave it floating." Such a PG is a status output and is not judged.
+_LOAD_SWITCH_PIN_RE = re.compile(r"^(DVDT|IMON|ILIM|TIMER)$")
+_REGULATOR_PIN_RE = re.compile(r"^(SW\d*|LX\d*|PH|FB|VFB|FB\d|BOOT|BST|CB)$")
 
 
 def _pg_unused(nets: dict, comps: dict,
@@ -1114,13 +1123,22 @@ def _pg_unused(nets: dict, comps: dict,
     hold no reader: no pin of an active part or connector other than
     power-good pins. The last item is ('checked', n)."""
     checked = 0
+    funcs: dict[str, set[str]] = {}
+    for members in nets.values():
+        for m in members:
+            funcs.setdefault(m["ref"], set()).add(
+                _norm_pin(m.get("pinfunction")))
+    switches = {r for r, fs in funcs.items()
+                if any(_LOAD_SWITCH_PIN_RE.match(f) for f in fs)
+                and not any(_REGULATOR_PIN_RE.match(f) for f in fs)}
     for net, members in sorted(nets.items()):
         if net.startswith("unconnected-") or net in rails:
             continue
         for m in members:
             func = _norm_pin(m.get("pinfunction"))
             if (not m["ref"].startswith("U") or not _PG_FUNC_RE.match(func)
-                    or _base_type(m.get("pintype")) in _POWER_TYPES):
+                    or _base_type(m.get("pintype")) in _POWER_TYPES
+                    or m["ref"] in switches):
                 continue
             checked += 1
             if len(members) < 2:
