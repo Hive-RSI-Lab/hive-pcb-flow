@@ -19,8 +19,11 @@ with the repo venv python. Keep output ASCII.
   `mouth`, `back` (it already failed mating_faces_inward), `side`, `top`
   (a vertical part), `unknown`, or `unjudged` (no family row: your eyes are
   the only check). Open every edge render with Read and say for each one
-  whether the mouth faces you. A part with no 3D model renders as bare pads:
-  say so, do not pass it.
+  whether the mouth faces you. A part with no 3D model renders as bare pads;
+  its render then carries a magenta arrow (`overlay`) the way check_mating
+  reads its mouth, and a caption. The arrow is check_mating's reading, not
+  a second look: check the pads and silk agree with it, say the body was
+  missing, and do not pass the part on the arrow alone.
 - Schematic PDF (`scripts/kc.py sch-pdf ...`), `architecture/` (intent),
   `requirements.md` (the promises), `constraints.json`.
 
