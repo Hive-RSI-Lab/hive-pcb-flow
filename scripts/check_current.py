@@ -94,12 +94,18 @@ re-judged at the current its far side can draw, when that is less:
  - via cluster: the cluster's vias are cut and the net's raw copper falls
    into components. At most one holds an unbounded part, no cluster via
    lies wholly inside it, and every other side reaches it through exactly
-   one cluster via. The cluster needs ceil(bound / via_amps) vias;
+   one cluster via. Vias that join the same sides, all within LEAF_ENTRY_MM
+   of each other, count as one (#983: following the rule's own advice, a
+   second via beside a tap's first, used to drop the bound). The cluster
+   needs ceil(bound / via_amps) vias;
  - track (a bridge, hifi-receiver-2 core +3V3: 0.3 mm taps off plane vias
    to single pull-ups, judged at the rail's 0.8 A): the track is taken out
    and the net's raw copper must fall into exactly two parts, one at each
    end, with nothing else touching it. When one part reaches only bounded
-   parts, the track is re-judged at their sum.
+   parts, the track is re-judged at their sum. A track that is no bridge
+   but lies wholly on such a bounded part of a bridge leading out of its
+   loop is judged at that part's bound (#983: steps shorter than they are
+   wide, beside a pad, read as a loop; behind_bridge).
 Re-judged findings that pass are listed in facts["leaf_branches"]; ones that
 still fail carry extras leaf_loads. A part on one of the entry's declared
 sense_pads is bounded like a sense pin (#1042: a Kelvin line draws microamps,
@@ -311,6 +317,7 @@ IPC2152_1OZ_10C = [(0.0, 0.0), (0.5, 0.25), (1.0, 0.50), (2.0, 1.10),
 OZ1_MM = 0.035                 # 1 oz copper thickness the table assumes
 VIA_AMPS_DEFAULT = 0.5         # spec: >= 1 via per 0.5 A at transitions
 VIA_CLUSTER_MM = 2.0           # vias within this distance share current
+LEAF_ENTRY_MM = 2.0            # leaf-tap barrels this close: one entry (#983)
 WIDTH_TOL_MM = 1e-3
 RETURN_SYNTH_MIN_A = 3.0       # derive return-net coverage at/above this rail
 PLANE_TAP_MM = 2.0     # plane-fed stubs: fill touches this close are one tap
@@ -825,8 +832,9 @@ def _copper_graph(bg: geom.BoardGeom, net: str, walls: dict | None = None,
     def hits(item) -> list[int]:
         if tree is None:
             return []
+        layers = getattr(item, "layers", None) or (item.layer,)
         return [int(i) for i in tree.query(item.poly, predicate="intersects")
-                if nodes[int(i)][0] in item.layers]
+                if nodes[int(i)][0] in layers]
     links = [v for v in bg.vias_of(net) if id(v) not in skip]
     links += [p for p in bg.pads_of(net) if id(p) not in skip
               and p.drill is not None and len(p.layers) > 1]
@@ -1352,9 +1360,13 @@ def _cut_cluster(bg: geom.BoardGeom, net: str, group: list):
     return ends, touched, refs_of, nodes, find
 
 
-def _single_entry(ends: list, main, rest: set) -> bool:
+def _single_entry(ends: list, main, rest: set, at: list | None = None) -> bool:
     """Whether the sides in `rest` reach `main` through one barrel each, and
-    no barrel sits inside `main`."""
+    no barrel sits inside `main`. Barrels `at` positions that join the same
+    sides, all within LEAF_ENTRY_MM of each other, count as one entry (#983:
+    a second via beside a leaf tap's first): a bypass through the far side
+    would join two points of `main` that close, so it carries next to
+    nothing."""
     if any(e <= {main} for e in ends):
         return False
     parent = {c: c for c in rest}
@@ -1368,11 +1380,25 @@ def _single_entry(ends: list, main, rest: set) -> bool:
         for c in side[1:]:
             parent[cfind(c)] = cfind(side[0])
     into_main: dict = {}
-    for e in ends:
+    for k, e in enumerate(ends):
         if main in e:
             for side in {cfind(c) for c in e & rest}:
-                into_main[side] = into_main.get(side, 0) + 1
-    return not any(n > 1 for n in into_main.values())
+                into_main.setdefault(side, []).append(k)
+    return all(len(ks) == 1 or _one_entry(ks, ends, at)
+               for ks in into_main.values())
+
+
+def _one_entry(ks: list, ends: list, at: list | None) -> bool:
+    """Whether barrels `ks` join the same sides and lie within LEAF_ENTRY_MM
+    of each other (_single_entry)."""
+    if at is None or any(ends[k] != ends[ks[0]] for k in ks):
+        return False
+    return all(math.dist(at[a], at[b]) <= LEAF_ENTRY_MM + 1e-9
+               for a in ks for b in ks)
+
+
+def _barrel_at(group: list) -> list:
+    return [tuple(getattr(b, "at", None) or b.center) for b in group]
 
 
 def cluster_branch(bg: geom.BoardGeom, net: str, group: list, sources):
@@ -1381,7 +1407,8 @@ def cluster_branch(bg: geom.BoardGeom, net: str, group: list, sources):
     side has a way around."""
     ends, touched, refs_of, nodes, find = _cut_cluster(bg, net, group)
     near = [c for c in touched if refs_of[c] & sources[0]]
-    if len(near) != 1 or not _single_entry(ends, near[0], touched - set(near)):
+    if len(near) != 1 or not _single_entry(ends, near[0], touched - set(near),
+                                           _barrel_at(group)):
         return None
     far = branch_refs(bg, net, list(refs_of.values()), sources)
     if far is None:
@@ -1402,7 +1429,7 @@ def cluster_leaf_bound(bg: geom.BoardGeom, net: str, group: list):
     if len(main) > 1:
         return None
     rest = touched - set(main)
-    if main and not _single_entry(ends, main[0], rest):
+    if main and not _single_entry(ends, main[0], rest, _barrel_at(group)):
         return None                      # inside the main side, or a bypass
     refs = set().union(*(refs_of[c] for c in rest))
     if not refs:
@@ -1413,6 +1440,13 @@ def cluster_leaf_bound(bg: geom.BoardGeom, net: str, group: list):
 def track_sides(bg: geom.BoardGeom, net: str, track):
     """[refs, refs] when taking a track out leaves the net's raw copper in two
     parts, one at each end; else None."""
+    split = _track_split(bg, net, track)
+    return None if split is None else list(split[1].values())
+
+
+def _track_split(bg: geom.BoardGeom, net: str, track):
+    """(side_of(item) -> its side's root or None, {root: refs} of the two
+    sides) for track_sides, else None."""
     nodes, find, hits = _copper_graph(bg, net, drop=track)
     on = [i for i, (l, _p) in enumerate(nodes) if l == track.layer]
     coords = track.shape.coords
@@ -1424,8 +1458,13 @@ def track_sides(bg: geom.BoardGeom, net: str, track):
     if (len(sides) != 2 or any(len(e) != 1 for e in ends)
             or ends[0] == ends[1]):
         return None                      # a parallel path, or a mid-track tap
-    return [{p.ref for p in bg.pads_of(net)
-             if any(find(i) == side for i in hits(p))} for side in sides]
+
+    def side_of(item):
+        roots = {find(i) for i in hits(item)}
+        return roots.pop() if len(roots) == 1 else None
+    return side_of, {side: {p.ref for p in bg.pads_of(net)
+                            if any(find(i) == side for i in hits(p))}
+                     for side in sides}
 
 
 def cluster_sides(bg: geom.BoardGeom, net: str, g, bridges: set, eid):
@@ -1457,6 +1496,43 @@ def cluster_sides(bg: geom.BoardGeom, net: str, g, bridges: set, eid):
         if sides:
             return sides
     return None
+
+
+BEHIND_EXITS_MAX = 8            # bridges tried by behind_bridge
+
+
+def behind_bridge(bg: geom.BoardGeom, net: str, g, bridges: set, eid, track):
+    """(amps, refs) for a track that is no bridge but lies wholly on the
+    bounded side of a bridge track leading out of its loop (#983: steps
+    shorter than they are wide, whose neighbours' end caps overlap across
+    them, next to a pad). Every current through that side enters by the
+    bridge, so it is at most the side's summed load bound; the smallest
+    over the bridges is kept. None when no bridge bounds it, or the loop
+    has more than BEHIND_EXITS_MAX bridges leading out (it is then part of
+    the main copper, which no bridge bounds)."""
+    todo = [a for a, nbrs in g.adj.items() if any(e == eid for _, _, e in nbrs)]
+    seen, exits = set(todo), set()
+    while todo:
+        u = todo.pop()
+        for v, _w, e in g.adj[u]:
+            if e in bridges:
+                exits.add(e)
+                if len(exits) > BEHIND_EXITS_MAX:
+                    return None
+            elif v not in seen:
+                seen.add(v)
+                todo.append(v)
+    best = None
+    for e in sorted(exits, key=str):
+        split = _track_split(bg, net, g.tracks[e])
+        if split is None:
+            continue
+        side_of, refs_of = split
+        side = side_of(track)
+        amps = None if side is None else _loads(bg, refs_of[side])
+        if amps is not None and (best is None or amps < best[0]):
+            best = (amps, sorted(refs_of[side]))
+    return best
 
 
 def track_leaf_bound(bg: geom.BoardGeom, sides: list | None):
@@ -1498,8 +1574,9 @@ def _stub_graph(bg: geom.BoardGeom, net: str, fills: dict,
     def hits(item) -> list[int]:
         if tree is None:
             return []
+        layers = getattr(item, "layers", None) or (item.layer,)
         return [int(i) for i in tree.query(item.poly, predicate="intersects")
-                if nodes[int(i)][0] in item.layers]
+                if nodes[int(i)][0] in layers]
     links = [x for x in bg.vias_of(net) if id(x) not in skip]
     links += [x for x in bg.pads_of(net) if id(x) not in skip
               and x.drill is not None and len(x.layers) > 1]
@@ -1841,6 +1918,8 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
                 sides = None if eid is None else cluster_sides(
                     bg, net, g, bridges, eid)
             leaf = track_leaf_bound(bg, sides)
+            if leaf is None and not v["bridge"] and id(t) in edge_of:
+                leaf = behind_bridge(bg, net, g, bridges, edge_of[id(t)], t)
             if leaf is None or leaf[0] >= v["current_a"]:
                 mid = t.shape.interpolate(0.5, normalized=True).coords[0]
                 far = branch_refs(bg, net, sides, sources) if (
