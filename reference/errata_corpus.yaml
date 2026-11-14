@@ -474,8 +474,15 @@ boards:
     summary: the EN input is too sensitive when left floating
     source_quote: "The `EN` input is much too sensitive when left floating."
     fault_class: SCH (input pull strength)
-    verdict: missed
-    follow_up: "cable pickup on a floating off-board input: no datasheet leakage to size against, so #1026's rule leaves it (survey #1079)"
+    verdict: caught
+    catch: {script: netlist_audit, kind: offboard_input_weak_pull, net: "/~{EN}"}
+    note: >-
+      #1079: v1's EN terminal (J1.3) is held only by R4 100k to +12V, with no
+      clamp, into Q1's base through R5 20k (C7 100n at the base did not
+      save it): above TI SPRACK9's 10k for a line that may be disconnected,
+      and no TVS as Microchip AN2587 asks on external I/O. v2's
+      /~{CTRL_EN_IN} has 22k to +3.3V and the D4 PESD3V3L5UY array; it is
+      the clamp that keeps v2 quiet.
 - id: megabuzz
   url: https://github.com/andykarpov/karabas-megabuzz
   commit: b3a026f15f440507760da5281632fed66bef03fe
