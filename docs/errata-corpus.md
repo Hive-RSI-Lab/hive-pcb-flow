@@ -97,7 +97,7 @@ what pcb-flow's checks do with the first revision. Written by
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| megabuzz-1: OPL3 at 5 V drives the FPGA's 3.3 V inputs through dropping resistors only | SCH (I/O supply domain) | missed | driver supply against receiver bank voltage without parts.json (#1029) |
+| megabuzz-1: OPL3 at 5 V drives the FPGA's 3.3 V inputs through dropping resistors only | SCH (I/O supply domain) | caught on rev A, gone on rev B (`netlist_audit` io_overvoltage) | reference/io_levels.yaml (#1029): the YMF262's VOH min VDD-1.0 V on its 5 V rail is 4 V at the Spartan-6 IO_ pins through R13-R16 27 ohm, over DS162's 3.95 V VIN max (YM_DATA, YM_DCLK, YM_SMP1, YM_SMP2); revA1 runs it from +3V3. The errata's /RST items are fixed in the revA files at this commit, and the revA1 items have no next revision here, so only this one is judged. |
 
 ## sizif: rev.C -> rev.C1
 
@@ -118,4 +118,4 @@ what pcb-flow's checks do with the first revision. Written by
 
 ## Count
 
-41 defects: 26 caught, 11 missed, 4 not_static.
+41 defects: 27 caught, 10 missed, 4 not_static.
