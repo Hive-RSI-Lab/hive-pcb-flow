@@ -129,6 +129,17 @@ schematic-level structural problems BEFORE board work starts:
    resistor on: only resistors, capacitors, LEDs, test points and jumpers.
    Whatever the converter powers starts before its output is in regulation
    (#1030). A PG left unconnected is a choice and is not flagged.
+ - power_path_body_diode (warning): a MOSFET between a battery's positive
+   net (BAT/VBAT/BATT/+BATT/CELL by name, or a BT* part's + pin) and a
+   rail with a source of its own (a power_out pin, a connector, a VBUS /
+   VIN / USB / 5V name) whose body diode (N: source to drain, P: drain to
+   source) points into the battery: with the FET off, that rail charges
+   the cell through the diode (#1085; TI SLVA139, Microchip AN1149). A
+   back-to-back pair's middle node is no rail and is skipped.
+ - protector_orientation (warning): a single-cell protector with S-8261's
+   pins (VDD, VSS, VM, DO, CO) whose VSS net (the cell's -) carries more
+   other ICs' supply pins than the pack - net its VM resistor reaches:
+   the load returns around the protection FETs (#1085; ABLIC S-8261).
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -253,6 +264,8 @@ def parse_netlist(path: Path | str) -> dict:
             if src:
                 comps[ref]["libsource"] = (_atom(src[0], "lib") or "",
                                            _atom(src[0], "part") or "")
+                if _atom(src[0], "description"):
+                    comps[ref]["libdesc"] = _atom(src[0], "description")
             unit_pins: set[str] = set()
             for ub in _kids(c, "units"):
                 for u in _kids(ub, "unit"):
@@ -1271,6 +1284,162 @@ def _pg_unused(nets: dict, comps: dict,
                 yield (m["ref"], m["pin"], func, net,
                        sorted({y["ref"] for y in seen} - {m["ref"]}))
     yield ("checked", checked, "", "", [])
+
+
+# power-path orientation (#1085). Seeded from TI SLVA139 and ABLIC S-8261
+# Rev.5.5_00, not from any corpus board.
+_PMOS_RE = re.compile(r"PMOS|P[-_ ]?CH|PFET|P-?CHANNEL|Q_P(MOS)?_", re.I)
+_NMOS_RE = re.compile(r"NMOS|N[-_ ]?CH|NFET|N-?CHANNEL|Q_N(MOS)?_", re.I)
+# a single-cell battery's positive net: BAT, VBAT, BATT, +BATT, BAT+,
+# VBAT_IN; not BAT- / BATN / BAT_NEG
+_BATTERY_NET_RE = re.compile(
+    r"^\+?V?BATT?(\+|_?P|_?POS|_IN)?$|^\+?CELL\+?$|^VCELL$")
+# a rail that has a source of its own besides the battery: a bus or adapter
+# input by name
+_SOURCE_NET_RE = re.compile(r"VBUS|^\+?VIN|USB|^\+?5V|^\+?VDC|ADAPTER|"
+                            r"^\+?DC_?IN|CHG|CHARGE")
+_BATTERY_REF_RE = re.compile(r"^BT\d")
+# S-8261-style protector: VDD to the cell's +, VSS to the cell's -, VM
+# (through R2) to the pack's - (EB-), DO/CO drive the two FETs
+_PROTECTOR_PINS = {"VDD", "VSS", "VM", "DO", "CO"}
+
+
+def _fet_channel(comp: dict) -> str | None:
+    """'P' or 'N' from the part's value, symbol name or the symbol's
+    description ("P-Channel MOSFET"), else None."""
+    for text in (comp.get("value") or "",
+                 (comp.get("libsource") or ("", ""))[1],
+                 comp.get("libdesc") or ""):
+        p, n = _PMOS_RE.search(text), _NMOS_RE.search(text)
+        if p and not n:
+            return "P"
+        if n and not p:
+            return "N"
+    return None
+
+
+def _battery_nets(nets: dict) -> set[str]:
+    """Nets that are a battery's positive terminal: by name, or on a BT*
+    part's + pin (or pin 1 of an unnamed one)."""
+    out = set()
+    for name, members in nets.items():
+        bare = re.split(r"/", name.upper())[-1]
+        if _BATTERY_NET_RE.match(bare):
+            out.add(name)
+            continue
+        for m in members:
+            if not _BATTERY_REF_RE.match(m["ref"] or ""):
+                continue
+            func = _norm_pin(m.get("pinfunction"))
+            if func == "+" or (not func and m["pin"] == "1"):
+                out.add(name)
+    return {n for n in out if not _is_ground_name(n.lstrip("/"))}
+
+
+def _sourced_rail(net: str, nets: dict, comp_pins: dict[str, dict[str, str]],
+                  skip: str, _hop: int = 0) -> bool:
+    """A rail with a source besides the battery: a power_out pin of
+    another part, a connector pin, or a bus/adapter name, on the net or
+    one or two diode (anode side), fuse, inductor, bead or resistor hops
+    back."""
+    bare = re.split(r"/", net.upper())[-1]
+    if _SOURCE_NET_RE.search(bare):
+        return True
+    members = nets.get(net, [])
+    if any(m["ref"] != skip and (
+            _base_type(m.get("pintype")) == "power_out"
+            or _CONNECTOR_RE.match(m["ref"] or "")) for m in members):
+        return True
+    if _hop >= 2:
+        return False
+    for m in members:
+        xp = comp_pins.get(m["ref"], {})
+        if m["ref"] == skip or len(xp) != 2:
+            continue
+        func = _norm_pin(m.get("pinfunction"))
+        diode = (m["ref"] or "").startswith("D")
+        if diode and func not in ("K", "CATHODE"):
+            continue
+        if not diode and not _DC_PASS_RE.match(m["ref"] or ""):
+            continue
+        far = next((n for p, n in xp.items() if p != m["pin"]), None)
+        if far and far != net and not _is_ground_name(far.lstrip("/")) \
+                and _sourced_rail(far, nets, comp_pins, skip, _hop + 1):
+            return True
+    return False
+
+
+def _power_path_fets(nets: dict, comps: dict,
+                     comp_pins: dict[str, dict[str, str]], rails: dict):
+    """Yield (ref, channel, battery net, other net) for each MOSFET whose
+    body diode conducts from a sourced rail into a battery's positive net
+    (N: source to drain, P: drain to source). The last item is
+    ('checked', n, '', '')."""
+    batteries = _battery_nets(nets)
+    checked = 0
+    for ref, pins in sorted(comp_pins.items()):
+        if not ref.startswith("Q") or comps.get(ref, {}).get("dnp"):
+            continue
+        roles: dict[str, set[str]] = {}
+        for net, members in nets.items():
+            for m in members:
+                if m["ref"] == ref:
+                    r = _transistor_role(_norm_pin(m.get("pinfunction")))
+                    if r:
+                        roles.setdefault(r, set()).add(net)
+        if len(roles.get("D", ())) != 1 or len(roles.get("S", ())) != 1:
+            continue
+        ch = _fet_channel(comps.get(ref, {}))
+        if not ch:
+            continue
+        (d,), (s,) = roles["D"], roles["S"]
+        anode, cathode = (s, d) if ch == "N" else (d, s)
+        if not ({anode, cathode} & batteries):
+            continue
+        checked += 1
+        if (cathode in batteries and anode not in batteries
+                and not _is_ground_name(anode.lstrip("/"))
+                and _supply_net(anode, nets[anode], rails)
+                and _sourced_rail(anode, nets, comp_pins, ref)):
+            yield ref, ch, cathode, anode
+    yield "checked", checked, "", ""
+
+
+def _protector_orientation(nets: dict, comps: dict,
+                           comp_pins: dict[str, dict[str, str]]):
+    """Yield (ref, vss net, vm-side net, ics on vss, ics on vm side) for
+    each S-8261-style protector whose VSS (the cell's -) net carries more
+    other ICs' ground pins than the pack - net VM reaches through its one
+    resistor: the load returns to the cell's - around the FETs. The last
+    item is ('checked', n, '', [], [])."""
+    funcs: dict[str, dict[str, str]] = {}
+    for net, members in nets.items():
+        for m in members:
+            funcs.setdefault(m["ref"], {})[_norm_pin(
+                m.get("pinfunction"))] = net
+    checked = 0
+
+    def grounds(net: str, own: str) -> list[str]:
+        return sorted({m["ref"] for m in nets.get(net, [])
+                       if m["ref"] != own and (m["ref"] or "").startswith("U")
+                       and _base_type(m.get("pintype")) in _POWER_TYPES})
+
+    for ref, fn in sorted(funcs.items()):
+        if not _PROTECTOR_PINS <= set(fn):
+            continue
+        vss, vm = fn["VSS"], fn["VM"]
+        pack = None
+        for m in nets.get(vm, []):
+            xp = comp_pins.get(m["ref"], {})
+            if _part_kind(m["ref"]) == "R" and len(xp) == 2:
+                pack = next((n for p, n in xp.items() if p != m["pin"]), None)
+        if not pack or pack == vss:
+            continue
+        checked += 1
+        on_vss, on_pack = grounds(vss, ref), grounds(pack, ref)
+        if on_vss and len(on_vss) > len(on_pack):
+            yield ref, vss, pack, on_vss, on_pack
+    yield "checked", checked, "", [], []
 
 
 def _dc_level(net: str, nets: dict, comps: dict,
@@ -2564,6 +2733,39 @@ def audit(parsed: dict, constraints: dict,
              else " (not yet re-read)"),
           bus=bus, load_pf=round(total, 3), budget_pf=budget)
 
+    # 22. power-path orientation (#1085; TI SLVA139: "the FET's body
+    # diode is oriented in the direction of normal current flow"; ABLIC
+    # S-8261 Rev.5.5_00 Figure 10: VSS on the cell's -, VM through R2 to
+    # the pack's - EB-)
+    pp_checked = 0
+    for ref, ch, bat, other in _power_path_fets(nets, comps, comp_pins,
+                                                pl_rails):
+        if ref == "checked":
+            pp_checked = ch
+            continue
+        d_s = "source to drain" if ch == "N" else "drain to source"
+        v("warning", "power_path_body_diode", bat, [ref],
+          f"{ref} ({comps.get(ref, {}).get('value')}, {ch}-channel) has its "
+          f"body diode ({d_s}) from '{other}' into the battery net '{bat}': "
+          f"with the FET off, '{other}' still charges the battery through "
+          f"the diode, uncontrolled. Turn the FET around so the diode points "
+          f"out of the battery [TI SLVA139; Microchip AN1149 Figs 5-6]",
+          from_net=other)
+    prot_checked = 0
+    for ref, vss, pack, on_vss, on_pack in _protector_orientation(
+            nets, comps, comp_pins):
+        if ref == "checked":
+            prot_checked = vss
+            continue
+        v("warning", "protector_orientation", vss, [ref] + on_vss,
+          f"{ref} ({comps.get(ref, {}).get('value')}) VSS net '{vss}' "
+          f"carries the ground of {', '.join(on_vss)}, while the pack "
+          f"negative '{pack}' its VM resistor reaches carries "
+          f"{', '.join(on_pack) or 'none'}: VSS belongs on the cell's - "
+          f"alone and the load returns through the FETs to the pack - "
+          f"(EB-), or the protector cannot cut it [ABLIC S-8261 Rev.5.5_00 "
+          f"Figure 10]", pack_net=pack)
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -2589,6 +2791,8 @@ def audit(parsed: dict, constraints: dict,
         "reset_contention_found": contention_checked,
         "io_drive_pins_checked": iolv_checked,
         "power_good_pins_checked": pg_checked,
+        "power_path_fets_checked": pp_checked,
+        "battery_protectors_checked": prot_checked,
         "unverified_findings": len(not_judged),
     }
     if not_judged:
