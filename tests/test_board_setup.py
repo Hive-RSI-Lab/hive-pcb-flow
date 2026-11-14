@@ -1699,6 +1699,27 @@ def test_stripline_single_ended_rule_no_class():
     assert not [c for c in rep["classes"] if c["name"].startswith("Z")]
 
 
+def test_single_ended_impedance_inner_guard():
+    """#1108: a 50 ohm net on an inner layer with no solved stripline is a
+    named DRC error (the pair's guard), not a silent miss at the default
+    width; the stripline layer keeps its width rule and no guard."""
+    rules, _ = rules_gen.build(_ddr_cons(), _cap("6layer_1oz"),
+                               _stackup("JLC06161H-3313"), False)
+    byname = {r.name: r for r in rules}
+    for lay in ("In1", "In3", "In4"):
+        g = byname[f"aiee_z50_outer_only_{lay}"]
+        assert g.constraint == "disallow track" and g.layer == f'"{lay}.Cu"'
+        assert "'/D0'" in g.condition and "'/CK_P'" not in g.condition
+    assert "aiee_z50_outer_only_In2" not in byname
+    assert "aiee_z50_outer_only" not in byname
+    # no stripline layer at all: one guard over every inner layer
+    cons, stk = _ddr_cons(), _stackup("JLC06161H-3313")
+    pairs = rules_gen.detect_diff_pairs(cons)
+    zr, _ = rules_gen.impedance_rules({**cons, "planes": []}, stk, pairs, 0.0889)
+    guards = [r for r in zr if r.constraint == "disallow track"]
+    assert [(r.name, r.layer) for r in guards] == [("aiee_z50_outer_only", "inner")], zr
+
+
 def test_stripline_width_necks_down_in_bga_fields():
     """BGA escape stubs run at the fab floor inside the field (#325): the
     stripline width rules exclude every ball grid's courtyard."""

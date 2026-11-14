@@ -7,7 +7,11 @@ lacks a declared pour (constraints `planes`) on the copper above or below. A str
 solved widths instead (`aiee_diff_w_<pair>_<layer>`, a track_width violation when the run is off
 its width; #323), so this rule names a layer with nothing to size the pair against. The rule is
 `aiee_diff_outer_only_<pair>` (every inner layer) or `aiee_diff_outer_only_<pair>_<layer>` (just
-the non-stripline ones, when the board has a stripline layer).
+the non-stripline ones, when the board has a stripline layer). Single-ended impedance nets
+(constraints `high_speed` with `impedance_ohm`) get the same guard per impedance,
+`aiee_z<Z>_outer_only` / `aiee_z<Z>_outer_only_<layer>` (#1108). route_auto writes both families
+into the DSN as each net's class `use_layer`, so Freerouting should not draw these; a hit means a
+hand edit, KRT, or a condition the DSN reader skipped.
 
 - Emitted by: kicad-cli DRC (`<board>.kicad_dru` auto-loads, no flag), normalized by `kc.py`
   `normalize_violation`. Msg: `Items not allowed (rule 'aiee_diff_outer_only_<pair>')`.
@@ -21,7 +25,7 @@ the non-stripline ones, when the board has a stripline layer).
 - Almost always: the router (or a hand edit) dropped an impedance-controlled net onto In1/In2.
   Layer TRANSITIONS are legal - vias are not tracks and never fire this rule - so what is flagged
   is specifically inner-layer track length, exactly the geometry the solver never solved.
-- A rule named anything OTHER than `aiee_diff_outer_only_*` means someone hand-authored a disallow
+- A rule named anything OTHER than `aiee_diff_outer_only_*` / `aiee_z*_outer_only*` means someone hand-authored a disallow
   rule; read the DRU comment beside it before touching anything.
 - Not real only if the net was WRONGLY paired (rules_gen JSON `diff_pairs` lists the detected
   pairs; a suffix-matched false pair means fix constraints `diff_pairs`, then regenerate).
@@ -39,7 +43,7 @@ the non-stripline ones, when the board has a stripline layer).
    Hand-solve the stripline geometry against the fab's impedance calculator (JLC's, for the
    exact entry in `reference/stackups.yaml` - its epsilon_r values are ASSUMED, see the header),
    record width/gap + source in the workspace log, apply with route_edit.py, and only then
-   delete that one `aiee_diff_outer_only_<pair>` rule from the `.kicad_dru`, with a comment
+   delete that one `aiee_*_outer_only*` rule from the `.kicad_dru`, with a comment
    naming the log entry. Never delete the rule first.
 
 ## Do not
@@ -61,4 +65,4 @@ the non-stripline ones, when the board has a stripline layer).
 
 - PROGRESS.md S8 entry item 4 (V12: outer microstrip only); hive-pcb-flow #323 (stripline layers).
 - `reference/stackups.yaml` header (assumed epsilon_r; confirm against the fab calculator).
-- rules_gen.py `diff_pair_rules` (T6 P5-4 comment block: rationale + waiver path).
+- rules_gen.py `diff_pair_rules` (T6 P5-4 comment block: rationale + waiver path), `impedance_rules` (#1108).

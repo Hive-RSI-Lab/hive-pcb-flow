@@ -556,6 +556,110 @@ def dsn_apply_layer_widths(dsn_text: str,
     return "".join(out), done
 
 
+def dru_track_bans(dru_text: str, signal_layers: list[str]) -> dict[str, set]:
+    """The layers a .kicad_dru `disallow track` rule keeps each net off
+    (rules_gen's aiee_diff_outer_only_* / aiee_z<Z>_outer_only*: an inner layer with no solved
+    stripline geometry), as {net: {layer, ...}}. Only rules whose condition
+    is nothing but `A.NetName == '...'` alternatives are read, on a quoted
+    layer or KiCad's `inner`/`outer`; any other condition is left to DRC.
+    signal_layers: the board's copper layer names, front first."""
+    outer = {ly for ly in signal_layers if ly in ("F.Cu", "B.Cu")}
+    bans: dict[str, set] = {}
+    for m in re.finditer(r'\(rule\s+"[^"]*"(.*?)\n\)', dru_text or "", re.S):
+        body = m.group(1)
+        if not re.search(r"\(constraint\s+disallow\s+[^)]*\btrack\b", body):
+            continue
+        lm = re.search(r'\(layer\s+("?)([^"\s)]+)\1\s*\)', body)
+        cm = re.search(r'\(condition\s+"(.*)"\s*\)', body)
+        if not lm or not cm:
+            continue
+        nets = re.findall(r"A\.NetName\s*==\s*'([^']+)'", cm.group(1))
+        rest = re.sub(r"A\.NetName\s*==\s*'[^']+'|\|\||\s", "", cm.group(1))
+        if not nets or rest:
+            continue
+        ly = lm.group(2)
+        layers = ({x for x in signal_layers if x not in outer} if ly == "inner"
+                  else outer if ly == "outer"
+                  else {ly} if ly in signal_layers else set())
+        for n in nets:
+            if layers:
+                bans.setdefault(n, set()).update(layers)
+    return bans
+
+
+def dsn_apply_track_bans(dsn_text: str, bans: dict[str, set]
+                         ) -> tuple[str, list]:
+    """Keep each net's tracks off the layers `bans` names (dru_track_bans)
+    by giving its class a Specctra `(circuit (use_layer ...))` of the
+    signal layers it may use, which Freerouting reads as the class's active
+    routing layers (#1108: the DRU kept the CK pair off In4, the DSN didn't,
+    and Freerouting drew it there). A class whose nets are banned
+    differently is split, the banned nets each to their own class (rules
+    and vias kept). A net banned from every layer is left alone, for DRC to
+    name. Returns (text, [{net, use_layer: the layers it may use}]); a DSN not in
+    `(resolution um N)` comes back unchanged."""
+    if not bans or not re.search(r"\(resolution\s+um\s+\d+\)", dsn_text):
+        return dsn_text, []
+    scan = _parser_blanked(dsn_text)
+    span = _structure_span(scan)
+    if span is None:
+        return dsn_text, []
+    signal = re.findall(r"\(layer\s+\"?([^\s\"()]+)\"?\s*\(type\s+(?:signal|mixed)\)",
+                        scan[span[0]:span[1]])
+
+    def allowed(net: str) -> tuple:
+        ban = bans.get(net) or set()
+        keep = tuple(ly for ly in signal if ly not in ban)
+        return keep if ban & set(signal) and keep else ()
+
+    def with_layers(body: str, keep: tuple) -> str:
+        use = f"(use_layer {' '.join(keep)})"
+        m = re.search(r"\(circuit\b", body)
+        if m:
+            end = _sexp_end(body, m.start())
+            return body[:end - 1].rstrip() + f"\n        {use}\n      )" \
+                + body[end:]
+        return f"(circuit\n        {use}\n      )\n      " + body
+
+    out, done, pos = [], [], 0
+    for m in re.finditer(r"\(class\s", dsn_text):
+        if m.start() < pos:
+            continue
+        end = _sexp_end(dsn_text, m.start())
+        block = dsn_text[m.start():end]
+        head_end = next((j for j, t in enumerate(_quote_mask(block))
+                         if j and t == "("), -1)
+        head = block[:head_end] if head_end > 0 else block[:-1]
+        body = (block[head_end:-1] if head_end > 0 else "").strip()
+        toks = _DSN_TOKEN_RE.findall(head)[1:]
+        name, members = toks[0], toks[1:]
+        out.append(dsn_text[pos:m.start()])
+        pos = end
+        hit = {t: allowed(t.strip('"')) for t in members}
+        hit = {t: k for t, k in hit.items() if k}
+        if not hit:
+            out.append(block)
+            continue
+        keep = [t for t in members if t not in hit]
+        alone = not keep and len(set(hit.values())) == 1
+        parts = []
+        if keep:
+            parts.append(f"(class {name} {' '.join(keep)}\n      {body}\n    )")
+        if alone:
+            k = next(iter(hit.values()))
+            parts.append(f"(class {name} {' '.join(members)}\n      "
+                         f"{with_layers(body, k)}\n    )")
+        else:
+            for tok, k in hit.items():
+                cname = "aiee_ban_" + re.sub(r"[^A-Za-z0-9_]", "_", tok.strip('"'))
+                parts.append(f"(class {cname} {tok}\n      "
+                             f"{with_layers(body, k)}\n    )")
+        done += [{"net": t.strip('"'), "use_layer": list(k)} for t, k in hit.items()]
+        out.append("\n    ".join(parts))
+    out.append(dsn_text[pos:])
+    return "".join(out), done
+
+
 _DSN_SEXP_TOKEN_RE = re.compile(r'"[^"]*"|[()]|[^\s()"]+')
 _DSN_HEAD_RE = re.compile(r"\(\s*([^\s()]+)")
 

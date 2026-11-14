@@ -127,7 +127,7 @@ FIXER_HINTS = {
     "via_dangling": "router", "track_dangling": "router",
     "track_angle": "router", "via_diameter": "router",
     "solder_mask_bridge": "router", "copper_edge_clearance": "router",
-    # disallow-rule hits (T6 P5-4: aiee_diff_outer_only_* inner-layer guard)
+    # disallow-rule hits (T6 P5-4 / #1108: aiee_diff_outer_only_*, aiee_z*_outer_only*)
     "items_not_allowed": "router",
     "courtyards_overlap": "placement", "footprint": "placement",
     "silk_over_copper": "silk", "silk_overlap": "silk",

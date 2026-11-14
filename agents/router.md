@@ -87,7 +87,8 @@ rules as routing constraints; cite the record id when you apply one.
 3. `scripts/route_auto.py --pcb <board>` - refill -> DSN export (with the
    board's hole rules: vias kept min_hole_to_hole apart, NPTH holes kept
    out by their hole/edge clearance, a keepout band along every board edge
-   as wide as min_copper_edge_clearance) -> the
+   as wide as min_copper_edge_clearance, and each net's DRU inner-layer
+   bans as its class's `use_layer`, `dsn_track_bans`) -> the
    Freerouting ladder (deterministic flags, per-rung timeouts, wedge
    detection) -> best-SES import -> refill -> DRC -> KRT finish/fallback
    (LQFP fan-outs FR cannot do; sliver-via and hole_to_hole rip; kept only
