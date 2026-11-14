@@ -65,7 +65,7 @@ def have(d: Path) -> dict[str, bool]:
         "freerouting": (d / "freerouting" / f"freerouting-{FR_VER}.jar").exists(),
         "krt": (d / "kicad-routing-tools" / f"KiCadRoutingTools-{KRT_VER}" / "plugins" / "rust_router" / "grid_router.so").exists(),
         "java": java_ok() or any(d.glob("jre/*/bin/java")),
-        "xvfb": bool(shutil.which("xvfb-run")) or bool(os.environ.get("DISPLAY")),
+        "xvfb": bool(shutil.which("Xvfb") and shutil.which("xauth")) or bool(os.environ.get("DISPLAY")),
     }
 
 
@@ -137,7 +137,7 @@ def report(d: Path) -> int:
     for k, v in h.items():
         print(f"  {k:12} {'ok' if v else 'MISSING'}")
     if not h["xvfb"]:
-        print("hwde tools: no X display and no xvfb-run. Needs root, once: sudo apt install xvfb"
+        print("hwde tools: no X display and no Xvfb. Needs root, once: sudo apt install xvfb"
               " (on WSL 2 with Windows 11 a display usually exists already)")
     return 0 if all(h.values()) else 1
 

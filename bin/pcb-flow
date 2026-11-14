@@ -206,13 +206,16 @@ export HWDE_KNOWLEDGE_SOURCES HWDE_BOARDS_ROOT HWDE_HOUSE_STYLE
 [ -n "${HWDE_PDF_MATERIAL_BUILDER:-}" ] && export HWDE_PDF_MATERIAL_BUILDER
 [ -n "${HWDE_DIAGRAM_MAKER:-}" ] && export HWDE_DIAGRAM_MAKER
 # KiCad's SWIG paths need an X display: with none, a script runs under its own
-# Xvfb (xvfb-run), gone when the script ends. GLX stays off: H0's Xvfb crashes
-# loading it through the NVIDIA EGL libraries, and KiCad doesn't need it here.
+# Xvfb (bin/xvfb-private), gone when the script ends. Not `xvfb-run -a` (#1037):
+# runs that start together pick the same display, and one that loses 10 times
+# runs its script on another run's server ("Authorization required").
+# GLX stays off: H0's Xvfb crashes loading it through the NVIDIA EGL
+# libraries, and KiCad doesn't need it here.
 # -noreset (#898): an X server resets when its last client disconnects, and wx
 # probes the display and reconnects; a connect that lands in the reset fails
 # with "wxEntryStart failed", about 1 start in 8 with many at once on a busy box.
 xvfb=
-[ -z "${DISPLAY:-}" ] && command -v xvfb-run >/dev/null 2>&1 && xvfb=1
+[ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1 && command -v xauth >/dev/null 2>&1 && xvfb=1
 # A heavy command (a pytest suite, the router, whole-board gates) runs under
 # `hive heavy`, which runs one heavy command at a time on the machine: on
 # 10-28 ten pcb-flow suites and freerouting at once took a 20-core load to 137.
@@ -225,7 +228,7 @@ lease() {
 		hive heavy </dev/null 2>&1 | grep -q '^usage: hive heavy'
 }
 x() {
-	[ -n "$xvfb" ] && set -- xvfb-run -a -s "-extension GLX -noreset" "$@"
+	[ -n "$xvfb" ] && set -- "$here/bin/xvfb-private" -extension GLX -noreset -- "$@"
 	if lease; then
 		export HWDE_HEAVY_HELD=1
 		exec hive heavy --what "$heavy" --patience 10m -- "$@"
