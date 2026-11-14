@@ -119,6 +119,21 @@ def test_diff_specs_non_usb_defaults_100_ohm():
     assert specs == [{"p": "/LVDS_P", "n": "/LVDS_N", "impedance_ohm": 100}]
 
 
+def test_diff_specs_leave_out_sense_pairs():
+    """#967: a low-frequency / sense pair wants equal legs, not a coupled
+    run at an impedance; route_critical must not route it as a diff pair."""
+    cons = {"diff_pairs": [{"p": "/INP", "n": "/INN",
+                            "kind": "low_frequency"},
+                           {"p": "/USB_DP", "n": "/USB_DM"}],
+            "high_speed": [{"net": "/ISNS_P"}, {"net": "/ISNS_N"},
+                           {"net": "/INP"}, {"net": "/INN"}]}
+    sense: list = []
+    specs = rc.diff_specs(cons, [], sense=sense)
+    assert [(s["p"], s["n"]) for s in specs] == [("/USB_DP", "/USB_DM")]
+    assert sense == [["/INP", "/INN"], ["/ISNS_P", "/ISNS_N"]]
+    assert rc.diff_specs(cons, []) == specs
+
+
 def test_diff_specs_explicit_wins_over_discovery():
     cons = {"diff_pairs": [{"p": "/USB_DP", "n": "/USB_DM", "gap_mm": 0.4,
                             "impedance_ohm": 85}],
