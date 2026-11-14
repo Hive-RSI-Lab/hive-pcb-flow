@@ -188,3 +188,32 @@ def test_dsn_shuffle_reorders_components_and_nets_only():
         assert out.index("(class kicad_default") > out.index('(net "C(1)"')
         assert out.index("(placement") < out.index("(network")
     assert routelib.dsn_shuffle("(pcb x", 1) == "(pcb x"
+
+
+def test_edge_keepouts_band_every_edge_on_every_layer():
+    # a 20 x 10 board with a 4 x 4 window: 8 segments, each once
+    outer = [(0, 0), (20, 0), (20, 10), (0, 10), (0, 0)]
+    window = [(8, 3), (12, 3), (12, 7), (8, 7), (8, 3)]
+    segs = routelib.edge_segments([outer, window, list(reversed(window))])
+    assert len(segs) == 8
+    text, n = routelib.dsn_edge_keepouts(DSN, segs, 0.3)
+    assert n == 8
+    polys = re.findall(r'\(keepout "aiee_edge" \(polygon (\S+) 0  ([^)]*)\)\)',
+                       text)
+    assert len(polys) == 16
+    assert {ly for ly, _ in polys} == {"F.Cu", "B.Cu"}
+    # the bottom edge (y = 0): 0.3 mm either side, 0.3 mm past each end
+    bottom = [[float(v) for v in c.split()] for _, c in polys
+              if all(abs(float(y)) <= 300.1
+                     for y in c.split()[1::2])][0]
+    xs, ys = bottom[0::2], bottom[1::2]
+    assert min(xs) == -300.0 and max(xs) == 20300.0
+    assert min(ys) == -300.0 and max(ys) == 300.0
+    s, e = routelib._structure_span(routelib._parser_blanked(text))
+    assert text.index("aiee_edge") > s and text.rindex("aiee_edge") < e
+
+
+def test_edge_keepouts_need_a_margin():
+    segs = routelib.edge_segments([[(0, 0), (5, 0), (5, 5), (0, 0)]])
+    assert routelib.dsn_edge_keepouts(DSN, segs, 0.0) == (DSN, 0)
+    assert routelib.dsn_edge_keepouts(DSN, [], 0.3) == (DSN, 0)

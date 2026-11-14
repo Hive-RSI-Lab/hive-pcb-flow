@@ -959,6 +959,77 @@ def dsn_npth_keepouts(dsn_text: str, holes: list[dict], margin_mm: float
     return text, len(holes)
 
 
+def edge_segments(rings, tol_mm: float = 0.01) -> list[tuple]:
+    """Each board-edge segment once: rings are point lists (mm) of the
+    outline faces, exterior and windows alike (a ring is simplified to
+    `tol_mm` first, so an arc's many chords collapse). Returns
+    [((x0, y0), (x1, y1)), ...]."""
+    from shapely.geometry import LineString
+    seen, out = set(), []
+    for ring in rings:
+        pts = list(ring)
+        if len(pts) < 2:
+            continue
+        line = LineString(pts)
+        if tol_mm > 0:
+            line = line.simplify(tol_mm, preserve_topology=False)
+        cs = list(line.coords)
+        for a, b in zip(cs, cs[1:]):
+            if abs(a[0] - b[0]) < 1e-9 and abs(a[1] - b[1]) < 1e-9:
+                continue
+            key = tuple(sorted(((round(a[0], 4), round(a[1], 4)),
+                               (round(b[0], 4), round(b[1], 4)))))
+            if key not in seen:
+                seen.add(key)
+                out.append(((a[0], a[1]), (b[0], b[1])))
+    return out
+
+
+def dsn_edge_keepouts(dsn_text: str, segments: list[tuple], margin_mm: float
+                      ) -> tuple[str, int]:
+    """Put a keepout on every signal layer along each board-edge segment:
+    a rectangle `margin_mm` either side of it, run on `margin_mm` past
+    each end so corners stay covered. KiCad grades copper by
+    min_copper_edge_clearance from Edge.Cuts; the DSN boundary carries no
+    such rule, so Freerouting keeps only its copper clearance from the
+    edge (ultra-front: tracks 0.28 mm from it against a 0.3 mm rule).
+    segments: edge_segments() output in board mm. Returns (text,
+    keepouts added); with no margin, or anything not in um, the text
+    comes back unchanged."""
+    import math
+    if margin_mm <= 0 or not segments \
+            or not re.search(r"\(unit\s+um\)", dsn_text):
+        return dsn_text, 0
+    scan = _parser_blanked(dsn_text)
+    span = _structure_span(scan)
+    if span is None:
+        return dsn_text, 0
+    s, e = span
+    layers = re.findall(r"\(layer\s+(\S+)\s+\(type\s+(?:signal|power|mixed)\)",
+                        scan[s:e])
+    if not layers:
+        return dsn_text, 0
+    m = margin_mm
+    lines = []
+    for (x0, y0), (x1, y1) in segments:
+        ln = math.hypot(x1 - x0, y1 - y0)
+        dx, dy = (x1 - x0) / ln, (y1 - y0) / ln
+        nx, ny = -dy, dx
+        a = (x0 - dx * m, y0 - dy * m)
+        b = (x1 + dx * m, y1 + dy * m)
+        pts = [(a[0] + nx * m, a[1] + ny * m), (b[0] + nx * m, b[1] + ny * m),
+               (b[0] - nx * m, b[1] - ny * m), (a[0] - nx * m, a[1] - ny * m)]
+        pts.append(pts[0])
+        coords = "  ".join(f"{px * 1000:.1f} {-py * 1000:.1f}"
+                           for px, py in pts)
+        lines += [f'    (keepout "aiee_edge" (polygon {ly} 0  {coords}))'
+                  for ly in layers]
+    close = e - 1
+    text = dsn_text[:close].rstrip() + "\n" + "\n".join(lines) + "\n  " \
+        + dsn_text[close:]
+    return text, len(segments)
+
+
 def _shuffle_children(text: str, scan: str, head: str, child: str,
                       rng) -> str:
     """Shuffle the order of the `(child ...)` children of the first

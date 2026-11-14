@@ -86,13 +86,18 @@ rules as routing constraints; cite the record id when you apply one.
    `--fence-net` for RF fences at the constraint's pitch).
 3. `scripts/route_auto.py --pcb <board>` - refill -> DSN export (with the
    board's hole rules: vias kept min_hole_to_hole apart, NPTH holes kept
-   out by their hole/edge clearance) -> the
+   out by their hole/edge clearance, a keepout band along every board edge
+   as wide as min_copper_edge_clearance) -> the
    Freerouting ladder (deterministic flags, per-rung timeouts, wedge
    detection) -> best-SES import -> refill -> DRC -> KRT finish/fallback
    (LQFP fan-outs FR cannot do; sliver-via and hole_to_hole rip; kept only
    if DRC strictly improves; its under-width tracks on power nets are
-   stripped) -> route_finish's maze pass for what is still unconnected.
-   Read facts: completion, rungs, krt_finish, maze_finish, dsn_hole_rules.
+   stripped; nets a filled zone carries are left out, `krt_finish.
+   plane_nets_left`, for the maze pass and stitch_vias to join with vias,
+   unless `--finish-plane-nets`) -> route_finish's maze pass for what is
+   still unconnected. Read facts: completion, rungs, krt_finish,
+   maze_finish, dsn_hole_rules, ses_import_check (nets the SES import
+   dropped although Freerouting reported them routed).
    On a dense board pass `--tries 3`: it keeps the best of three
    differently ordered routes by DRC (facts graded, variance).
    Anything left unconnected after that: `scripts/route_finish.py --pcb
@@ -316,10 +321,9 @@ rules as routing constraints; cite the record id when you apply one.
 - A 0.5 mm FFC pin can be boxed in by its neighbours' fan-out (SDA trapped between SCL and INT after Freerouting). Rip the neighbour and route both with a small grid A* or `route_edit`; the resulting B.Cu tracks can split the GND pour into islands, which a second GND pour on the other layer rejoins.
 - A zone's default pad connection is thermal relief. In a tight corridor the gaps from the pad and its neighbour overlap and no fill forms: `starved_thermal` plus a real `unconnected_items` (a pad on its own pour island while the layer reports a healthy "2 islands"). Re-pour with `"connect": "solid"` in a planes sidecar entry. A pad geometry-capped at one spoke also clears with a short same-net track from the pad into open fill, before any zone edit. A 3 A pour needs solid pads.
 - Read pad extents from `geom.pads_of().poly.bounds`, never from the raw `(size w h)`: the pad carries its own rotation, and `route_edit` accepts an op that misses its pad by 1.3 mm (the error shows up later as `unconnected_items` and `track_dangling` naming a track by length). Assert every `add_track` endpoint is covered by the target pad's `poly` before emitting ops.
-- `route_auto`'s KRT finish connects plane-net SMD pads with traces, not vias. On a thermal-pour board it daisy-chains GND across the pour (-2.6 % of the effective area on a board whose margin is that number). Use `--no-krt-finish` when Freerouting cannot read the board.
 - Freerouting 2.2.4 can die with `StackOverflowError` in `PolylineTrace.combine` while reading the DSN (KRT guide-wire wedge). Zero pass lines on every rung means the ladder is dead, not slow.
-- Freerouting ignores a declared power pour band (it routes signals across the zone, splitting it, and under connectors), ignores copper-to-edge and hole-to-hole (tracks 0.28 mm from the edge, vias 0.43 mm apart), and leaves GND to pours it cannot see. On a small board hand-route the few signals with `route_edit`; add a 0.5 mm edge keepout rule area and a 0.2 mm Default clearance (via centres >= 0.8 mm); route GND as a net first and pour afterwards.
-- `route_auto` (and the SES import) can report done and still drop connections (`fr_completion 1.0`, completion 0.93). Trust the board's completion, not the router's.
+- Freerouting ignores a declared power pour band (it routes signals across the zone, splitting it, and under connectors) and leaves GND to pours it cannot see. On a small board hand-route the few signals with `route_edit`; route GND as a net first and pour afterwards.
+- `fr_completion` is Freerouting's own count; `completion` is the board's. When the SES import drops connections, `ses_import_check.dropped_nets` names them: trust `completion`.
 - A `placement_adjust_request` naming nets that are plane-carried by design is premature on the 2-layer chain: `stitch_vias` and `plane_repair` run later and own them. Finish the chain, then judge the request.
 - `plane_repair` unrestricted can join pours through a connector body (shorting items, NPTH hole clearance) and still exit 0 `pass`. Snapshot first; only kicad-cli DRC counts. Restore and restrict.
 - `stitch_vias` can miss pads already connected through a multi-segment track to an existing via. Run DRC straight after it and remove the redundant vias.
