@@ -140,6 +140,12 @@ schematic-level structural problems BEFORE board work starts:
    pins (VDD, VSS, VM, DO, CO) whose VSS net (the cell's -) carries more
    other ICs' supply pins than the pack - net its VM resistor reaches:
    the load returns around the protection FETs (#1085; ABLIC S-8261).
+ - offboard_input_weak_pull (warning): a connector pin whose net is held
+   only by a resistor above 10k to a rail or ground, with no on-board driver
+   and no TVS or ESD clamp on it, read by an IC input or a transistor's base
+   or gate there or one series resistor on: the line floats with the cable
+   out and picks up a long wire (TI SPRACK9: 4.7k-10k on a line that may be
+   disconnected; Microchip AN2587: TVS on external connector I/O) (#1079).
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -1440,6 +1446,105 @@ def _protector_orientation(nets: dict, comps: dict,
         if on_vss and len(on_vss) > len(on_pack):
             yield ref, vss, pack, on_vss, on_pack
     yield "checked", checked, "", [], []
+
+
+# An off-board input: a connector pin whose net is held only by a resistor
+# to a rail, read by an IC input or a transistor's base or gate. TI SPRACK9
+# (Appendix A Table 2) on a cable line that "is pulled up to eliminate
+# switching if the XDS is disconnected": "TI recommends a 4.7K pull-up but
+# common values in the 4.7K to 10K range are acceptable." Microchip AN2587
+# (DS00002587A, PCB rule 8): "The use of TVS and ferrite beads and/or common
+# mode chokes as required are recommended on all external connector I/O
+# pins." An RC filter behind a series resistor is not enough on its own:
+# pdlc v1 had 20k into 100n at its PNP's base and the errata still calls
+# the EN input "much too sensitive when left floating".
+_OFFBOARD_PULL_MAX = 10e3
+_CLAMP_VALUE_RE = re.compile(
+    r"(ESD|TVS|PESD|SP0\d|TPD\d|USBLC|SMAJ|SMBJ|SMCJ|SMF\d|PRTR|RCLAMP|"
+    r"SRV05|IP4\d|NUP\d|ESDA|CDSOT|TPSMA|P6KE|1\.5KE)", re.I)
+_OB_DRIVE_TYPES = {"output", "tri_state", "power_out", "open_collector",
+                "open_emitter"}
+# a pin read as an analogue level (a converter's feedback, a sense input)
+# is not a logic input, and a net its name calls an output (TX, ..._OUT) is
+# driven from this board whatever its pin types say
+_ANALOG_PIN_RE = re.compile(r"^(V?FB\d*|COMP|V?SENSE\w*|I?SNS\w*|CS[+-]?|"
+                            r"ISET|ILIM|RT|SS|TR|AIN\d*|ADC\w*|VREF\w*)$")
+_OUTPUT_TOKEN_RE = re.compile(r"^(TXD?|TXO|OUT\w*|\w*OUT)$")
+
+
+def _offboard_weak_pull(nets: dict, comps: dict,
+                        comp_pins: dict[str, dict[str, str]],
+                        rails: dict[str, float]):
+    """Yield one dict per connector net held only by a pull resistor weaker
+    than _OFFBOARD_PULL_MAX to a rail or ground, with no on-board driver and
+    no clamp (TVS or ESD diode) on it, read by an IC input or a transistor's
+    base or gate on the net or one 2-pin resistor on. The last item is
+    {'checked': n}, the off-board inputs looked at."""
+    checked = 0
+    for net, members in sorted(nets.items()):
+        if (net.startswith("unconnected-") or _is_ground_name(net)
+                or _supply_net(net, members, rails)):
+            continue
+        conns = [m for m in members if _CONNECTOR_RE.match(m["ref"] or "")]
+        if not conns or any(_OUTPUT_TOKEN_RE.match(t) for t in
+                            re.split(r"[^A-Z0-9]+", net.upper()) if t):
+            continue
+        pulls, series, clamps, drivers = [], [], [], []
+        for m in members:
+            ref = m["ref"] or ""
+            pins = comp_pins.get(ref, {})
+            kind = _part_kind(ref)
+            if (_base_type(m.get("pintype")) in _OB_DRIVE_TYPES
+                    or (ref.startswith("Q") and _transistor_role(
+                        m.get("pinfunction")) in ("C", "D", "E", "S"))):
+                drivers.append(f"{ref}.{m['pin']}")
+            if kind == "R" and len(pins) == 2:
+                far = next((n for p, n in pins.items() if p != m["pin"]),
+                           None)
+                ohm = engcalc.parse_value(comps.get(ref, {}).get("value"))
+                if not far or not ohm:
+                    continue
+                fv = 0.0 if _is_ground_name(far) else rails.get(far)
+                if fv is not None:
+                    pulls.append((ohm, fv, ref, far))
+                else:
+                    series.append((ref, far))
+            elif (ref.startswith(("D", "TVS", "ESD"))
+                  and not ref.startswith("DS")) or (
+                    ref.startswith("U") and _CLAMP_VALUE_RE.search(
+                        str(comps.get(ref, {}).get("value") or ""))):
+                clamps.append(ref)
+        if not pulls or drivers:
+            continue
+        # readers: on the net, or behind one series resistor
+        readers = []
+        for where, via in [(net, None)] + [(far, r) for r, far in series]:
+            for y in nets.get(where, []):
+                yref = y["ref"] or ""
+                role = _transistor_role(y.get("pinfunction"))
+                if yref.startswith("Q") and role in ("B", "G"):
+                    readers.append((f"{yref}.{role}", via))
+                elif (yref.startswith("U") and _base_type(y.get("pintype"))
+                      in ("input", "bidirectional")
+                      and not _ANALOG_PIN_RE.match(
+                          _norm_pin(y.get("pinfunction")))):
+                    readers.append((f"{yref}.{_norm_pin(y.get('pinfunction')) or y['pin']}", via))
+                elif via and _base_type(y.get("pintype")) in _OB_DRIVE_TYPES:
+                    readers = []
+                    break
+            else:
+                continue
+            break
+        if not readers:
+            continue
+        checked += 1
+        ohm, fv, pref, far = min(pulls)
+        if ohm <= _OFFBOARD_PULL_MAX or clamps:
+            continue
+        yield {"net": net, "connectors": [f"{m['ref']}.{m['pin']}"
+                                          for m in conns],
+               "pull": (ohm, fv, pref, far), "readers": readers}
+    yield {"checked": checked}
 
 
 def _dc_level(net: str, nets: dict, comps: dict,
@@ -2766,6 +2871,32 @@ def audit(parsed: dict, constraints: dict,
           f"(EB-), or the protector cannot cut it [ABLIC S-8261 Rev.5.5_00 "
           f"Figure 10]", pack_net=pack)
 
+    # 23. an off-board input held only by a weak pull, with no clamp on the
+    # connector pin (#1079; errata corpus: pdlc v1's EN terminal, 100k to
+    # +12V into a PNP's base, was "much too sensitive when left floating";
+    # v2 has 22k to +3.3V and an ESD array on it)
+    ob_checked = 0
+    for hit in _offboard_weak_pull(nets, comps, comp_pins, pl_rails):
+        if "checked" in hit:
+            ob_checked = hit["checked"]
+            continue
+        ohm, fv, pref, far = hit["pull"]
+        who = ", ".join(r + (f" (through {via})" if via else "")
+                        for r, via in hit["readers"])
+        v("warning", "offboard_input_weak_pull", hit["net"],
+          sorted({c.split(".")[0] for c in hit["connectors"]} | {pref}
+                 | {r.split(".")[0] for r, _ in hit["readers"]}
+                 | {via for _, via in hit["readers"] if via}),
+          f"'{hit['net']}' leaves the board at "
+          f"{', '.join(hit['connectors'])} and is held only by {pref} "
+          f"{comps[pref].get('value')} to {far}, with no TVS or ESD clamp "
+          f"on it, into {who}: with the cable out or on a long wire it picks "
+          f"up enough to switch. Use a pull of {_OFFBOARD_PULL_MAX / 1e3:g}k "
+          f"or less and clamp the pin [TI SPRACK9 App. A Table 2: 4.7K to "
+          f"10K on a line that may be disconnected; Microchip AN2587 PCB "
+          f"rule 8: TVS on all external connector I/O pins]",
+          pull_ohm=ohm, pull_to=far, connectors=hit["connectors"])
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -2794,6 +2925,7 @@ def audit(parsed: dict, constraints: dict,
         "power_path_fets_checked": pp_checked,
         "battery_protectors_checked": prot_checked,
         "unverified_findings": len(not_judged),
+        "offboard_inputs_checked": ob_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged

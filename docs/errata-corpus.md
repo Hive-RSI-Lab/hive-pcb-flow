@@ -15,7 +15,7 @@ only for the round's first reading: each round is swept once.
 
 ## Count
 
-- Training: 35 of 42 caught (35 caught, 3 missed, 4 not_static).
+- Training: 36 of 42 caught (36 caught, 2 missed, 4 not_static).
 - Holdout round 1, blind: 1 of 12 caught (1 caught, 11 missed).
 - Holdout round 1, with the rules written since: 2 of 12 caught (2 caught, 10 missed).
 - Holdout round 2, blind: 1 of 26 caught (1 caught, 25 missed).
@@ -134,7 +134,7 @@ round, pinned and swept before those rules are:
 |---|---|---|---|
 | pdlc-1: the driver does not wait for power-good before driving the panel | PI (power-good sequencing) | caught on rev A, gone on rev B (`netlist_audit` power_good_unused) | #1030: v1's LM5158 PGOOD reaches only R1 2.2k and the D2 power LED, so nothing holds the half-bridge off until the boost is in regulation; v2 takes every PG (/HV_PG, /PDLC_PG_A, /PDLC_PG_B) into a 74LVC1G08 and STM32 inputs. |
 | pdlc-2: no current limit on the panel drive, so large panels drain the output capacitor | PI (load current limit) | missed | a switched capacitive load against the boost's output charge and current limit: needs the load's capacitance, which no schematic carries (#1030, survey) |
-| pdlc-3: the EN input is too sensitive when left floating | SCH (input pull strength) | missed | cable pickup on a floating off-board input: no datasheet leakage to size against, so #1026's rule leaves it (survey #1079) |
+| pdlc-3: the EN input is too sensitive when left floating | SCH (input pull strength) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_weak_pull) | #1079: v1's EN terminal (J1.3) is held only by R4 100k to +12V, with no clamp, into Q1's base through R5 20k (C7 100n at the base did not save it): above TI SPRACK9's 10k for a line that may be disconnected, and no TVS as Microchip AN2587 asks on external I/O. v2's /~{CTRL_EN_IN} has 22k to +3.3V and the D4 PESD3V3L5UY array; it is the clamp that keeps v2 quiet. |
 
 ### megabuzz: revA -> revA1
 
