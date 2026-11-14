@@ -358,3 +358,9 @@ def test_fetch_checks_out_the_cpl_dirs(tmp_path, monkeypatch):
     ec.fetch(tmp_path, b)
     sparse = next(c for c in calls if "sparse-checkout" in c)
     assert sparse[-3:] == ["v2", "v2/kicad", "v3/kicad"]
+
+
+def test_a_revision_kept_only_in_history_gets_its_own_checkout(tmp_path):
+    b = {"id": "h", "commit": "b" * 40, "rev_a": {"commit": "a" * 40}, "rev_b": {}}
+    assert ec.repo_dir(tmp_path, b, "rev_a").name == "h@" + "a" * 12
+    assert ec.repo_dir(tmp_path, b, "rev_b") == ec.repo_dir(tmp_path, b)

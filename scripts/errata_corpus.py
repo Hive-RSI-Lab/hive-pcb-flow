@@ -67,6 +67,9 @@ def load(path: Path = MANIFEST, section: str = "boards") -> list[dict]:
     """One set of the manifest: `boards` (training) or `holdout`."""
     boards = yaml.safe_load(path.read_text(encoding="utf-8")).get(section) or []
     for b in boards:
+        for r in ("rev_a", "rev_b"):
+            if r in b and "commit" in b[r] and len(str(b[r]["commit"])) != 40:
+                raise SystemExit(f"{b['id']} {r}: commit must be a full sha")
         if section == "holdout":
             sw = b.get("swept") or {}
             if len(str(sw.get("flow", ""))) != 40 or not sw.get("date"):
@@ -91,20 +94,30 @@ def load_all(path: Path = MANIFEST) -> list[dict]:
     return load(path) + load(path, "holdout")
 
 
-def repo_dir(cache: Path, b: dict) -> Path:
-    return cache / "repos" / f"{b['id']}@{b['commit'][:12]}"
+def repo_dir(cache: Path, b: dict, rev: str | None = None) -> Path:
+    """The checkout a revision's files are read from. A board whose
+    revisions sit side by side is one checkout at `commit`; a revision with a
+    `commit` of its own (a repo that kept its revisions only in history) gets
+    its own checkout."""
+    sha = (b.get(rev) or {}).get("commit") or b["commit"] if rev else b["commit"]
+    return cache / "repos" / f"{b['id']}@{sha[:12]}"
 
 
 def fetch(cache: Path, b: dict) -> None:
-    dest = repo_dir(cache, b)
-    dirs = sorted({str(Path(b[r][k]).parent) for r in ("rev_a", "rev_b")
-                   for k in ("sch", "cpl") if b[r].get(k)})
-    if not dest.exists():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout",
-                        b["url"], str(dest)], check=True)
-    subprocess.run(["git", "-C", str(dest), "sparse-checkout", "set", *dirs], check=True)
-    subprocess.run(["git", "-C", str(dest), "checkout", "-q", b["commit"]], check=True)
+    by_dest: dict[Path, tuple[str, set]] = {}
+    for r in ("rev_a", "rev_b"):
+        dest = repo_dir(cache, b, r)
+        sha = b[r].get("commit") or b["commit"]
+        by_dest.setdefault(dest, (sha, set()))[1].update(
+            str(Path(b[r][k]).parent) for k in ("sch", "pcb", "cpl") if b[r].get(k))
+    for dest, (sha, dirs) in by_dest.items():
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout",
+                            b["url"], str(dest)], check=True)
+        subprocess.run(["git", "-C", str(dest), "sparse-checkout", "set", *sorted(dirs)],
+                       check=True)
+        subprocess.run(["git", "-C", str(dest), "checkout", "-q", sha], check=True)
 
 
 def matches(violation: dict, catch: dict) -> bool:
@@ -208,7 +221,7 @@ def audit(cache: Path, b: dict, rev: str, script: str) -> list[dict]:
     out.parent.mkdir(parents=True, exist_ok=True)
     empty = out.parent / "constraints.json"
     empty.write_text("{}", encoding="utf-8")
-    cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b), empty)
+    cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b, rev), empty)
     subprocess.run([sys.executable, str(SCRIPTS / cmd), *args, "--out", str(out)],
                    capture_output=True, text=True, timeout=900)
     if not out.is_file():
