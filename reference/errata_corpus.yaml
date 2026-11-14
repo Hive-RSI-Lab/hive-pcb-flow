@@ -713,7 +713,14 @@ holdout:
     fault_class: SCH (port protection)
     blind: missed
     verdict: missed
-    follow_up: "check_esd in the corpus sweep's runners (#1089)"
+    follow_up: "check_esd counting a bare zener to ground as a port clamp, seeded from a training board"
+    note: >-
+      Swept with check_esd (#1089): rev A's RX_FROM_AUX, TX_TO_AUX,
+      RX_FROM_CONTROL_BOARD_5V and TX_TO_CONTROL_BOARD are esd_unclamped, but
+      so are they on rev B, whose fix is four Device:D_Zener_Small parts
+      (D5-D8) with no part number, which CLAMP_RE does not read as clamps.
+      A finding the fix leaves standing isn't a catch, so this stays missed;
+      a zener rule seeded here would move the board to training.
 - id: fc980c
   url: https://github.com/wlhlm/fc980c-controller
   commit: 6e5bdc90e22744e33c552bb7725e03fd9a6de9f5

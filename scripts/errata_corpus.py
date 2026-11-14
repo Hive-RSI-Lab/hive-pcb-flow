@@ -28,8 +28,9 @@ is fetched into this repo. Checks run here (RUNNERS), each with an empty
 constraints file, what hwde reads before anyone has written one:
 netlist_audit on the schematic, check_mate_pins and check_current on the
 board, check_straps on the board with the netlist kicad-cli exports from the
-schematic, check_connector_fit and check_silk on the board (no parts/),
-check_pinouts on the schematic, check_bom_sync on the board with --live (the package of each LCSC part
+schematic, check_connector_fit, check_silk and check_esd on the board (no
+parts/, so check_esd reads no victim's abs max), check_pinouts on the
+schematic, check_bom_sync on the board with --live (the package of each LCSC part
 comes from JLC's record, as nothing in the foreign tree holds it), check_thermal on the board
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
@@ -201,6 +202,14 @@ def _check_silk(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_silk.py", "--pcb", str(_pcb(b, rev, repo, empty))]
 
 
+def _check_esd(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """On the board alone: clamps at its external connectors. --parts names
+    a folder that does not exist, so the victims' abs max is not read from
+    whatever parts/ the foreign repo keeps (#1089)."""
+    return ["check_esd.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--constraints", str(empty), "--parts", str(empty.parent / "no-parts")]
+
+
 def _check_bom_sync(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_bom_sync.py", "--pcb", str(_pcb(b, rev, repo, empty)), "--live"]
 
@@ -261,7 +270,8 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_bom_sync": _check_bom_sync,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
-           "check_pinouts": _check_pinouts, "dfm": _dfm}
+           "check_pinouts": _check_pinouts, "check_esd": _check_esd,
+           "dfm": _dfm}
 
 
 def audit(cache: Path, b: dict, rev: str, script: str,
