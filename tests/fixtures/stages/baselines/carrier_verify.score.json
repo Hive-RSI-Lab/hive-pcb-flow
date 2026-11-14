@@ -4,11 +4,11 @@
  "fixture": "carrier_verify",
  "board": "lumina-carrier",
  "metrics": {
-  "errors": 190,
+  "errors": 189,
   "warnings": 209,
   "by_check": {
    "check_return_path": 4,
-   "check_current": 22,
+   "check_current": 21,
    "check_decoupling": 14,
    "check_diffpair": 3,
    "check_creepage": 26,
@@ -72,7 +72,7 @@
    "route_style": 108,
    "silk_misattributed": 3,
    "strap_unknown": 1,
-   "undersized_track": 14,
+   "undersized_track": 13,
    "wick_via_in_pad": 74
   },
   "si": {
@@ -85,7 +85,7 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 190.0,
+  "errors": 189.0,
   "warnings": 209.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0

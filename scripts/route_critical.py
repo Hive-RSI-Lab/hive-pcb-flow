@@ -30,8 +30,13 @@ Critical-net sources (constraints.json, sidecar default like place_metrics):
               never tees the rail into it), then route_sense_lines lays each
               sense line from its sense pad to its tap pad on copper of its
               own (mazeroute, every other piece of rail copper a wall) and
-              keeps the pour off it with an aiee_sense_* rule area. After
-              the final refill sense_verdicts walks each line
+              keeps the pour off it with an aiee_sense_* rule area. The
+              line is a signal, not the rail (#1042): it is laid at the
+              board's Default netclass width (sense_width), never the
+              rail's IPC width, and an aiee_sensew_* rule area that hugs
+              it (nothing disallowed) is the mark rules_gen's
+              aiee_sense_width_<net> rule lets down to the fab minimum.
+              After the final refill sense_verdicts walks each line
               (check_kelvin.sense_walk): a line that joins rail copper
               before its tap is an error, sense_route_off_pad.
 
@@ -1688,6 +1693,31 @@ SENSE_PREFIX = "aiee_sense"  # route_critical's sense-line pour keepouts
 SENSE_TAP_KEEP_MM = 0.4      # the pour may still meet the line this near its
 #                              tap (under check_kelvin.SENSE_SLACK_MM)
 SENSE_TAP_SHARE_MM = 0.45    # rail copper this near the tap pad is the tap
+SENSE_MARK = "aiee_sensew"   # rules_gen's sense-width mark (#1042); the
+#                              set_rule_areas prefix SENSE_PREFIX covers it
+SENSE_MARK_MM = 0.02         # the mark's margin round the line's copper:
+#                              wide enough for KiCad's arc error, too thin
+#                              to enclose any wider (rail) track
+
+
+def sense_width(pro_path: Path | None) -> float:
+    """The width a sense line is laid at (#1042): the board's Default
+    netclass track width, never under its min_track_width. A feedback
+    divider or SENSE pin draws microamps, so the rail's IPC width does not
+    apply; the regulator notes ask for a short, thin trace (TI SNVA721A
+    section 2.5; knowledge record buck-fb-route-rules)."""
+    floors = grading_floors(pro_path)
+    w = None
+    if pro_path is not None and Path(pro_path).is_file():
+        try:
+            proj = json.loads(Path(pro_path).read_text(encoding="utf-8"))
+            for c in (proj.get("net_settings", {}).get("classes") or []):
+                if c.get("name") == "Default" \
+                        and isinstance(c.get("track_width"), (int, float)):
+                    w = float(c["track_width"])
+        except (OSError, json.JSONDecodeError):
+            pass
+    return max(w or floors["track_width"], floors["track_width"])
 
 
 def sense_pairs(specs: list[dict]) -> list[tuple[str, str, str]]:
@@ -1755,7 +1785,9 @@ def sense_keepout(bg: geom.BoardGeom, net: str, new_uuids: set[str], sense,
                   tap, clearance: float) -> list[dict]:
     """aiee_sense_* rule areas (pours not allowed) round a laid sense line:
     its new tracks and vias and its sense pad, grown by clearance, less the
-    ring round its tap pad where the pour meets the rail anyway."""
+    ring round its tap pad where the pour meets the rail anyway. Also the
+    line's aiee_sensew_* marks (#1042): its new tracks grown by
+    SENSE_MARK_MM, nothing disallowed, for rules_gen's sense width rule."""
     by_layer: dict[str, list] = {}
     for t in bg.tracks_of(net=net):
         if t.uuid in new_uuids:
@@ -1772,6 +1804,22 @@ def sense_keepout(bg: geom.BoardGeom, net: str, new_uuids: set[str], sense,
     cut = tap.poly.buffer(SENSE_TAP_KEEP_MM)
     areas = []
     tag = re.sub(r"[^A-Za-z0-9]+", "_", f"{sense.ref}_{sense.number}")
+    # the sense-width mark (#1042): the line's own tracks, tap end and all,
+    # grown by SENSE_MARK_MM; KiCad's enclosedByArea takes no wider track
+    marks: dict[str, list] = {}
+    for t in bg.tracks_of(net=net):
+        if t.uuid in new_uuids:
+            marks.setdefault(t.layer, []).append(t.poly.buffer(SENSE_MARK_MM))
+    for ly in sorted(marks):
+        shape = unary_union(marks[ly])
+        for k, poly in enumerate(q for q in getattr(shape, "geoms", [shape])
+                                 if q.geom_type == "Polygon"
+                                 and not q.is_empty):
+            pts = [[round(x, 4), round(y, 4)] for x, y in list(
+                poly.simplify(SENSE_MARK_MM / 10).exterior.coords)[:-1]]
+            areas.append({"name": f"{SENSE_MARK}_{tag}_{ly.replace('.', '_')}"
+                                  f"_{k}", "layers": [ly], "poly": pts,
+                          "tracks": False, "vias": False, "pours": False})
     for ly in sorted(by_layer):
         shape = unary_union(by_layer[ly]).difference(cut)
         polys = getattr(shape, "geoms", [shape])
@@ -1825,7 +1873,9 @@ def route_sense_lines(ctx: dict, specs: list[dict]) -> tuple[list, list]:
         try:
             router = mazeroute.Router(bg)
             fence_rail(router, net, sense, tap)
-            ops = router.route(net, s_name, t_name)
+            ops = router.route(net, s_name, t_name,
+                               ctx.get("sense_width") or sense_width(None),
+                               pull=True)
             route_edit.apply_ops(staged, ops)
         except CheckError as exc:
             vios.append(violation(
@@ -2168,7 +2218,9 @@ def run(argv: list[str] | None = None):
            "fab_file": write_fab_overrides(work, floors),
            "grid_step": args.grid_step, "timeout_s": args.timeout_s,
            # #489: rules_gen's per-layer (stripline) impedance widths
-           "zgeo": zrules.board_layer_geometry(staged)}
+           "zgeo": zrules.board_layer_geometry(staged),
+           # #1042: a sense line is laid thin, not at its rail's width
+           "sense_width": sense_width(work / (pcb.stem + ".kicad_pro"))}
     # Per-net clearances for KRT (T6, LEARNINGS 1522): --clearance is a CAP
     # on KRT's auto-read netclass map and KRT cannot read a .kicad_dru, so
     # HV clearance must travel in an explicit --net-clearances file.

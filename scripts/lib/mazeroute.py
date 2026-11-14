@@ -190,15 +190,20 @@ class Router:
         self.obs.added.extend(rf.ops_items(ops, self._conn,
                                            self.bg.copper_layers))
 
-    def route(self, net, a, b, width=None) -> list:
-        """One route from END a to END b, committed, as route_edit ops."""
+    def route(self, net, a, b, width=None, pull=False) -> list:
+        """One route from END a to END b, committed, as route_edit ops.
+        pull: straighten the grid's staircase (pulled_ops)."""
         sa, sb = self.end(a, net), self.end(b, net)
         hit = self.find(net, sa, sb, width)
         if hit is None:
             raise CheckError(f"route {net} {a} -> {b}: no path on "
                              f"{', '.join(self.layers)} at the board's rules")
-        self.commit(hit[0])
-        return hit[0]
+        ops = hit[0]
+        if pull:
+            ops = pulled_ops(hit[2], hit[1], ops,
+                             width or self.rules.width(net))
+        self.commit(ops)
+        return ops
 
     def corridor(self, net, a, b, hw: float, width=None):
         """The route from a to b as a polygon: its centreline buffered by
@@ -498,3 +503,82 @@ class Router:
             ops += job_ops
         self.rounds = rounds
         return ops
+
+
+# --------------------------------------------------------- string pulling
+
+def _sight(gr, k: int, c0, c1) -> bool:
+    """True when a track centre may run straight from cell c0 to cell c1 on
+    layer k: every cell round each sample along the way (a quarter cell
+    apart) is free in the search grid, which already holds the width and
+    clearance."""
+    blk = gr.blk[k]
+    n = max(1, int(math.ceil(4 * math.hypot(c1[0] - c0[0], c1[1] - c0[1]))))
+    for s in range(n + 1):
+        x = c0[0] + (c1[0] - c0[0]) * s / n
+        y = c0[1] + (c1[1] - c0[1]) * s / n
+        for i in {math.floor(x), math.ceil(x)}:
+            for j in {math.floor(y), math.ceil(y)}:
+                if not (0 <= i < gr.nx and 0 <= j < gr.ny) \
+                        or blk[j * gr.nx + i]:
+                    return False
+    return True
+
+
+def pulled_ops(gr, path, ops: list, width: float) -> list:
+    """ops with each layer run's tracks redrawn as the fewest straight
+    pieces the grid allows (#1042). A grid path that runs off the eight
+    directions is a staircase of steps shorter than the track is wide; their
+    end caps overlap, so check_current's netconn sees a loop where there is
+    one line and can no longer call it a leaf branch. Run ends stay where
+    they were (the vias and the pads), so ops' vias are kept as they are.
+    A straight stretch of the path is always one piece. A run through a
+    neck cell (gr.neck) is left alone."""
+    neck = getattr(gr, "neck", None) or {}
+    runs: list[list] = []
+    for q in path:
+        if q[2] == -1:
+            runs.append([])
+            continue
+        if runs and runs[-1] and runs[-1][-1][2] == q[2]:
+            runs[-1].append(q)
+        else:
+            runs.append([q])
+    tracks = [op for op in ops if op["op"] == "add_track"]
+    if not tracks:
+        return ops
+    net = tracks[0]["net"]
+    out = []
+    for run in (r for r in runs if len(r) > 1):
+        k = run[0][2]
+        if any((k, q[1] * gr.nx + q[0]) in neck for q in run):
+            return ops
+        step = [(b[0] - a[0], b[1] - a[1]) for a, b in zip(run, run[1:])]
+        pts = [run[0]]
+        i = 0
+        while i < len(run) - 1:
+            j = i + 1
+            # a stretch the path itself runs straight along is clear by
+            # construction; _sight's rounding may not see that hugging a
+            # keepout edge
+            while j + 1 < len(run) and (
+                    all(d == step[i] for d in step[i:j + 1])
+                    or _sight(gr, k, run[i], run[j + 1])):
+                j += 1
+            pts.append(run[j])
+            i = j
+        # the greedy pass bends where it first loses sight; a bend whose
+        # neighbours see each other is not needed
+        m = 1
+        while m < len(pts) - 1:
+            if _sight(gr, k, pts[m - 1], pts[m + 1]):
+                del pts[m]
+                m = max(1, m - 1)
+            else:
+                m += 1
+        for q0, q1 in zip(pts, pts[1:]):
+            if q0[:2] != q1[:2]:
+                out.append({"op": "add_track", "start": list(gr.xy(*q0[:2])),
+                            "end": list(gr.xy(*q1[:2])), "width": width,
+                            "layer": gr.layers[k], "net": net})
+    return out + [op for op in ops if op["op"] != "add_track"]

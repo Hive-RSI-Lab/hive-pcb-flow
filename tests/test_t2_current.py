@@ -1134,6 +1134,63 @@ def test_leaf_track_with_second_feed_keeps_budget(tmp_path_factory):
                 if b["kind"] == "undersized_track"]
 
 
+# a router's staircase: steps shorter than the track is wide, whose end caps
+# meet the next-but-one step's, so netconn reads the one line as a loop
+_STAIR = """  (zone (net "PWR") (layer "B.Cu")
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10)))
+    (filled_polygon (layer "B.Cu")
+      (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10))))
+  (via (at 3 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (segment (start 3 5) (end 5 5) (width 0.2) (layer "F.Cu") (net "PWR"))
+  (segment (start 5 5) (end 5.05 5.05) (width 0.2) (layer "F.Cu") (net "PWR"))
+  (segment (start 5.05 5.05) (end 5.1 5.05) (width 0.2) (layer "F.Cu") (net "PWR"))
+  (segment (start 5.1 5.05) (end 5.15 5) (width 0.2) (layer "F.Cu") (net "PWR"))
+  (segment (start 5.15 5) (end 7.6 5) (width 0.2) (layer "F.Cu") (net "PWR"))
+"""
+
+
+def test_leaf_track_through_a_staircase_judged_at_its_load(tmp_path_factory):
+    """#1042: the steps are no bridges (their caps form a loop), but the
+    loop holds only track ends and two bridges lead out: one line, a leaf
+    at R1's bound, not a 2 A finding."""
+    bg = _board(tmp_path_factory, "stair", _STAIR + _tap_part())
+    vs, facts = check_current.check_net(bg, ENTRY_PWR)
+    assert _kinds(vs, "undersized_track") == []
+    assert {tuple(b["loads"]) for b in facts["leaf_branches"]
+            if b["kind"] == "undersized_track"} == {("R1",)}
+
+
+def test_staircase_branching_to_a_cap_keeps_budget(tmp_path_factory):
+    """Negative: a third track leaves the staircase for C2, a capacitor with
+    no bound. Three ways out: no bridge's sides are the cluster's, so the
+    steps are judged at 2 A, not at R1's bound."""
+    br = ('  (segment (start 5.05 5.05) (end 5.05 7.6) (width 0.2) '
+          '(layer "F.Cu") (net "PWR"))\n'
+          '  (footprint "t:C0402" (at 5.45 8) (layer "F.Cu")\n'
+          '    (property "Reference" "C2" (at 0 0 0))\n'
+          '    (property "Value" "100nF" (at 0 0 0))\n'
+          '    (pad "1" smd rect (at -0.4 0) (size 0.5 0.6) (layers "F.Cu") '
+          '(net "PWR"))\n'
+          '    (pad "2" smd rect (at 0.4 0) (size 0.5 0.6) (layers "F.Cu") '
+          '(net "GND")))\n')
+    bg = _board(tmp_path_factory, "stair3", _STAIR + _tap_part() + br)
+    vs, _ = check_current.check_net(bg, ENTRY_PWR)
+    assert {v["current_a"] for v in _kinds(vs, "undersized_track")} == {2.0}
+
+
+def test_declared_sense_pad_bounds_its_part(tmp_path_factory):
+    """#1042: R1's pad 1 is no SENSE pin by name, but the entry declares it
+    a sense pad: R1 draws at most SENSE_BOUND_A."""
+    bg = _board(tmp_path_factory, "tapsns",
+                _TAP + _tap_part("R1", "4R7", "t:R1206"))
+    vs, facts = check_current.check_net(
+        bg, dict(ENTRY_PWR, sense_pads={"R1.1": "C9.1"}))
+    assert _kinds(vs, "undersized_track") == []
+    [leaf] = [b for b in facts["leaf_branches"]
+              if b["kind"] == "undersized_track"]
+    assert leaf["current_a"] == check_current.SENSE_BOUND_A
+
+
 def test_leaf_track_still_too_thin_names_its_load(tmp_path_factory):
     """A 4R7 1206 can pass 0.33 A, more than a 0.2 mm track carries at a
     tight 1 C rise: the finding stays, re-judged at that bound."""
