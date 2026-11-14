@@ -225,3 +225,67 @@ parts:
         cite:
           - {doc: max98357a.pdf, sha256: abac92d3522a204f093c911257c0e0ffa958d8f8acc1da3103a291d0403e8cd9, page: 17, table: '', quote: 'Drive SD_MODE low to put the ICs into shutdown.', fields: []}
           - {doc: max98357a.pdf, sha256: abac92d3522a204f093c911257c0e0ffa958d8f8acc1da3103a291d0403e8cd9, page: 7, table: 'Electrical Characteristics', quote: 'SD_MODE Pulldown Resistor RPD 92 100 108', fields: []}
+
+  # Rows for the ICs of boards no datasheet rule judged before (#1104
+  # sweep: 10 of 23 boards checked), each cite checked with part_rows
+  # --verify against the PDF named.
+  - mpn: TPA3116D2 / TPA3118D2 / TPA3130D2
+    match: '^TPA3(116|118|130)D2'
+    verified: true   # TI SLOS708G (December 2017) read 2026-11-14
+    aliases: {GAIN: GAIN/SLV}
+    pins:
+      - pin: SDZ
+        forbid: [ground, open]
+        severity: warning
+        why: >-
+          SDZ low mutes the outputs and puts the amplifier in its
+          low-current state, so grounded it never plays; left unconnected
+          its operation is unpredictable
+        source: >-
+          SLOS708G 7.3.3 Startup and Shutdown Operation: "The SDZ input
+          terminal should be held high (see specification table for trip
+          point) during normal operation when the amplifier is in use.
+          Pulling SDZ low will put the outputs to mute and the amplifier to
+          enter a low-current state." and "It is not recommended to leave
+          SDZ unconnected, because amplifier operation would be
+          unpredictable."
+        cite:
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.3 Startup and Shutdown Operation', quote: 'The SDZ input terminal should be held high (see specification table for trip point) during normal operation when the amplifier is in use.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.3 Startup and Shutdown Operation', quote: 'Pulling SDZ low will put the outputs to mute and the amplifier to enter a low-current state.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.3 Startup and Shutdown Operation', quote: 'It is not recommended to leave SDZ unconnected, because amplifier operation would be unpredictable.', fields: []}
+      - pin: PLIMIT
+        forbid: [open, ground]
+        severity: warning
+        why: >-
+          PLIMIT takes a GVDD-to-GND divider (a power limit) or GVDD itself
+          (no limit); the output's virtual rail is about 4 x the PLIMIT
+          voltage, so grounded the amplifier has no output swing, and open
+          the pin is at neither connection the datasheet gives
+        source: >-
+          SLOS708G Pin Functions, PLIMIT: "Power limit level adjust.
+          Connect a resistor divider from GVDD to GND to set power limit.
+          Connect directly to GVDD for no power limit." 7.3.4 PLIMIT
+          Operation: the "virtual" rail "is approximately 4 times the
+          voltage at the PLIMIT pin".
+        cite:
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 4, table: 'Pin Functions', quote: 'Power limit level adjust. Connect a resistor divider from GVDD to GND to set power limit. Connect directly to GVDD for no power limit.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.4 PLIMIT Operation', quote: 'rail is approximately 4 times the voltage at the PLIMIT pin', fields: []}
+      - pin: GAIN/SLV
+        allow: [pulled_down]
+        severity: warning
+        why: >-
+          the gain and master/slave mode are read from GAIN/SLV's divider,
+          and every setting Table 1 lists has R1 from the pin to GND
+          (5.6k to 100k); with no resistor to ground the pin is at none of
+          the listed settings
+        source: >-
+          SLOS708G 7.3.1 Gain Setting and Master and Slave: "The gain of
+          the TPA31xxD2 family is set by the voltage divider connected to
+          the GAIN/SLV control pin." Table 1 Gain and Master/Slave: R1 (to
+          GND) 5.6 kOhm to 100 kOhm in all eight rows, R2 (to GVDD) OPEN or
+          16 kOhm to 100 kOhm.
+        cite:
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 13, table: '7.3.1 Gain Setting and Master and Slave', quote: 'The gain of the TPA31xxD2 family is set by the voltage divider connected to the GAIN/SLV control pin.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 14, table: 'Table 1. Gain and Master/Slave', quote: 'MODE GAIN R1 (to GND) (1) R2 (to GVDD) (1) INPUT IMPEDANCE', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 14, table: 'Table 1. Gain and Master/Slave', quote: 'Master 20 dB 5.6 kΩ OPEN 60 kΩ', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 4, table: 'Pin Functions', quote: 'Selects Gain and selects between Master and Slave mode depending on pin voltage divider.', fields: []}

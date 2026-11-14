@@ -202,3 +202,58 @@ def test_every_row_cites_its_datasheet():
             assert set(rule.get("allow", [])) | set(
                 rule.get("forbid", [])) <= states
             assert rule.get("allow") or rule.get("forbid") or "max_v" in rule
+
+
+# Rows for the ICs of boards no datasheet rule judged before (#1104): each
+# test plants a fault on the board's real wiring, and the wiring as built
+# stays quiet.
+
+def _tpa(sdz="/SDZ", plimit="/GVDD", gain="/GAIN", value="TPA3118D2DAPR"):
+    """PCB-0017's TPA3118D2 U1: SDZ (with FAULTZ) on R2 100k to +12V,
+    PLIMIT on its own GVDD, GAIN/SLV on R1 5.6k to GND (master, 20 dB)."""
+    comps = {"U1": value, "R1": "5.6k 1%", "R2": "100k 1%",
+             "R3": "100k 1%", "C5": "1uF 25V X7R"}
+    nets = {"GND": [_m("U1", "9", "GND", "power_in"), _m("R1", "2"),
+                    _m("R3", "2"), _m("C5", "2")],
+            "+12V": [_m("U1", "17", "AVCC", "power_in"), _m("R2", "2")],
+            "/GVDD": [_m("U1", "7", "GVDD", "power_out"), _m("C5", "1")],
+            "/SDZ": [_m("R2", "1"), _m("U1", "3", "FAULTZ")],
+            "/GAIN": [_m("R1", "1")],
+            "/MUTE": [_m("R3", "1"), _m("U1", "12", "MUTE")]}
+    nets.setdefault(sdz, []).append(_m("U1", "2", "SDZ"))
+    nets.setdefault(plimit, []).append(_m("U1", "6", "PLIMIT"))
+    nets.setdefault(gain, []).append(_m("U1", "8", "GAIN/SLV"))
+    return comps, nets
+
+
+@pytest.mark.parametrize("value", ["TPA3118D2DAPR", "TPA3116D2DADR",
+                                   "TPA3130D2DAPR"])
+def test_tpa3118_sdz_on_gnd_is_the_planted_fault(value):
+    hits, facts = _audit(*_tpa(sdz="GND", value=value))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("SDZ", "GND", "warning")]
+    assert "SLOS708G" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_tpa3118_plimit_unconnected_is_the_planted_fault():
+    net = "unconnected-(U1-PLIMIT-Pad6)"
+    hits, facts = _audit(*_tpa(plimit=net))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("PLIMIT", net, "warning")]
+    assert "SLOS708G" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+@pytest.mark.parametrize("net", ["GND", "/GVDD"])
+def test_tpa3118_gain_slv_with_no_r1_to_gnd_is_the_planted_fault(net):
+    hits, facts = _audit(*_tpa(gain=net))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("GAIN/SLV", net, "warning")]
+    assert "SLOS708G" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_tpa3118_as_pcb0017_wires_it_is_quiet():
+    hits, facts = _audit(*_tpa())
+    assert hits == [] and facts["pin_state_parts_checked"] == 1
