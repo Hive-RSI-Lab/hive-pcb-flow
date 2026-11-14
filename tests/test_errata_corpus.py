@@ -138,7 +138,7 @@ def test_run_dispatches_check_straps_catches(tmp_path, monkeypatch):
     a script with no runner is reported as not run."""
     calls = []
 
-    def fake(cache, b, rev, script):
+    def fake(cache, b, rev, script, constraints=None):
         calls.append((script, rev))
         return [{"kind": "reset_pull_offboard", "net": "GPIO6"}] if rev == "rev_a" else []
     monkeypatch.setattr(ec, "audit", fake)
