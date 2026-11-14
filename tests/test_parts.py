@@ -1168,3 +1168,79 @@ def test_net_lib_pull_loads_in_kicad(tmp_path):
     # the pulled footprint is parseable and has copper pads
     fp_file = data["results"][0]["footprints"][0]["file"]
     assert len(fplib.parse_footprint(fp_file).copper_pads) >= 2
+
+
+def _two_rows(tmp_path, half_span: float, per_row: int = 4,
+              pitch: float = 1.27) -> Path:
+    """A SOIC-like footprint: two pad columns at x = +-half_span."""
+    pads = []
+    for i in range(per_row):
+        y = (i - (per_row - 1) / 2) * pitch
+        pads.append(f'  (pad {i + 1} smd rect (at {-half_span} {y:.3f}) '
+                    '(size 1.5 0.6) (layers F.Cu F.Paste F.Mask))')
+        pads.append(f'  (pad {2 * per_row - i} smd rect (at {half_span} '
+                    f'{y:.3f}) (size 1.5 0.6) (layers F.Cu F.Paste F.Mask))')
+    return _mk_fp(tmp_path, pads, name=f"R{int(half_span * 1000)}")
+
+
+def test_fp_verify_flags_a_wrong_row_spacing(tmp_path, capsys):
+    """SOP-20 class miss: rows 6.00 mm apart against a 5.75 mm land passed
+    pad count and pitch - row spacing was never compared."""
+    ds = write_ds(tmp_path, {"land_pattern": {
+        "pad_count": 8, "pitch_mm": 1.27, "row_spacing_mm": 5.75}})
+    bad = _two_rows(tmp_path, 3.0)
+    code, payload = run_main(
+        fp_verify, ["--footprint", str(bad), "--datasheet-json", str(ds),
+                    "--svg", str(tmp_path / "o.svg")], tmp_path, capsys)
+    rows = [v for v in payload["violations"] if v["kind"] == "row_spacing"]
+    assert code == 1 and len(rows) == 1 and rows[0]["severity"] == "error"
+    assert 6.0 in rows[0]["measured_mm"]
+    assert "pad_pitch" not in {v["kind"] for v in payload["violations"]}
+
+    good = _two_rows(tmp_path, 2.875)
+    code, payload = run_main(
+        fp_verify, ["--footprint", str(good), "--datasheet-json", str(ds),
+                    "--svg", str(tmp_path / "o2.svg")], tmp_path, capsys,
+        name="good")
+    assert code == 0
+    assert payload["measured_row_spacing_mm"] == [5.75]
+    assert not [v for v in payload["violations"]
+                if v["kind"].startswith("row_spacing")]
+
+
+def test_fp_verify_row_spacing_on_a_quad_and_unmeasurable(tmp_path, capsys):
+    """A QFP's rows run both ways: either axis matching passes. A SOT-23 has
+    no row pair: the datasheet value is then a warning to check by hand,
+    never a silent pass."""
+    pads, n = [], 1
+    for i in range(4):
+        o = (i - 1.5) * 0.5
+        for at in (f"-4.25 {o}", f"{o} 4.25", f"4.25 {-o}", f"{-o} -4.25"):
+            pads.append(f'  (pad {n} smd rect (at {at}) (size 0.3 1.2) '
+                        '(layers F.Cu F.Paste F.Mask))')
+            n += 1
+    quad = _mk_fp(tmp_path, pads, name="Q")
+    ds = write_ds(tmp_path, {"land_pattern": {"pad_count": 16,
+                                              "row_spacing_mm": 8.5}})
+    code, payload = run_main(
+        fp_verify, ["--footprint", str(quad), "--datasheet-json", str(ds),
+                    "--svg", str(tmp_path / "o.svg")], tmp_path, capsys)
+    assert payload["measured_row_spacing_mm"] == [8.5, 8.5]
+    assert code == 0
+
+    sot = _mk_fp(tmp_path, [
+        '  (pad 1 smd rect (at -1 -0.95) (size 0.6 0.7) (layers F.Cu))',
+        '  (pad 2 smd rect (at -1 0.95) (size 0.6 0.7) (layers F.Cu))',
+        '  (pad 3 smd rect (at 1.2 0) (size 0.6 0.7) (layers F.Cu))'],
+        name="S")
+    ds2 = tmp_path / "sot.json"
+    ds2.write_text(json.dumps({"land_pattern": {"pad_count": 3,
+                                                "row_spacing_mm": 2.2}}),
+                   encoding="utf-8")
+    code, payload = run_main(
+        fp_verify, ["--footprint", str(sot), "--datasheet-json", str(ds2),
+                    "--svg", str(tmp_path / "o3.svg")], tmp_path, capsys,
+        name="sot")
+    un = [v for v in payload["violations"]
+          if v["kind"] == "row_spacing_unmeasured"]
+    assert code == 0 and len(un) == 1 and un[0]["severity"] == "warning"
