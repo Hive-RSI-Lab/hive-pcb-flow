@@ -23,6 +23,14 @@ Checks (land_pattern fields drive which run):
                 its hole and every locating post has one
                 (check_connector_fit's tht_pin_tight, post_holes_missing ...)
 
+Not checked: which pad carries which pin. pin1 only asks that a pad numbered
+'1' exists, and the geometry checks don't read numbers, so a footprint that
+numbers its pads round the wrong side passes. Example: on SiTime's 3.2 x 2.5 mm
+PQFN-4 oscillator, pins 1 and 2 share a LONG side (2.1 mm apart, SiT1602B
+drawing POD-PQFN-004-X03225-002); numbering round the short side puts VDD on
+OE and OUT on the supply, and the clock never starts. Check numbering against
+the datasheet's top view or KiCad's stock footprint.
+
 Exit (SPEC section 6): 0 = no error-severity findings (warnings allowed),
 1 = one or more errors, 2 = unreadable footprint/JSON.
 
