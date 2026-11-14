@@ -103,3 +103,31 @@ def test_wired_or_pgoods_with_no_reader_still_fire():
     nets["PGOOD"].append(_m("U2", "7", "PG", "open_collector"))
     hits, _ = _audit(comps, nets)
     assert len(hits) == 2 and {h["pg_pin"] for h in hits} == {"U1.4", "U2.7"}
+
+
+def _efuse(extra_pins=()):
+    """lumina-carrier's TPS16630 eFuse (pwr.kicad_sch): PGOOD through R71
+    10k to D21, nothing else; dVdT, ILIM and IMON on their parts."""
+    comps, nets = _v1()
+    comps["U1"] = "TPS16630PWPR"
+    nets["/pwr/DVDT"] = [_m("U1", "10", "dVdT"), _m("C59", "1")]
+    nets["/pwr/ILIM"] = [_m("U1", "11", "ILIM"), _m("R65", "1")]
+    nets["/IMON"] = [_m("U1", "14", "IMON", "output"), _m("R68", "1")]
+    for pin, func in extra_pins:
+        nets[f"Net-(U1-{func})"] = [_m("U1", pin, func), _m("C99", pin)]
+    comps.update(C59="10nF", R65="18k", R68="30k", C99="100nF")
+    return comps, nets
+
+
+def test_an_efuse_pgood_on_an_led_is_a_status_output_not_judged():
+    # False finding from the sweep outside the corpus (lumina-carrier U22):
+    # an eFuse switches its input through and regulates nothing.
+    hits, facts = _audit(*_efuse())
+    assert hits == [] and facts["power_good_pins_checked"] == 0
+
+
+def test_a_converter_with_a_current_limit_pin_is_still_judged():
+    # A buck controller with ILIM also has SW and FB: it regulates a rail.
+    hits, facts = _audit(*_efuse(extra_pins=[("20", "SW"), ("21", "FB")]))
+    assert [h["net"] for h in hits] == ["PGOOD"]
+    assert facts["power_good_pins_checked"] == 1
