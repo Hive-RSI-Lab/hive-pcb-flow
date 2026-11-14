@@ -200,6 +200,12 @@ Consumers per key (script -> phase):
   "testpoints": {"nets": ["+*", "GND", "/NRST"], "min_coverage_pct": 90,
                  "fixture": false},
 
+  // check_pinouts (#1027): an off-board connector with no standard of its
+  // own (a harness to a part's leads) held to a "stated" row of
+  // reference/connector_pinouts.yaml. Standard headers (JTAG, audio jacks)
+  // are found without this.
+  "pinouts": [{"ref": "J8", "standard": "bedlift-lift-actuator"}],
+
   // check_body_clash (P8, #608): parts whose 3D bodies overlap on purpose (a
   // battery in its holder, a part under a shield). Each needs a why. Anything
   // else that overlaps is an error.

@@ -1,0 +1,60 @@
+{
+  "_comment": "S4 verification inputs for the usbbuck4 golden (test fixture). /MCO is the clock-out net with the F.Cu->B.Cu transition at (141,123); USB_DP/DM are the FS pair (skew belongs to S5 check_diffpair, return path is checked here).",
+  "high_speed": [
+    {
+      "net": "/MCO",
+      "reference": "GND"
+    },
+    {
+      "net": "/USB_DP",
+      "reference": "GND"
+    },
+    {
+      "net": "/USB_DM",
+      "reference": "GND"
+    }
+  ],
+  "power": [
+    {
+      "net": "+3V3",
+      "current_a": 0.4
+    },
+    {
+      "net": "VBUS",
+      "current_a": 0.5
+    }
+  ],
+  "placement": {
+    "_comment": "S9 placement inputs (edges match the hand-placed golden: USB left, SWD right, MCO header bottom). The xtal group locks the load caps to the crystal until S7 emits satellite metadata.",
+    "edges": [
+      {
+        "ref": "J1",
+        "edge": "left"
+      },
+      {
+        "ref": "J2",
+        "edge": "right"
+      },
+      {
+        "ref": "J3",
+        "edge": "bottom"
+      }
+    ],
+    "groups": [
+      {
+        "name": "xtal",
+        "anchor": "Y1",
+        "members": [
+          "C7",
+          "C8"
+        ]
+      }
+    ]
+  },
+  "pinouts": [
+    {
+      "ref": "J96",
+      "standard": "bedlift-lift-actuator"
+    }
+  ]
+}

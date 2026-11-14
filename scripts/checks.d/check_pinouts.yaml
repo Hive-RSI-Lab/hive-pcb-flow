@@ -1,0 +1,12 @@
+# check_pinouts: an off-board connector wired to its standard pinout
+# (reference/connector_pinouts.yaml, each row cited): a JTAG header judged by
+# the IC's TCK/TMS/TDI/TDO pins on its nets, a 3.5 mm jack by its T/R/S nets,
+# and a cable named in constraints.json "pinouts" by its stated mate (#1027).
+# Reads the board's own <board>.net beside it (or the one verify_all exports
+# from its schematic).
+name: check_pinouts
+needs: []
+args: []
+optional:
+  constraints: [--constraints, "{constraints}"]
+  netlist: [--netlist, "{netlist}"]
