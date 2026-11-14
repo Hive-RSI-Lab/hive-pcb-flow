@@ -69,6 +69,15 @@ Entries with "pdn": false are skipped (same opt-out as check_pdn).
 
 CLI: --pcb board.kicad_pcb --constraints constraints.json [--out report.json]
      exit 0/1/2 per SPEC section 6.
+
+RUNNING IT: call it as `pcb-flow check_irdrop ...` so it runs in the module's
+venv; plain `python3 scripts/check_irdrop.py` fails with "No module named
+'shapely'". Runtime, measured 2026-11-14: a 4-layer board (236 KB pcb, one
+constrained net, ~39k cells at 0.019 mm, direct solver on ~34k unknowns plus
+the ~8k-unknown Richardson pair) takes about 6 s. A job queue in front of it
+(e.g. a memory-slot wrapper) can add minutes; time the check itself, not the
+wait. Nets past DIRECT_MAX_UNKNOWNS switch to multigrid CG and an 800k-cell
+net peaks near 0.75 GB.
 """
 from __future__ import annotations
 
