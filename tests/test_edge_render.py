@@ -101,3 +101,100 @@ def test_edge_renders_are_written_per_connector(tmp_path):
     assert o["view"] == "edge_J6" and o["shows"] == "back"
     assert Path(o["path"]).name == "b_edge_J6.png"
     assert Path(o["path"]).stat().st_size > 0
+
+
+# --------------------------------------------- #1052: the mouth overlay
+# The pinned boards' connector models are not in git, so their edge pictures
+# show bare pads and the reviewer cannot see a mouth. The picture of a part
+# with no model in it gets an arrow the way its mouth faces.
+
+def _fake_render(monkeypatch, missing=()):
+    from PIL import Image
+
+    def fake(cli, pcb, out, **kw):
+        out.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (400, 300), (40, 60, 40)).save(out)
+        return {"status": "pass", "outputs": [str(out)],
+                "models_missing": list(missing), "models_relinked": []}
+    monkeypatch.setattr(kc, "render_png", fake)
+
+
+def _render(pcb, tmp_path):
+    (o,) = render.render_edges(pcb, tmp_path / "r", Path("kicad-cli"),
+                               width=400, height=300, quality="basic")
+    return o
+
+
+def _arrow_side(png):
+    """'below' or 'above' the centre: where the overlay's magenta lies,
+    caption band (the top rows) left out."""
+    from PIL import Image
+    im = Image.open(png).convert("RGB")
+    w, h = im.size
+    ys = [y for y in range(h // 6, h) for x in range(w)
+          if im.getpixel((x, y)) == render.OVERLAY_RGB]
+    assert ys, "no overlay drawn"
+    return "below" if sum(ys) / len(ys) > h / 2 else "above"
+
+
+def test_screen_dir_maps_board_axes_into_the_edge_picture():
+    # looking in across the bottom edge (+y): the plain top view, tilted
+    assert render.screen_dir("+y", "+y") == (0, 1)     # toward the viewer
+    assert render.screen_dir("-y", "+y") == (0, -1)    # into the board
+    assert render.screen_dir("+x", "+y") == (1, 0)
+    # across the top edge the camera is turned 180: +x reads leftward
+    assert render.screen_dir("+x", "-y") == (-1, 0)
+    assert render.screen_dir("-y", "-y") == (0, 1)
+    # across the left edge (-x): board +y (down the board) is on the right
+    assert render.screen_dir("+y", "-x") == (1, 0)
+    assert render.screen_dir("-x", "-x") == (0, 1)
+
+
+def test_planted_backwards_socket_without_model_gets_arrow_into_board(
+        tmp_path, monkeypatch):
+    """The planted fault: J6 turned 180, mouth into the board, and no 3D
+    model, as on the pinned boards. Before #1052 the picture showed bare
+    pads; now an arrow points up the picture, away from the viewer."""
+    _fake_render(monkeypatch)
+    o = _render(_sd(tmp_path, 180), tmp_path)
+    assert (o["shows"], o["mouth"], o["overlay"]) == ("back", "-y",
+                                                       "mouth_arrow")
+    assert _arrow_side(o["path"]) == "above"
+
+
+def test_socket_facing_the_edge_gets_arrow_toward_viewer(tmp_path,
+                                                         monkeypatch):
+    _fake_render(monkeypatch)
+    o = _render(_sd(tmp_path, 0), tmp_path)
+    assert (o["shows"], o["overlay"]) == ("mouth", "mouth_arrow")
+    assert _arrow_side(o["path"]) == "below"
+
+
+def _with_model(tmp_path, path):
+    pcb = _sd(tmp_path, 180)
+    t = pcb.read_text()
+    t = t.replace('(attr smd)', f'(attr smd)\n    (model "{path}")', 1)
+    pcb.write_text(t)
+    return pcb
+
+
+def test_part_whose_model_is_in_the_picture_gets_no_overlay(tmp_path,
+                                                            monkeypatch):
+    (tmp_path / "sd.wrl").write_text("#VRML V2.0 utf8\n")
+    _fake_render(monkeypatch)
+    o = _render(_with_model(tmp_path, "${KIPRJMOD}/sd.wrl"), tmp_path)
+    assert o["overlay"] is None
+
+
+def test_part_whose_model_file_is_missing_gets_the_overlay(tmp_path,
+                                                           monkeypatch):
+    gone = "${KIPRJMOD}/../lib/x.3dshapes/sd.wrl"
+    _fake_render(monkeypatch, missing=[gone])
+    o = _render(_with_model(tmp_path, gone), tmp_path)
+    assert o["overlay"] == "mouth_arrow"
+
+
+def test_unjudged_connector_gets_a_caption_only(tmp_path, monkeypatch):
+    _fake_render(monkeypatch)
+    o = _render(_unlisted(tmp_path), tmp_path)
+    assert (o["shows"], o["overlay"]) == ("unjudged", "caption")

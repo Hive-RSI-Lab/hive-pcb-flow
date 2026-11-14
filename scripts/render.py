@@ -34,6 +34,14 @@ whose mouth the pads do not tell), or "unjudged" (no family knows the part:
 the render is the only look anyone gets). A person reviewing the release
 looks at each and checks the picture agrees with `shows`.
 
+A connector whose 3D model is not in the picture (no model, or its file is
+in models_missing) renders as bare pads, so nothing shows which way it faces
+(#1052). Its picture then gets an overlay, written onto the PNG: an arrow
+from the part's centre the way its mouth faces (a ring for vertical entry)
+and a caption saying the body is missing. The output's `overlay` says what
+was drawn: "mouth_arrow", "mouth_up", "caption" (no mouth to draw: `shows`
+is unknown or unjudged), or null when the model is in the picture.
+
 JSON to stdout (or --out FILE): {script, outputs:[{view, path, status}],
 models_missing, models_relinked, status}. Exit 0 = all views rendered, 2 = any failure.
 """
@@ -78,6 +86,7 @@ VIEW_SETS = {
 EDGE = "edge"
 EDGE_TILT = -60      # degrees about X from straight down: 30 deg above the board
 EDGE_MIN_MM = 5.0    # frame at least this much around a small part
+OVERLAY_RGB = (255, 0, 200)   # magenta: no board colour, reads as a mark
 
 
 def _edge_camera(normal: tuple[float, float]) -> float:
@@ -139,6 +148,7 @@ def edge_plans(pcb: Path) -> list[dict]:
             "ref": ref, "footprint": matinglib._name(f.fpid), "side": f.side,
             "edge": edge, "shows": shows,
             "family": (fact or {}).get("family"),
+            "mouth": (fact or {}).get("mouth"),
             "rotate": f"{EDGE_TILT},0,"
                       f"{_edge_camera(matinglib.AXES[edge]):g}",
             # kicad-cli: cm from the board centre, y up
@@ -147,16 +157,93 @@ def edge_plans(pcb: Path) -> list[dict]:
     return plans
 
 
+def part_models(pcb: Path) -> dict[str, list[str]]:
+    """ref -> the model paths its footprint names (none: no entry)."""
+    import check_model_paths
+    out: dict[str, list[str]] = {}
+    for ref, _, m in check_model_paths.board_models(pcb):
+        out.setdefault(ref, []).append(m)
+    return out
+
+
+def screen_dir(mouth: str, edge: str) -> tuple[float, float]:
+    """The image direction (x right, y down) of board axis `mouth` in the
+    edge render looking in across `edge`. The camera sits outside the edge,
+    so the edge's outward normal points down the picture, toward the viewer;
+    the axis 90 deg clockwise of it on the board (y down) points right."""
+    import matinglib
+    nx, ny = matinglib.AXES[edge]
+    mx, my = matinglib.AXES[mouth]
+    return (mx * ny - my * nx, mx * nx + my * ny)
+
+
+SAYS = {"mouth": "out over the edge, toward you",
+        "back": "into the board, away from you",
+        "side": "along the edge",
+        "top": "up, out of the board",
+        "unknown": "not readable from its pads",
+        "unjudged": "unknown: no connector family knows the part"}
+
+
+def draw_mouth(png: Path, plan: dict) -> str:
+    """Draw the mouth overlay (module docstring) onto `png`; return the
+    `overlay` value. The pivot puts the part at the picture's centre."""
+    from PIL import Image, ImageDraw, ImageFont
+    im = Image.open(png).convert("RGB")
+    w, h = im.size
+    d = ImageDraw.Draw(im)
+    cx, cy = w / 2, h / 2
+    s = min(w, h)
+    lw = max(2, s // 80)
+    kind = "caption"
+    if plan["shows"] == "top":
+        r = s * 0.06
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=OVERLAY_RGB,
+                  width=lw)
+        d.ellipse((cx - lw, cy - lw, cx + lw, cy + lw), fill=OVERLAY_RGB)
+        kind = "mouth_up"
+    elif plan.get("mouth"):
+        ux, uy = screen_dir(plan["mouth"], plan["edge"])
+        n = s * 0.28
+        tx, ty = cx + ux * n, cy + uy * n
+        d.line((cx, cy, tx, ty), fill=OVERLAY_RGB, width=lw)
+        a = s * 0.06       # the head: two barbs back from the tip
+        px, py = -uy, ux
+        d.polygon([(tx + ux * a * 0.4, ty + uy * a * 0.4),
+                   (tx - ux * a + px * a * 0.6, ty - uy * a + py * a * 0.6),
+                   (tx - ux * a - px * a * 0.6, ty - uy * a - py * a * 0.6)],
+                  fill=OVERLAY_RGB)
+        kind = "mouth_arrow"
+    try:
+        font = ImageFont.load_default(size=max(10, s // 28))
+    except TypeError:          # Pillow < 10.1 has one fixed size
+        font = ImageFont.load_default()
+    text = (f"{plan['ref']}: no 3D model in this picture. "
+            f"Mouth faces {SAYS.get(plan['shows'], plan['shows'])}")
+    box = d.textbbox((0, 0), text, font=font)
+    pad = max(4, s // 100)
+    d.rectangle((0, 0, w, box[3] - box[1] + 2 * pad), fill=(0, 0, 0))
+    d.text((pad, pad - box[1]), text, fill=OVERLAY_RGB, font=font)
+    im.save(png)
+    return kind
+
+
 def render_edges(pcb: Path, out_dir: Path, cli, *, width: int, height: int,
                  quality: str) -> list[dict]:
     """Render every edge_plans() entry; one result per connector."""
     out = []
+    models = part_models(pcb)
     for p in edge_plans(pcb):
         png = out_dir / f"{pcb.stem}_{EDGE}_{p['ref']}.png"
         r = kc.render_png(cli, pcb, png, side="top", width=width,
                           height=height, quality=quality, rotate=p["rotate"],
                           pivot=p["pivot"], zoom=p["zoom"])
-        out.append({"view": f"{EDGE}_{p['ref']}", **p,
+        gone = set(r.get("models_missing", []))
+        overlay = None
+        if r["status"] == "pass" and png.is_file() and not any(
+                m not in gone for m in models.get(p["ref"], [])):
+            overlay = draw_mouth(png, p)
+        out.append({"view": f"{EDGE}_{p['ref']}", **p, "overlay": overlay,
                     "path": out_dir_relpath(r, png), "status": r["status"],
                     "stderr_tail": r.get("stderr_tail", ""),
                     "models_missing": r.get("models_missing", []),
