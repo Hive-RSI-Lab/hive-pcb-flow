@@ -60,6 +60,22 @@ Pad and part-attribute ops (U-ECO: the hi-fi boards scripted these by hand):
        refilled here: refill after. Absolute, so idempotent.
   {"op": "set_dnp", "ref": R, "dnp": bool}
 
+Re-pad ops (part_repair), resolved by the driver (place_edit._resolve_repad)
+into `_` fields this worker only carries out:
+  {"op": "swap_fp", "ref": R, "_lib": DIR.pretty, "_name": N, "_fpid": "L:N",
+   "_pose": {x, y, deg, side}, "_nets": {number: net | ""},
+   "_zone": {number: word}, "_locked": bool, "_uuid": U}
+     - loads the footprint N from DIR in place of R's, as KiCad's "update
+       footprint from library" does: the new part takes R's reference,
+       value, fields, schematic link, field texts (where they sat), DNP,
+       lock and uuid; its pads take `_nets` and the old pads' pin data by
+       number, `_zone` where given. The old part is renamed R__swap_old and
+       removed after the last op, right before Save (every removal last).
+  {"op": "renumber", "ref": R, "_pads": [{"at": [x, y], "number": N,
+   "net": NAME | "", ["zone": word]}]}
+     - the pad at each board position (0.005 mm) takes the number, net,
+       pin data (of the old pad with that number) and zone word given.
+
 The board is saved ONLY if every op applied; any failure exits 3 with a JSON
 error and writes nothing (the driver treats the staged copy as garbage).
 Save() may drop a default .kicad_pro next to `out` - the driver stages in a
@@ -68,11 +84,14 @@ never clobbered. mm->IU uses pcbIUScale.mmToIU (FromMM truncates: prior-
 attempt fact, e.g. 32.3 mm -> 32299999 nm).
 """
 import json
+import math
 import sys
 
 import safelib  # lib/ is sys.path[0]: the worker runs as lib/place_swig.py
 
 import pcbnew
+
+import update_swig  # apply_fields / inherit / net_of: board_update's swap
 
 
 def iu(mm: float) -> int:
@@ -348,10 +367,127 @@ def apply_set_pad(board, op: dict) -> dict:
             "zone_connection": op.get("zone_connection")}
 
 
+# swap_fp: (old part, new part, uuid to carry) - the old parts are removed,
+# and their uuids given to the new ones, after the last op, before Save
+_DOOMED = []
+REPAD_TOL = 0.005  # mm, = place_edit.REPAD_TOL
+NATIVE_FIELDS = ("Reference", "Value", "Footprint")
+
+
+def _pin_data(fp) -> dict:
+    """{pad number: (pin function, pin type)} of the first pad numbered so."""
+    pins = {}
+    for p in fp.Pads():
+        pins.setdefault(p.GetNumber(), (p.GetPinFunction(), p.GetPinType()))
+    return pins
+
+
+def _set_pad_net(board, pad, net: str, cache: dict) -> None:
+    if net:
+        pad.SetNet(update_swig.net_of(board, net, cache))
+    else:
+        pad.SetNetCode(0)
+
+
+def apply_swap_fp(board, op: dict) -> dict:
+    ref = op["ref"]
+    old = board.FindFootprintByReference(ref)
+    if old is None:
+        raise KeyError(f"footprint '{ref}' not on board")
+    new = pcbnew.FootprintLoad(op["_lib"], op["_name"])
+    if new is None:
+        raise KeyError(f"swap_fp {ref}: cannot load footprint "
+                       f"{op['_name']} from {op['_lib']}")
+    lib, name = op["_fpid"].split(":", 1)
+    new.SetFPID(pcbnew.LIB_ID(lib, name))
+    pins = _pin_data(old)
+    custom = {f.GetName(): f.GetText() for f in old.GetFields()
+              if f.GetName() not in NATIVE_FIELDS}
+    old.SetReference(ref + "__swap_old")  # later ops on REF find the new one
+    new.SetReference(ref)
+    update_swig.apply_fields(new, old.GetValue(), custom)
+    board.Add(new)
+    _KEEPALIVE.extend([old, new])
+    # where the old part sits first, so inherit() lays the field texts where
+    # they were; then the pose (move, side, absolute angle: place's order)
+    new.SetPosition(old.GetPosition())
+    set_side(new, side_of(old))
+    new.SetOrientationDegrees(old.GetOrientationDegrees())
+    update_swig.inherit(new, old, True)
+    pose = op["_pose"]
+    new.SetPosition(pcbnew.VECTOR2I(iu(pose["x"]), iu(pose["y"])))
+    set_side(new, pose["side"])
+    new.SetOrientationDegrees(float(pose["deg"]))
+    cache = {}
+    nets = op.get("_nets") or {}
+    zones = op.get("_zone") or {}
+    for p in new.Pads():
+        n = p.GetNumber()
+        _set_pad_net(board, p, nets.get(n, ""), cache)
+        if n in pins:
+            p.SetPinFunction(pins[n][0])
+            p.SetPinType(pins[n][1])
+        if n in zones:
+            p.SetLocalZoneConnection(getattr(pcbnew, ZONE_CONNECTIONS[zones[n]]))
+    new.SetDNP(old.IsDNP())
+    new.SetLocked(bool(op.get("_locked", old.IsLocked())))
+    _DOOMED.append((old, new, op.get("_uuid")))
+    pos = new.GetPosition()
+    return {"ref": ref, "footprint": op["_fpid"],
+            "x": round(pcbnew.ToMM(pos.x), 6), "y": round(pcbnew.ToMM(pos.y), 6),
+            "deg": round(new.GetOrientationDegrees(), 4),
+            "side": side_of(new), "locked": new.IsLocked(),
+            "pads": {p.GetNumber(): p.GetNetname() for p in new.Pads()
+                     if p.GetNumber()}}
+
+
+def apply_renumber(board, op: dict) -> dict:
+    ref = op["ref"]
+    fp = board.FindFootprintByReference(ref)
+    if fp is None:
+        raise KeyError(f"footprint '{ref}' not on board")
+    pads = list(fp.Pads())
+    pins = _pin_data(fp)  # before any number changes
+    tol = iu(REPAD_TOL)
+    plan = []
+    for e in op["_pads"]:
+        x, y = iu(e["at"][0]), iu(e["at"][1])
+        hit = [p for p in pads if math.hypot(p.GetPosition().x - x,
+                                             p.GetPosition().y - y) <= tol]
+        if len(hit) > 1:
+            hit = [p for p in hit if p.IsOnCopperLayer()]
+        if len(hit) != 1:
+            raise KeyError(f"renumber {ref}: {len(hit)} pads at {e['at']}")
+        if any(hit[0] is q for q, _ in plan):
+            raise KeyError(f"renumber {ref}: the pad at {e['at']} is named "
+                           "twice")
+        plan.append((hit[0], e))
+    cache = {}
+    done = []
+    for p, e in plan:
+        n = e["number"]
+        was = p.GetNumber()
+        p.SetNumber(n)
+        _set_pad_net(board, p, e.get("net", ""), cache)
+        if n in pins:
+            p.SetPinFunction(pins[n][0])
+            p.SetPinType(pins[n][1])
+        if e.get("zone") is not None:
+            p.SetLocalZoneConnection(getattr(pcbnew, ZONE_CONNECTIONS[e["zone"]]))
+        done.append({"at": e["at"], "was": was, "number": n,
+                     "net": p.GetNetname()})
+    board.BuildListOfNets()
+    return {"ref": ref, "renumbered": done}
+
+
 def apply_op(board, op: dict) -> dict:
     kind = op["op"]
     if kind == "set_pad":
         return apply_set_pad(board, op)
+    if kind == "swap_fp":
+        return apply_swap_fp(board, op)
+    if kind == "renumber":
+        return apply_renumber(board, op)
     if kind == "set_dnp":
         fp = board.FindFootprintByReference(op["ref"])
         if fp is None:
@@ -412,11 +548,25 @@ def _run(job) -> int:
             print(json.dumps({"ok": False, "index": i,
                               "error": f"{type(e).__name__}: {e}"}))
             return 3
+    try:  # swap_fp's removals last, the uuid once the old part is gone
+        for old, new, uuid in _DOOMED:
+            board.RemoveNative(old)  # RemoveNative: see apply_text_op
+            if uuid:
+                new.SetUuid(pcbnew.KIID(uuid))
+        if _DOOMED:
+            board.BuildListOfNets()
+    except Exception as e:  # noqa: BLE001 - no save on any failure
+        print(json.dumps({"ok": False, "index": None,
+                          "error": f"swap_fp removal: {type(e).__name__}: "
+                                   f"{e}"}))
+        return 3
     if not board.Save(job["out"]):
         print(json.dumps({"ok": False, "index": None,
                           "error": f"board.Save failed: {job['out']}"}))
         return 3
-    print(json.dumps({"ok": True, "results": results}))
+    # a line of its own, flushed: SWIG's C-level noise (a removal's leak
+    # report) may share stdout without a newline
+    print("\n" + json.dumps({"ok": True, "results": results}), flush=True)
     return 0
 
 

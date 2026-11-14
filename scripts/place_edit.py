@@ -30,6 +30,20 @@ for a refdes with no legal spot near its own pads (dense 0603 rows): on a
 silk layer it refuses a size below check_silk's legibility floor or a stroke
 below the fab's silk width floor (silk_text_floor()).
 
+swap_fp puts a .kicad_mod FILE (a fixed library footprint) in place of a
+placed part's footprint, on a placed or routed board, as KiCad's "update
+footprint from library" does: the part keeps its reference, value, fields,
+schematic link, field texts, DNP and lock; each pad takes the net the old
+pad of its number had (`nets` {number: net} overrides, "" = no net) and,
+where the board set one on every old pad of that number, its zone
+connection. renumber gives the pads found at board positions new numbers
+(`pads` [{"at": [x, y], "number": N}], 0.005 mm), each with the net of
+number N (`nets` again overrides) - the lighter fix when only the numbering
+was wrong and no graphic follows pin 1. Both refuse when a track or via of
+another net touches one of the pads they produce (KiCad would carry that
+copper onto the pad's net when it saves): rip it first with route_edit,
+re-route after; part_repair.py does the three steps and checks them.
+
 Note: KiCad regenerates footprint/graphic UUIDs on every save, so two saves of
 the same placement are NOT byte-identical - compare parsed positions, never
 file hashes.
@@ -37,6 +51,7 @@ file hashes.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import math
 import os
@@ -88,11 +103,24 @@ OP_FIELDS = {  # op -> (required, optional)
     # connector shell joined to its plane without thermal spokes)
     "set_pad": ({"ref", "pad"}, {"net", "size", "zone_connection"}),
     "set_dnp": ({"ref", "dnp"}, set()),
+    # re-pad a placed part (part_repair's ops): swap_fp loads a .kicad_mod
+    # file in place of its footprint (x/y/deg/side: where it goes, default
+    # where the old one sat; fpid: "Lib:Name" the board records); renumber
+    # gives the pads at board positions new numbers
+    "swap_fp": ({"ref", "footprint"}, {"fpid", "nets", "x", "y", "deg",
+                                       "side"}),
+    "renumber": ({"ref", "pads"}, {"nets"}),
 }
 TEXT_LAYERS = {"F.SilkS", "B.SilkS", "F.Fab", "B.Fab"}
 POS_TOL = 1e-3   # mm
 ANG_TOL = 0.05   # deg
-FOOTPRINT_OPS = {"place", "move", "rotate", "flip"}  # copper-relevant ops
+REPAD_TOL = 0.005  # mm: a renumber `at` finds its pad within this
+REPAD_OPS = ("swap_fp", "renumber")
+# copper-relevant ops (refused on a routed board without --allow-routed)
+FOOTPRINT_OPS = {"place", "move", "rotate", "flip", *REPAD_OPS}
+# ops that may not share an op list with a swap_fp/renumber of the same part
+# (a re-pad sets the part's pose and its pads' nets itself)
+REPAD_EXCLUSIVE = ("place", "move", "rotate", "flip", "set_pad")
 TEXT_OPS = ("add_text", "remove_text", "move_text", "set_text")
 SILK_LAYERS = {"F.SilkS", "B.SilkS"}
 SIZE_TOL = 1e-3  # mm
@@ -175,6 +203,8 @@ def validate_ops(doc: dict) -> list[dict]:
             _validate_set_text(i, op)
         if kind == "set_pad":
             _validate_set_pad(i, op)
+        if kind in REPAD_OPS:
+            _validate_repad(i, op)
         if kind == "set_dnp" and not isinstance(op["dnp"], bool):
             raise CheckError(f"ops[{i}]: dnp must be a boolean")
         if kind == "silk_clear":
@@ -205,7 +235,81 @@ def validate_ops(doc: dict) -> list[dict]:
                     and r[0] < r[2] and r[1] < r[3]):
                 raise CheckError(f"ops[{i}]: region must be [x0, y0, x1, y1]"
                                  " mm with x0 < x1, y0 < y1")
+    _validate_repad_list(ops)
     return ops
+
+
+def _is_num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) \
+        and math.isfinite(v)
+
+
+def _validate_repad(i: int, op: dict) -> None:
+    kind = op["op"]
+    nets = op.get("nets")
+    if nets is not None and not (
+            isinstance(nets, dict)
+            and all(isinstance(k, str) and k and isinstance(v, str)
+                    for k, v in nets.items())):
+        raise CheckError(f"ops[{i}] ({kind}): nets must be {{pad number: "
+                         "net name}} (\"\" = no net)")
+    if kind == "swap_fp":
+        fp = op["footprint"]
+        if not (isinstance(fp, str) and fp.endswith(".kicad_mod")
+                and len(fp) > len(".kicad_mod")):
+            raise CheckError(f"ops[{i}] (swap_fp): footprint must be the "
+                             "path of a .kicad_mod file")
+        fpid = op.get("fpid")
+        if fpid is not None and not (
+                isinstance(fpid, str) and fpid.count(":") == 1
+                and all(fpid.split(":"))):
+            raise CheckError(f"ops[{i}] (swap_fp): fpid must be "
+                             "\"Library:Name\"")
+        if ("x" in op) != ("y" in op):
+            raise CheckError(f"ops[{i}] (swap_fp): give x and y together")
+        return
+    pads = op["pads"]
+    if not (isinstance(pads, list) and pads and all(
+            isinstance(p, dict) and set(p) == {"at", "number"}
+            and isinstance(p["number"], str) and p["number"]
+            and isinstance(p["at"], list) and len(p["at"]) == 2
+            and all(_is_num(v) for v in p["at"]) for p in pads)):
+        raise CheckError(f"ops[{i}] (renumber): pads must be a list of "
+                         "{\"at\": [x, y] mm, \"number\": N}")
+    for a in range(len(pads)):
+        for b in range(a):
+            if math.dist(pads[a]["at"], pads[b]["at"]) <= REPAD_TOL:
+                raise CheckError(f"ops[{i}] (renumber): pads[{b}] and "
+                                 f"pads[{a}] name the same pad")
+
+
+def _validate_repad_list(ops: list[dict]) -> None:
+    """One re-pad per part, alone with its pose and pad nets: a swap_fp or
+    renumber sets those itself (from the board as it was before the list)."""
+    first: dict[str, int] = {}
+    for i, op in enumerate(ops):
+        if op["op"] not in REPAD_OPS:
+            continue
+        if op["ref"] in first:
+            raise CheckError(f"ops[{i}] ({op['op']}): {op['ref']} is "
+                             f"already re-padded by ops[{first[op['ref']]}] "
+                             "- one swap_fp or renumber per part per list")
+        first[op["ref"]] = i
+    for i, op in enumerate(ops):
+        j = first.get(op.get("ref"))
+        if j is None or i == j:
+            continue
+        rk = ops[j]["op"]
+        if op["op"] in REPAD_EXCLUSIVE:
+            raise CheckError(
+                f"ops[{i}] ({op['op']}): {op['ref']} is re-padded by "
+                f"ops[{j}] ({rk}), which sets its pose and its pads' nets - "
+                "give the pose to swap_fp (x, y, deg, side) and the nets to "
+                "its `nets`, or run this op in a list of its own")
+        if rk == "swap_fp" and i < j:
+            raise CheckError(f"ops[{i}] ({op['op']}): comes before the "
+                             f"swap_fp of {op['ref']} (ops[{j}]), which "
+                             "replaces the footprint - put it after")
 
 
 def _validate_set_pad(i: int, op: dict) -> None:
@@ -270,9 +374,17 @@ def _expected_state(ops: list[dict]) -> dict[str, dict]:
     for op in ops:
         if op["op"] in TEXT_OPS:
             continue  # verified independently by _verify_texts
-        if op["op"] in ("silk_clear", "set_pad", "set_dnp"):
-            continue  # moves nothing; _verify_parts checks pads/dnp
+        if op["op"] in ("silk_clear", "set_pad", "set_dnp", "renumber"):
+            continue  # moves nothing; _verify_parts/_verify_repad check pads
         w = want.setdefault(op["ref"], {})
+        if op["op"] == "swap_fp":  # resolved: _pose/_locked (_resolve_repad)
+            pose = op.get("_pose") or {}
+            for k in ("x", "y", "deg", "side"):
+                v = op.get(k, pose.get(k))
+                if v is not None:
+                    w[k] = v
+            if "_locked" in op:
+                w["locked"] = op["_locked"]
         if op["op"] in ("place", "move"):
             w["x"], w["y"] = op["x"], op["y"]
         if op["op"] in ("place", "rotate") and op.get("deg") is not None:
@@ -591,11 +703,338 @@ def _refuse_routed_renet(pcb: Path, ops: list[dict]) -> None:
                 "whole net with route_edit rename_net")
 
 
-def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False) -> dict:
+# ------------------------------------------------------------- re-pad ops
+# swap_fp / renumber are resolved HERE, against the board as it is before the
+# op list, and the worker only carries them out: which file it loads, the net
+# each new pad takes, the zone connection that follows a pad number, where
+# every pad lands - and that no copper of another net touches one of them.
+
+ZONE_WORD = {v: k for k, v in ZONE_CONNECT.items()}  # 2 -> "solid", ...
+
+
+def _fp_nodes(data, ref: str) -> list:
+    """The (footprint ...) nodes of a parsed board whose Reference is REF."""
+    return [n for n in data[1:] if _sx_head(n) == "footprint"
+            and any(_sx_head(s) == "property" and len(s) >= 3
+                    and _sx_str(s[1]).lower() == "reference"
+                    and _sx_str(s[2]) == ref for s in n[1:])]
+
+
+def _node_uuid(node) -> str | None:
+    return next((_sx_str(s[1]) for s in node[1:]
+                 if _sx_head(s) == "uuid" and len(s) > 1), None)
+
+
+def _grouped(data) -> set[str]:
+    """uuids that are members of a (group ...) on the board."""
+    return {_sx_str(m) for g in data[1:] if _sx_head(g) == "group"
+            for s in g[1:] if _sx_head(s) == "members" for m in s[1:]}
+
+
+def _net_class(net: str | None) -> str:
+    """board_update._nets_equal's no-connect class: "" for an open pad."""
+    net = net or ""
+    return "" if net.startswith("unconnected-") else net
+
+
+def _old_net(old_pads: list, number: str, ref: str, kind: str) -> str | None:
+    """The net the old pads numbered NUMBER share (None: no such pad)."""
+    have = [p.net or "" for p in old_pads if p.number == number]
+    if not have:
+        return None
+    if len({_net_class(n) for n in have}) > 1:
+        raise CheckError(
+            f"{kind} {ref}: the old pads numbered {number} are on nets "
+            f"{sorted(set(have))} - say which one with nets "
+            f"{{\"{number}\": NET}}")
+    return next((n for n in have if _net_class(n)), have[0])
+
+
+def _uuid_hint(items: list) -> str:
+    return json.dumps({"op": "rip", "uuid_prefix": sorted(
+        {(it.uuid or "?")[:8] for it in items})})
+
+
+def _resolve_repad(pcb: Path, ops: list[dict], stage: Path, *,
+                   touch_check: bool = True
+                   ) -> tuple[list[dict], dict[int, list[str]]]:
+    """-> (the op list with each swap_fp/renumber resolved into `_` fields
+    for the worker and _verify_repad, notes {op index: [str]}).
+
+    CheckError, before anything is staged, when a re-pad cannot be done
+    safely: the part is not on the board exactly once or sits in a group,
+    the file is not a footprint, old pads of one number disagree on the net,
+    a renumber `at` finds no pad or the same pad twice, a `nets` key names
+    no pad - or copper of another net touches a pad the op produces
+    (touch_check=False skips that last one: part_repair.py's trial run on a
+    scratch copy, which only reads the pads back and rips that copper)."""
+    if not any(op["op"] in REPAD_OPS for op in ops):
+        return ops, {}
+    import copy
+
+    import sexpdata
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    import board_update
+    import geom
+    data = sexpdata.loads(pcb.read_text(encoding="utf-8"))
+    bg = geom.BoardGeom.from_file(pcb)
+    model = placelib.PlaceModel(pcb)
+    grouped = _grouped(data)
+    dnp = _dnp_refs(pcb)
+    wops = copy.deepcopy(ops)
+    notes: dict[int, list[str]] = {}
+    for i, op in enumerate(wops):
+        kind = op["op"]
+        if kind not in REPAD_OPS:
+            continue
+        ref, note = op["ref"], notes.setdefault(i, [])
+        nodes = _fp_nodes(data, ref)
+        if len(nodes) != 1:
+            raise CheckError(f"{kind} {ref}: {len(nodes)} footprints carry "
+                             "this reference - it must be exactly one")
+        uuid = _node_uuid(nodes[0])
+        if uuid in grouped:
+            raise CheckError(f"{kind} {ref}: the part is in a group - "
+                             "ungroup it first (the swap does not carry "
+                             "group membership)")
+        if _fp_nodes(data, ref + "__swap_old"):
+            raise CheckError(f"{kind} {ref}: {ref}__swap_old is on the "
+                             "board (a broken earlier swap) - remove it")
+        old = [p for p in bg.pads_of(ref=ref)]
+        zc = _pad_zone_connects(pcb, ref)
+        fp = model.footprints[ref]
+        given = op.get("nets") or {}
+        if kind == "swap_fp":
+            src = Path(op["footprint"]).expanduser().resolve()
+            try:
+                root = sexpdata.loads(src.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError) as e:
+                raise CheckError(f"swap_fp {ref}: cannot read "
+                                 f"{op['footprint']}: {e}") from e
+            except Exception as e:  # noqa: BLE001 - sexpdata's parse errors
+                raise CheckError(f"swap_fp {ref}: {op['footprint']} is not "
+                                 f"an s-expression: {e}") from e
+            if _sx_head(root) not in ("footprint", "module"):
+                raise CheckError(f"swap_fp {ref}: {op['footprint']} is not "
+                                 "a footprint file")
+            lib_dir = stage / f"swap{i}.pretty"
+            lib_dir.mkdir()
+            shutil.copy2(src, lib_dir / src.name)
+            op["_lib"], op["_name"] = str(lib_dir), src.stem
+            lib = src.parent.name[:-len(".pretty")] \
+                if src.parent.name.endswith(".pretty") \
+                else fp.fpid.split(":", 1)[0]
+            op["_fpid"] = op.get("fpid") or f"{lib}:{src.stem}"
+            op["_pose"] = {"x": op.get("x", fp.pos[0]),
+                           "y": op.get("y", fp.pos[1]),
+                           "deg": op.get("deg", fp.angle),
+                           "side": op.get("side", fp.side)}
+            op["_locked"], op["_dnp"], op["_uuid"] = fp.locked, \
+                ref in dnp, uuid
+            probe = board_update.placed_pads(bg, lib_dir / src.name, ref,
+                                             op["_pose"], {})
+            if not probe:
+                raise CheckError(f"swap_fp {ref}: {op['footprint']} has no "
+                                 "copper pads")
+            numbers = sorted({p.number for p in probe if p.number})
+            unknown = sorted(set(given) - set(numbers))
+            if unknown:
+                raise CheckError(f"swap_fp {ref}: nets names pad(s) "
+                                 f"{unknown} the new footprint lacks "
+                                 f"(it has {numbers})")
+            nets = {}
+            for n in numbers:
+                was = _old_net(old, n, ref, kind)
+                nets[n] = given[n] if n in given else (was or "")
+                if was is None and n not in given:
+                    note.append(f"new pad {n} had no old pad: no net")
+            op["_nets"] = nets
+            for n in sorted({p.number for p in old if p.number}
+                            - set(numbers)):
+                was = _old_net(old, n, ref, kind)
+                if _net_class(was):
+                    note.append(f"old pad {n} ({was}) has no pad in the "
+                                "new footprint: its net loses this pin")
+            op["_zone"] = {}
+            for n in numbers:
+                have = set(zc.get(n, [None]))
+                if len(have) == 1 and None not in have:
+                    z = have.pop()
+                    if z in ZONE_WORD:
+                        op["_zone"][n] = ZONE_WORD[z]
+                    else:
+                        note.append(f"pad {n}: zone_connect {z} not carried")
+            final = [dataclasses.replace(p, net=nets.get(p.number) or None)
+                     for p in probe]
+            expect_zone = {n: ZONE_CONNECT[w] for n, w in op["_zone"].items()}
+        else:
+            final = list(old)
+            # used: old-pad index -> the zone connection it will have
+            # ("?" = unknown: it keeps its own)
+            pads, used = [], {}
+            for spec in op["pads"]:
+                at = spec["at"]
+                hit = [k for k, p in enumerate(old)
+                       if math.dist(p.center, at) <= REPAD_TOL]
+                if len(hit) != 1:
+                    raise CheckError(
+                        f"renumber {ref}: {len(hit)} of its copper pads lie "
+                        f"within {REPAD_TOL} mm of {at} - it must be one "
+                        "(pad centres: " + ", ".join(
+                            f"{p.number}@{[round(c, 4) for c in p.center]}"
+                            for p in old) + ")")
+                k = hit[0]
+                if k in used:
+                    raise CheckError(f"renumber {ref}: pad {old[k].number} "
+                                     f"at {at} is named twice")
+                used[k] = "?"
+                n = spec["number"]
+                was = _old_net(old, n, ref, kind)
+                net = given[n] if n in given else (was or "")
+                if was is None and n not in given:
+                    note.append(f"no old pad was numbered {n}: no net")
+                entry = {"at": list(old[k].center), "number": n, "net": net}
+                have = set(zc.get(n, []))
+                if len(have) == 1:
+                    z = next(iter(have))
+                    if z in ZONE_WORD:
+                        entry["zone"] = ZONE_WORD[z]
+                        used[k] = z
+                elif have:
+                    note.append(f"old pads numbered {n} disagree on the zone "
+                                f"connection: pad at {at} keeps its own")
+                pads.append(entry)
+                final[k] = dataclasses.replace(old[k], number=n,
+                                               net=net or None)
+            unknown = sorted(set(given) - {e["number"] for e in pads})
+            if unknown:
+                raise CheckError(f"renumber {ref}: nets names pad(s) "
+                                 f"{unknown} no `pads` entry gives")
+            op["_pads"] = pads
+            per: dict[str, set] = {}
+            for k, p in enumerate(final):
+                if k in used:
+                    per.setdefault(p.number, set()).add(used[k])
+                else:
+                    was = set(zc.get(p.number, [None]))
+                    per.setdefault(p.number, set()).add(
+                        was.pop() if len(was) == 1 else "?")
+            expect_zone = {n: v.pop() for n, v in per.items()
+                           if len(v) == 1 and "?" not in v}
+            dup = sorted(n for n in {p.number for p in final}
+                         if sum(q.number == n for q in final)
+                         > sum(q.number == n for q in old))
+            if dup:
+                note.append(f"pad numbers {dup} now name more pads than "
+                            "before")
+        op["_expect"] = sorted([p.number, p.net or "", round(p.center[0], 6),
+                                round(p.center[1], 6)] for p in final)
+        op["_expect_zone"] = expect_zone
+        short = []
+        for p in final:
+            for it in board_update._touching(bg, p):
+                if not board_update._nets_equal(it.net, p.net):
+                    short.append((p, it))
+        if short and touch_check:
+            shown = "; ".join(
+                f"pad {p.number} ({p.net or 'no net'}) <- {it.net} "
+                f"{'track' if isinstance(it, geom.Track) else 'via'} "
+                f"{(it.uuid or '?')[:8]}" for p, it in short[:6])
+            more = f" and {len(short) - 6} more" if len(short) > 6 else ""
+            raise CheckError(
+                f"{kind} {ref}: copper of other nets touches the pads it "
+                f"would produce ({shown}{more}); KiCad would carry it onto "
+                "the pad's net when it saves - rip it first (route_edit "
+                f"--op '{_uuid_hint([it for _, it in short])}'), re-route "
+                "after: part_repair.py does both and checks the result")
+        stub = {id(it): it for p in old for it in board_update._touching(bg, p)}
+        for p in final:
+            for it in board_update._touching(bg, p):
+                stub.pop(id(it), None)
+        if stub:
+            note.append(f"{len(stub)} tracks/vias touched the old pads and "
+                        "touch no new pad: they are left dangling ("
+                        f"{_uuid_hint(list(stub.values()))})")
+        if not note:
+            notes.pop(i)
+    return wops, notes
+
+
+def _verify_repad(pcb: Path, ops: list[dict]) -> list[str]:
+    """swap_fp / renumber landed, read back from the saved file: one part
+    with the ref (the old one gone), its library id, uuid, DNP, and every
+    copper pad's number, net and position, and the zone connections."""
+    done = [op for op in ops if op["op"] in REPAD_OPS]
+    if not done:
+        return []
+    import sexpdata
+
+    import geom
+    data = sexpdata.loads(pcb.read_text(encoding="utf-8"))
+    bg = geom.BoardGeom.from_file(pcb)
+    dnp = _dnp_refs(pcb)
+    problems = []
+    for op in done:
+        kind, ref = op["op"], op["ref"]
+        nodes = _fp_nodes(data, ref)
+        if len(nodes) != 1:
+            problems.append(f"{kind} {ref}: {len(nodes)} footprints carry "
+                            "the reference")
+            continue
+        if _fp_nodes(data, ref + "__swap_old"):
+            problems.append(f"{kind} {ref}: the old footprint is still on "
+                            "the board")
+        if kind == "swap_fp":
+            got = _sx_str(nodes[0][1]) if len(nodes[0]) > 1 else ""
+            if got != op["_fpid"]:
+                problems.append(f"swap_fp {ref}: library id {got!r} != "
+                                f"{op['_fpid']!r}")
+            if op.get("_uuid") and _node_uuid(nodes[0]) != op["_uuid"]:
+                problems.append(f"swap_fp {ref}: uuid {_node_uuid(nodes[0])}"
+                                f" != the old part's {op['_uuid']}")
+            if not any(o["op"] == "set_dnp" and o["ref"] == ref
+                       for o in ops) and (ref in dnp) != op["_dnp"]:
+                problems.append(f"swap_fp {ref}: dnp is {ref in dnp}")
+        have = sorted([p.number, p.net or "", p.center[0], p.center[1]]
+                      for p in bg.pads_of(ref=ref))
+        want = op["_expect"]
+        if len(have) != len(want):
+            problems.append(f"{kind} {ref}: {len(have)} copper pads, "
+                            f"expected {len(want)}")
+        else:
+            left = list(have)
+            for n, net, x, y in want:
+                k = next((k for k, h in enumerate(left) if h[0] == n
+                          and math.dist(h[2:], (x, y)) <= POS_TOL), None)
+                if k is None:
+                    problems.append(f"{kind} {ref}: no pad {n} at "
+                                    f"({x}, {y})")
+                    continue
+                if not _nets_equal(left[k][1], net):
+                    problems.append(f"{kind} {ref}: pad {n} at ({x}, {y}) "
+                                    f"is on {left[k][1]!r}, not {net!r}")
+                left.pop(k)
+        zc = _pad_zone_connects(pcb, ref)
+        for n, z in (op.get("_expect_zone") or {}).items():
+            if any(v != z for v in zc.get(n, [z])):
+                problems.append(f"{kind} {ref}: pad {n} zone_connect "
+                                f"{zc.get(n)} != {z}")
+    return problems
+
+
+def _nets_equal(a: str | None, b: str | None) -> bool:
+    return _net_class(a) == _net_class(b)
+
+
+def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
+              touch_check: bool = True) -> dict:
     """Validate refs, stage, run the SWIG worker, verify, atomically swap in.
 
     Returns the worker's per-op results. Raises CheckError (original board
     untouched) on any failure. Importable - place_seed --apply uses this.
+    touch_check=False lets a swap_fp/renumber land on other-net copper
+    (part_repair.py's trial on a scratch copy; never on a board you keep).
     """
     pcb = Path(pcb).resolve()
     if not pcb.is_file():
@@ -614,9 +1053,12 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False) -> dict:
 
     stage = Path(tempfile.mkdtemp(prefix=".aiee_edit_", dir=pcb.parent))
     try:
+        # swap_fp / renumber: resolved against the board before the list
+        wops, notes = _resolve_repad(pcb, ops, stage,
+                                     touch_check=touch_check)
         staged = stage / pcb.name
         shutil.copy2(pcb, staged)
-        job = {"board": str(staged), "out": str(staged), "ops": ops}
+        job = {"board": str(staged), "out": str(staged), "ops": wops}
         jf = stage / "job.json"
         jf.write_text(json.dumps(job), encoding="utf-8")
         cp = subprocess.run([str(bp), str(WORKER), str(jf)],
@@ -645,8 +1087,8 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False) -> dict:
             idx = result.get("index")
             at = f" at ops[{idx}]" if idx is not None else ""
             raise CheckError(f"worker failed{at}: {detail} (rolled back)")
-        problems = _verify(staged, ops) + _verify_texts(staged, ops) \
-            + _verify_parts(staged, ops)
+        problems = _verify(staged, wops) + _verify_texts(staged, ops) \
+            + _verify_parts(staged, ops) + _verify_repad(staged, wops)
         if problems:
             raise CheckError("post-apply verify failed (rolled back): "
                              + "; ".join(problems))
@@ -656,7 +1098,11 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False) -> dict:
             import route_edit
             route_edit._refill(cli, pcb, staged)
         os.replace(staged, pcb)
-        return result["results"]
+        results = result["results"]
+        for i, extra in notes.items():
+            if i < len(results) and isinstance(results[i], dict):
+                results[i].setdefault("notes", []).extend(extra)
+        return results
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
