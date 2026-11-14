@@ -688,7 +688,10 @@ def impedance_rules(constraints: dict, stackup: dict, pairs: list[dict],
                     ) -> tuple[list[Rule], list[dict]]:
     """Single-ended high_speed nets with impedance_ohm: the outer microstrip
     width (a fact: the router's class is left to the board, RF boards draw
-    their own) and, per stripline layer, a layer-scoped track_width rule."""
+    their own) and, per stripline layer, a layer-scoped track_width rule.
+    An inner layer with no solved stripline gets the same named guard as a
+    diff pair (a disallow-track), so a run there is a DRC error instead of a
+    silent impedance miss at the default width (#1108)."""
     in_pair = {n for dp in pairs for n in (dp["p"], dp["n"])}
     nets = [e for e in constraints.get("high_speed", [])
             if e.get("impedance_ohm") and e.get("net") not in in_pair]
@@ -697,6 +700,8 @@ def impedance_rules(constraints: dict, stackup: dict, pairs: list[dict],
     h, er, cu_oz = outer_microstrip_params(stackup)
     t = imp.CU_OZ_MM.get(cu_oz, 0.035)
     strip = stripline_layers(stackup, constraints)
+    inner = [ly["name"] for ly in stackup.get("stack", [])
+             if ly["type"] == "copper"][1:-1]
     rules: list[Rule] = []
     facts: list[dict] = []
     by_z: dict[float, dict] = {}
@@ -726,6 +731,14 @@ def impedance_rules(constraints: dict, stackup: dict, pairs: list[dict],
             rules.append(Rule(f"aiee_z{_mm_tag(z)}_w_{_layer_tag(lname)}", "track_width",
                               layer=f'"{lname}"', condition=_neckdown(cond, bga_refs),
                               extra=_width_window(g["width_mm"], floor)))
+        unsized = [n for n in inner if "width_mm" not in sol["layers"].get(n, {})]
+        if unsized and len(unsized) == len(inner):
+            rules.append(Rule(f"aiee_z{_mm_tag(z)}_outer_only", "disallow track",
+                              layer="inner", condition=cond))
+        else:
+            for n in unsized:
+                rules.append(Rule(f"aiee_z{_mm_tag(z)}_outer_only_{_layer_tag(n)}",
+                                  "disallow track", layer=f'"{n}"', condition=cond))
     return rules, facts
 
 

@@ -146,6 +146,61 @@ def test_dsn_apply_layer_widths():
     assert routelib.dsn_apply_layer_widths(_DSN, {"/X": {"In9.Cu": 0.1}}) == (_DSN, [])
 
 
+_BAN_DRU = """(version 1)
+(rule "aiee_diff_outer_only_CK_In4"
+\t(layer "In4.Cu")
+\t(constraint disallow track)
+\t(condition "A.NetName == '/CK_P' || A.NetName == '/CK_N'")
+)
+(rule "aiee_diff_outer_only_X"
+\t(layer inner)
+\t(constraint disallow track)
+\t(condition "A.NetName == '/X'")
+)
+(rule "not_a_net_list"
+\t(layer "In2.Cu")
+\t(constraint disallow track)
+\t(condition "A.NetClass == 'HS'")
+)
+(rule "a_width"
+\t(layer "In2.Cu")
+\t(constraint track_width (min 0.1mm))
+\t(condition "A.NetName == '/D0'")
+)
+"""
+_SIX = ["F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"]
+
+
+def test_dru_track_bans():
+    """#1108: rules_gen's disallow-track layer rules, per net."""
+    bans = routelib.dru_track_bans(_BAN_DRU, _SIX)
+    assert bans == {"/CK_P": {"In4.Cu"}, "/CK_N": {"In4.Cu"},
+                    "/X": {"In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu"}}
+    assert routelib.dru_track_bans("", _SIX) == {}
+
+
+def test_dsn_apply_track_bans():
+    """#1108: a banned layer leaves the class's use_layer; a class whose
+    nets are banned differently is split, rules and vias kept."""
+    bans = {"/CK_P": {"In2.Cu"}, "/D0": {"In2.Cu", "B.Cu"}}
+    text, done = routelib.dsn_apply_track_bans(_DSN, bans)
+    assert sorted((d["net"], tuple(d["use_layer"])) for d in done) == [
+        ("/CK_P", ("F.Cu", "B.Cu")), ("/D0", ("F.Cu",))]
+    ck = text[text.index("(class DP100 /CK_P"):]
+    assert "(use_layer F.Cu B.Cu)" in ck and "(width 94.8)" in ck
+    assert '(class kicad_default GND "Net-(C1-Pad2)"' in text
+    d0 = text[text.index("(class aiee_ban__D0 /D0"):]
+    d0 = d0[:d0.index("(class DP100")]
+    assert "(use_layer F.Cu)" in d0 and "(width 200)" in d0
+    assert '(use_via "Via[0-5]_450:200_um")' in d0
+    assert text.count("(use_layer") == 2 and text.count("(class ") == 3
+    assert text.count("(") == text.count(")")
+    # banned from every layer, or from a layer the DSN lacks: left alone
+    every = {"/CK_P": {"F.Cu", "In2.Cu", "B.Cu"}, "/D0": {"In9.Cu"}}
+    assert routelib.dsn_apply_track_bans(_DSN, every) == (_DSN, [])
+    assert routelib.dsn_apply_track_bans(_DSN, {}) == (_DSN, [])
+
+
 # ------------------------------------------------------------ route_critical
 
 def _board(tmp_path, keepout=True, name="z6") -> Path:
@@ -366,6 +421,11 @@ def test_live_freerouting_draws_dsn_layer_widths(tmp_path, capsys):
         pytest.skip("route_swig: wxEntryStart failed (no usable X display)")
     assert code == 0, (rep, _SEEN, capsys.readouterr().out)
     assert sorted(rep["facts"]["dsn_layer_widths"]) == ["/CK_N", "/CK_P", "/D0"]
+    # the DRU's unsized-inner guards reach the DSN: the pair and the 50 ohm
+    # net may use only the outer layers and the In2 stripline
+    bans = {b["net"]: b["use_layer"] for b in rep["facts"]["dsn_track_bans"]}
+    assert sorted(bans) == ["/CK_N", "/CK_P", "/D0"]
+    assert all(v == ["F.Cu", "In2.Cu", "B.Cu"] for v in bans.values()), bans
     drc = _drc(pcb)
     assert drc["violations"] == [], drc["violations"]
     w = _in2_widths(pcb)

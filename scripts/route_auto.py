@@ -6,7 +6,9 @@ export via the SWIG worker (wx-suppressed; plane layers marked LT_POWER so the
 DSN carries "(type power)") -> Freerouting CLI over an escalation ladder
 (the DSN first carries each net's .kicad_dru width/clearance floor as its own
 class, routelib.dsn_apply_net_rules, the board's hole rules the export
-drops, _dsn_hole_rules, and each pre-routed wire chain as one path,
+drops, _dsn_hole_rules, the layers a DRU `disallow track` rule bans a net
+from as its class's use_layer, _dsn_track_bans, #1108, and each pre-routed
+wire chain as one path,
 routelib.dsn_merge_wires, as split wires overflow Freerouting's stack;
 routelib.DEFAULT_LADDER; deterministic flags, per-rung process timeout, score
 logging) -> import the best rung's SES (Freerouting's pin neckdowns in a
@@ -141,6 +143,23 @@ def _dsn_layer_widths(staged: Path, dsn: Path) -> list[str]:
     text, done = routelib.dsn_apply_layer_widths(
         dsn.read_text(encoding="utf-8"),
         {net: zrules.layer_widths(geo, [net]) for net in geo})
+    if done:
+        dsn.write_text(text, encoding="utf-8")
+    return done
+
+
+def _dsn_track_bans(staged: Path, dsn: Path, bg: geom.BoardGeom) -> list[dict]:
+    """Write the staged board's `disallow track` layer rules (rules_gen's
+    aiee_diff_outer_only_* and aiee_z<Z>_outer_only*) into the DSN as class
+    use_layer lists, so Freerouting keeps a net off the layers DRC bans it
+    from (#1108)."""
+    dru = staged.with_suffix(".kicad_dru")
+    if not dru.is_file():
+        return []
+    text, done = routelib.dsn_apply_track_bans(
+        dsn.read_text(encoding="utf-8"),
+        routelib.dru_track_bans(dru.read_text(encoding="utf-8"),
+                                list(bg.copper_layers)))
     if done:
         dsn.write_text(text, encoding="utf-8")
     return done
@@ -585,6 +604,7 @@ def route_probe(pcb: Path, *, passes: int = 4, timeout_s: int = 180,
         "layer_types": {ly: "power" for ly in _auto_power_layers(bg)}}, work)
     _dsn_net_rules(staged, dsn)
     _dsn_layer_widths(staged, dsn)
+    _dsn_track_bans(staged, dsn, bg)
     _dsn_hole_rules(staged, dsn, bg)
     merged = _dsn_merge_wires(dsn)
     _dsn_barriers(staged, dsn)
@@ -678,6 +698,7 @@ def run(argv: list[str] | None = None):
         "layer_types": {ly: "power" for ly in power_layers}}, work)
     dsn_net_rules = _dsn_net_rules(staged, dsn)
     dsn_layer_widths = _dsn_layer_widths(staged, dsn)
+    dsn_track_bans = _dsn_track_bans(staged, dsn, bg)
     hole_rules = _dsn_hole_rules(staged, dsn, bg)
     grown = hole_rules.pop("grown")
     dsn_wires_merged = _dsn_merge_wires(dsn)
@@ -928,6 +949,7 @@ def run(argv: list[str] | None = None):
             "power_layers": power_layers,
             "dsn_net_rules": dsn_net_rules,
             "dsn_layer_widths": dsn_layer_widths,
+            "dsn_track_bans": dsn_track_bans,
             "dsn_barriers": dsn_barriers,
             "dsn_hole_rules": hole_rules,
             "dsn_wires_merged": dsn_wires_merged,
