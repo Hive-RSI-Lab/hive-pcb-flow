@@ -611,6 +611,19 @@ HTSSOP-32 stays `smd`. Parts marked `board_only`, `exclude_from_bom` or
   pads contradict (`fp_attr_mismatch`), or that has both kinds of pad and no
   type (`fp_attr_unspecified`, which the position export drops). Planted
   fault `attr-tht-on-smd`: blinky2's SOT-223 U2 marked through_hole.
+- `check_fp_package` (verify suite) judges each footprint against the
+  package of the part it names: the LCSC or JLC number on the footprint
+  (parts.json's `refdes` wins over a stale field), read from parts.json or
+  `reference/lcsc_packages.json`. It compares mount, family (SOD-123 vs
+  SOD-323, DO-41 vs SMD), pin count, pitch, SOIC body width, QFN/DFN body,
+  and a passive's case size (`footprint_package_mismatch`), and an R/C/L
+  Value against the record's value, 2 % apart or more
+  (`lcsc_value_mismatch`). A name that gives only a mount, or a package name
+  equal to the footprint name, is not judged. `--live` asks JLC for codes
+  it has no record of, and looks up an MPN (or a D/Q/U Value) when every
+  JLC row of that exact model agrees on one package; that's a warning, for
+  sweeps, not the gate. `facts.judged` counts the parts it judged.
+  Miss class 1 in [miss-taxonomy.md](miss-taxonomy.md).
 
 ## Net ties and their bridges
 

@@ -1,0 +1,10 @@
+# check_fp_package: each part's footprint against the package of the part it
+# names (its LCSC/JLC number's record in parts.json or
+# reference/lcsc_packages.json; mount, family, pins, pitch, SO width, QFN
+# body), and a passive's Value against that record's value. Board only;
+# --live (JLC's records, MPN search) is for sweeps, not the gate.
+name: check_fp_package
+needs: []
+args: []
+optional:
+  parts: [--parts, "{parts}"]
