@@ -48,15 +48,15 @@ what pcb-flow's checks do with the first revision. Written by
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | glasgow-1: U24/U25 nRESET left floating | SCH (datasheet pin state) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): TCA6416A/PCA6416A RESET must not be open (TI SCPS194F, NXP PCA6416A Table 3). revD0 leaves both on unconnected-* nets; revD1 ties them up. |
-| glasgow-2: U3 TMP112 and U21 DAC43204 answer on the same I2C address | SCH (I2C address map) | caught (not run here) (`netlist_audit` i2c_address_collision) | reference/i2c_addresses.yaml (#1034): TMP112 ADD0 and DAC43204 A0 both on GND put both at 0x48 on /SCL (SBOS473L Table 7-4, SLASEX3A Table 7-16). revD1 moves ADD0 to V+ (0x49). |
-| glasgow-3: U25 ADDR strap tied to the wrong power domain | SCH (strap supply domain) | caught (not run here) (`netlist_audit` pin_state) | reference/pin_states.yaml's ADDR row with rail_pin VDD_P (#1034): the PCA6416A reads ADDR against VCCP (VIH 0.7 x VCCP, TI SCPS194F), so a tie to +3V3 while VDD_P is +5V5 reads low and lands on U24's 0x20. revD1 ties it to VDD_P's rail. |
+| glasgow-2: U3 TMP112 and U21 DAC43204 answer on the same I2C address | SCH (I2C address map) | caught on rev A, gone on rev B (`netlist_audit` i2c_address_collision) | reference/i2c_addresses.yaml (#1034): TMP112 ADD0 and DAC43204 A0 both on GND put both at 0x48 on /SCL (SBOS473L Table 7-4, SLASEX3A Table 7-16). revD1 moves ADD0 to V+ (0x49). |
+| glasgow-3: U25 ADDR strap tied to the wrong power domain | SCH (strap supply domain) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml's ADDR row with rail_pin VDD_P (#1034): the PCA6416A reads ADDR against VCCP (VIH 0.7 x VCCP, TI SCPS194F), so a tie to +3V3 while VDD_P is +5V5 reads low and lands on U24's 0x20. revD1 ties it to VDD_P's rail. |
 | glasgow-4: U4 FUSB302 SCL and SDA swapped on the schematic | SCH (bus pin map) | caught on rev A, gone on rev B (`netlist_audit` pin_net_swap) | netlist_audit's pin_net_swap reads U4's SCL pin on /SDA and its SDA pin on /SCL; revD1 swaps them back and the finding is gone. |
-| glasgow-5: STM32G031 MCU_nRST held near 1.2 V by an unprogrammed FX2/FPGA | ANA (pull vs pin leakage) | missed | pull strength against pin leakage and driver contention on a DC-solved net (#1026) |
-| glasgow-6: FX2 U8B and U2 can both drive MCU_nRST | SCH (driver contention) | missed | pull strength against pin leakage and driver contention on a DC-solved net (#1026) |
-| glasgow-7: R9 100k pull-up loses to the unconfigured FPGA's 150 uA pull-down, so nALERT sits asserted | ANA (pull vs pin leakage) | missed | pull strength against pin leakage and driver contention on a DC-solved net (#1026) |
+| glasgow-5: STM32G031 MCU_nRST held near 1.2 V by an unprogrammed FX2/FPGA | ANA (pull vs pin leakage) | caught on rev A, gone on rev B (`netlist_audit` pull_vs_leakage) | reference/pin_leakage.yaml (#1026): R26 47k and the STM32's own 25-55k pull-up against the unconfigured ECP5's 150 uA pull-down and the FX2's and ECP5's 10 uA leakage solves to 0 V, below the NRST VIL (an error). revD1 gates NRST through a 74LVC1G08 and the old net carries a 10k pull-down that holds the gate input at 0.15 V. |
+| glasgow-6: FX2 U8B and U2 can both drive MCU_nRST | SCH (driver contention) | caught on rev A, gone on rev B (`netlist_audit` driver_contention) | reference/pin_leakage.yaml (#1026) marks the STM32G031 PF2-NRST as a reset input; revD0 puts FX2 PD3 and ECP5 PT13B, both bidirectional, on it (a warning). revD1 drives NRST from a 74LVC1G08 alone. |
+| glasgow-7: R9 100k pull-up loses to the unconfigured FPGA's 150 uA pull-down, so nALERT sits asserted | ANA (pull vs pin leakage) | caught on rev A, gone on rev B (`netlist_audit` pull_vs_leakage) | reference/pin_leakage.yaml (#1026): R9 100k against the ECP5's 150 uA IPD (FPGA-DS-02012 Table 3.7) and 20 uA of leakage solves to 0 V (an error). revD1's 2.2k holds 2.9 V, above the FX2's 2 V VIH. |
 | glasgow-8: INTB/DRDY lines on U6 pins that cannot take an interrupt | FW-HW (pin function) | not_static | every STM32G0 GPIO can take an EXTI line, so no pin table rules a pin out; which pins the firmware wants for interrupts is its own choice (#1032). |
 | glasgow-9: ADC AICOM pin left off GND though single-ended mode is referenced to it | SCH (datasheet pin state) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): NAFE71388 AICOM belongs on ground, directly or through its series resistor (section 7.3.2.2.1). revD0 runs it through R34 to /ADC/REMOTE_COM; revD1 takes it to GND. A warning. |
-| glasgow-10: BUSY/CSSPIN on RD instead of a FLAG pin | FW-HW (pin function) | caught (not run here) (`netlist_audit` mcu_input_only_drive) | reference/mcu_pins.yaml (#1032): the FX2's RDY0/SLRD is input-only (38-08032 Rev. *K Table 4-1), and revD0 joins flash U9's ~{CS} to it over 0R R40. revD1 moves it to a FLAG pin. A warning. |
+| glasgow-10: BUSY/CSSPIN on RD instead of a FLAG pin | FW-HW (pin function) | caught on rev A, gone on rev B (`netlist_audit` mcu_input_only_drive) | reference/mcu_pins.yaml (#1032): the FX2's RDY0/SLRD is input-only (38-08032 Rev. *K Table 4-1), and revD0 joins flash U9's ~{CS} to it over 0R R40. revD1 moves it to a FLAG pin. A warning. |
 
 ## echoplayer: r1-rev1 -> r1-rev1.1
 
@@ -65,7 +65,7 @@ what pcb-flow's checks do with the first revision. Written by
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | echoplayer-1: USB3320C ID pin grounded on a device-only board, so the core starts as a host | SCH (datasheet pin state) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): USB3320 ID grounded makes an A-device (DS00001792F Table 2-1, 5.6.1), a warning as a host board may mean it. rev1.1 ties U8's ID to 3V3, as the datasheet allows. |
-| echoplayer-2: HP/LO 3.5 mm jacks wired against the standard headphone pinout | LIB (standard connector pinout) | caught (not run here) (`check_pinouts` pinout_mismatch) | check_pinouts reads J4's pads T/R1/R2/S from their names: rev1 has the tip on /audio/hp_com and left on R1 (J5, the line out, has its tip on GND and fires too); rev1.1 has both in the CTIA order. |
+| echoplayer-2: HP/LO 3.5 mm jacks wired against the standard headphone pinout | LIB (standard connector pinout) | caught on rev A, gone on rev B (`check_pinouts` pinout_mismatch) | check_pinouts reads J4's pads T/R1/R2/S from their names: rev1 has the tip on /audio/hp_com and left on R1 (J5, the line out, has its tip on GND and fires too); rev1.1 has both in the CTIA order. |
 | echoplayer-3: ESD diodes D1-D4 load the SDMMC lines past the bus's capacitance limit | SI (bus capacitive load) | missed | a per-bus capacitive load budget, ESD arrays included (#1031) |
 
 ## bedlift: v0.2 -> v1
@@ -74,12 +74,12 @@ what pcb-flow's checks do with the first revision. Written by
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| bedlift-1: lift actuator connectors J8/J9 pins 2 and 3 swapped, reversing the hall sensors' supply | SCH (off-board connector pinout) | caught_with_constraints (not run here) (`check_pinouts` pinout_mismatch, with constraints) | v0.2 has pin 2 on VHALL and pin 3 on GND; v1 has pin 2 on GND and pin 3 on +5V. Only the actuator's own pinout says which is right, so the catch states the mate (reference/connector_pinouts.yaml bedlift-lift-actuator) on J8 (v1's actuator connector is J10). |
+| bedlift-1: lift actuator connectors J8/J9 pins 2 and 3 swapped, reversing the hall sensors' supply | SCH (off-board connector pinout) | caught on rev A, gone on rev B (`check_pinouts` pinout_mismatch, with constraints) | v0.2 has pin 2 on VHALL and pin 3 on GND; v1 has pin 2 on GND and pin 3 on +5V. Only the actuator's own pinout says which is right, so the catch states the mate (reference/connector_pinouts.yaml bedlift-lift-actuator) on J8 (v1's actuator connector is J10). |
 | bedlift-2: DRV8434S nSCS tied to GND, but the part needs a falling edge to start each SPI frame | SCH (datasheet pin state) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): DRV8434S nSCS must be driven, as each frame needs it high between (SLOSE70 7.5.1.2). v0.2 ties U7-U10's nSCS to GND; v1 drives them from the MCU. |
 | bedlift-3: DRV8434S STEP not on a hardware-timer pin, so stall detection sees jitter | FW-HW (pin function) | not_static | the DRV8434S also takes steps over SPI, and which timer the firmware gives STEP is its own choice; no pin table rules the wiring out (#1032). |
 | bedlift-4: DRV8434S VREF wired straight to DVDD, 5 V where 3.3 V is recommended | SCH (datasheet pin range) | caught on rev A, gone on rev B (`netlist_audit` pin_state) | reference/pin_states.yaml (#1033): DRV8434S VREF is limited to 3.3 V and DVDD is 5 V (SLOSE70 6.3, 8.2.2.2), so VREF on the part's own DVDD fires. v1 feeds it through a divider. |
-| bedlift-5: LIFT1 IN2 on an MCU pin with no timer channel, so the motor cannot be driven by PWM | FW-HW (pin function) | caught (not run here) (`netlist_audit` mcu_pwm_timer) | reference/mcu_pins.yaml (#1032): with PMODE high both DRV8874s are in PWM mode (SLVSF66A Table 2), and v0.2's four inputs (PB0, PA15, PC6, PA8) fit no single timer of the STM32C031. v1's PA0-PA3 all sit on TIM1 of its STM32C051. A warning. |
-| bedlift-6: actuator hall sensors powered at 3.3 V where they are meant for 5 V | SCH (off-board part supply) | caught_with_constraints (not run here) (`check_pinouts` pinout_supply_volts, with constraints) | /VHALL is U4's output (a 74LVC1G17 on +3.3V), so check_pinouts puts it at 3.3 V against the 5 V the actuator row asks on its supply pin; v1 feeds pin 3 from +5V. |
+| bedlift-5: LIFT1 IN2 on an MCU pin with no timer channel, so the motor cannot be driven by PWM | FW-HW (pin function) | caught on rev A, gone on rev B (`netlist_audit` mcu_pwm_timer) | reference/mcu_pins.yaml (#1032): with PMODE high both DRV8874s are in PWM mode (SLVSF66A Table 2), and v0.2's four inputs (PB0, PA15, PC6, PA8) fit no single timer of the STM32C031. v1's PA0-PA3 all sit on TIM1 of its STM32C051. A warning. |
+| bedlift-6: actuator hall sensors powered at 3.3 V where they are meant for 5 V | SCH (off-board part supply) | caught on rev A, gone on rev B (`check_pinouts` pinout_supply_volts, with constraints) | /VHALL is U4's output (a 74LVC1G17 on +3.3V), so check_pinouts puts it at 3.3 V against the 5 V the actuator row asks on its supply pin; v1 feeds pin 3 from +5V. |
 
 ## pdlc: v1 -> v2
 
@@ -87,15 +87,9 @@ what pcb-flow's checks do with the first revision. Written by
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-<<<<<<< HEAD
 | pdlc-1: the driver does not wait for power-good before driving the panel | PI (power-good sequencing) | caught on rev A, gone on rev B (`netlist_audit` power_good_unused) | #1030: v1's LM5158 PGOOD reaches only R1 2.2k and the D2 power LED, so nothing holds the half-bridge off until the boost is in regulation; v2 takes every PG (/HV_PG, /PDLC_PG_A, /PDLC_PG_B) into a 74LVC1G08 and STM32 inputs. |
 | pdlc-2: no current limit on the panel drive, so large panels drain the output capacitor | PI (load current limit) | missed | a switched capacitive load against the boost's output charge and current limit: needs the load's capacitance, which no schematic carries (#1030, survey) |
 | pdlc-3: the EN input is too sensitive when left floating | SCH (input pull strength) | missed | cable pickup on a floating off-board input: no datasheet leakage to size against, so #1026's rule leaves it (survey #1079) |
-=======
-| pdlc-1: the driver does not wait for power-good before driving the panel | PI (power-good sequencing) | missed | a power-good pin that gates nothing; a switched load against the converter's limit (#1030) |
-| pdlc-2: no current limit on the panel drive, so large panels drain the output capacitor | PI (load current limit) | missed | a power-good pin that gates nothing; a switched load against the converter's limit (#1030) |
-| pdlc-3: the EN input is too sensitive when left floating | SCH (input pull strength) | missed | pull strength against pin leakage and driver contention on a DC-solved net (#1026) |
->>>>>>> d8ab075 (check_pinouts: off-board connectors against their standard pinout (#1027))
 
 ## megabuzz: revA -> revA1
 
@@ -111,7 +105,7 @@ what pcb-flow's checks do with the first revision. Written by
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| sizif-1: JTAG header pinout differs from the Altera standard | SCH (standard connector pinout) | caught (not run here) (`check_pinouts` pinout_mismatch) | A KiCad 5 legacy schematic, read through lib/legacy_net. J11's net names follow the Altera pinout on both revisions; the fault is at the FPGA end (rev.C puts /TCK on U6's TDO, /TDI on its TCK, /TDO on its TDI). check_pinouts judges each header pin by the JTAG pin function it meets on the IC, so rev.C fires and rev.C1 is clean. |
+| sizif-1: JTAG header pinout differs from the Altera standard | SCH (standard connector pinout) | caught on rev A, gone on rev B (`check_pinouts` pinout_mismatch) | A KiCad 5 legacy schematic, read through lib/legacy_net. J11's net names follow the Altera pinout on both revisions; the fault is at the FPGA end (rev.C puts /TCK on U6's TDO, /TDI on its TCK, /TDO on its TDI). check_pinouts judges each header pin by the JTAG pin function it meets on the IC, so rev.C fires and rev.C1 is clean. |
 | sizif-2: J3 header's silkscreen is wrong | DFA (silk labels) | missed | check_silk reading a header's labels against its pins' nets (#1028) |
 
 ## ambient: rev_c -> rev_d
@@ -124,8 +118,4 @@ what pcb-flow's checks do with the first revision. Written by
 
 ## Count
 
-<<<<<<< HEAD
-41 defects: 28 caught, 9 missed, 4 not_static.
-=======
-41 defects: 25 caught, 2 caught_with_constraints, 10 missed, 4 not_static.
->>>>>>> d8ab075 (check_pinouts: off-board connectors against their standard pinout (#1027))
+41 defects: 30 caught, 2 caught_with_constraints, 5 missed, 4 not_static.
