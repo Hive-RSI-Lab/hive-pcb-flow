@@ -1,0 +1,47 @@
+# Capacitance budgets per bus line, and the capacitance parts put on a line,
+# for netlist_audit.py's bus_cap_load rule (#1031; errata corpus
+# echoplayer-3: CESD3V3AP clamps on every SDMMC line, and the bus failed at
+# speed).
+#
+# The rule adds up only what this file and the parts' own values say: the
+# rows below, and each capacitor from the line to a ground or a rail (its
+# value). The host's pins, the card and the copper are not counted, so the
+# total is a floor: over the budget is over for certain, under it is not a
+# pass for the line.
+#
+# buses: per kind of line,
+#   budget_pf   what the board side may put on one line
+#   max_pf      (i2c) the higher limit one faster mode allows; a total
+#               between the two is a warning, past max_pf an error
+#   source      the document, its revision, the table
+# parts: per part that loads a line,
+#   match       a regex tried against the part's Value, then its symbol
+#               name (case-insensitive)
+#   c_pf        the capacitance it puts on each pin's line, at 0 V and
+#               1 MHz unless the source says otherwise (typical when the
+#               sheet gives only that: the floor stays a floor)
+#   source      the datasheet, its revision, the table or line
+# verified: true means the source was re-read for this row.
+buses:
+  sd:
+    budget_pf: 30
+    what: C_HOST + C_BUS, everything on one SD line but the card
+    source: >-
+      NXP AN10911 Rev. 01 (29 April 2010) Table 2, after the SD Physical
+      Layer spec: C_L <= 40 pF, C_CARD <= 10 pF, C_HOST + C_BUS <= 30 pF
+    verified: true
+  i2c:
+    budget_pf: 400
+    max_pf: 550
+    what: C_b, the capacitive load on one bus line
+    source: >-
+      NXP UM10204 Rev. 7.0 (1 October 2021) Table 11: C_b 400 pF in
+      Standard and Fast mode, 550 pF in Fast-mode Plus
+    verified: true
+parts:
+  - match: 'CESD3V3AP'
+    c_pf: 120
+    source: >-
+      JSCJ CESD3V3AP datasheet (rev C, March 2014), electrical
+      characteristics: C_J 120 pF typ at V_R = 0 V, f = 1 MHz
+    verified: true
