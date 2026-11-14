@@ -1,0 +1,92 @@
+# What a pin sinks, sources and needs on its net while nothing has set it
+# up yet, for netlist_audit.py's pull_vs_leakage and driver_contention
+# rules (#1026): an unconfigured FPGA's weak pull-downs, an unprogrammed
+# MCU's input leakage, a reset pin's own pull-up, a logic input's
+# thresholds.
+#
+# match: a regex tried against the part's Value, then its symbol name
+# (case-insensitive).
+# state: when the row holds (unconfigured, from reset).
+# pins: each row's `pin` is a regex tried against the netlist pinfunction
+#   (upper-cased, KiCad's ~{...} overbar dropped, the text before the first
+#   '/') and then against the pin number. A row only counts on a pin whose
+#   type is not power. Fields, all worst case over the datasheet's range:
+#   ipd       A   the most a weak pull-down sinks (a pull-up must beat it)
+#   ipu       A   the most a weak pull-up sources (a pull-down must beat it)
+#   leak      A   the most input leakage, either way
+#   rpu       ohm [min, max] of an internal pull-up resistor to its supply
+#   vil / vih V   the receiver's input thresholds, or
+#   vil_frac / vih_frac   the same as a fraction of the pull's rail
+#   reset     true on a reset input: two push-pull drivers from other parts
+#             on its net fight (driver_contention)
+#   source    the datasheet, its revision, the table or section
+# verified: true means the source was re-read for this row.
+#
+# The rule solves each net that has a pull resistor to a rail of known
+# volts (0 ohm hops followed) with the currents of the pins listed here,
+# and flags a worst-case level that misses the receivers' VIH (pull-up) or
+# VIL (pull-down). A net with no listed receiver is read against CMOS
+# 0.7 / 0.3 of the pull's rail.
+#
+# Seeded from the errata corpus (#1026): glasgow-5, glasgow-6, glasgow-7.
+
+parts:
+  - mpn: ECP5 (LFE5U, LFE5UM)
+    match: '^LFE5U'
+    state: during configuration (unconfigured)
+    verified: true   # Lattice FPGA-DS-02012-3.4 read 2026-11-14
+    pins:
+      - pin: '^P[TBLR]\d+[A-D]$'
+        ipd: 150.0e-6
+        leak: 10.0e-6
+        source: >-
+          FPGA-DS-02012-3.4 Table 3.7 DC Electrical Characteristics: IPD
+          "I/O Active Pull-down Current, pulling up from logic LOW state"
+          max 150 uA for 0 <= VIN <= VCCIO; IIL/IIH max 10 uA. Section 4.1
+          Signal Descriptions, P[L/R] and P[T/B]: "During configuration the
+          user-programmable I/O are tri-stated with an internal pull-down
+          resistor enabled."
+
+  - mpn: CY7C68013A (EZ-USB FX2LP)
+    match: '^CY7C6801[3-6]A'
+    state: from reset (unprogrammed, ports are inputs)
+    verified: true   # Infineon 38-08032 Rev. AD read 2026-11-14
+    pins:
+      - pin: '^P[A-E][0-7]$'
+        leak: 10.0e-6
+        vil: 0.8
+        vih: 2.0
+        source: >-
+          38-08032 Rev. AD Table 14 DC Characteristics: VIH min 2 V, VIL max
+          0.8 V, II input leakage +-10 uA. Port pin table: Port D pins reset
+          to I (input), Z; OED (Port D output enable) resets to 00000000.
+
+  - mpn: STM32G031 / STM32G030
+    match: '^STM32G03[01]'
+    state: from reset (NRST in its default bidirectional reset mode)
+    verified: false  # st.com did not answer 2026-11-14; not re-read
+    pins:
+      - pin: '^(NRST|PF2|PF2-NRST)$'
+        reset: true
+        rpu: [25000, 55000]
+        vil_frac: 0.3
+        vih_frac: 0.7
+        source: >-
+          STM32G031x4/x6/x8 datasheet DS12992 section 5.3 NRST input
+          characteristics: VIL(NRST) max 0.3 VDD, VIH(NRST) min 0.7 VDD, RPU
+          weak pull-up 25-55 kOhm (the STM32G0 family values, also DS13564);
+          RM0444 3.4.1: PF2-NRST resets to bidirectional reset mode.
+
+  - mpn: 74LVC1G08
+    match: '74LVC1G08'
+    state: always (VCC 3 V to 3.6 V)
+    verified: true   # TI SCES217AA (August 2026) read 2026-11-14
+    pins:
+      - pin: '^[12]$'
+        leak: 5.0e-6
+        vil: 0.8
+        vih: 2.0
+        source: >-
+          SCES217AA 5.3 Recommended Operating Conditions: VIH min 2 V and VIL
+          max 0.8 V at VCC = 3 V to 3.6 V; 5.5 Electrical Characteristics: II
+          +-5 uA.
