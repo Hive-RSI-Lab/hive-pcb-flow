@@ -47,7 +47,8 @@
    "check_via_stubs": 0,
    "check_vias": 0,
    "check_wicking": 74,
-   "netlist_audit": 0
+   "netlist_audit": 0,
+   "check_pinouts": 0
   },
   "by_kind": {
    "antenna_side_clearance": 1,
