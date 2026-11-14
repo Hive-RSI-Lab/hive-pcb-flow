@@ -363,6 +363,80 @@ def test_ch224k_cfg1_on_a_12v_rail_is_the_planted_fault():
 def test_ch224k_as_pcb0003_wires_it_is_quiet():
     hits, facts = _audit(*_ch224k())
     assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+def _ch224a(vbus="/VHV", cfg1="/CFG1", extra_comps=None, extra_nets=None):
+    """PCB-0016-A's CH224A U1: VHV and VBUS both on /VHV, which R7 0R
+    links to the USB-C VBUS, with C1 1uF and the LED leg R6 10k; CFG1 on
+    the Rset bank R1-R4, R2 24k grounded by R5 0R (12 V fitted). VBUS and
+    CFG1 go on the nets named; the rest stays as built."""
+    comps = {"U1": "CH224A", "R1": "6.8k", "R2": "24k", "R3": "56k",
+             "R4": "120k", "R5": "0R", "R6": "10k", "R7": "0R",
+             "C1": "1uF 50V X5R", "D1": "LED red", "J1": "USB-C 6P",
+             "J2": "OUT VBUS/GND", "JP1": "9V link (open)",
+             "JP2": "15V link (open)", "JP3": "20V link (open)",
+             **(extra_comps or {})}
+    nets = {"GND": [_m("U1", "11", "GND", "power_in"), _m("C1", "2"),
+                    _m("D1", "2", "K"), _m("J1", "A12", "GND"),
+                    _m("J2", "2", "Pin_2"), _m("R5", "2")],
+            "VBUS": [_m("J1", "A9", "VBUS"), _m("J1", "B9", "VBUS"),
+                     _m("J2", "1", "Pin_1"), _m("R7", "1")],
+            "/VHV": [_m("R7", "2"), _m("C1", "1"), _m("R6", "1"),
+                     _m("U1", "1", "VHV", "power_in")],
+            "/LED_A": [_m("R6", "2"), _m("D1", "1", "A")],
+            "/CFG1": [_m("R1", "1"), _m("R2", "1"), _m("R3", "1"),
+                      _m("R4", "1")],
+            "/SEL9": [_m("R1", "2"), _m("JP1", "1", "A")],
+            "/SEL12": [_m("R2", "2"), _m("R5", "1")],
+            "/SEL15": [_m("R3", "2"), _m("JP2", "1", "A")],
+            "/SEL20": [_m("R4", "2"), _m("JP3", "1", "A")],
+            "/CC1": [_m("J1", "A5", "CC1"), _m("U1", "7", "CC1")],
+            "/CC2": [_m("J1", "B5", "CC2"), _m("U1", "6", "CC2")]}
+    for name, ms in (extra_nets or {}).items():
+        nets.setdefault(name, []).extend(ms)
+    nets.setdefault(vbus, []).append(_m("U1", "8", "VBUS"))
+    nets.setdefault(cfg1, []).append(_m("U1", "9", "CFG1"))
+    return comps, nets
+
+
+@pytest.mark.parametrize("net,extra_comps,extra_nets", [
+    # the CH224K's 1k series resistor kept from the bus to VBUS
+    ("/VSENSE", {"R8": "1k"}, {"VBUS": [_m("R8", "1")],
+                               "/VSENSE": [_m("R8", "2")]}),
+    ("GND", None, None),
+    ("unconnected-(U1-VBUS-Pad8)", None, None)])
+def test_ch224a_vbus_not_shorted_to_vhv_is_the_planted_fault(
+        net, extra_comps, extra_nets):
+    hits, facts = _audit(*_ch224a(vbus=net, extra_comps=extra_comps,
+                                  extra_nets=extra_nets))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("VBUS", net, "error")]
+    assert "CH224 datasheet V2.1" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ch224a_vbus_on_a_0r_to_the_bus_is_quiet():
+    # the replacement guide's own fix: the series resistor made 0 ohm
+    hits, facts = _audit(*_ch224a(
+        vbus="/VSENSE", extra_comps={"R8": "0R"},
+        extra_nets={"VBUS": [_m("R8", "1")], "/VSENSE": [_m("R8", "2")]}))
+    assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+def test_ch224a_cfg1_on_a_5v_rail_is_the_planted_fault():
+    hits, facts = _audit(*_ch224a(
+        cfg1="+5V", extra_comps={"U2": "AP2112K-5.0"},
+        extra_nets={"+5V": [_m("U2", "5", "VOUT", "power_out")]}))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("CFG1", "+5V", "error")]
+    assert "above its 3.8 V limit" in hits[0]["msg"]
+    assert "CH224 datasheet V2.1" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ch224a_as_pcb0016a_wires_it_is_quiet():
+    hits, facts = _audit(*_ch224a())
+    assert hits == [] and facts["pin_state_parts_checked"] == 1
     # and on 3.3 V rails by name, under both limits
     hits, facts = _audit(*_ch224k(
         vdd="+3V3", cfg1="+3V3", extra_comps={"U2": "AP2112K-3.3"},

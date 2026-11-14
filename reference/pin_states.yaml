@@ -368,6 +368,46 @@ parts:
           - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 13, table: '8.1.3 CH224K绝对最大值', quote: 'VIOCC CC1 、CC2、CFG1引脚上的电压 -0.5 8 V', fields: [max_v]}
           - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.1 CH224A和 CH224K不同点', quote: 'CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V', fields: [max_v]}
 
+  - mpn: CH224A / CH224Q
+    match: '^CH224[AQ]'
+    verified: true   # WCH CH224 datasheet V2.1 (CH224手册1) read 2026-11-14
+    pins:
+      # Not rail_pin: VHV: the replacement guide's fix is a 0 ohm in place
+      # of the series resistor, which leaves VBUS on its own net; a 0 ohm
+      # hop reads as the short, so a VBUS pin on a different rail from VHV
+      # is not caught (a miss, never a false hit).
+      - pin: VBUS
+        allow: [rail, external]
+        forbid: [open, ground]
+        why: >-
+          the CH224A/Q's VBUS pin is a voltage-sense input that must be
+          shorted to VHV (pin 1, the supply); left open, grounded, or kept
+          behind the CH224K's series resistor it does not see the bus
+          voltage straight
+        source: >-
+          WCH CH224 datasheet V2.1 table 4-1 CH224Q/CH224A pins: "8 8 VBUS
+          I 电压检测输入，需要短接至 VHV。" (voltage-sense input, must be
+          shorted to VHV); 7.2.1, replacing a CH224K's single-resistor
+          design: "将 R1短接或更换为 0Ω" (short R1, the VBUS series resistor,
+          or change it to 0 ohm).
+        cite:
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 3, table: '表 4-1 CH224Q、CH224A引脚定义', quote: '8 8 VBUS I 电压检测输入，需要短接至 VHV。', fields: []}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.2.1 原CH224K为单电阻配置模式', quote: '将 R1短接或更换为 0Ω', fields: []}
+      - pin: CFG1
+        max_v: 3.8
+        why: >-
+          the CH224A/Q's CFG1 is rated -0.5 to 3.8 V (the CH224K's 8 V);
+          a CFG1 level carried over from a CH224K design on a 5 V or higher
+          supply is past its absolute maximum
+        source: >-
+          WCH CH224 datasheet V2.1 8.1.1 CH224Q/A absolute maximum: "VIOUX
+          DP 、DM、CFG1引脚上的电压 -0.5 3.8 V" (voltage on DP, DM, CFG1, -0.5
+          to 3.8 V); 7.1: "CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V" (the
+          CH224A's CFG1 is rated 3.8 V, the CH224K's 8 V).
+        cite:
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 13, table: '8.1.1 CH224Q/A绝对最大值', quote: 'VIOUX DP 、DM、CFG1引脚上的电压 -0.5 3.8 V', fields: [max_v]}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.1 CH224A和 CH224K不同点', quote: 'CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V', fields: [max_v]}
+
   - mpn: ADS8326
     match: '^ADS8326'
     verified: true   # TI SBAS343C (May 2007, revised September 2009) read 2026-11-14
