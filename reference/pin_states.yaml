@@ -30,6 +30,11 @@
 #   why       one line for the finding
 #   source    the datasheet, its revision, the section or table
 # supply_volts: the part's power_out pins and their nominal volts.
+# cite: where a row's facts are, [{doc, sha256, page, table, quote,
+#   fields}]: `bin/hwde part_rows --verify` checks each quote is on its
+#   page and each cited field's number is in the quote (#1100). A
+#   finding that only a row without verified: true makes is reported
+#   as not judged, never as a hit.
 # verified: true means the source was re-read for this row.
 #
 # Seeded from the errata corpus's datasheet-pin-state misses (#1033):
@@ -131,3 +136,88 @@ parts:
           grounded. For a B-Device ID is floated." Section 5.6.1: "For
           device only applications that do not use the ID signal the ID pin
           should be connected to VDD33."
+
+  # Seeded with scripts/part_rows.py (#1100): drafted from the datasheet,
+  # each cite checked with part_rows --verify against the PDF named.
+  - mpn: ESP32-C3 (chip, ESP32-C3-MINI-1)
+    match: '^ESP32-C3(?!-WROOM)'
+    verified: true   # Espressif ESP32-C3 v2.5 and ESP32-C3-MINI-1 v2.2 read 2026-11-14
+    aliases: {CHIP_EN: EN}
+    pins:
+      - pin: EN
+        forbid: [open]
+        why: >-
+          EN (CHIP_EN on the bare chip) enables the chip; left floating the
+          chip may never start or may reset at random
+        source: >-
+          ESP32-C3 Series Datasheet v2.5 section 2.3 (pin overview): "Note:
+          Do not leave the CHIP_EN pin floating." ESP32-C3-MINI-1 v2.2 pin
+          table: "Note: Do not leave the EN pin floating."
+        cite:
+          - {doc: esp32-c3.pdf, sha256: fede706c39ce663c861136724ffe32dff3f1407fa7f2dac18bbd0d21f0634205, page: 25, table: '', quote: 'Note: Do not leave the CHIP_EN pin floating.', fields: []}
+          - {doc: esp32-c3-mini-1.pdf, sha256: b53790a43866afb431ecc121d1b73d514aea1bf4934906f2eab630310528b1e0, page: 11, table: '', quote: 'Note: Do not leave the EN pin floating.', fields: []}
+
+  - mpn: ESP32-S3 (chip, ESP32-S3-WROOM-1)
+    match: '^ESP32-S3(?!-MINI)'
+    verified: true   # Espressif ESP32-S3 v2.2 and ESP32-S3-WROOM-1 v1.8 read 2026-11-14
+    aliases: {CHIP_PU: EN}
+    pins:
+      - pin: EN
+        forbid: [open]
+        why: >-
+          EN (CHIP_PU on the bare chip) enables the chip; left floating the
+          chip may never start or may reset at random
+        source: >-
+          ESP32-S3 Series Datasheet v2.2 pin overview: "Note: Do not leave
+          the CHIP_PU pin floating." ESP32-S3-WROOM-1 v1.8 pin table: "Note:
+          Do not leave the EN pin floating."
+        cite:
+          - {doc: esp32-s3.pdf, sha256: 2d5a7cb7fd559d8d972bd88db32669c0196d23f22d7afaafb0f63d099b589a3f, page: 28, table: '', quote: 'Note: Do not leave the CHIP_PU pin floating.', fields: []}
+          - {doc: esp32-s3-wroom-1.pdf, sha256: 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435, page: 11, table: '', quote: 'Note: Do not leave the EN pin floating.', fields: []}
+
+  - mpn: USB2514B
+    match: '^USB251[234]B'
+    verified: true   # Microchip DS00001692C read 2026-11-14
+    pins:
+      - pin: RBIAS
+        allow: [pulled_down]
+        why: >-
+          RBIAS takes a 12.0k 1% resistor to ground that sets the USB
+          transceivers' bias; without it the PHY is out of spec or dead
+        source: >-
+          DS00001692C 3.3 Pin Descriptions: "RBIAS ... a 12.0 k (+/- 1%)
+          resistor is attached from ground to this pin to set the
+          transceiver's internal bias settings."
+        cite:
+          - {doc: usb2514b.pdf, sha256: 3fca1a17701a3fd513c867f4deab71887b317302ff7cbbc22310c1ddaa6bdaa9, page: 12, table: '3.3 Pin Descriptions', quote: 'resistor is attached from ground to this pin to set the transceiver’s internal bias settings', fields: []}
+      - pin: VBUS_DET
+        forbid: [open]
+        why: >-
+          the hub asserts its D+ pull-up only when VBUS_DET is high; left
+          open the hub never signals a connect to its host
+        source: >-
+          DS00001692C 3.3 Pin Descriptions: VBUS_DET "should be connected to
+          VBUS on the upstream port via a 2:1 voltage divider" and, for a
+          permanently attached host, "must be connected to a dedicated host
+          control output, or connected to the 3.3 V domain".
+        cite:
+          - {doc: usb2514b.pdf, sha256: 3fca1a17701a3fd513c867f4deab71887b317302ff7cbbc22310c1ddaa6bdaa9, page: 12, table: '3.3 Pin Descriptions', quote: 'this pin must be connected to a dedicated host control output, or connected to the 3.3 V domain', fields: []}
+
+  - mpn: MAX98357A/B
+    match: '^MAX98357'
+    verified: true   # Maxim 19-6779 Rev 7 read 2026-11-14
+    pins:
+      - pin: SD_MODE
+        forbid: [ground, open]
+        severity: warning
+        why: >-
+          SD_MODE low is shutdown and its internal 100k pulls it low, so
+          grounded or left open the amplifier never plays
+        source: >-
+          MAX98357A/B 19-6779 Rev 7, SD_MODE and Shutdown Operation: "Drive
+          SD_MODE low to put the ICs into shutdown."; Table 5: "Low B0 trip
+          point > V SD_MODE Shutdown"; Electrical Characteristics: SD_MODE
+          pulldown resistor RPD 92-108 kOhm.
+        cite:
+          - {doc: max98357a.pdf, sha256: abac92d3522a204f093c911257c0e0ffa958d8f8acc1da3103a291d0403e8cd9, page: 17, table: '', quote: 'Drive SD_MODE low to put the ICs into shutdown.', fields: []}
+          - {doc: max98357a.pdf, sha256: abac92d3522a204f093c911257c0e0ffa958d8f8acc1da3103a291d0403e8cd9, page: 7, table: 'Electrical Characteristics', quote: 'SD_MODE Pulldown Resistor RPD 92 100 108', fields: []}

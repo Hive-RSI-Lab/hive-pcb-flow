@@ -17,6 +17,11 @@
 # receivers: parts whose I/O pins have a fixed absolute input limit.
 #   pins      regex on the pin function of the I/O pins it covers
 #   vin_max   V: the most those pins take, worst case over the grades
+# cite: where a row's facts are, [{doc, sha256, page, table, quote,
+#   fields}]: `bin/hwde part_rows --verify` checks each quote is on its
+#   page and each cited field's number is in the quote (#1100). A
+#   finding that only a row without verified: true makes is reported
+#   as not judged, never as a hit.
 # source: the datasheet, its revision and the table. verified: true means
 # the source was re-read for this row.
 #
@@ -40,6 +45,45 @@ drivers:
       Characteristics: VOH min VDD -1.0 V at IOH -80 uA, VDD 4.75 to 5.25 V
       (2. Recommended Operating Conditions). PIN CONFIGURATION: D0-D7 I/O,
       SMPBD, SMPAC, DOAB, DOCD, OSY outputs, /IRQ open drain.
+
+  # Seeded with scripts/part_rows.py (#1100): drafted from the datasheet,
+  # each cite checked with part_rows --verify against the PDF named.
+  - mpn: STM32F103
+    match: '^STM32F103'
+    verified: true   # ST DS5319 Rev 19 read 2026-11-14 (part_rows --verify)
+    supply: '^VDD'
+    pins: '^P[A-G]\d+$'
+    voh_drop: 1.3
+    source: >-
+      DS5319 Rev 19 Table 37 Output voltage characteristics: VOH min VDD-0.4
+      V at 8 mA and VDD-1.3 V at 20 mA, 2.7 V < VDD < 3.6 V (the 20 mA
+      figure is taken, as the worst case over load).
+    cite:
+      - {doc: stm32f103c8.pdf, sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f, page: 64, table: Table 37, quote: 'when 8 pins are sourced at same time VDD–1.3 -', fields: [voh_drop]}
+
+  - mpn: STM32F030
+    match: '^STM32F030'
+    verified: true   # ST DocID024849 Rev 3 read 2026-11-14 (part_rows --verify)
+    supply: '^VDD'
+    pins: '^P[A-F]\d+$'
+    voh_drop: 1.3
+    source: >-
+      DocID024849 Rev 3 Table 47 Output voltage characteristics: VOH min
+      VDDIOx-0.4 V at 8 mA and VDDIOx-1.3 V at 20 mA (VDDIOx >= 2.7 V).
+    cite:
+      - {doc: stm32f030f4.pdf, sha256: faac9340687f69518930b13c314561570c7298c4d083bf64a4a39c51587a31dc, page: 63, table: Table 47, quote: 'VOH (2) Output high level voltage for an I/O pin V DDIOx–1.3 -', fields: [voh_drop]}
+
+  - mpn: STM32G431
+    match: '^STM32G431'
+    verified: true   # ST DS12589 Rev 6 read 2026-11-14 (part_rows --verify)
+    supply: '^VDD'
+    pins: '^P[A-G]\d+$'
+    voh_drop: 1.3
+    source: >-
+      DS12589 Rev 6 Table 54 Output voltage characteristics: VOH min VDD-0.4
+      V at 8 mA and VDD-1.3 V at 20 mA (VDD >= 2.7 V).
+    cite:
+      - {doc: stm32g431cb.pdf, sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9, page: 113, table: Table 54, quote: 'VOH (3) Output high level voltage for an I/O pin V DD-1.3 -', fields: [voh_drop]}
 
 receivers:
   - mpn: Spartan-6 (XC6SLX)

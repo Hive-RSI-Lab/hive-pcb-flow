@@ -107,13 +107,13 @@ def test_every_row_cites_its_datasheet():
     doc = yaml.safe_load((REPO / "reference" / "io_levels.yaml").read_text())
     for row in doc["drivers"]:
         assert set(row) <= {"mpn", "match", "verified", "supply", "pins",
-                            "voh_drop", "source"}, row["mpn"]
+                            "voh_drop", "source", "cite"}, row["mpn"]
         for k in ("match", "supply", "pins"):
             re.compile(row[k])
         assert 0 <= float(row["voh_drop"]) < 2
     for row in doc["receivers"]:
         assert set(row) <= {"mpn", "match", "verified", "pins", "vin_max",
-                            "source"}, row["mpn"]
+                            "source", "cite"}, row["mpn"]
         for k in ("match", "pins"):
             re.compile(row[k])
         assert 1 < float(row["vin_max"]) < 6

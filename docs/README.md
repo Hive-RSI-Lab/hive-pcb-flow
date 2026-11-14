@@ -108,6 +108,16 @@ page covers how an agent runs it inside the Hive.
   folklore, and the ngspice traps (`x^3` drops the sign; THD needs a
   max timestep) are in
   [reference/ingest/analog-audio.md](../reference/ingest/analog-audio.md).
+- netlist_audit's datasheet-table rules (pin states, MCU pins, I2C
+  addresses, pin leakage, I/O levels) only know the parts in their
+  `reference/*.yaml` tables. Add a part with `bin/hwde part_rows PART
+  --pdf DATASHEET.pdf`: it drafts rows from the PDF, each with a `cite`
+  (page, table and a quote), and lists the pages an address table or AF
+  matrix is on as leads. A reader fixes the draft, and `bin/hwde part_rows
+  --verify reference/*.yaml --pdf ...` checks every quote is on its cited
+  page and table and every cited number is in its quote before the part
+  gets `verified: true`. Until then a finding that needs the row is
+  reported as not judged, not as a fault.
 - A board that runs firmware gets `pcb-flow check_fw --board boards/<name>`,
   run at every schematic change, not first at bring-up. It runs hive-fw's
   `fw constraints` (with `fw pins` inside it) for each firmware target whose
