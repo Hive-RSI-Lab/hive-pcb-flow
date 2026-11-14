@@ -200,6 +200,50 @@ def test_via_and_pad_touch_use_copper_overlap():
     assert gone_s2 == []
 
 
+# ============================================================ pure: both ends
+
+def test_short_spur_across_a_track_dangles():
+    """KiCad 10 counts a track that touches both ends of another for one
+    end only, so a spur shorter than the track is wide dangles though both
+    its ends lie in copper (DRC's track_dangling)."""
+    pads = [PD((0, 0)), PD((4, 0))]
+    segs = [S("s1", (0, 0), (2, 0)), S("s2", (2, 0), (4, 0)),
+            S("s3", (2, 0), (2, 0.05))]
+    gone_s, _ = rcl.find_dangling(segs, [], pads, EMPTY)
+    assert gone_s == ["s3"]
+
+
+def test_short_jog_between_two_tracks_is_kept():
+    """A jog as short as that spur joins two tracks: each counts for the
+    jog end it is nearer, so both ends hold."""
+    pads = [PD((0, 0)), PD((4, 0.05))]
+    segs = [S("s1", (0, 0), (2, 0)), S("s2", (2, 0), (2, 0.05)),
+            S("s3", (2, 0.05), (4, 0.05))]
+    gone_s, _ = rcl.find_dangling(segs, [], pads, EMPTY)
+    assert gone_s == []
+
+
+def test_spur_end_within_tol_of_the_track_copper_is_kept():
+    """Out of the both-ends case a contact gets TOL more than KiCad gives:
+    a spur whose far end misses the track's copper by under TOL stays (the
+    safe side) and one that misses it by more goes."""
+    pads = [PD((0, 0)), PD((4, 0))]
+    base = [S("s1", (0, 0), (2, 0)), S("s2", (2, 0), (4, 0))]
+    near = base + [S("s3", (2, 0), (2, 0.255))]
+    assert rcl.find_dangling(near, [], pads, EMPTY)[0] == []
+    far = base + [S("s3", (2, 0), (2, 0.27))]
+    assert rcl.find_dangling(far, [], pads, EMPTY)[0] == ["s3"]
+
+
+def test_stacked_short_spurs_cascade():
+    """s4 holds s3's free end until s4 goes; then s3 goes too."""
+    pads = [PD((0, 0)), PD((4, 0))]
+    segs = [S("s1", (0, 0), (2, 0)), S("s2", (2, 0), (4, 0)),
+            S("s3", (2, 0), (2, 0.05)), S("s4", (2, 0.05), (2, 0.1))]
+    gone_s, _ = rcl.find_dangling(segs, [], pads, EMPTY)
+    assert gone_s == ["s4", "s3"]
+
+
 def test_regression_pd_trigger_vbus_stubs_survive():
     """V13 regression fixture: on the frozen pd-trigger route board the
     dangling pass must remove NOTHING, and the two VBUS stubs the old

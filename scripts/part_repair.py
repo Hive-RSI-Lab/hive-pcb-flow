@@ -29,7 +29,8 @@ net back together, and keep the result only if the board got no worse.
      widest width ripped from it, then at its rule width, then letting the
      maze router push other signal nets' copper in the window aside and put
      it back (Router.reroute). Dead stubs left in the windows are pruned
-     (route_cleanup's dangling pass).
+     (route_cleanup's dangling pass): none the new routes meet, except a
+     spur off a junction they make with copper that holds without it.
   7. check: the routes go in, the board is refilled and DRC'd. It passes when
      no net has more islands than before, no DRC check counts more errors or
      warnings than before, and no net has more unconnected items.
@@ -287,47 +288,104 @@ def _via_layers(op: dict, cu: list) -> list:
     return list(cu)
 
 
+def _spur_end(s, poly, added, segs, vias, pads, arcs, fill):
+    """For an existing track s (copper `poly`) that meets the `added`
+    copper of its net and layer: the uuids of the existing tracks and vias
+    at its end E (a set, maybe empty) when s may still be pruned, else
+    None. It may when every added piece that meets s lies at E and none at
+    its other end, and the copper at E without s (the added pieces and the
+    existing tracks, arcs, vias, pads and pour that reach E) has some that
+    was there before and holds together by itself, so pruning s cannot cut
+    the added copper off: s is a spur the join left behind a junction."""
+    tol = route_cleanup.TOL
+    half = s.width / 2
+    reach = half + tol
+    pa, pb = Point(s.a), Point(s.b)
+    ends = set()
+    for p in added:
+        if not p.intersects(poly):
+            continue
+        at_a, at_b = p.distance(pa) <= reach, p.distance(pb) <= reach
+        if at_a == at_b:
+            return None
+        ends.add(at_a)
+    if len(ends) != 1:
+        return None
+    e = s.a if ends.pop() else s.b
+    pe = Point(e)
+    have = [p for p in added if p.distance(pe) <= reach]
+    old: list = []
+    partners = set()
+    for o in segs:
+        if o is not s and o.net == s.net and o.layer == s.layer \
+                and route_cleanup._pt_seg_dist(e, o.a, o.b) \
+                <= half + o.width / 2 + tol:
+            old.append(LineString([o.a, o.b]).buffer(o.width / 2))
+            partners.add(o.uuid)
+    for net, layer, line, w in arcs:
+        if net == s.net and layer == s.layer \
+                and line.distance(pe) <= half + w / 2 + tol:
+            old.append(line.buffer(w / 2))
+    for v in vias:
+        if v.net == s.net and s.layer in v.layers \
+                and math.dist(e, v.at) <= v.size / 2 + reach:
+            old.append(Point(v.at).buffer(v.size / 2))
+            partners.add(v.uuid)
+    for pd in pads:
+        if pd.net == s.net and s.layer in pd.layers \
+                and pd.poly.distance(pe) <= reach:
+            old.append(pd.poly)
+    if fill is not None and not fill.is_empty and fill.distance(pe) <= reach:
+        old.append(fill)
+    if not old:
+        return None
+    polys = have + old
+    group = list(range(len(polys)))
+
+    def root(i):
+        while group[i] != i:
+            group[i] = group[group[i]]
+            i = group[i]
+        return i
+
+    for i in range(len(polys)):
+        for j in range(i + 1, len(polys)):
+            if polys[i].intersects(polys[j]):
+                group[root(i)] = root(j)
+    if len({root(i) for i in range(len(polys))}) != 1:
+        return None
+    return partners
+
+
 def _dangling(pcb: Path, bg, nets: set, *, gone=(), adds=(), win=None,
               anchors=()) -> list:
     """route_cleanup's dangling pass over `nets` on pcb, less `gone`, plus
-    the `adds` (route_edit ops, never removed). With win, only copper fully
-    inside it that meets no added copper may go; `anchors` never go."""
+    the `adds` (route_edit ops, never removed); `anchors` never go. With
+    win, only copper fully inside it may go, and only if it meets no added
+    copper or is a spur behind a junction of it (_spur_end). If such a
+    spur goes and so does an existing track or via at its junction, the
+    junction is checked again without what went; if it no longer holds,
+    the spur is kept and the pass runs again (each run keeps more, so it
+    ends)."""
     cu = list(bg.copper_layers)
     segs, vias = route_cleanup.parse_items(pcb, cu)
     gone = set(gone)
     segs = [s for s in segs if s.net in nets and s.uuid not in gone]
     vias = [v for v in vias if v.net in nets and v.uuid not in gone]
     addcu: dict = {}
+    new_s, new_v = [], []
     for op in adds:
         if op["op"] == "add_track":
             addcu.setdefault((op["net"], op["layer"]), []).append(
                 LineString([op["start"], op["end"]]).buffer(op["width"] / 2))
+            new_s.append(route_cleanup.Seg(
+                "", op["net"], op["layer"], float(op["width"]),
+                tuple(op["start"]), tuple(op["end"])))
         elif op["op"] == "add_via":
             for ly in _via_layers(op, cu):
                 addcu.setdefault((op["net"], ly), []).append(
                     Point(op["at"]).buffer(op["size"] / 2))
-    addcu = {k: shapely.union_all(v) for k, v in addcu.items()}
-
-    def fixed(uuid, net, poly, layers) -> bool:
-        if uuid in anchors or (win is not None and not win.contains(poly)):
-            return True
-        return any((net, ly) in addcu and addcu[(net, ly)].intersects(poly)
-                   for ly in layers)
-
-    if win is not None:
-        segs = [dataclasses.replace(s, uuid="") if fixed(
-            s.uuid, s.net, LineString([s.a, s.b]).buffer(s.width / 2),
-            [s.layer]) else s for s in segs]
-        vias = [dataclasses.replace(v, uuid="") if fixed(
-            v.uuid, v.net, Point(v.at).buffer(v.size / 2), v.layers) else v
-            for v in vias]
-    for op in adds:
-        if op["op"] == "add_track":
-            segs.append(route_cleanup.Seg(
-                "", op["net"], op["layer"], float(op["width"]),
-                tuple(op["start"]), tuple(op["end"])))
-        elif op["op"] == "add_via":
-            vias.append(route_cleanup.ViaItem(
+            new_v.append(route_cleanup.ViaItem(
                 "", op["net"], tuple(op["at"]), float(op["size"]),
                 float(op["drill"]), tuple(_via_layers(op, cu))))
     pads = [route_cleanup.PadItem(p.net, tuple(p.layers), p.center, p.poly)
@@ -342,8 +400,47 @@ def _dangling(pcb: Path, bg, nets: set, *, gone=(), adds=(), win=None,
             cache[(net, layer)] = bg.zone_fill(net, layer)
         return cache[(net, layer)]
 
-    gs, gv = route_cleanup.find_dangling(segs, vias, pads, fillfn, arcs)
-    return gs + gv
+    hold = set(anchors)
+    spurs: dict = {}    # uuid -> (track, copper, added copper, partners)
+    if win is not None:
+        for s in segs:
+            if s.uuid in hold:
+                continue
+            poly = LineString([s.a, s.b]).buffer(s.width / 2)
+            if not win.contains(poly):
+                hold.add(s.uuid)
+                continue
+            added = addcu.get((s.net, s.layer), [])
+            if not any(p.intersects(poly) for p in added):
+                continue
+            got = _spur_end(s, poly, added, segs, vias, pads, arcs,
+                            fillfn(s.net, s.layer))
+            if got is None:
+                hold.add(s.uuid)
+            else:
+                spurs[s.uuid] = (s, poly, added, got)
+        for v in vias:
+            poly = Point(v.at).buffer(v.size / 2)
+            if not win.contains(poly) or any(
+                    p.intersects(poly) for ly in v.layers
+                    for p in addcu.get((v.net, ly), [])):
+                hold.add(v.uuid)
+    while True:
+        gs, gv = route_cleanup.find_dangling(
+            [dataclasses.replace(s, uuid="") if s.uuid in hold else s
+             for s in segs] + new_s,
+            [dataclasses.replace(v, uuid="") if v.uuid in hold else v
+             for v in vias] + new_v, pads, fillfn, arcs)
+        out = set(gs + gv)
+        left_s = [s for s in segs if s.uuid not in out]
+        left_v = [v for v in vias if v.uuid not in out]
+        bad = {u for u in gs if u in spurs and spurs[u][3] & out
+               and _spur_end(*spurs[u][:3], left_s, left_v, pads, arcs,
+                             fillfn(spurs[u][0].net, spurs[u][0].layer))
+               is None}
+        if not bad:
+            return gs + gv
+        hold |= bad
 
 
 def patch_notes(bg, old: dict, new: dict) -> list[str]:

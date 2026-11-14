@@ -169,6 +169,37 @@ def test_dangling_prunes_only_free_copper_in_the_window(u1):
         == {"b0", "b1", "b2", "c0"}
 
 
+def _add(net, a, b):
+    return {"op": "add_track", "net": net, "layer": "F.Cu", "width": 0.25,
+            "start": list(a), "end": list(b)}
+
+
+def test_dangling_prunes_the_stubs_behind_a_new_junction(u1):
+    """A route that lands where b0 forks meets b1 and b2 at that end only,
+    and b0 holds it there to pad 2: the two stubs go, b0 stays."""
+    pcb, bg = u1
+    add = _add("B", (0, 2), (0, 2.8))
+    assert set(pr._dangling(pcb, bg, {"B"}, win=WIN, adds=[add])) \
+        == {"b1", "b2"}
+
+
+def test_dangling_keeps_the_copper_a_new_route_hangs_on(u1, tmp_path):
+    """A route that lands on b1's free end alone hangs on b1, so b1 and b0
+    stay. One that lands where d1 ends at a dead stub d2 hangs on d1 (d0's
+    T onto it leads to pad 4): once d2 would go too, nothing at that end
+    holds the route, so d1 and d0 stay (and d2 with them)."""
+    pcb, bg = u1
+    add = _add("B", (0.6, 2), (0.6, 2.8))
+    assert set(pr._dangling(pcb, bg, {"B"}, win=WIN, adds=[add])) == {"b2"}
+    pcb2 = _board(tmp_path, U1 + COPPER
+                  + _seg((5, -2), (5.5, -2.5), "D", "d2"), name="d2")
+    bg2 = geom.BoardGeom.from_file(pcb2)
+    assert set(pr._dangling(pcb2, bg2, {"D"}, win=WIN)) \
+        == {"d0", "d1", "d2"}
+    add = _add("D", (5, -2), (5, -2.8))
+    assert pr._dangling(pcb2, bg2, {"D"}, win=WIN, adds=[add]) == []
+
+
 PATCH_A = ('(zone (net "A") (net_name "A") (layer "F.Cu") (uuid "zA")'
            ' (name "PATCH_A")\n (polygon (pts (xy -3 -1) (xy -1 -1) (xy -1 1)'
            ' (xy -3 1)))\n (filled_polygon (layer "F.Cu") (pts (xy -3 -1)'
