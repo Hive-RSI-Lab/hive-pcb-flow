@@ -300,8 +300,12 @@ rules as routing constraints; cite the record id when you apply one.
   once with `wxEntryStart failed`. An X server resets when its last client
   leaves, and a client connecting during the reset fails. `-noreset` in the
   server args took 30 parallel starts from 24 of 180 failing to 0 of 180;
-  `bin/pcb-flow`'s `x()` and benchcorpus pass it (issue #898). A rarer
-  `Authorization required` (about 4% at 30 at once) remains either way.
+  `bin/pcb-flow`'s `x()` and benchcorpus pass it (issue #898). The rarer
+  `Authorization required` was `xvfb-run -a` itself: starts at once take the
+  same display, and after 10 lost tries it runs the script anyway, on another
+  run's server. `x()` now starts its own Xvfb with `-displayfd`
+  (`bin/xvfb-private`), and benchcorpus does the same: 0 of 390 at 30-60 at
+  once, against 23 of 150 before (issue #1037).
 - Snapshot before plane_repair/route_cleanup (ask via state.py snapshot or
   confirm the orchestrator did). Board copies kept for the design doc go in
   `routing/` named `pre-<step>.kicad_pcb` / `post-<step>.kicad_pcb` (hyphen:

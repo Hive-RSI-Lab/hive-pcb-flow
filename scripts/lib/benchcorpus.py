@@ -252,30 +252,29 @@ def _write_result(work: Path, name: str, res: dict) -> dict:
     return res
 
 
-def _free_display() -> int:
-    for n in range(50, 100):
-        if not Path(f"/tmp/.X{n}-lock").exists() \
-                and not Path(f"/tmp/.X11-unix/X{n}").exists():
-            return n
-    raise CheckError("no free X display in :50-:99")
-
-
 def start_xvfb() -> tuple[subprocess.Popen, str]:
     """Our own Xvfb: a shared long-lived display has aborted SWIG workers."""
     if not shutil.which("Xvfb"):
         raise CheckError("Xvfb not on PATH (the SWIG and Freerouting steps "
                          "need a display)")
-    n = _free_display()
+    # -displayfd: Xvfb takes a free display itself and writes its number once
+    # it takes connections. Picking the first one with no lock file raced
+    # other starts: the loser's server died and its workers were sent to the
+    # winner's display (#1037).
     # -noreset: the workers come and go, and a server that resets when the
     # last one leaves fails the next one's connect during the reset (#898)
-    proc = subprocess.Popen(["Xvfb", f":{n}", "-nolisten", "tcp", "-noreset"],
+    r, w = os.pipe()
+    proc = subprocess.Popen(["Xvfb", "-displayfd", str(w), "-nolisten", "tcp",
+                             "-noreset"], pass_fds=(w,),
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(50):
-        if Path(f"/tmp/.X11-unix/X{n}").exists():
-            return proc, f":{n}"
-        time.sleep(0.1)
-    proc.kill()
-    raise CheckError(f"Xvfb :{n} did not come up")
+    os.close(w)
+    with os.fdopen(r) as f:
+        n = f.readline().strip()
+    if not n.isdigit():
+        proc.kill()
+        proc.wait()
+        raise CheckError("Xvfb did not come up")
+    return proc, f":{n}"
 
 
 def run_corpus(root: Path, work: Path, *, boards=None, rerun=(), nice=10,

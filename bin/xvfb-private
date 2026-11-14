@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# xvfb-private [Xvfb args] -- command [args]: run a command on an Xvfb of its
+# own, and stop that server when the command ends (#1037).
+#
+# Why not `xvfb-run -a`: it takes the first display with no lock file, so runs
+# that start together take the same one, and all but one of their servers die
+# with "Server is already active". It tries the next display, up to 10 times,
+# and when every try collides it runs the command anyway, on a display it
+# doesn't own: "unable to open display", or another run's server, which refuses
+# its cookie with "Authorization required". With 30 starts at once on a busy
+# machine that was 23 of 150. Here Xvfb picks the display itself (-displayfd
+# takes the socket and the lock in one step), and a server that doesn't come up
+# fails the run before the command starts.
+set -u
+xargs=()
+while [ $# -gt 0 ] && [ "$1" != -- ]; do xargs+=("$1"); shift; done
+if [ $# -lt 2 ]; then
+	echo "usage: xvfb-private [Xvfb args] -- command [args]" >&2
+	exit 2
+fi
+shift
+
+dir=$(mktemp -d "${TMPDIR:-/tmp}/xvfb-private.XXXXXX") || exit 1
+pid=
+cleanup() {
+	if [ -n "$pid" ]; then kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; fi
+	rm -rf "$dir"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The server takes the cookie from -auth when it starts, whatever display the
+# entry names; the client's entry has to name the display, so it is added once
+# the display is known.
+auth=$dir/Xauthority
+cookie=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+: >"$auth"
+xauth -q -f "$auth" add :0 MIT-MAGIC-COOKIE-1 "$cookie" || exit 1
+mkfifo "$dir/displayfd" || exit 1
+Xvfb -displayfd 3 -nolisten tcp -auth "$auth" "${xargs[@]}" \
+	3>"$dir/displayfd" </dev/null >"$dir/log" 2>&1 &
+pid=$!
+# Xvfb writes the display number once it takes connections; if it dies first,
+# the read gets end-of-file and nothing.
+num=
+read -r num <"$dir/displayfd"
+case "$num" in
+'' | *[!0-9]*)
+	echo "xvfb-private: Xvfb did not start:" >&2
+	cat "$dir/log" >&2
+	exit 1
+	;;
+esac
+xauth -q -f "$auth" add ":$num" MIT-MAGIC-COOKIE-1 "$cookie" || exit 1
+DISPLAY=:$num XAUTHORITY=$auth "$@"
+exit $?
