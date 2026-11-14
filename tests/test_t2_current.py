@@ -2198,3 +2198,94 @@ def test_connector_source_is_decided_by_pin_type(tmp_path_factory):
         bg, "+5V", ["U9"], ({"J1"}, {"J1"}, set())) is True   # half the loads
     assert check_current.stub_feeds(
         bg, "+5V", ["J1"], ({"J1"}, {"J1"}, set())) is True
+
+
+# ---- leaf rule gaps (#983) --------------------------------------------------
+# The leaf tap of _TAP, with the plane feeding U1 (no bound) so the plane is
+# the main side, and a second via beside the first.
+
+_U1_ON_PLANE = """  (footprint "t:U" (at 15 5)
+    (layer "B.Cu")
+    (property "Reference" "U1" (at 0 0 0))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "B.Cu") (net "PWR")))
+"""
+_SECOND_VIA = """  (via (at 3 5.8) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (segment (start 3 5.8) (end 3 5) (width 0.2) (layer "F.Cu") (net "PWR"))
+"""
+
+
+def _tap_vias(vs, facts):
+    leaves = [b for b in facts.get("leaf_branches", [])
+              if b["kind"] == "insufficient_transition_vias"]
+    return _kinds(vs, "insufficient_transition_vias"), leaves
+
+
+def test_leaf_tap_one_via_judged_at_its_load(tmp_path_factory):
+    """Control: one via into the tap carries only R1's current."""
+    bg = _board(tmp_path_factory, "tapv1", _TAP + _tap_part() + _U1_ON_PLANE)
+    found, leaves = _tap_vias(*check_current.check_net(bg, ENTRY_PWR))
+    assert found == [] and [b["loads"] for b in leaves] == [["R1"]]
+
+
+def test_leaf_tap_second_via_keeps_leaf_bound(tmp_path_factory):
+    """#983: a second via beside the first used to make the tap side reach
+    the plane through two barrels, which dropped the leaf bound and judged
+    the pair at the rail's 2 A. Barrels joining the same two sides within
+    LEAF_ENTRY_MM count as one entry."""
+    bg = _board(tmp_path_factory, "tapv2",
+                _TAP + _tap_part() + _U1_ON_PLANE + _SECOND_VIA)
+    found, leaves = _tap_vias(*check_current.check_net(bg, ENTRY_PWR))
+    assert found == [] and [b["loads"] for b in leaves] == [["R1"]]
+
+
+def test_leaf_tap_far_second_entry_keeps_budget(tmp_path_factory):
+    """Negative: the tap's other entry is a via far from the first, joined
+    to the same cluster by a third via near both: the tap side can carry a
+    bypass between distant points of the plane, so no bound."""
+    far = """  (via (at 4.6 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (via (at 6.2 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "PWR"))
+"""
+    bg = _board(tmp_path_factory, "tapvfar",
+                _TAP + _tap_part() + _U1_ON_PLANE + far)
+    found, leaves = _tap_vias(*check_current.check_net(bg, ENTRY_PWR))
+    assert found and all(v["required"] == 4 for v in found)   # 2 A
+    assert leaves == []
+
+
+# C301.1's tap on haos-voice: the chain starts inside R1's pad with steps
+# shorter than the track is wide, so the neighbouring end caps overlap and
+# the steps are no bridges; the long segment beyond them is one.
+_SHORT_STEPS = """  (zone (net "PWR") (layer "B.Cu")
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10)))
+    (filled_polygon (layer "B.Cu")
+      (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10))))
+  (via (at 3 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (segment (start 3 5) (end 7.2 5.25) (width 0.2) (layer "F.Cu") (net "PWR"))
+  (segment (start 7.2 5.25) (end 7.3 5.2) (width 0.2) (layer "F.Cu") (net "PWR"))
+  (segment (start 7.3 5.2) (end 7.45 5.05) (width 0.2) (layer "F.Cu") (net "PWR"))
+  (segment (start 7.45 5.05) (end 7.6 5) (width 0.2) (layer "F.Cu") (net "PWR"))
+"""
+
+
+def test_short_steps_behind_a_bridge_take_its_bound(tmp_path_factory):
+    """#983: segments shorter than their width are no bridges, and a pad on
+    their loop keeps them from being one staircase line. They lie wholly on
+    the bounded side of the bridge leading into them, so they are judged at
+    that side's bound (R1), not at the rail's 2 A."""
+    bg = _board(tmp_path_factory, "shortsteps",
+                _SHORT_STEPS + _tap_part() + _U1_ON_PLANE)
+    vs, facts = check_current.check_net(bg, ENTRY_PWR)
+    assert _kinds(vs, "undersized_track") == []
+    leaves = [b for b in facts["leaf_branches"]
+              if b["kind"] == "undersized_track"]
+    assert len(leaves) >= 2 and all(b["loads"] == ["R1"] for b in leaves)
+
+
+def test_short_steps_to_an_unbounded_part_keep_budget(tmp_path_factory):
+    """Negative: the same chain to a capacitor (no bound) stays at 2 A."""
+    bg = _board(tmp_path_factory, "shortstepscap",
+                _SHORT_STEPS + _tap_part("C1", "100nF", "t:C0402")
+                + _U1_ON_PLANE)
+    vs, facts = check_current.check_net(bg, ENTRY_PWR)
+    found = _kinds(vs, "undersized_track")
+    assert found and {v["current_a"] for v in found} == {2.0}
