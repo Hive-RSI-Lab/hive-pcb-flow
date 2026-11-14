@@ -93,6 +93,18 @@ schematic-level structural problems BEFORE board work starts:
  - i2c_address_collision (error): two devices on one SCL net whose
    address straps (reference/i2c_addresses.yaml) give the same 7-bit
    address (#1034, glasgow-2). A strap it can't read leaves that device out.
+ - pull_vs_leakage: a signal net (0 ohm links followed) pulled to a rail
+   of known volts by resistors too weak for the pins on it that
+   reference/pin_leakage.yaml says sink or source current before they are
+   set up (an unconfigured FPGA's weak pull-downs, input leakage) (#1026).
+   The worst-case level is the pulls' Thevenin source less that current
+   through their resistance; error when a listed receiver reads it as the
+   wrong state, warning when it sits between VIL and VIH (receivers not
+   listed: 0.3 / 0.7 of the rail). A net with a push-pull output is skipped.
+ - driver_contention (warning): a reset input pin_leakage.yaml lists that
+   shares its net with output, bidirectional or tri-state pins of two or
+   more other parts (connectors and open-collector pins aside): they can
+   fight on the line (#1026).
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -138,6 +150,7 @@ PIN_REQUIREMENTS = HERE.parent / "reference" / "pin_requirements.yaml"
 PIN_STATES = HERE.parent / "reference" / "pin_states.yaml"
 MCU_PINS = HERE.parent / "reference" / "mcu_pins.yaml"
 I2C_ADDRESSES = HERE.parent / "reference" / "i2c_addresses.yaml"
+PIN_LEAKAGE = HERE.parent / "reference" / "pin_leakage.yaml"
 
 # Strong differential suffix families (subset of check_diffpair.SUFFIX_PAIRS:
 # the bare +/- and P/N tokens are too ambiguous for unpaired-net warnings).
@@ -799,6 +812,182 @@ def _rail_volts(constraints: dict, nets: dict) -> dict[str, float]:
     return out
 
 
+
+def load_pin_leakage(path: Path = PIN_LEAKAGE) -> list[dict]:
+    """reference/pin_leakage.yaml's parts (its header says the form)."""
+    import yaml  # noqa: PLC0415
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise checklib.CheckError(f"pin leakage {path}: {exc}") from exc
+    return doc.get("parts") or []
+
+
+def _leak_row(specs: list[dict], comp: dict, m: dict
+              ) -> tuple[dict, dict] | None:
+    """(spec, pin row) of reference/pin_leakage.yaml for net member M."""
+    if _base_type(m.get("pintype")) in _POWER_TYPES:
+        return None
+    func = _norm_pin(m.get("pinfunction")).split("/", 1)[0]
+    for spec in specs:
+        if not _spec_matches(spec, comp):
+            continue
+        for row in spec.get("pins") or []:
+            rx = re.compile(row["pin"], re.I)
+            if (func and rx.search(func)) or rx.search(str(m["pin"])):
+                return spec, row
+    return None
+
+
+def _zero_ohm_groups(nets: dict, comps: dict,
+                     comp_pins: dict[str, dict[str, str]]
+                     ) -> list[list[str]]:
+    """Nets joined by 0 ohm resistors, one list per group (singletons
+    included), each sorted."""
+    parent = {n: n for n in nets}
+
+    def find(n):
+        while parent[n] != n:
+            parent[n] = parent[parent[n]]
+            n = parent[n]
+        return n
+    for ref, pins in comp_pins.items():
+        if _part_kind(ref) != "R" or len(pins) != 2:
+            continue
+        if engcalc.parse_value(comps.get(ref, {}).get("value")) != 0:
+            continue
+        a, b = pins.values()
+        if a in parent and b in parent:
+            parent[find(a)] = find(b)
+    groups: dict[str, list[str]] = {}
+    for n in nets:
+        groups.setdefault(find(n), []).append(n)
+    return [sorted(g) for g in groups.values()]
+
+
+def _pull_vs_leakage(nets: dict, comps: dict,
+                     comp_pins: dict[str, dict[str, str]],
+                     rails: dict[str, float], specs: list[dict]):
+    """Yield one dict per signal net (0 ohm groups as one) that has a pull
+    to a rail of known volts and a pin listed in reference/pin_leakage.yaml
+    sinking or sourcing current on it, with the worst-case level, the
+    receivers' thresholds and the verdict ('error' when the level reads as
+    the wrong state, 'warning' when it sits between VIL and VIH, None when
+    clean). Nets with a push-pull output on them are skipped: the driver
+    sets the level, not the pull."""
+    for group in _zero_ohm_groups(nets, comps, comp_pins):
+        gset = set(group)
+        members = [(n, m) for n in group for m in nets[n]]
+        if any(n.startswith("unconnected-") or _is_ground_name(n)
+               or _supply_net(n, nets[n], rails) for n in group):
+            continue
+        if any(_base_type(m.get("pintype")) == "output"
+               and _leak_row(specs, comps.get(m["ref"], {}), m) is None
+               for _, m in members):
+            continue
+        pulls: list[tuple[float, float, str]] = []   # (volts, ohms, why)
+        rows: list[tuple[str, str, dict, dict]] = []  # ref, pin, spec, row
+        for n, m in members:
+            ref = m["ref"] or ""
+            pins = comp_pins.get(ref, {})
+            if _part_kind(ref) == "R" and len(pins) == 2:
+                far = next((nt for p, nt in pins.items() if p != m["pin"]),
+                           None)
+                if not far or far in gset:
+                    continue
+                ohm = engcalc.parse_value(comps.get(ref, {}).get("value"))
+                fv = 0.0 if _is_ground_name(far) else rails.get(far)
+                if ohm and fv is not None:
+                    pulls.append((fv, ohm, f"{ref} "
+                                  f"{comps[ref].get('value')} to {far}"))
+                continue
+            hit = _leak_row(specs, comps.get(ref, {}), m)
+            if hit:
+                rows.append((ref, m["pin"], hit[0], hit[1]))
+        if not pulls or not rows:
+            continue
+        top = max(v for v, _, _ in pulls)
+        # a listed internal pull-up (a reset pin's own) at its weakest
+        for ref, pin, spec, row in rows:
+            if row.get("rpu") and top > 0:
+                pulls.append((top, float(max(row["rpu"])),
+                               f"{ref}.{pin} internal pull-up "
+                               f"{max(row['rpu']) / 1e3:g}k max"))
+        g = sum(1 / r for _, r, _ in pulls)
+        vth = sum(v / r for v, r, _ in pulls) / g
+        rth = 1 / g
+        up = top > 0 and vth > top / 2
+        sink = sum(float(row.get("ipd" if up else "ipu") or 0)
+                   + float(row.get("leak") or 0) for *_, row in rows)
+        if sink <= 0:
+            continue
+        level = vth - rth * sink if up else vth + rth * sink
+        level = min(max(level, 0.0), top)
+        recv = []
+        for ref, pin, spec, row in rows:
+            vil = row.get("vil", (row["vil_frac"] * top
+                                  if "vil_frac" in row else None))
+            vih = row.get("vih", (row["vih_frac"] * top
+                                  if "vih_frac" in row else None))
+            if vil is not None and vih is not None:
+                recv.append((f"{ref}.{pin}", float(vil), float(vih)))
+        if not recv:
+            recv = [("CMOS", 0.3 * top, 0.7 * top)]
+        if up:
+            wrong = [r for r in recv if level < r[1]]
+            vague = [r for r in recv if level < r[2]]
+            need = max(r[2] for r in recv)
+        else:
+            wrong = [r for r in recv if level > r[2]]
+            vague = [r for r in recv if level > r[1]]
+            need = min(r[1] for r in recv)
+        sev = "error" if wrong else "warning" if vague else None
+        # the largest single pull that would still hold `need`, others gone
+        span = (top - need) if up else need
+        r_max = span / sink if span > 0 else 0.0
+        name = max(group, key=lambda n: (not n.startswith("Net-("), n))
+        yield {"net": name, "group": group, "up": up, "level": level,
+               "vth": vth, "rth": rth, "sink": sink, "pulls": pulls,
+               "rows": rows, "receivers": recv, "need": need,
+               "severity": sev, "wrong": wrong or vague, "r_max": r_max}
+
+
+def _driver_contention(nets: dict, comps: dict,
+                       comp_pins: dict[str, dict[str, str]],
+                       rails: dict[str, float], specs: list[dict]):
+    """Yield (net, reset pin 'REF.PIN', [driver 'REF.PIN'], spec) for each
+    signal net (0 ohm groups as one) holding a reset pin of
+    reference/pin_leakage.yaml and push-pull capable pins (output,
+    bidirectional, tri-state) of two or more other parts: any two of them
+    can fight on the line. Connectors and open-collector pins don't
+    count."""
+    for group in _zero_ohm_groups(nets, comps, comp_pins):
+        if any(_is_ground_name(n) or _supply_net(n, nets[n], rails)
+               for n in group):
+            continue
+        members = [m for n in group for m in nets[n]]
+        resets = []
+        for m in members:
+            hit = _leak_row(specs, comps.get(m["ref"], {}), m)
+            if hit and hit[1].get("reset"):
+                resets.append((m, hit[0]))
+        if not resets:
+            continue
+        rm, spec = resets[0]
+        drivers: dict[str, str] = {}
+        for m in members:
+            ref = m["ref"] or ""
+            if ref == rm["ref"] or re.match(r"^(J|P|CN|X|TP)\d", ref):
+                continue
+            if _base_type(m.get("pintype")) in {"output", "bidirectional",
+                                                "tri_state"}:
+                drivers.setdefault(ref, f"{ref}.{m['pin']}")
+        if len(drivers) >= 2:
+            name = max(group, key=lambda n: (not n.startswith("Net-("), n))
+            yield (name, f"{rm['ref']}.{rm['pin']}",
+                   sorted(drivers.values()), spec)
+
+
 def _dc_level(net: str, nets: dict, comps: dict,
               comp_pins: dict[str, dict[str, str]],
               rails: dict[str, float]) -> tuple[float | None, list[str], str]:
@@ -1374,7 +1563,8 @@ def audit(parsed: dict, constraints: dict,
           board_only_refs: set[str] | None = None,
           pin_states: list[dict] | None = None,
           mcu_pins: dict | None = None,
-          i2c_addresses: list[dict] | None = None
+          i2c_addresses: list[dict] | None = None,
+          pin_leakage: list[dict] | None = None
           ) -> tuple[list[dict], dict]:
     nets = parsed["nets"]
     comps = parsed["components"]
@@ -1910,6 +2100,57 @@ def audit(parsed: dict, constraints: dict,
               + ("" if all(d[2].get("verified") for d in same)
                  else " (not yet re-read)"),
               address=f"0x{adr:02X}")
+    # 18. a pull too weak for what the pins on its net sink or source, and
+    # a reset line that two parts can drive (reference/pin_leakage.yaml,
+    # #1026; errata corpus: glasgow revD0 held the STM32 NRST at 1.2 V
+    # against an unprogrammed FX2 and an unconfigured ECP5's 150 uA
+    # pull-downs, with both of them able to drive it; its 100k nALERT
+    # pull-up lost to the same pull-down)
+    pl_specs = load_pin_leakage() if pin_leakage is None else pin_leakage
+    pl_rails = _rail_volts(constraints, nets)
+    pulls_checked = 0
+    for hit in _pull_vs_leakage(nets, comps, comp_pins, pl_rails, pl_specs):
+        pulls_checked += 1
+        if not hit["severity"]:
+            continue
+        way = "up" if hit["up"] else "down"
+        who = ", ".join(
+            f"{r}.{p} {s['mpn']}"
+            + ("" if s.get("verified") else " (not yet re-read)")
+            for r, p, s, _ in hit["rows"])
+        recv = ", ".join(f"{n} VIL {lo:.2g} / VIH {hi:.2g} V"
+                         for n, lo, hi in hit["wrong"])
+        refs = sorted({r for r, *_ in hit["rows"]}
+                      | {w.split()[0].split(".")[0]
+                         for _, _, w in hit["pulls"]})
+        srcs = "; ".join(sorted({" ".join(row["source"].split()).split(":")[0]
+                                 for *_, row in hit["rows"]}))
+        v(hit["severity"], "pull_vs_leakage", hit["net"], refs,
+          f"'{hit['net']}' is pulled {way} by "
+          f"{'; '.join(w for _, _, w in hit['pulls'])} "
+          f"(Thevenin {hit['vth']:.3g} V through {hit['rth'] / 1e3:.3g}k), "
+          f"but {who} {'sink' if hit['up'] else 'source'} up to "
+          f"{hit['sink'] * 1e6:.3g} uA there before they are set up, so it "
+          f"can sit at {hit['level']:.2g} V: "
+          + ("the wrong state" if hit["severity"] == "error"
+             else "between the thresholds")
+          + f" for {recv}. A pull of at most "
+          f"{hit['r_max'] / 1e3:.3g}k alone holds {hit['need']:.2g} V "
+          f"[{srcs}]",
+          level_v=round(hit["level"], 3), sink_a=hit["sink"],
+          thevenin_v=round(hit["vth"], 3), thevenin_ohm=round(hit["rth"]),
+          max_pull_ohm=round(hit["r_max"]), nets=hit["group"])
+    contention_checked = 0
+    for name, rpin, drivers, spec in _driver_contention(
+            nets, comps, comp_pins, pl_rails, pl_specs):
+        contention_checked += 1
+        v("warning", "driver_contention", name,
+          sorted({d.split(".")[0] for d in drivers}),
+          f"reset input {rpin} ({spec['mpn']}) on '{name}' can be driven "
+          f"by {', '.join(drivers)}: two push-pull pins from different "
+          f"parts fight if both drive at once; give one of them the line "
+          f"(a gate or open-drain) or confirm firmware keeps all but one "
+          f"as inputs", reset_pin=rpin, drivers=drivers)
 
     facts = {
         "nets": len(nets),
@@ -1931,6 +2172,8 @@ def audit(parsed: dict, constraints: dict,
         "mcu_input_only_parts_checked": io_checked,
         "i2c_buses_checked": len(buses),
         "i2c_devices_placed": sum(len(d) for d in buses.values()),
+        "pulls_vs_leakage_checked": pulls_checked,
+        "reset_contention_found": contention_checked,
     }
     return violations, facts
 

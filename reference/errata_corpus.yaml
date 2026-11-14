@@ -264,20 +264,34 @@ boards:
     summary: STM32G031 MCU_nRST held near 1.2 V by an unprogrammed FX2/FPGA
     source_quote: "U6 STM32G031 has MCU_nRST input held at approx. +1.2V with unprogrammed FX2/FPGA"
     fault_class: ANA (pull vs pin leakage)
-    verdict: missed
-    follow_up: "pull strength against pin leakage and driver contention on a DC-solved net (#1026)"
+    verdict: caught
+    catch: {script: netlist_audit, kind: pull_vs_leakage, net: "/MCU_~{RST}"}
+    note: >-
+      reference/pin_leakage.yaml (#1026): R26 47k and the STM32's own 25-55k
+      pull-up against the unconfigured ECP5's 150 uA pull-down and the FX2's
+      and ECP5's 10 uA leakage solves to 0 V, below the NRST VIL (an error).
+      revD1 gates NRST through a 74LVC1G08 and the old net carries a 10k
+      pull-down that holds the gate input at 0.15 V.
   - id: glasgow-6
     summary: FX2 U8B and U2 can both drive MCU_nRST
     source_quote: "U8B and U2 can contend on MCU_nRST"
     fault_class: SCH (driver contention)
-    verdict: missed
-    follow_up: "pull strength against pin leakage and driver contention on a DC-solved net (#1026)"
+    verdict: caught
+    catch: {script: netlist_audit, kind: driver_contention, net: "/MCU_~{RST}", refs: [U2, U8]}
+    note: >-
+      reference/pin_leakage.yaml (#1026) marks the STM32G031 PF2-NRST as a
+      reset input; revD0 puts FX2 PD3 and ECP5 PT13B, both bidirectional, on
+      it (a warning). revD1 drives NRST from a 74LVC1G08 alone.
   - id: glasgow-7
     summary: R9 100k pull-up loses to the unconfigured FPGA's 150 uA pull-down, so nALERT sits asserted
     source_quote: "value of R9 is too small; when unconfigured, FPGA U8B has an active pull-down of 150 uA (datasheet table 3.7, IPD), which is much bigger than the 33 uA required to drop all 3.3 V on the 100k resistor"
     fault_class: ANA (pull vs pin leakage)
-    verdict: missed
-    follow_up: "pull strength against pin leakage and driver contention on a DC-solved net (#1026)"
+    verdict: caught
+    catch: {script: netlist_audit, kind: pull_vs_leakage, net: "/~{ALERT}"}
+    note: >-
+      reference/pin_leakage.yaml (#1026): R9 100k against the ECP5's 150 uA
+      IPD (FPGA-DS-02012 Table 3.7) and 20 uA of leakage solves to 0 V (an
+      error). revD1's 2.2k holds 2.9 V, above the FX2's 2 V VIH.
   - id: glasgow-8
     summary: INTB/DRDY lines on U6 pins that cannot take an interrupt
     source_quote: "move INTB/DRDY connections to U6 to interrupt-capable pins"
@@ -423,7 +437,7 @@ boards:
     source_quote: "The `EN` input is much too sensitive when left floating."
     fault_class: SCH (input pull strength)
     verdict: missed
-    follow_up: "pull strength against pin leakage and driver contention on a DC-solved net (#1026)"
+    follow_up: "cable pickup on a floating off-board input: no datasheet leakage to size against, so #1026's rule leaves it (survey #1079)"
 - id: megabuzz
   url: https://github.com/andykarpov/karabas-megabuzz
   commit: b3a026f15f440507760da5281632fed66bef03fe
