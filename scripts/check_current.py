@@ -101,7 +101,12 @@ re-judged at the current its far side can draw, when that is less:
    end, with nothing else touching it. When one part reaches only bounded
    parts, the track is re-judged at their sum.
 Re-judged findings that pass are listed in facts["leaf_branches"]; ones that
-still fail carry extras leaf_loads.
+still fail carry extras leaf_loads. A part on one of the entry's declared
+sense_pads is bounded like a sense pin (#1042: a Kelvin line draws microamps,
+and the regulator notes ask for a thin trace, TI SNVA721A section 2.5,
+LMR33630 SNVSAN3F section 10.1). A track that is no bridge only because a
+router's staircase of short steps reads as a loop takes the sides of the two
+bridges leading out of it (cluster_sides).
 
 Override reach (LEARNINGS 2026-07-28/29: overrides used to feed only track
 widths, making the via rule net-wide and unsatisfiable for branch taps):
@@ -730,12 +735,19 @@ _DECLARED: dict[str, float] = {}
 SENSE_PIN = re.compile(r"(SENSE|SNS|KELVIN|^FB$|^VFB$|^CS[+-]?$|^S[+-]$|"
                        r"^ISNS|^VSNS|[+-]SENSE|SENSE[+-])")
 SENSE_BOUND_A = 0.001
+# The entry's declared sense pads ("sense_pads" keys, "REF.PAD"), set by
+# check_net (#1042): a Kelvin line's sense end draws microamps however its
+# pin is named (a feedback divider's top resistor, a t:SENSE part).
+_SENSE_PADS: set = set()
 
 
 def _sense_only(bg: geom.BoardGeom, ref: str) -> bool:
     pads = [p for p in bg.pads_of(ref=ref) if p.net == _NET_UNDER_TEST[0]]
     return bool(pads) and all(
-        pin_name(p) and SENSE_PIN.search(pin_name(p)) for p in pads)
+        (pin_name(p) and SENSE_PIN.search(pin_name(p)))
+        or ((p.ref, str(p.number)) in _SENSE_PADS
+            and not SOURCE_PIN.fullmatch(pin_name(p) or ""))
+        for p in pads)
 
 
 _NET_UNDER_TEST: list = [None]
@@ -746,7 +758,8 @@ SWITCH_NET = re.compile(r"(?:^|[/_])(?:SW|LX)\d*$")    # /pwr/SW, BUCK5_LX
 def load_bound(bg: geom.BoardGeom, ref: str) -> float | None:
     """Most current part `ref` can pass (A), or None when unknown. A ref
     declared in the entry's "loads" is bounded at that current; a part
-    whose pads on the net are all sense pins at SENSE_BOUND_A; a two-pad
+    whose pads on the net are all sense pins, or the entry's declared
+    sense_pads (not a regulator's output pin), at SENSE_BOUND_A; a two-pad
     chip resistor at sqrt(P_rated / R) from its Value and the imperial
     size in its footprint id. Every other part may draw the net's whole
     budget."""
@@ -1415,6 +1428,37 @@ def track_sides(bg: geom.BoardGeom, net: str, track):
              if any(find(i) == side for i in hits(p))} for side in sides]
 
 
+def cluster_sides(bg: geom.BoardGeom, net: str, g, bridges: set, eid):
+    """track_sides for a track that is no bridge only because a router's
+    staircase of steps shorter than the track is wide joins its own pieces
+    end cap to end cap (netconn rule b), so one line reads as a loop (#1042).
+    The cluster is the part of netconn's graph round edge `eid` joined by
+    non-bridge edges. When every node in it is a track end (no pad, via or
+    pour) and exactly two bridge tracks lead out of it, every current through
+    it runs through either bridge, so the sides of a bridge are its sides.
+    Else None: a loop that reaches a pad, via or pour may be a real parallel
+    path."""
+    todo = [a for a, nbrs in g.adj.items() if any(e == eid for _, _, e in nbrs)]
+    seen, exits = set(todo), set()
+    while todo:
+        u = todo.pop()
+        if u[0] != "pt":
+            return None
+        for v, _w, e in g.adj[u]:
+            if e in bridges:
+                exits.add(e)
+            elif v not in seen:
+                seen.add(v)
+                todo.append(v)
+    if len(exits) != 2:
+        return None
+    for e in sorted(exits, key=str):
+        sides = track_sides(bg, net, g.tracks[e])
+        if sides:
+            return sides
+    return None
+
+
 def track_leaf_bound(bg: geom.BoardGeom, sides: list | None):
     """(amps, refs) a track with these track_sides can carry at most, when one
     side reaches only bounded loads; else None (module docstring, leaf
@@ -1636,6 +1680,10 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
     _DECLARED.update({str(r): float(a)
                       for r, a in (entry.get("loads") or {}).items()})
     _NET_UNDER_TEST[0] = net
+    _SENSE_PADS.clear()
+    _SENSE_PADS.update(tuple(str(k).rsplit(".", 1))
+                       for k in (entry.get("sense_pads") or {})
+                       if "." in str(k))
 
     # ---- plane-fed rail: the declared trunk must exist
     plane_fed = bool(entry.get("plane_fed", False))
@@ -1786,7 +1834,12 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
             pour_taps = [v["pos"] for v, _ in shunted]
         # a bridge whose far side feeds only bounded loads: their sum
         for v, t in list(undersized):
-            sides = track_sides(bg, net, t) if v["bridge"] else None
+            if v["bridge"]:
+                sides = track_sides(bg, net, t)
+            else:
+                eid = edge_of.get(id(t))
+                sides = None if eid is None else cluster_sides(
+                    bg, net, g, bridges, eid)
             leaf = track_leaf_bound(bg, sides)
             if leaf is None or leaf[0] >= v["current_a"]:
                 mid = t.shape.interpolate(0.5, normalized=True).coords[0]

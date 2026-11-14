@@ -851,6 +851,56 @@ def test_live_krt_rail_keeps_the_sense_pad_off_the_rail(sense, cli, krt_dir,
         [("R911.1", "C911.1", True)]
 
 
+@pytest.mark.smoke
+@pytest.mark.parametrize("rule", [True, False])
+def test_live_sense_line_at_3a_runs_thin_and_passes(rule, cli, krt_dir,
+                                                    tmp_path, monkeypatch):
+    """#1042: at 3 A rules_gen's power width rule wants KP 1 mm wide, but the
+    R911.1 -> C911.1 sense line carries the divider's microamps. With
+    sense_width_rules the line runs thin, DRC finds no track_width error,
+    check_current no undersized track and check_kelvin a clean tap. Planted
+    fault: without the rule the thin line breaks DRC, so route_critical
+    refuses it."""
+    import check_current
+    import check_kelvin
+    import kc
+    import rules_gen
+    if not rule:
+        monkeypatch.setattr(rules_gen, "sense_width_rules",
+                            lambda c, cap: ([], []))
+    pcb = _kp_board(tmp_path, True)
+    cons_p = tmp_path / "constraints.json"
+    cons = json.loads(cons_p.read_text(encoding="utf-8"))
+    for e in cons["power"]:
+        if e["net"] == "KP":
+            e["current_a"] = 3.0
+    cons_p.write_text(json.dumps(cons), encoding="utf-8")
+    assert rules_gen.main([
+        "--constraints", str(cons_p), "--pcb", str(pcb),
+        "--pro", str(tmp_path / "blinky2.kicad_pro"),
+        "--out-dru", str(tmp_path / "blinky2.kicad_dru"),
+        "--out", str(tmp_path / "rg.json")]) == 0
+    rep = tmp_path / "report.json"
+    rc.main(["--pcb", str(pcb), "--only", "power", "--out-report", str(rep)])
+    r = json.loads(rep.read_text(encoding="utf-8"))
+    if not rule:
+        assert [(v["kind"], v["net"]) for v in r["violations"]] == \
+            [("critical_route_rolled_back", "KP")]
+        assert "(track_width)" in r["violations"][0]["msg"]
+        return
+    assert r["status"] == "pass", r["violations"]
+    drc = kc.run_drc(cli, pcb, all_track_errors=True)
+    assert [v for v in drc["violations"] if v["check"] == "track_width"
+            ] == []
+    bg = geom.load_board(pcb)
+    kp = next(e for e in cons["power"] if e["net"] == "KP")
+    vs, _ = check_current.check_net(bg, kp, cons)
+    assert [v for v in vs if v.get("kind") == "undersized_track"] == []
+    vios, facts = check_kelvin.judge_sense(bg, SENSE_SPEC)
+    assert vios == [] and facts[0]["reached"]
+    assert min(t.width for t in bg.tracks_of(net="KP")) < 0.5
+
+
 def test_nets_in_new_errors_names_the_routed_nets_that_broke_drc():
     """lite-main (hifi-receiver-2): KRT laid /OUT_L_N across the TPA3118's
     pins; only the nets in errors whose type grew are named."""
@@ -1076,7 +1126,8 @@ def test_sense_keepout_covers_the_line_not_the_tap(tmp_path):
     bg = geom.BoardGeom.from_file(pcb)
     sense = check_kelvin._pad_named(bg, "R911.1")
     tap = check_kelvin._pad_named(bg, "C911.1")
-    areas = rc.sense_keepout(bg, "KP", {"n1", "n2"}, sense, tap, 0.2)
+    every = rc.sense_keepout(bg, "KP", {"n1", "n2"}, sense, tap, 0.2)
+    areas = [a for a in every if not a["name"].startswith("aiee_sensew_")]
     assert areas and {a["layers"][0] for a in areas} == {"F.Cu"}
     assert all(a["name"].startswith("aiee_sense_R911_1_") and a["pours"]
                and not a["tracks"] and not a["vias"] for a in areas)
@@ -1090,6 +1141,47 @@ def test_sense_keepout_covers_the_line_not_the_tap(tmp_path):
     # the old rail track is not the line's
     assert rc.sense_keepout(bg, "KP", set(), sense, tap, 0.2)[0]["poly"] \
         != areas[0]["poly"]
+
+
+def test_sense_width_mark_hugs_the_line_only(tmp_path):
+    """#1042: the aiee_sensew_* mark rules_gen's sense width rule reads
+    holds the new line's tracks (tap end included) and disallows nothing;
+    a rail track, though it touches the line, is not enclosed."""
+    from shapely.geometry import Polygon
+    import check_kelvin
+    pcb = _sense_board(tmp_path, "mark", _seg(15, 17.5, 22, 17.5, "KP", "n1")
+                       + _seg(22, 17.5, 22, 20, "KP", "n2")
+                       + _seg(22, 20, 30, 20, "KP", "r1"))
+    bg = geom.BoardGeom.from_file(pcb)
+    sense = check_kelvin._pad_named(bg, "R911.1")
+    tap = check_kelvin._pad_named(bg, "C911.1")
+    every = rc.sense_keepout(bg, "KP", {"n1", "n2"}, sense, tap, 0.2)
+    marks = [a for a in every if a["name"].startswith("aiee_sensew_")]
+    assert len(marks) == 1 and marks[0]["layers"] == ["F.Cu"]
+    m = marks[0]
+    assert m["name"].startswith("aiee_sensew_R911_1_F_Cu_")
+    assert not (m["tracks"] or m["vias"] or m["pours"])
+    shape = Polygon(m["poly"])
+    tr = {t.uuid: t for t in bg.tracks_of(net="KP")}
+    assert shape.contains(tr["n1"].poly) and shape.contains(tr["n2"].poly)
+    assert not shape.contains(tr["r1"].poly)        # the rail's own track
+    # the set_rule_areas prefix replaces marks and keepouts together
+    assert all(a["name"].startswith(rc.SENSE_PREFIX) for a in every)
+    assert not rc.sense_keepout(bg, "KP", set(), sense, tap, 0.2)[0][
+        "name"].startswith("aiee_sensew_")
+
+
+def test_sense_width_is_the_default_class_floored(tmp_path):
+    pro = tmp_path / "b.kicad_pro"
+    pro.write_text(json.dumps({"net_settings": {"classes": [
+        {"name": "Default", "track_width": 0.25}]}}))
+    assert rc.sense_width(pro) == pytest.approx(0.25)
+    pro.write_text(json.dumps({"net_settings": {"classes": [
+        {"name": "Default", "track_width": 0.01}]}}))
+    floor = rc.grading_floors(pro)["track_width"]
+    assert rc.sense_width(pro) == pytest.approx(floor)
+    assert rc.sense_width(None) == pytest.approx(
+        rc.grading_floors(None)["track_width"])
 
 
 def test_normalize_leaves_the_sense_pad_fenced(tmp_path, monkeypatch):
@@ -1110,3 +1202,9 @@ def test_normalize_leaves_the_sense_pad_fenced(tmp_path, monkeypatch):
                                   fence={("R911", "1")})
     assert r["widened"] == 0
     assert [b["start"] for b in r["blocked"]] == [[10.0, 20.0]]
+
+
+def test_sense_mark_names_agree_with_rules_gen():
+    """rules_gen's sense-width rule finds route_critical's marks by name."""
+    import rules_gen
+    assert rc.SENSE_MARK == rules_gen.SENSE_MARK

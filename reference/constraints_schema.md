@@ -81,7 +81,13 @@ Consumers per key (script -> phase):
     // on the board or not on this net is sense_tap_bad. The power track and
     // the sense track may both end on the named pad. route_critical honours
     // it (#1043): the rail is routed with the sense pad left out, then the
-    // sense line is laid on its own and the pour kept off it.
+    // sense line is laid on its own and the pour kept off it. Its width
+    // (#1042): the line carries the divider's or SENSE pin's microamps, and
+    // the regulator notes ask for a short, thin trace (TI SNVA721A section
+    // 2.5; LMR33630 SNVSAN3F section 10.1), so rules_gen's
+    // aiee_sense_width_<net> rule lets the tracks route_critical lays (and
+    // marks with an aiee_sensew_* area) run at the fab minimum, and
+    // check_current bounds the declared sense pad's part at 1 mA.
     "net": "+5V", "current_a": 2.0,
     "sense_pads": {"R113.1": "C114.1"}
   }, {

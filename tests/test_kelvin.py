@@ -226,6 +226,17 @@ def test_sense_line_with_overlapping_jogs_is_clean(tmp_path):
     assert not vios and f["reached"] and not f["joins"]
 
 
+def test_sense_line_jogging_by_the_tap_still_reaches_it(tmp_path):
+    """#1042: a pulled sense line bends within SENSE_SLACK_MM of C1.1 before
+    it lands there. A contact by the tap is the tap only when it meets power
+    copper; the line's own bend there leads on to the pad."""
+    t = (_seg("P", 30, 20, 30, 11.3, 0.2)
+         + _seg("P", 30, 11.3, 30.4, 11.3, 0.2)
+         + _seg("P", 30.4, 11.3, 30.4, 10, 0.2))
+    vios, (f,) = _sense(_board(tmp_path, _rail(t)))
+    assert not vios and f["reached"] and not f["joins"]
+
+
 def test_root_block_finds_pieces_on_a_cycle_through_the_root():
     r = ("root",)
     edges = [(r, "p1"), (r, "p2"), ("p1", "t"), ("t", "p2"),   # rail
