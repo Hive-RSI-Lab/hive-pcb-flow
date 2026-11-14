@@ -87,8 +87,8 @@ what pcb-flow's checks do with the first revision. Written by
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| pdlc-1: the driver does not wait for power-good before driving the panel | PI (power-good sequencing) | missed | a power-good pin that gates nothing; a switched load against the converter's limit (#1030) |
-| pdlc-2: no current limit on the panel drive, so large panels drain the output capacitor | PI (load current limit) | missed | a power-good pin that gates nothing; a switched load against the converter's limit (#1030) |
+| pdlc-1: the driver does not wait for power-good before driving the panel | PI (power-good sequencing) | caught on rev A, gone on rev B (`netlist_audit` power_good_unused) | #1030: v1's LM5158 PGOOD reaches only R1 2.2k and the D2 power LED, so nothing holds the half-bridge off until the boost is in regulation; v2 takes every PG (/HV_PG, /PDLC_PG_A, /PDLC_PG_B) into a 74LVC1G08 and STM32 inputs. |
+| pdlc-2: no current limit on the panel drive, so large panels drain the output capacitor | PI (load current limit) | missed | a switched capacitive load against the boost's output charge and current limit: needs the load's capacitance, which no schematic carries (#1030, survey) |
 | pdlc-3: the EN input is too sensitive when left floating | SCH (input pull strength) | missed | cable pickup on a floating off-board input: no datasheet leakage to size against, so #1026's rule leaves it (survey #1079) |
 
 ## megabuzz: revA -> revA1
@@ -118,4 +118,4 @@ what pcb-flow's checks do with the first revision. Written by
 
 ## Count
 
-41 defects: 27 caught, 10 missed, 4 not_static.
+41 defects: 28 caught, 9 missed, 4 not_static.

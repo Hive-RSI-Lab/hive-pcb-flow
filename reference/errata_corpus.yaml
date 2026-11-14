@@ -423,15 +423,19 @@ boards:
     summary: the driver does not wait for power-good before driving the panel
     source_quote: "The driver does not wait for the power-good signal to be asserted before driving the panel which results in hiccups."
     fault_class: PI (power-good sequencing)
-    verdict: missed
-    note: v1's PGOOD net has two members and gates no driver enable.
-    follow_up: "a power-good pin that gates nothing; a switched load against the converter's limit (#1030)"
+    verdict: caught
+    catch: {script: netlist_audit, kind: power_good_unused, net: PGOOD}
+    note: >-
+      #1030: v1's LM5158 PGOOD reaches only R1 2.2k and the D2 power LED, so
+      nothing holds the half-bridge off until the boost is in regulation; v2
+      takes every PG (/HV_PG, /PDLC_PG_A, /PDLC_PG_B) into a 74LVC1G08 and
+      STM32 inputs.
   - id: pdlc-2
     summary: no current limit on the panel drive, so large panels drain the output capacitor
     source_quote: "The driver does not limit the current to the panel so it exceeds the available charge in the output capacitor when driving larger panels and hiccups."
     fault_class: PI (load current limit)
     verdict: missed
-    follow_up: "a power-good pin that gates nothing; a switched load against the converter's limit (#1030)"
+    follow_up: "a switched capacitive load against the boost's output charge and current limit: needs the load's capacitance, which no schematic carries (#1030, survey)"
   - id: pdlc-3
     summary: the EN input is too sensitive when left floating
     source_quote: "The `EN` input is much too sensitive when left floating."

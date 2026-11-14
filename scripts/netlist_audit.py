@@ -110,6 +110,11 @@ schematic-level structural problems BEFORE board work starts:
    directly or through series resistors (any divider to a known rail or
    ground solved), an I/O pin of a listed receiver above its vin_max: a 5 V
    part into a 3.3 V FPGA through dropping resistors only (#1029).
+ - power_good_unused (warning): an IC's power-good output (PG, PGOOD,
+   PWRGD, POK...) wired to its net but read by nothing there or one series
+   resistor on: only resistors, capacitors, LEDs, test points and jumpers.
+   Whatever the converter powers starts before its output is in regulation
+   (#1030). A PG left unconnected is a choice and is not flagged.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -1095,6 +1100,49 @@ def _io_overvoltage(nets: dict, comps: dict,
                            "rrow": rrow, "level": level,
                            "over": level > float(rrow["vin_max"])}
     yield {"checked": checked}
+
+
+_PG_FUNC_RE = re.compile(
+    r"^(PG|PGOOD\d*|PGD|POK|PWRGD|PWR_?GOOD|PWR_?OK|PGOOD_?\w)$", re.I)
+_NOT_A_READER_RE = re.compile(r"^(R|RN|C|L|FB|D|LED|TP|JP|SJ|H|MH)\d")
+
+
+def _pg_unused(nets: dict, comps: dict,
+               comp_pins: dict[str, dict[str, str]], rails: dict[str, float]):
+    """Yield (ref, pin, func, net, members) for each IC power-good output
+    whose net, and the nets one 2-pin resistor away (not rails or ground),
+    hold no reader: no pin of an active part or connector other than
+    power-good pins. The last item is ('checked', n)."""
+    checked = 0
+    for net, members in sorted(nets.items()):
+        if net.startswith("unconnected-") or net in rails:
+            continue
+        for m in members:
+            func = _norm_pin(m.get("pinfunction"))
+            if (not m["ref"].startswith("U") or not _PG_FUNC_RE.match(func)
+                    or _base_type(m.get("pintype")) in _POWER_TYPES):
+                continue
+            checked += 1
+            if len(members) < 2:
+                continue
+            reach = {net}
+            for x in members:
+                xp = comp_pins.get(x["ref"], {})
+                if _part_kind(x["ref"]) == "R" and len(xp) == 2:
+                    far = next((n for p, n in xp.items() if p != x["pin"]),
+                               None)
+                    if far and far not in rails and not _is_ground_name(far):
+                        reach.add(far)
+            seen = [y for n in sorted(reach) for y in nets.get(n, [])]
+            readers = [y for y in seen if y is not m
+                       and not _NOT_A_READER_RE.match(y["ref"])
+                       and not (_PG_FUNC_RE.match(
+                           _norm_pin(y.get("pinfunction")))
+                           and y["ref"].startswith("U"))]
+            if not readers:
+                yield (m["ref"], m["pin"], func, net,
+                       sorted({y["ref"] for y in seen} - {m["ref"]}))
+    yield ("checked", checked, "", "", [])
 
 
 def _dc_level(net: str, nets: dict, comps: dict,
@@ -2299,6 +2347,22 @@ def audit(parsed: dict, constraints: dict,
           level_v=round(hit["level"], 3), vin_max=float(r["vin_max"]),
           driver_supply_v=hit["vdd"], series_ohm=hit["rs"])
 
+    # 20. a power-good output that gates nothing (#1030; errata corpus:
+    # pdlc v1's LM5158 PGOOD lit an LED and the half-bridge drove the panel
+    # before the boost was in regulation)
+    pg_checked = 0
+    for ref, pin, func, net, others in _pg_unused(nets, comps, comp_pins,
+                                                  pl_rails):
+        if ref == "checked":
+            pg_checked = pin
+            continue
+        v("warning", "power_good_unused", net, [ref] + others,
+          f"{ref} ({comps.get(ref, {}).get('value')}) {func} (pin {pin}) "
+          f"reaches only {', '.join(others)}: no enable, reset or MCU input "
+          f"reads it, so the load starts before the rail is in regulation. "
+          f"Gate the load's enable on it, or leave it unconnected if "
+          f"sequencing is not needed", pg_pin=f"{ref}.{pin}")
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -2322,6 +2386,7 @@ def audit(parsed: dict, constraints: dict,
         "pulls_vs_leakage_checked": pulls_checked,
         "reset_contention_found": contention_checked,
         "io_drive_pins_checked": iolv_checked,
+        "power_good_pins_checked": pg_checked,
     }
     return violations, facts
 
