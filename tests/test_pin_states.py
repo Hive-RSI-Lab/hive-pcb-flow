@@ -438,3 +438,58 @@ def test_ads8326_ref_grounded_or_open_is_the_planted_fault(net):
 def test_ads8326_as_pcb0014_wires_it_is_quiet():
     hits, facts = _audit(*_ads8326())
     assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+def _ad8226(ref="/VREF", outa_type="passive", extra_comps=None,
+            extra_nets=None):
+    """PCB-0013's AD8226 U1: REF on /VREF, which the OPA2333 U2's OUTA
+    buffers from the R2 121k / R3 10.0k divider on /VREF_SET; U2's B half
+    gains U1's output up (R4 24.9k, R5 10.0k back to /VREF).
+    REF goes on the net named; the rest stays as built."""
+    comps = {"U1": "AD8226ARZ-R7", "U2": "OPA2333AIDR",
+             "R1": "1.27k 0.1% 25ppm", "R2": "121k 0.1% 25ppm",
+             "R3": "10.0k 0.1% 25ppm", "R4": "24.9k 0.1% 25ppm",
+             "R5": "10.0k 0.1% 25ppm", "C4": "100nF 50V X7R",
+             "J1": "KF128-5.08-3P", "J2": "KF128-5.08-2P",
+             **(extra_comps or {})}
+    nets = {"GND": [_m("U1", "5", "-VS", "power_in"),
+                    _m("U2", "4", "V-", "power_in"), _m("R3", "2"),
+                    _m("C4", "2"), _m("J1", "3"), _m("J2", "2")],
+            "+3V3": [_m("U1", "8", "+VS", "power_in"),
+                     _m("U2", "8", "V+", "power_in"), _m("R2", "1")],
+            "/IN_N": [_m("J1", "1"), _m("U1", "1", "-IN")],
+            "/IN_P": [_m("J1", "2"), _m("U1", "4", "+IN")],
+            "/RG_A": [_m("R1", "1"), _m("U1", "2", "RG")],
+            "/RG_B": [_m("R1", "2"), _m("U1", "3", "RG")],
+            "/VREF_SET": [_m("R2", "2"), _m("R3", "1"), _m("C4", "1"),
+                          _m("U2", "3", "INA+")],
+            "/VREF": [_m("U2", "1", "OUTA", outa_type),
+                      _m("U2", "2", "INA-"), _m("R5", "2")],
+            "/AMP1_OUT": [_m("U1", "7", "VOUT"), _m("U2", "5", "INB+")],
+            "/FB2": [_m("R4", "2"), _m("R5", "1"), _m("U2", "6", "INB-")],
+            "/VOUT": [_m("U2", "7", "OUTB", outa_type), _m("R4", "1"),
+                      _m("J2", "1")]}
+    for name, ms in (extra_nets or {}).items():
+        nets.setdefault(name, []).extend(ms)
+    nets.setdefault(ref, []).append(_m("U1", "6", "REF"))
+    return comps, nets
+
+
+@pytest.mark.parametrize("net", ["/VREF_SET", "unconnected-(U1-REF-Pad6)"])
+def test_ad8226_ref_on_the_bare_divider_or_open_is_the_planted_fault(net):
+    # /VREF_SET: REF straight on the 121k/10.0k divider, skipping the
+    # buffer, which is Figure 59's crossed-out circuit
+    hits, facts = _audit(*_ad8226(ref=net))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("REF", net, "warning")]
+    assert "AD8226 Rev. C" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+@pytest.mark.parametrize("ref, outa_type", [
+    ("/VREF", "passive"),   # as PCB-0013 is built
+    ("/VREF", "output"),    # the same buffer, its output typed
+    ("GND", "passive")])    # REF grounded, the usual dual-supply wiring
+def test_ad8226_ref_driven_low_impedance_is_quiet(ref, outa_type):
+    hits, facts = _audit(*_ad8226(ref=ref, outa_type=outa_type))
+    assert hits == [] and facts["pin_state_parts_checked"] == 1

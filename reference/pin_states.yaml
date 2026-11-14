@@ -415,3 +415,36 @@ parts:
           - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 22, table: 'REFERENCE INPUT', quote: 'The external reference sets the analog input range. The ADS8326 operates with a reference in the range of 0.1V to VDD.', fields: []}
           - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 3, table: 'RECOMMENDED OPERATING CONDITIONS', quote: 'Reference input voltage 0.1 VDD V', fields: []}
           - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 7, table: 'PIN ASSIGNMENTS', quote: 'REF 1 Analog input Reference input', fields: []}
+
+  - mpn: AD8226
+    match: '^AD8226'
+    verified: true   # Analog Devices AD8226 data sheet Rev. C read 2026-11-14
+    # Known false warning: a buffer whose output pin is typed as an output,
+    # on a REF net that also carries a pull resistor, reads as driven plus
+    # pulled and still warns; the rule cannot tell the low-impedance driver
+    # from the pull. A buffer typed passive (PCB-0013's OPA2333) reads as
+    # neither and stays quiet.
+    pins:
+      - pin: REF
+        forbid: [open, pulled_up, pulled_down]
+        severity: warning
+        why: >-
+          REF must be driven from a low impedance, below 2 ohm for best
+          performance: it is one end of an internal 50 kOhm resistor, so a
+          resistor divider or pull on it adds to that resistor, amplifies
+          only the positive input path and degrades CMRR (Figure 59 crosses
+          out a bare divider on REF and buffers it instead); open, the
+          output has no reference to be developed against
+        source: >-
+          AD8226 Rev. C table 6: "REF Reference. This pin must be driven by
+          low impedance." Reference terminal: "The output voltage of the
+          AD8226 is developed with respect to the potential on the reference
+          terminal." "For the best performance, source impedance to the REF
+          terminal should be kept below 2 Ω." "This uneven amplification
+          degrades CMRR." Figure 59, Driving the Reference Pin.
+        cite:
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 9, table: 'Table 6. Pin Function Descriptions', quote: 'REF Reference. This pin must be driven by low impedance.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'The output voltage of the AD8226 is developed with respect to the potential on the reference terminal.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'For the best performance, source impedance to the REF terminal should be kept below 2 Ω.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'This uneven amplification degrades CMRR.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'Figure 59. Driving the Reference Pin', fields: []}
