@@ -297,3 +297,74 @@ def test_ap64350_rt_clk_on_gnd_is_the_planted_fault():
 def test_ap64350_as_pcb0008b_wires_it_is_quiet():
     hits, facts = _audit(*_ap64350())
     assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+def _ch224k(vdd="/VDD", vbus="/VSENSE", cfg1="/CFG1", extra_comps=None,
+            extra_nets=None):
+    """PCB-0003's CH224K U1: VDD fed from /VIND by R2A+R2B 510R with C5
+    1uF, VBUS sensing /VIND through R1 10k, CFG1 on R3 100k to VDD.
+    VDD, VBUS and CFG1 go on the nets named; the rest stays as built."""
+    comps = {"U1": "CH224K", "R1": "10k", "R2A": "510R", "R2B": "510R",
+             "R3": "100k", "C5": "1uF 50V X5R", "C1A": "10uF 50V X5R",
+             "F1": "Polyfuse", "SW1": "SW_DIP_x03", **(extra_comps or {})}
+    nets = {"GND": [_m("U1", "11", "GND", "power_in"), _m("C5", "2"),
+                    _m("C1A", "2"), _m("J1", "A1", "GND")],
+            "VBUS": [_m("J1", "A4", "VBUS"), _m("C1A", "1"), _m("F1", "1")],
+            "/VIND": [_m("F1", "2"), _m("R1", "1"), _m("R2A", "1")],
+            "/R2_MID": [_m("R2A", "2"), _m("R2B", "1")],
+            "/VDD": [_m("R2B", "2"), _m("C5", "1"), _m("R3", "1")],
+            "/VSENSE": [_m("R1", "2")],
+            "/CFG1": [_m("R3", "2"), _m("SW1", "1")],
+            "/CC1": [_m("J1", "A5", "CC1"), _m("U1", "7", "CC1")],
+            "/CC2": [_m("J1", "B5", "CC2"), _m("U1", "6", "CC2")]}
+    for name, ms in (extra_nets or {}).items():
+        nets.setdefault(name, []).extend(ms)
+    nets.setdefault(vdd, []).append(_m("U1", "1", "VDD", "power_in"))
+    nets.setdefault(vbus, []).append(_m("U1", "8", "VBUS"))
+    nets.setdefault(cfg1, []).append(_m("U1", "9", "CFG1"))
+    return comps, nets
+
+
+@pytest.mark.parametrize("net", ["VBUS", "GND",
+                                 "unconnected-(U1-VBUS-Pad8)"])
+def test_ch224k_vbus_without_its_series_resistor_is_the_planted_fault(net):
+    # "VBUS": straight on the bus, which a regulator's VIN makes a rail
+    hits, facts = _audit(*_ch224k(
+        vbus=net, extra_comps={"U2": "AP2112K-3.3"},
+        extra_nets={"VBUS": [_m("U2", "1", "VIN", "power_in")]}))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("VBUS", net, "error")]
+    assert "CH224 datasheet V2.1" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ch224k_vdd_on_a_5v_rail_is_the_planted_fault():
+    hits, facts = _audit(*_ch224k(
+        vdd="+5V", extra_comps={"U2": "AP2112K-5.0"},
+        extra_nets={"+5V": [_m("U2", "5", "VOUT", "power_out")]}))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("VDD", "+5V", "error")]
+    assert "above its 3.6 V limit" in hits[0]["msg"]
+    assert "CH224 datasheet V2.1" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ch224k_cfg1_on_a_12v_rail_is_the_planted_fault():
+    hits, facts = _audit(*_ch224k(
+        cfg1="+12V", extra_comps={"U2": "LM7812"},
+        extra_nets={"+12V": [_m("U2", "3", "VO", "power_out")]}))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("CFG1", "+12V", "error")]
+    assert "above its 8 V limit" in hits[0]["msg"]
+    assert "CH224 datasheet V2.1" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ch224k_as_pcb0003_wires_it_is_quiet():
+    hits, facts = _audit(*_ch224k())
+    assert hits == [] and facts["pin_state_parts_checked"] == 1
+    # and on 3.3 V rails by name, under both limits
+    hits, facts = _audit(*_ch224k(
+        vdd="+3V3", cfg1="+3V3", extra_comps={"U2": "AP2112K-3.3"},
+        extra_nets={"+3V3": [_m("U2", "5", "VOUT", "power_out")]}))
+    assert hits == [] and facts["pin_state_parts_checked"] == 1
