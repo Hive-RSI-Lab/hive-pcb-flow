@@ -62,3 +62,21 @@ schemes:
       size: '(?:^|[\s/]){v}(?:[\s/]|$)'
       power: 'Normal\s+Size\s+(?:\w\w\s+)*{v}\b'
       tolerance: '\b{v}\s*=\s*\D{0,3}[\d.]+\s*%'
+  sitime_osc:
+    source: "SiTime SiT1602B data sheet Rev 1.08, Ordering Information part number guide (haos-voice Y301, SiT1602BI-22-18E-25.000000E)"
+    # The guide quotes each code in curly quotes; the drive-strength letter is
+    # optional ("-" is the default) and is recorded, not checked, as is the
+    # frequency, whose decimal point the normalised MPN has lost.
+    mpn: '^SIT(?P<family>\d{4})(?P<revision>[A-Z])(?P<temperature>[A-Z])(?P<drive>[A-Z]?)(?P<size>\d)(?P<stability>\d)(?P<voltage>\d\d|XX|YY)(?P<feature>[A-Z])(?P<frequency>\d+)(?P<packing>[A-Z])$'
+    series:
+      - 'Part\s*Family\s*["“”]SiT\d{4}["“”]'
+      - 'Revision\s*Letter'
+    fields:
+      family: 'Part\s*Family\s*["“”]SiT{v}["“”]'
+      revision: 'Revision\s*Letter\s*["“”]{v}["“”]'
+      temperature: '["“”]{v}["“”]\s*(?:Commercial|Industrial|Extended|Automotive)'
+      size: '["“”]{v}["“”]\s*\d+(?:\.\d+)?\s*x\s*\d+(?:\.\d+)?\s*mm'
+      stability: '["“”]{v}["“”]\s*for\s*\D{0,3}\d+\s*ppm'
+      voltage: '["“”]{v}["“”]\s*for\s*\d[\d.]*\s*V'
+      feature: '["“”]{v}["“”]\s*for\s*(?:Output\s*Enable|Standby|No\s*Connect)'
+      packing: '["“”]{v}["“”]\s*:\s*\d+(?:/\d+)?\s*mm\s*Tape'

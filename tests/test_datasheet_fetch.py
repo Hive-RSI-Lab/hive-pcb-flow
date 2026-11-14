@@ -281,13 +281,35 @@ UNIROYAL = ("Thick Film Chip Resistors Part Name 01005/0201/0402/0603/0805/"
             "codes: Resistance Value 12th code T=Tape/Reel")
 JST = ("SH CONNECTOR Model No. BM06B-SRSS-TB BM07B-SRSS-TB "
        "SM05B-SRSS-TB SM06B-SRSS-TB SM07B-SRSS-TB")
+# SiTime's guide as pypdf reads it, curly quotes and all; the PDF helper
+# here can't set those, so the PDF copy has straight ones.
+SITIME_TEXT = ("Ordering Information The Part No. Guide is for reference only. "
+               "Packaging \u201cD\u201d: 8 mm Tape & Reel, 3 ku reel \u201cT\u201d: "
+               "12/16 mm Tape & Reel, 3 ku reel \u201cE\u201d: 8 mm Tape & Reel, "
+               "1 ku reel Blank for Bulk Frequency Refer to Frequency List below "
+               "Part Family \u201cSiT1602\u201d Revision Letter \u201cB\u201d is the "
+               "revision Temperature Range \u201cC\u201d Commercial, -20 to 70\u00baC "
+               "\u201cI\u201d Industrial, -40 to 85\u00baC Output Drive Strength "
+               "\u201c\u2013\u201d Default (datasheet limits) \u201cL\u201d \u201cT\u201d "
+               "Package Size \u201c7\u201d 2.0 x 1.6 mm \u201c1\u201d 2.5 x 2.0 mm "
+               "\u201c2\u201d 3.2 x 2.5 mm Frequency Stability \u201c1\u201d for "
+               "\u00b120 ppm \u201c2\u201d for \u00b125 ppm \u201c3\u201d for \u00b150 ppm "
+               "Feature Pin \u201cE\u201d for Output Enable \u201cS\u201d for Standby "
+               "\u201cN\u201d for No Connect Supply Voltage \u201c18\u201d for 1.8 V "
+               "\u00b110% \u201c33\u201d for 3.3 V \u00b110% \u201cXX\u201d for 2.25 V "
+               "to 3.63 V")
+SITIME = SITIME_TEXT.translate({0x201c: '"', 0x201d: '"', 0x2013: "-",
+                                0xb1: "+/-", 0xba: " deg "})
 FAMILY_DOCS = {"samsung": SAMSUNG, "yageo_rt": YAGEO_RT, "yageo_cc": YAGEO_CC,
-               "uniroyal": UNIROYAL, "jst": JST}
+               "uniroyal": UNIROYAL, "jst": JST, "sitime": SITIME}
 FAMILY_MPNS = {"samsung": ["CL05B104KO5NNNC", "CL10A106KP8NNNC"],
                "yageo_rt": ["RT0402BRD0712KL"],
                "yageo_cc": ["CC0402KRX5R6BB474"],
                "uniroyal": ["0402WGF1001TCE", "0603WAF100JT5E"],
-               "jst": ["SM06B-SRSS-TB"]}
+               "jst": ["SM06B-SRSS-TB"],
+               "sitime": ["SIT1602BI-22-18E-25.000000E",
+                          "SiT1602BC-12-18E-66.666660D",
+                          "SiT1602BIL22-XXE-25.000000T"]}
 
 
 def _doc(section: str) -> bytes:
@@ -308,6 +330,20 @@ def test_cl_series_datasheet_for_c1525_says_how_it_matched():
     assert a["match"]["fields"]["size"] == "05"
     assert a["match"]["fields"]["dielectric"] == "B"
     assert a["match"]["fields"]["voltage"] == "O"
+
+
+def test_sitime_guide_decodes_with_its_own_curly_quotes():
+    match, why = datasheet_extract.series_match("SIT1602BI-22-18E-25.000000E",
+                                                SITIME_TEXT)
+    assert why is None and match["scheme"] == "sitime_osc", (match, why)
+    f = match["fields"]
+    assert (f["family"], f["revision"], f["temperature"], f["drive"]) == \
+        ("1602", "B", "I", "")
+    assert (f["size"], f["stability"], f["voltage"], f["feature"],
+            f["packing"]) == ("2", "2", "18", "E", "E")
+    match, why = datasheet_extract.series_match("SIT1602BI-22-18E-25.000000E",
+                                                SITIME_TEXT.replace("\u201c2\u201d 3.2", "x"))
+    assert match is None and "size=2" in why, (match, why)
 
 
 def test_named_datasheet_says_how_it_matched():
@@ -336,7 +372,15 @@ def test_the_right_series_with_a_field_it_cannot_decode_stays_suspect():
                      ("CC0402KRX7R6BB474", YAGEO_CC),   # the X5R-only document
                      ("CC9999KRX5R6BB474", YAGEO_CC),
                      ("RT9999BRD0712KL", YAGEO_RT),
-                     ("0402WZF1001TCE", UNIROYAL)]:     # no power code WZ
+                     ("0402WZF1001TCE", UNIROYAL),      # no power code WZ
+                     ("SIT1602BI-92-18E-25.000000E", SITIME),   # no size 9
+                     ("SIT1602BI-25-18E-25.000000E", SITIME),   # no stability 5
+                     ("SIT1602BX-22-18E-25.000000E", SITIME),   # no range X
+                     ("SIT1602BI-22-15E-25.000000E", SITIME),   # no 15 supply
+                     ("SIT1602BI-22-18Q-25.000000E", SITIME),   # no feature Q
+                     ("SIT1602BI-22-18E-25.000000Z", SITIME),   # no packing Z
+                     ("SIT1602CI-22-18E-25.000000E", SITIME),   # revision C
+                     ("SIT8008BI-22-18E-25.000000E", SITIME)]:  # another family
         a = datasheet_extract.assess_pdf(_doc(doc), mpn)
         assert a["status"] == "suspect", (mpn, a)
         assert any(mpn in r for r in a["reasons"]), a
