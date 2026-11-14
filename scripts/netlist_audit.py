@@ -100,7 +100,9 @@ schematic-level structural problems BEFORE board work starts:
    The worst-case level is the pulls' Thevenin source less that current
    through their resistance; error when a listed receiver reads it as the
    wrong state, warning when it sits between VIL and VIH (receivers not
-   listed: 0.3 / 0.7 of the rail). A net with a push-pull output is skipped.
+   listed: 0.3 / 0.7 of the rail). A net with a push-pull output is skipped,
+   and so is a level the pulls alone already put in that band (a divider
+   into an ADC input sits mid-rail by design, #1100).
  - driver_contention (warning): a reset input pin_leakage.yaml lists that
    shares its net with output, bidirectional or tri-state pins of two or
    more other parts (connectors and open-collector pins aside): they can
@@ -110,6 +112,10 @@ schematic-level structural problems BEFORE board work starts:
    directly or through series resistors (any divider to a known rail or
    ground solved), an I/O pin of a listed receiver above its vin_max: a 5 V
    part into a 3.3 V FPGA through dropping resistors only (#1029).
+ The datasheet-table rules (pin_state through io_overvoltage) count a row
+   only once its part says verified: true. A finding that needs a drafted,
+   unverified row (scripts/part_rows.py drafts them) is listed under
+   facts' not_judged, counted as unverified_findings, and is not a hit (#1100).
  - power_good_unused (warning): an IC's power-good output (PG, PGOOD,
    PWRGD, POK...) wired to its net but read by nothing there or one series
    resistor on: only resistors, capacitors, LEDs, test points and jumpers.
@@ -884,7 +890,7 @@ def _pull_vs_leakage(nets: dict, comps: dict,
     sinking or sourcing current on it, with the worst-case level, the
     receivers' thresholds and the verdict ('error' when the level reads as
     the wrong state, 'warning' when it sits between VIL and VIH, None when
-    clean). Nets with a push-pull output on them are skipped: the driver
+    clean or when the pulls alone already put it in that band). Nets with a push-pull output on them are skipped: the driver
     sets the level, not the pull."""
     for group in _zero_ohm_groups(nets, comps, comp_pins):
         gset = set(group)
@@ -944,15 +950,21 @@ def _pull_vs_leakage(nets: dict, comps: dict,
                 recv.append((f"{ref}.{pin}", float(vil), float(vih)))
         if not recv:
             recv = [("CMOS", 0.3 * top, 0.7 * top)]
-        if up:
-            wrong = [r for r in recv if level < r[1]]
-            vague = [r for r in recv if level < r[2]]
-            need = max(r[2] for r in recv)
-        else:
-            wrong = [r for r in recv if level > r[2]]
-            vague = [r for r in recv if level > r[1]]
-            need = min(r[1] for r in recv)
+        def judge(v):
+            if up:
+                return ([r for r in recv if v < r[1]],
+                        [r for r in recv if v < r[2]])
+            return ([r for r in recv if v > r[2]],
+                    [r for r in recv if v > r[1]])
+        wrong, vague = judge(level)
+        need = (max if up else min)(r[2 if up else 1] for r in recv)
         sev = "error" if wrong else "warning" if vague else None
+        # a divider the designer set between the thresholds (an ADC or
+        # analog bias input) is not the leakage's doing: judge only a band
+        # the leakage moves the level into
+        w0, v0 = judge(min(max(vth, 0.0), top))
+        if sev == ("error" if w0 else "warning" if v0 else None):
+            sev = None
         # the largest single pull that would still hold `need`, others gone
         span = (top - need) if up else need
         r_max = span / sink if span > 0 else 0.0
@@ -1008,6 +1020,20 @@ def load_io_levels(path: Path = IO_LEVELS) -> dict:
         raise checklib.CheckError(f"io levels {path}: {exc}") from exc
     return {"drivers": doc.get("drivers") or [],
             "receivers": doc.get("receivers") or []}
+
+
+def _verified_only(table):
+    """A datasheet rule table with only its `verified: true` rows (#1100).
+
+    A finding the rule makes from the whole table but not from this one
+    rests on a row nobody has read against its datasheet (a part_rows.py
+    draft), so the report lists it under not_judged, never as a fault."""
+    if isinstance(table, dict):
+        return {k: _verified_only(v) for k, v in table.items()}
+    if isinstance(table, list):
+        return [r for r in table
+                if not isinstance(r, dict) or r.get("verified") is True]
+    return table
 
 
 def _io_receiver(table: dict, comp: dict, m: dict) -> dict | None:
@@ -1751,6 +1777,18 @@ def audit(parsed: dict, constraints: dict,
             SCRIPT, sev, None, None, net, refs, msg, SOURCE,
             kind=kind, **extra))
 
+    # A datasheet-table finding that only an unverified row makes (rules
+    # 15-19, #1100) is reported as not judged, not as a fault.
+    not_judged: list[str] = []
+
+    def vt(judged, sev, kind, net, refs, msg, **extra):
+        if judged:
+            v(sev, kind, net, refs, msg, **extra)
+        else:
+            not_judged.append(f"{kind} ({sev}) on {net or ', '.join(refs)}: "
+                              f"{msg} -- rests on a drafted row not yet "
+                              f"verified against its datasheet")
+
     # 1. every constraints-referenced net exists
     referenced = _constraint_nets(constraints)
     for net, sources in sorted(referenced.items()):
@@ -2200,10 +2238,13 @@ def audit(parsed: dict, constraints: dict,
     for spec in ps_specs:
         pin_states_checked += sum(1 for r in comps
                                   if _spec_matches(spec, comps[r]))
+    ps_ok = {(h[2], h[3], h[8]) for h in _pin_states(
+        nets, comps, comp_pins, ps_rails, _verified_only(ps_specs))}
     for (rule, spec, ref, pnum, name, st, volts, why,
          problem) in _pin_states(nets, comps, comp_pins, ps_rails, ps_specs):
         via = f" (via {', '.join(why)})" if why else ""
-        v(rule.get("severity", "error"), "pin_state", name, [ref],
+        vt((ref, pnum, problem) in ps_ok,
+           rule.get("severity", "error"), "pin_state", name, [ref],
           f"{ref} ({comps[ref].get('value')}) pin {pnum} {rule['pin']} on "
           f"'{name}' {problem}{via}: {' '.join(rule['why'].split())} "
           f"[{' '.join(rule['source'].split()).split(':')[0]}]"
@@ -2218,11 +2259,14 @@ def audit(parsed: dict, constraints: dict,
     mp_table = load_mcu_pins() if mcu_pins is None else mcu_pins
     pwm_found, pwm_checked = _mcu_pwm_groups(nets, comps, comp_pins,
                                              ps_rails, mp_table)
+    pwm_ok = {(h[0]["mpn"], h[1]) for h in _mcu_pwm_groups(
+        nets, comps, comp_pins, ps_rails, _verified_only(mp_table))[0]}
     for row, mref, mrow, inputs in pwm_found:
         pins = "; ".join(
             f"{lr} {lp} on {mp} ({'/'.join(fs) if fs else 'no timer'})"
             for lr, lp, mp, fs in inputs)
-        v(row.get("severity", "warning"), "mcu_pwm_timer", None,
+        vt((row["mpn"], mref) in pwm_ok,
+           row.get("severity", "warning"), "mcu_pwm_timer", None,
           sorted({i[0] for i in inputs} | {mref}),
           f"{mref} ({comps[mref].get('value')}) drives the PWM inputs of "
           f"{row['mpn']} {', '.join(sorted({i[0] for i in inputs}))} from "
@@ -2241,10 +2285,13 @@ def audit(parsed: dict, constraints: dict,
             io_checked += sum(1 for r in comps
                               if _mcu_row(comps[r], mp_table.get("mcus")
                                           or []) is row)
+    io_ok = {(h[1], h[2], h[4]) for h in _input_only_selects(
+        nets, comps, comp_pins, _verified_only(mp_table))}
     for (mrow, mref, mpin, mnet, sref, spin,
          snet) in _input_only_selects(nets, comps, comp_pins, mp_table):
         via = "" if snet == mnet else f" over a 0 ohm link from '{mnet}'"
-        v("warning", "mcu_input_only_drive", snet, [mref, sref],
+        vt((mref, mpin, sref) in io_ok,
+           "warning", "mcu_input_only_drive", snet, [mref, sref],
           f"{sref} ({comps[sref].get('value')}) chip select {spin} on "
           f"'{snet}' is wired to {mref} ({comps[mref].get('value')}) "
           f"{mpin}{via}, a pin the MCU can only read: it can watch that "
@@ -2259,6 +2306,13 @@ def audit(parsed: dict, constraints: dict,
     i2c_rows = load_i2c_addresses() if i2c_addresses is None \
         else i2c_addresses
     buses = _i2c_buses(nets, comps, comp_pins, ps_rails, i2c_rows)
+    i2c_ok = set()
+    for scl, devs in _i2c_buses(nets, comps, comp_pins, ps_rails,
+                                _verified_only(i2c_rows)).items():
+        seen: dict[int, int] = {}
+        for d in devs:
+            seen[d[0]] = seen.get(d[0], 0) + 1
+        i2c_ok |= {(scl, a) for a, n in seen.items() if n > 1}
     for scl, devs in sorted(buses.items()):
         by_adr: dict[int, list[tuple]] = {}
         for d in devs:
@@ -2269,7 +2323,7 @@ def audit(parsed: dict, constraints: dict,
             who = ", ".join(f"{r} ({comps[r].get('value')}, "
                             f"{row['pin']} to {where})"
                             for _, r, row, where in same)
-            v("error", "i2c_address_collision", scl,
+            vt((scl, adr) in i2c_ok, "error", "i2c_address_collision", scl,
               sorted(d[1] for d in same),
               f"I2C bus '{scl}': {who} all answer at 0x{adr:02X} "
               f"[{'; '.join(sorted({' '.join(d[2]['source'].split()).split(' Table')[0] for d in same}))}]"
@@ -2285,6 +2339,8 @@ def audit(parsed: dict, constraints: dict,
     pl_specs = load_pin_leakage() if pin_leakage is None else pin_leakage
     pl_rails = _rail_volts(constraints, nets)
     pulls_checked = 0
+    pull_ok = {(h["net"], h["severity"]) for h in _pull_vs_leakage(
+        nets, comps, comp_pins, pl_rails, _verified_only(pl_specs))}
     for hit in _pull_vs_leakage(nets, comps, comp_pins, pl_rails, pl_specs):
         pulls_checked += 1
         if not hit["severity"]:
@@ -2301,7 +2357,8 @@ def audit(parsed: dict, constraints: dict,
                          for _, _, w in hit["pulls"]})
         srcs = "; ".join(sorted({" ".join(row["source"].split()).split(":")[0]
                                  for *_, row in hit["rows"]}))
-        v(hit["severity"], "pull_vs_leakage", hit["net"], refs,
+        vt((hit["net"], hit["severity"]) in pull_ok,
+           hit["severity"], "pull_vs_leakage", hit["net"], refs,
           f"'{hit['net']}' is pulled {way} by "
           f"{'; '.join(w for _, _, w in hit['pulls'])} "
           f"(Thevenin {hit['vth']:.3g} V through {hit['rth'] / 1e3:.3g}k), "
@@ -2317,10 +2374,12 @@ def audit(parsed: dict, constraints: dict,
           thevenin_v=round(hit["vth"], 3), thevenin_ohm=round(hit["rth"]),
           max_pull_ohm=round(hit["r_max"]), nets=hit["group"])
     contention_checked = 0
+    cont_ok = {(h[0], h[1]) for h in _driver_contention(
+        nets, comps, comp_pins, pl_rails, _verified_only(pl_specs))}
     for name, rpin, drivers, spec in _driver_contention(
             nets, comps, comp_pins, pl_rails, pl_specs):
         contention_checked += 1
-        v("warning", "driver_contention", name,
+        vt((name, rpin) in cont_ok, "warning", "driver_contention", name,
           sorted({d.split(".")[0] for d in drivers}),
           f"reset input {rpin} ({spec['mpn']}) on '{name}' can be driven "
           f"by {', '.join(drivers)}: two push-pull pins from different "
@@ -2334,6 +2393,10 @@ def audit(parsed: dict, constraints: dict,
     # through 27 ohm dropping resistors)
     io_table = load_io_levels() if io_levels is None else io_levels
     iolv_checked = 0
+    iolv_ok = {(h["net"], h["driver"], h["receiver"])
+               for h in _io_overvoltage(nets, comps, comp_pins, pl_rails,
+                                        _verified_only(io_table))
+               if "checked" not in h and h["over"]}
     for hit in _io_overvoltage(nets, comps, comp_pins, pl_rails, io_table):
         if "checked" in hit:
             iolv_checked = hit["checked"]
@@ -2346,7 +2409,8 @@ def audit(parsed: dict, constraints: dict,
                else " directly")
         div = (f", divided by {'; '.join(hit['divider'])}"
                if hit["divider"] else "")
-        v("error", "io_overvoltage", hit["net"],
+        vt((hit["net"], hit["driver"], hit["receiver"]) in iolv_ok,
+           "error", "io_overvoltage", hit["net"],
           sorted({hit["driver"], hit["receiver"]}
                  | ({hit["series"]} if hit["series"] else set())),
           f"{hit['driver']} ({comps[hit['driver']].get('value')}) "
@@ -2405,7 +2469,10 @@ def audit(parsed: dict, constraints: dict,
         "reset_contention_found": contention_checked,
         "io_drive_pins_checked": iolv_checked,
         "power_good_pins_checked": pg_checked,
+        "unverified_findings": len(not_judged),
     }
+    if not_judged:
+        facts["not_judged"] = not_judged
     return violations, facts
 
 

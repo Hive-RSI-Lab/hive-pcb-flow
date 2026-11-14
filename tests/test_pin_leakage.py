@@ -119,7 +119,7 @@ def test_revd0_mcu_rst_is_held_low_and_contended():
                    ("driver_contention", "/MCU_~{RST}", "warning")}
     pull = next(h for h in hits if h["kind"] == "pull_vs_leakage")
     assert "internal pull-up 55k" in pull["msg"]   # the STM32's own, weakest
-    assert "(not yet re-read)" in pull["msg"]
+    assert "(not yet re-read)" not in pull["msg"]   # G031 read, #1100
     cont = next(h for h in hits if h["kind"] == "driver_contention")
     assert cont["refs"] == ["U2", "U8"] and cont["reset_pin"] == "U6.5"
     assert facts["reset_contention_found"] == 1
@@ -144,7 +144,7 @@ def test_every_row_cites_its_datasheet():
     doc = yaml.safe_load(
         (REPO / "reference" / "pin_leakage.yaml").read_text())
     fields = {"pin", "ipd", "ipu", "leak", "rpu", "vil", "vih", "vil_frac",
-              "vih_frac", "reset", "source"}
+              "vih_frac", "reset", "source", "cite"}
     for part in doc["parts"]:
         assert part["match"] and part["state"], part["mpn"]
         assert isinstance(part["verified"], bool), part["mpn"]
@@ -158,3 +158,30 @@ def test_every_row_cites_its_datasheet():
             for k in ("ipd", "ipu", "leak"):
                 assert k not in row or 0 < float(row[k]) < 0.01
             assert ("vil" in row) == ("vih" in row)
+
+
+def test_a_divider_set_between_the_thresholds_is_not_the_leakages_doing():
+    """PCB-0020's VBAT_SENSE: 1M/1M from VBAT into an ESP32-C3 ADC GPIO sits
+    mid-rail by design; 50 nA moves it 25 mV (#1100 sweep, a false hit)."""
+    nets = {"VBAT": [_m("R6", "1"), _m("BT1", "1", "+", "power_out")],
+            "+3V3": [_m("U1", "1", "VDD", "power_in")],
+            "GND": [_m("R7", "2"), _m("U1", "2", "GND", "power_in")],
+            "/VBAT_SENSE": [_m("R6", "2"), _m("R7", "1"),
+                            _m("U1", "6", "GPIO4", "bidirectional")]}
+    comps = {"U1": "ESP32-C3", "R6": "1M", "R7": "1M", "BT1": "BAT"}
+    parsed = {"components": {r: {"value": v, "libsource": ("", "")}
+                             for r, v in comps.items()}, "nets": nets}
+    viol, facts = netlist_audit.audit(
+        parsed, {"voltages": [{"net": "VBAT", "voltage": 4.2}]}, None,
+        pin_requirements=[], pin_states=[])
+    assert [v for v in viol if v["kind"] in KINDS] == []
+    assert facts["pulls_vs_leakage_checked"] == 1
+
+
+def test_a_divider_the_leakage_drags_to_the_wrong_state_is_still_an_error():
+    comps, nets = _alert("100k")
+    comps["R10"] = "1M"
+    nets["/~{ALERT}"].append(_m("R10", "1"))
+    nets["GND"].append(_m("R10", "2"))
+    hits, _ = _audit(comps, nets)
+    assert [h["severity"] for h in hits] == ["error"]
