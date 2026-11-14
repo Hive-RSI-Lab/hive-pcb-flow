@@ -600,15 +600,20 @@ holdout:
     source_quote: "Q3 power mux FET reversed — source/drain swapped, body diode points VCC→+BATT"
     fault_class: SCH (part orientation)
     blind: missed
-    verdict: missed
-    follow_up: "a power-path part's orientation against the power flow (#1085)"
+    verdict: caught
+    caught_by: "#1085"
+    catch: {script: netlist_audit, kind: power_path_body_diode, net: +BATT, refs: [Q3]}
+    note: >-
+      Not an independent catch: the rule was written after this defect was
+      read, though seeded from datasheets (TI SLVA139, Microchip AN1149),
+      not from this board. The warning is on v3.0 and gone on v3.1.
   - id: netscore-2
     summary: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped
     source_quote: "BMS1 (FS312MH) GND and BAT- swapped — datasheet §6/§8: pin 1 GND is the cell negative and pin 3 BAT- is \"negative of charger or load\""
     fault_class: SCH (pin function vs datasheet)
     blind: missed
     verdict: missed
-    follow_up: "a power-path part's orientation against the power flow (#1085)"
+    follow_up: "protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors"
 - id: netscore-big
   url: https://github.com/arcticlula/Netscore
   commit: 4426f309aab51d447e32f062f66db48317256ff4
