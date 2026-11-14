@@ -16,6 +16,8 @@ JLC guidance replicated here:
     gerber dir and zip: the fab's flying-probe E-test runs against it. A net
     joined only inside a part (jumper_pad_groups) gets one name per bare-board
     island (`USB_DP`, `USB_DP~J1`), else the tester reads it as open (#962).
+    The nets a net tie joins (net_tie_pad_groups: a Bridged solder jumper)
+    get one name where the copper joins them, else it reads them as shorted.
   - Pos (CPL source): both sides, csv, mm. bom_cpl.py reformats it into JLC's
     CPL with rotation corrections.
   - Gerbers use KiCad's standard extensions/X2, which current JLC accepts. No
@@ -232,12 +234,46 @@ def name_jumper_islands(pcb: Path, ipc_file: Path, gerber_dir: Path,
     return renames
 
 
+def name_net_ties(pcb: Path, ipc_file: Path, gerber_dir: Path,
+                  bg=None) -> list[dict]:
+    """A net tie (the footprint's `net_tie_pad_groups`: a Bridged solder
+    jumper, a NetTie) joins two nets with its own copper on purpose, but
+    kicad-cli names each net apart, so the fab's E-test reads the good board
+    as a short between them. Give the nets of each tie one D-356 name where
+    the gerbers' copper joins them (ipcd356.merge_net_ties); a tie whose
+    copper is cut keeps its names. Runs after name_jumper_islands, on the
+    file as it left. -> the renames."""
+    import geom
+    import ipcd356
+    pcb_text = pcb.read_text(encoding="utf-8", errors="replace")
+    if "net_tie_pad_groups" not in pcb_text:
+        return []
+    bg = bg if bg is not None else geom.load_board(pcb)
+    ties = ipcd356.net_tie_classes(pcb_text, bg)
+    if not ties:
+        return []
+    # bytes, so a CRLF file stays CRLF
+    text = ipc_file.read_bytes().decode("utf-8", errors="replace")
+    d = ipcd356.parse(text)
+    ipcd356.resolve(d, bg)
+    res = ipcd356.compare(gerblib.open_fab(gerber_dir), d, ties,
+                          ipcd356.jumper_groups(pcb_text))
+    new, renames = ipcd356.merge_net_ties(text, res["tie_joins"])
+    if renames:
+        part = ipc_file.with_name(ipc_file.name + ".part")
+        part.write_text(new, encoding="utf-8", newline="")
+        os.replace(part, ipc_file)
+    return renames
+
+
 def export_ipc_absolute(cli: Path, pcb: Path, ipc_file: Path,
                         gerber_dir: Path | None = None, bg=None) -> dict:
     """The netlist, then (with `gerber_dir`, the gerbers it ships beside)
-    each jumper island named apart (name_jumper_islands). If the naming
-    fails, the file stays kicad-cli's (a later netlist compare reports the
-    jumper open) and `jumper_rename_error` says why."""
+    each jumper island named apart (name_jumper_islands) and the nets of
+    each net tie given one name (name_net_ties). If a naming fails, the
+    file stays as it was before it (a later netlist compare reports the
+    jumper open or the tie short) and `jumper_rename_error` or
+    `tie_rename_error` says why."""
     res = _export_ipc_absolute(cli, pcb, ipc_file)
     if gerber_dir is not None and res.get("status") == "pass":
         try:
@@ -245,6 +281,10 @@ def export_ipc_absolute(cli: Path, pcb: Path, ipc_file: Path,
                                                         gerber_dir, bg)
         except Exception as exc:  # noqa: BLE001 (the export itself stands)
             res["jumper_rename_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            res["tie_renames"] = name_net_ties(pcb, ipc_file, gerber_dir, bg)
+        except Exception as exc:  # noqa: BLE001 (the export itself stands)
+            res["tie_rename_error"] = f"{type(exc).__name__}: {exc}"
     return res
 
 
@@ -422,6 +462,10 @@ def run(pcb: Path, out_dir: Path, name: str | None = None,
         print(f"fab_export: jumper islands not named apart in {ipc_file.name} "
               f"({n['jumper_rename_error']}); dfm_check will report the "
               "E-test open", file=sys.stderr)
+    if n.get("tie_rename_error"):
+        print(f"fab_export: net ties not given one name in {ipc_file.name} "
+              f"({n['tie_rename_error']}); dfm_check will report the "
+              "E-test short", file=sys.stderr)
     pos_file = out_dir / f"{name}-pos.csv"
     p = kc.export_pos(cli, pcb, pos_file, side="both", fmt="csv", units="mm")
     if p.get("status") != "pass":
@@ -461,6 +505,10 @@ def run(pcb: Path, out_dir: Path, name: str | None = None,
            if n.get("jumper_renames") else {}),
         **({"ipc_jumper_rename_error": n["jumper_rename_error"]}
            if n.get("jumper_rename_error") else {}),
+        **({"ipc_tie_renames": n["tie_renames"]}
+           if n.get("tie_renames") else {}),
+        **({"ipc_tie_rename_error": n["tie_rename_error"]}
+           if n.get("tie_rename_error") else {}),
         "files": files_meta,
         "gerber_zip": str(zip_path) if zip_path else None,
         "gerber_zip_sha256": zip_sha,

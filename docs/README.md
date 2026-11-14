@@ -625,6 +625,20 @@ with that copper or without it.
   layer of a drawing of the footprint's that spans the pieces: the bridge,
   moved off copper. A group with fewer than two of its pads on the board
   isn't judged.
+- A fab's E-test knows a net by its IPC-D-356 name, and kicad-cli names the
+  nets of a tie apart, so the tester reads the tie's copper as a short and
+  fails a good board. `fab_export` gives the nets of each tie one name where
+  the shipped copper joins them (`ipc_tie_renames` in its manifest): of the
+  tie's names, the one with the most records stays. A tie whose copper is
+  cut keeps its names, and a tie whose nets sit in a short with other nets
+  isn't renamed. `dfm_check`'s netlist compare reports a tie still named
+  apart as `dfm_net_short` with `tie` set: re-export the package, or, where
+  one of the names also stands for a net outside the tie (kicad-cli keeps
+  the last 14 characters), rename the nets first. A tie's one name isn't a
+  `dfm_netlist_name_clash`. A tie whose nets the copper leaves in pieces is
+  `dfm_net_tie_open`: each net is whole, so the tester can't see it.
+  Re-export a stale package, and if `check_net_tie` fails too, put the
+  bridge back.
 
 The hit: two SolderJumper-3 Bridged12 boot straps on a 6-layer board lost
 their bridges to F.SilkS at the escape step, and a later silk clean-up

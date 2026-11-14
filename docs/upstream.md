@@ -264,6 +264,14 @@ What moved where:
   and `CPL.csv` are still held to `bom_dnp_populated`. The report's
   `fab_files` says which file each role read
   (`tests/test_check_bom_sync.py`).
+- `scripts/fab_export.py` gives the nets of each net tie
+  (`net_tie_pad_groups`) one IPC-D-356 name where the shipped copper joins
+  them (`lib/ipcd356.py` `merge_net_ties`), after the jumper islands are
+  named apart. kicad-cli named them apart, and a fab's tester read the tie
+  as a short. A tie whose copper is cut keeps its names, and `dfm_check`
+  reports it as `dfm_net_tie_open`, which the tester can't see. A tie still
+  named apart is a `dfm_net_short` with `tie` set and says how to fix it
+  (`tests/test_netlist_compare.py`).
 
 `requirements.lock`, `LICENSE` and `NOTICE` came from upstream's repo root,
 and so did `docs/failure-modes.yaml` (`bench --scorecard-corpus` maps

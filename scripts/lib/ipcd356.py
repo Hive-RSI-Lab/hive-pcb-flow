@@ -29,10 +29,13 @@ Public API:
     parse(text) -> D356
     resolve(d356, bg) -> list[name clash dict]   (sets point.board_net)
     net_tie_classes(pcb_text, bg) -> {net: class id}
+    net_tie_refs(pcb_text) -> {ref, ...}
     jumper_groups(pcb_text) -> [(ref, (pin, ...)), ...]
-    compare(fab, d356, ties=None, jumpers=None)
-        -> {"shorts": [...], "opens": [...], "jumper_splits": [...], ...}
+    compare(fab, d356, ties=None, jumpers=None, tie_refs=None)
+        -> {"shorts": [...], "opens": [...], "jumper_splits": [...],
+            "tie_joins": [...], "tie_opens": [...], ...}
     split_jumper_islands(text, splits) -> (text, renames)
+    merge_net_ties(text, joins) -> (text, renames)
 
 A footprint's jumper pads (`jumper_pad_groups`, or
 `duplicate_pad_numbers_are_jumpers`) join copper inside the part: a
@@ -42,6 +45,17 @@ read the net as open (#962). compare() reports such a net under
 `jumper_splits`, as an open only while its islands share a D-356 name;
 split_jumper_islands() gives each island its own name, which fab_export
 writes into the shipped netlist.
+
+A net tie (`net_tie_pad_groups`: a Bridged solder jumper, a NetTie) is the
+other way round: the footprint's own copper joins two nets on purpose, and
+kicad-cli names each net apart, so a tester reads the island as a short.
+compare() lists each island whose nets one tie joins under `tie_joins`, and
+as a short (`tie`) while it carries more than one D-356 name;
+merge_net_ties() gives those names one, which fab_export writes into the
+shipped netlist. A tie whose nets the copper leaves in more than one piece
+(the package is older than the footprint's bridge, or the bridge is off
+copper) is listed under `tie_opens`: the netlist names those nets apart, so
+the tester can't see it.
 """
 from __future__ import annotations
 
@@ -251,6 +265,17 @@ def net_tie_classes(pcb_text: str, bg) -> dict[str, int]:
     return {n: roots.index(find(n)) for n in parent}
 
 
+def net_tie_refs(pcb_text: str) -> set[str]:
+    """The refs of the footprints that carry `net_tie_pad_groups`."""
+    out = set()
+    for m in re.finditer(r"\(footprint\s", pcb_text):
+        block = pcb_text[m.start():_sexp_end(pcb_text, m.start())]
+        ref = _REF.search(block)
+        if ref and _NET_TIE.search(block):
+            out.add(ref.group(1))
+    return out
+
+
 _JUMPER = re.compile(r"\(jumper_pad_groups((?:\s*\((?:\s*\"[^\"]*\")+\s*\))+)\s*\)")
 _DUP_JUMPER = re.compile(r"\(duplicate_pad_numbers_are_jumpers\s+yes\s*\)")
 _PAD_NUM = re.compile(r'\(pad\s+"([^"]*)"')
@@ -330,13 +355,64 @@ def drill_span(path, n_layers: int) -> tuple[int, int]:
     return 1, n_layers
 
 
+def _tie_opens(nets_in: dict, roots_of: dict, ties: dict[str, int],
+               tie_refs: set) -> list[dict]:
+    """Net ties whose nets the shipped copper leaves in more than one
+    piece: the package lacks the bridge the board's footprint draws (a
+    package older than the board, a bridge moved off copper). The netlist
+    names those nets apart, so a tester passes the board with the tie open."""
+    if not ties:
+        return []
+    joined = _DSU()
+    present: dict = defaultdict(set)          # class -> its nets on copper
+    for by_net in nets_in.values():
+        by_cls: dict = defaultdict(list)
+        for nm in by_net:
+            if nm in ties:
+                by_cls[ties[nm]].append(nm)
+        for c, nets in by_cls.items():
+            present[c].update(nets)
+            for nm in nets:
+                joined.union(nets[0], nm)
+    out = []
+    for c, nets in sorted(present.items()):
+        parts: dict = defaultdict(list)
+        for nm in sorted(nets):
+            parts[joined.find(nm)].append(nm)
+        if len(parts) < 2:
+            continue
+        groups = sorted(parts.values())
+        # where to look: the tie's own pads, the bridge between them, when
+        # both pieces hold one; else the nearest points of the pieces
+        pts = {nm: [p for tps in roots_of[nm].values() for p in tps]
+               for nm in nets}
+        a = [p for nm in groups[0] for p in pts[nm]]
+        b = [p for g in groups[1:] for nm in g for p in pts[nm]]
+        ta = [p for p in a if p.ref in tie_refs]
+        tb = [p for p in b if p.ref in tie_refs]
+        if ta and tb:
+            a, b = ta, tb
+        if len(a) > len(b):
+            a, b = b, a
+        tree = STRtree([Point(p.x, p.y) for p in b])
+        pa, pb = min(((p, b[int(tree.nearest(Point(p.x, p.y)))]) for p in a),
+                     key=lambda ab: ((ab[0].x - ab[1].x) ** 2
+                                     + (ab[0].y - ab[1].y) ** 2))
+        out.append({"nets": sorted(nets), "class": c, "groups": groups,
+                    "near": [pa.as_dict(), pb.as_dict()],
+                    "at": [round((pa.x + pb.x) / 2, 3),
+                           round((pa.y + pb.y) / 2, 3)]})
+    return out
+
+
 def compare(fab, d: D356, ties: dict[str, int] | None = None,
-            jumpers: list | None = None) -> dict:
+            jumpers: list | None = None, tie_refs=None) -> dict:
     """Connectivity of the shipped copper vs the D-356 netlist. `jumpers`
     (jumper_groups()) are the pads parts join inside: a net whose islands
     meet only through them is a jumper split, not an open, as long as each
     island has a D-356 name of its own; the tester then never probes
-    through the part."""
+    through the part. `tie_refs` (net_tie_refs()) places a tie open at the
+    tie's own pads."""
     import gerblib
 
     ties = ties or {}
@@ -440,22 +516,49 @@ def compare(fab, d: D356, ties: dict[str, int] | None = None,
             "points": {nm: [p.label for p in by_net[nm]][:6] for nm in nets},
             "island": where(root), **extra}
 
+    # D-356 name -> the board nets its resolved points belong to: a name
+    # that also stands for a net outside a tie can't take the tie's nets
+    name_nets: dict = defaultdict(set)
+    for tp in d.points:
+        if tp.board_net and tp.net != NO_NET:
+            name_nets[tp.net].add(tp.board_net)
+
     shorts = []
+    tie_joins = []
     for root, by_net in nets_in.items():
+        by_name: dict = defaultdict(list)
+        for tps in by_net.values():
+            for p in tps:
+                by_name[p.net].append(p)
         if len(by_net) < 2:
             # one board net, but islands named apart (split_jumper_islands)
             # meet in this copper: the tester reads the two names as a short
-            by_name: dict = defaultdict(list)
-            for tps in by_net.values():
-                for p in tps:
-                    by_name[p.net].append(p)
             if len(by_name) > 1 and any(_JUMPER_NAME.search(n) for n in by_name):
                 shorts.append(short(root, by_name, jumper=True))
             continue
         nets = sorted(by_net)
-        if len({ties.get(nm, ("solo", nm)) for nm in nets}) == 1:
-            continue          # a net tie joins exactly these nets
-        shorts.append(short(root, by_net))
+        cls = {ties.get(nm, ("solo", nm)) for nm in nets}
+        if len(cls) > 1:
+            shorts.append(short(root, by_net))
+            continue
+        # A net tie joins exactly these nets: the copper is the design. The
+        # tester knows the island only by its D-356 names, and reads two
+        # names in one island as a short (merge_net_ties gives it one).
+        (c,) = cls
+        members = {nm for nm, k in ties.items() if k == c}
+        names = sorted(by_name)
+        mergeable = all(name_nets[nm] <= members for nm in names)
+        tie_joins.append({
+            "nets": nets, "class": c, "d356_names": names,
+            "mergeable": mergeable,
+            "n_points": sum(len(t) for t in by_net.values()),
+            "island": where(root)})
+        if len(names) > 1:
+            shorts.append(short(root, by_net, tie=True, d356_names=names,
+                                mergeable=mergeable))
+    # D-356 keeps 6 characters of a ref
+    tie_opens = _tie_opens(nets_in, roots_of, ties,
+                           {r[:6] for r in tie_refs or ()})
     # pad label -> the jumper group ids it is in. D-356 keeps 4 characters
     # of a pin number.
     jump_of: dict = defaultdict(set)
@@ -511,7 +614,9 @@ def compare(fab, d: D356, ties: dict[str, int] | None = None,
     shorts.sort(key=lambda s: s["nets"])
     opens.sort(key=lambda o: (o["net"], "no_copper" in o))
     jumper_splits.sort(key=lambda j: j["net"])
+    tie_joins.sort(key=lambda j: j["nets"])
     return {"shorts": shorts, "opens": opens, "jumper_splits": jumper_splits,
+            "tie_joins": tie_joins, "tie_opens": tie_opens,
             "n_points": n_points,
             "n_nets": len(roots_of), "n_plated_holes": n_holes,
             "n_islands": {k: len(v) for k, v in islands.items()},
@@ -553,4 +658,54 @@ def split_jumper_islands(text: str, splits: list[dict]) -> tuple[str, list[dict]
                 lines[i] = ln[:3] + f"{name:<14}" + ln[17:]
             renames.append({"net": sp["net"], "from": base, "to": name,
                             "points": len(frag)})
+    return eol.join(lines) + (eol if text.endswith("\n") else ""), renames
+
+
+_RECORD = ("317", "327", "367")
+
+
+def merge_net_ties(text: str, joins: list[dict]) -> tuple[str, list[dict]]:
+    """Give the D-356 names of each net-tie island (compare()'s
+    `tie_joins`) one name, so the tester expects the continuity the tie's
+    copper makes. Of the names an island carries, the one with the most
+    records in the file stays (then the first in sort order), and every
+    record of the others takes it, wherever it lies: the points of one net
+    keep one name, so an open in it is still an open. A join whose names
+    also stand for a net outside the tie (`mergeable` false: a 14-character
+    clash) is left. -> (new text, renames)."""
+    lines = text.splitlines()
+    eol = "\r\n" if "\r\n" in text else "\n"
+    aliases = {m.group(1): m.group(2) for ln in lines if (m := _ALIAS.match(ln))}
+    recs: dict[str, list[int]] = defaultdict(list)
+    raw_of: dict[str, str] = {}
+    for i, ln in enumerate(lines):
+        if ln[:3] not in _RECORD:
+            continue
+        raw = ln.ljust(17)[3:17]
+        name = aliases.get(raw.strip(), raw.strip())
+        recs[name].append(i)
+        raw_of.setdefault(name, raw)
+    dsu = _DSU()
+    joins = [j for j in joins if j.get("mergeable", True)
+             and len([n for n in j["d356_names"] if n in recs]) > 1]
+    for j in joins:
+        names = [n for n in j["d356_names"] if n in recs]
+        for nm in names[1:]:
+            dsu.union(names[0], nm)
+    groups: dict = defaultdict(set)
+    nets_of: dict = defaultdict(set)
+    for j in joins:
+        names = [n for n in j["d356_names"] if n in recs]
+        root = dsu.find(names[0])
+        groups[root].update(names)
+        nets_of[root].update(j["nets"])
+    renames = []
+    for root, members in sorted(groups.items(), key=lambda kv: sorted(kv[1])):
+        win = min(members, key=lambda nm: (-len(recs[nm]), nm))
+        for nm in sorted(members - {win}):
+            for i in recs[nm]:
+                ln = lines[i].ljust(17)
+                lines[i] = ln[:3] + raw_of[win] + ln[17:]
+            renames.append({"nets": sorted(nets_of[root]), "from": nm,
+                            "to": win, "points": len(recs[nm])})
     return eol.join(lines) + (eol if text.endswith("\n") else ""), renames

@@ -317,20 +317,293 @@ class _BG:
         return self._vias
 
 
-def test_net_tie_short_is_the_design(tmp_path):
-    pcb = ('(kicad_pcb (footprint "NetTie-2"\n'
+TIE_PCB = ('(kicad_pcb (footprint "NetTie-2"\n'
            '  (property "Reference" "NT1")\n'
            '  (net_tie_pad_groups "1, 2")\n'
            '  (pad "1" smd) (pad "2" smd)))\n')
-    bg = _BG([_Pad("NT1", "1", "GND_A"), _Pad("NT1", "2", "GND_B")])
-    ties = ipcd356.net_tie_classes(pcb, bg)
+
+
+def _tie_case(tmp_path, gap=0.4, eol="\n"):
+    """NT1 ties GND_A (pad 1) to GND_B (pad 2); C1 sits on GND_B. The two
+    pads' flashes touch at a 0.4 mm pitch and stand apart at a larger one
+    (the tie's copper cut)."""
+    bg = _BG([_Pad("NT1", "1", "GND_A"), _Pad("NT1", "2", "GND_B"),
+              _Pad("C1", "1", "GND_B")])
+    fab = stack(tmp_path, {"F.Cu": [flash(1, 1), flash(1 + gap, 1),
+                                    flash(1 + gap, 3), "D11*",
+                                    f"X{gx(1 + gap)}Y{gx(-1)}D02*",
+                                    f"X{gx(1 + gap)}Y{gx(-3)}D01*"],
+                           "B.Cu": []}, {})
+    text = d356(rec("327", "GND_A", "NT1", "1", 1, 1, 1),
+                rec("327", "GND_B", "NT1", "2", 1 + gap, 1, 1),
+                rec("327", "GND_B", "C1", "1", 1 + gap, 3, 1))
+    return fab, text.replace("\n", eol), bg
+
+
+def test_net_tie_short_is_the_design_once_its_nets_share_a_name(tmp_path):
+    fab, text, bg = _tie_case(tmp_path)
+    ties = ipcd356.net_tie_classes(TIE_PCB, bg)
     assert ties["GND_A"] == ties["GND_B"]
-    fab = stack(tmp_path, {"F.Cu": [flash(1, 1), flash(1.4, 1)], "B.Cu": []},
-                {})
-    d = ipcd356.parse(d356(rec("327", "GND_A", "NT1", "1", 1, 1, 1),
-                           rec("327", "GND_B", "NT1", "2", 1.4, 1, 1)))
-    assert ipcd356.compare(fab, d)["shorts"] != []
-    assert ipcd356.compare(fab, d, ties)["shorts"] == []
+    d = ipcd356.parse(text)
+    ipcd356.resolve(d, bg)
+    (sh,) = ipcd356.compare(fab, d)["shorts"]
+    assert not sh.get("tie")
+    # the copper is the design, but a tester knows the island by its D-356
+    # names, and reads two names in one island as a short
+    res = ipcd356.compare(fab, d, ties)
+    (sh,) = res["shorts"]
+    assert sh["tie"] and sh["mergeable"]
+    assert sh["d356_names"] == ["GND_A", "GND_B"]
+    (j,) = res["tie_joins"]
+    assert j["nets"] == ["GND_A", "GND_B"] and j["n_points"] == 3
+    assert res["tie_opens"] == []
+
+    new, (r,) = ipcd356.merge_net_ties(text, res["tie_joins"])
+    # GND_B has the most records, so it stays
+    assert (r["from"], r["to"], r["points"]) == ("GND_A", "GND_B", 1)
+    assert r["nets"] == ["GND_A", "GND_B"]
+    assert len(new.splitlines()) == len(text.splitlines())
+    d2 = ipcd356.parse(new)
+    assert [p.net for p in d2.points] == ["GND_B"] * 3
+    (clash,) = ipcd356.resolve(d2, bg)
+    assert clash == {"d356_net": "GND_B", "board_nets": ["GND_A", "GND_B"]}
+    res2 = ipcd356.compare(fab, d2, ties)
+    assert res2["shorts"] == [] and res2["opens"] == []
+    assert res2["tie_joins"][0]["d356_names"] == ["GND_B"]
+    # merging again changes nothing
+    assert ipcd356.merge_net_ties(new, res2["tie_joins"]) == (new, [])
+
+
+def test_a_cut_tie_keeps_its_names_and_is_a_tie_open(tmp_path):
+    fab, text, bg = _tie_case(tmp_path, gap=2)
+    d = ipcd356.parse(text)
+    ipcd356.resolve(d, bg)
+    res = ipcd356.compare(fab, d, ipcd356.net_tie_classes(TIE_PCB, bg))
+    assert res["shorts"] == [] and res["opens"] == [] and res["tie_joins"] == []
+    assert ipcd356.merge_net_ties(text, res["tie_joins"]) == (text, [])
+    # the board ties the nets and this copper doesn't: the netlist names
+    # them apart, so a tester passes it, and only the tie open tells
+    (to,) = res["tie_opens"]
+    assert to["nets"] == ["GND_A", "GND_B"]
+    assert to["groups"] == [["GND_A"], ["GND_B"]]
+    assert [(p["ref"], p["pin"]) for p in to["near"]] == [("NT1", "1"),
+                                                         ("NT1", "2")]
+    assert to["at"] == pytest.approx([2.0, 1.0], abs=0.01)   # D-356 rounds
+    # R1 spans the two nets closer than the tie's pads: the open is still
+    # placed at the tie, where the bridge is missing
+    plant(tmp_path, "s-F_Cu.gtl", flash(1, 6) + "\n" + flash(1.8, 6))
+    text_r = text.replace("999", rec("327", "GND_A", "R1", "1", 1, 6, 1) + "\n"
+                          + rec("327", "GND_B", "R1", "2", 1.8, 6, 1) + "\n999")
+    bg_r = _BG(bg._pads + [_Pad("R1", "1", "GND_A"), _Pad("R1", "2", "GND_B")])
+    d = ipcd356.parse(text_r)
+    ipcd356.resolve(d, bg_r)
+    fab_r = gerblib.open_fab(tmp_path)
+    ties = ipcd356.net_tie_classes(TIE_PCB, bg_r)
+    assert ipcd356.net_tie_refs(TIE_PCB) == {"NT1"}
+    (to,) = ipcd356.compare(fab_r, d, ties)["tie_opens"]
+    assert {p["ref"] for p in to["near"]} == {"R1"}
+    (to,) = ipcd356.compare(fab_r, d, ties, tie_refs={"NT1"})["tie_opens"]
+    assert [p["ref"] + p["pin"] for p in to["near"]] == ["NT11", "NT12"]
+    # a three-net tie that two islands hold, one joining two of its nets
+    pcb3 = TIE_PCB.replace('"1, 2"', '"1, 2, 3"').replace(
+        '(pad "2" smd)', '(pad "2" smd) (pad "3" smd)')
+    bg._pads.append(_Pad("NT1", "3", "GND_C"))
+    plant(tmp_path, "s-F_Cu.gtl", flash(3.4, 1))
+    text3 = text.replace("999", rec("327", "GND_C", "NT1", "3", 3.4, 1, 1)
+                         + "\n999")
+    d = ipcd356.parse(text3)
+    ipcd356.resolve(d, bg)
+    res = ipcd356.compare(gerblib.open_fab(tmp_path), d,
+                          ipcd356.net_tie_classes(pcb3, bg))
+    (to,) = res["tie_opens"]
+    assert to["nets"] == ["GND_A", "GND_B", "GND_C"]
+    assert to["groups"] == [["GND_A"], ["GND_B", "GND_C"]]
+    assert [p["ref"] + p["pin"] for p in to["near"]] == ["NT11", "NT12"]
+
+
+def test_the_tie_name_with_most_records_stays_and_aliases_resolve():
+    lines = ["P  CODE 00", "P  UNITS CUST 0", "P  NNAME1     /BOOT5_SEL",
+             "P  NNAME2     /BOOT9_SEL",
+             rec("327", "+1V8", "JP1", "1", 1, 1, 1),
+             rec("327", "NNAME1", "JP1", "2", 2, 1, 1),
+             rec("327", "NNAME1", "R1", "1", 3, 1, 1),
+             rec("327", "GND", "JP2", "1", 1, 5, 1),
+             rec("317", "GND", "VIA", "", 1, 6, 0, hole=0.3),
+             rec("327", "NNAME2", "JP2", "2", 2, 5, 1), "999"]
+    text = "\r\n".join(lines) + "\r\n"
+    joins = [{"nets": ["+1V8", "/BOOT5_SEL"], "d356_names": ["+1V8", "/BOOT5_SEL"],
+              "mergeable": True},
+             {"nets": ["/BOOT9_SEL", "GND"], "d356_names": ["/BOOT9_SEL", "GND"],
+              "mergeable": True}]
+    new, renames = ipcd356.merge_net_ties(text, joins)
+    # /BOOT5_SEL has 2 records to +1V8's 1, though +1V8 sorts first; the
+    # winner's own field (its alias) goes into the loser's record
+    assert [(r["from"], r["to"], r["points"]) for r in renames] == \
+        [("+1V8", "/BOOT5_SEL", 1), ("/BOOT9_SEL", "GND", 1)]
+    assert [p.net for p in ipcd356.parse(new).points] == \
+        ["/BOOT5_SEL"] * 3 + ["GND"] * 3
+    assert new.splitlines()[4][:17] == "327NNAME1        "
+    assert new.count("\r\n") == text.count("\r\n") and "\n\n" not in new
+    # a three-net tie seen as two islands that share a name is one group
+    text = d356(rec("327", "A", "U1", "1", 1, 1, 1),
+                rec("327", "B", "U1", "2", 2, 1, 1),
+                rec("327", "B", "U1", "3", 3, 1, 1),
+                rec("327", "C", "U1", "4", 4, 1, 1))
+    joins = [{"nets": ["A", "B"], "d356_names": ["A", "B"], "mergeable": True},
+             {"nets": ["B", "C"], "d356_names": ["B", "C"], "mergeable": True}]
+    new, renames = ipcd356.merge_net_ties(text, joins)
+    assert [(r["from"], r["to"], r["nets"]) for r in renames] == \
+        [("A", "B", ["A", "B", "C"]), ("C", "B", ["A", "B", "C"])]
+    assert {p.net for p in ipcd356.parse(new).points} == {"B"}
+
+
+def test_a_tie_name_that_also_stands_for_another_net_is_left(tmp_path):
+    # kicad-cli cut GND_A and C9's OTHER to one name, X: renaming X would
+    # put OTHER on the tie too
+    fab, text, bg = _tie_case(tmp_path)
+    bg._pads.append(_Pad("C9", "1", "OTHER"))
+    plant(tmp_path, "s-F_Cu.gtl", flash(8, 8))
+    text = text.replace("327GND_A", "327X    ").replace(
+        "999", rec("327", "X", "C9", "1", 8, 8, 1) + "\n999")
+    d = ipcd356.parse(text)
+    (clash,) = ipcd356.resolve(d, bg)
+    assert clash["board_nets"] == ["GND_A", "OTHER"]
+    res = ipcd356.compare(gerblib.open_fab(tmp_path), d,
+                          ipcd356.net_tie_classes(TIE_PCB, bg))
+    (sh,) = res["shorts"]
+    assert sh["tie"] and not sh["mergeable"] and sh["d356_names"] == ["GND_B", "X"]
+    assert ipcd356.merge_net_ties(text, res["tie_joins"]) == (text, [])
+
+
+def test_dfm_check_passes_a_tie_once_export_names_it_once(tmp_path, monkeypatch):
+    import fab_export
+    pcb = tmp_path / "t.kicad_pcb"
+    pcb.write_text(TIE_PCB)
+    gdir = tmp_path / "g"
+    fab, text, bg = _tie_case(gdir, eol="\r\n")
+    ipc = gdir / "t.ipc"
+    ipc.write_bytes(text.encode())
+    vios: list = []
+    facts, skip = dfm_check.check_netlist(fab, pcb, bg, gdir, tmp_path, vios)
+    assert skip is None and facts["netlist"]["net_ties"] == 1
+    (v,) = vios
+    assert v["kind"] == "dfm_net_short" and v["tie"] and v["severity"] == "error"
+    assert "a net tie joins these nets on purpose" in v["msg"]
+    assert "(GND_A, GND_B)" in v["msg"] and v["refs"] == ["NT1"]
+
+    monkeypatch.setattr(geom, "load_board", lambda p: bg)
+    (r,) = fab_export.name_net_ties(pcb, ipc, gdir)
+    assert (r["from"], r["to"]) == ("GND_A", "GND_B")
+    raw = ipc.read_bytes()
+    assert raw.count(b"\n") == raw.count(b"\r\n") and b"GND_A" not in raw
+    assert not list(gdir.glob("*.part"))
+    vios = []
+    facts, _ = dfm_check.check_netlist(fab, pcb, bg, gdir, tmp_path, vios)
+    # GND_B now stands for both of the tie's nets: that is no name clash
+    assert vios == [] and facts["netlist"]["shorts"] == 0
+    assert facts["netlist"]["name_clashes"] == 0
+    assert facts["netlist"]["net_ties"] == 1
+    # and naming again changes nothing
+    assert fab_export.name_net_ties(pcb, ipc, gdir) == []
+    assert ipc.read_bytes() == raw
+
+
+def test_dfm_check_reports_a_cut_tie_the_tester_cant_see(tmp_path):
+    pcb = tmp_path / "t.kicad_pcb"
+    pcb.write_text(TIE_PCB)
+    gdir = tmp_path / "g"
+    fab, text, bg = _tie_case(gdir, gap=2)
+    (gdir / "t.ipc").write_text(text)
+    vios: list = []
+    facts, skip = dfm_check.check_netlist(fab, pcb, bg, gdir, tmp_path, vios)
+    assert skip is None and facts["netlist"]["net_tie_opens"] == 1
+    assert facts["netlist"]["shorts"] == facts["netlist"]["opens"] == 0
+    (v,) = vios
+    assert v["kind"] == "dfm_net_tie_open" and v["severity"] == "error"
+    assert v["refs"] == ["NT1"] and v["nets"] == ["GND_A", "GND_B"]
+    assert v["groups"] == [["GND_A"], ["GND_B"]]
+    assert "leaves them in 2 pieces" in v["msg"]
+    assert "NT1-1 / NT1-2" in v["msg"] and "re-export the package" in v["msg"]
+    assert "netlist" in dfm_check.DFM_FAMILIES and \
+        "dfm_net_tie_open" in dfm_check.DFM_FAMILIES["netlist"]
+
+
+def test_dfm_check_names_a_failed_tie_rename(tmp_path, monkeypatch):
+    import fab_export
+    import kc
+    pcb = tmp_path / "t.kicad_pcb"
+    pcb.write_text(TIE_PCB)
+    fab, text, bg = _tie_case(tmp_path / "g")
+
+    def export(cli, pcb, f, gdir, bg):
+        f.write_text(text)
+        return {"status": "pass", "tie_rename_error": "D356Error: bad"}
+    monkeypatch.setattr(fab_export, "export_ipc_absolute", export)
+    monkeypatch.setattr(kc, "resolve_cli", lambda: Path("cli"))
+    vios: list = []
+    facts, skip = dfm_check.check_netlist(fab, pcb, bg, tmp_path / "g",
+                                          tmp_path, vios)
+    assert skip is None and facts["netlist"]["source"] == "board"
+    (v,) = vios
+    assert v["tie"] and "naming itself failed (D356Error: bad)" in v["msg"]
+
+
+def test_dfm_check_tells_a_tie_whose_name_clashes_to_rename_nets(tmp_path):
+    pcb = tmp_path / "t.kicad_pcb"
+    pcb.write_text(TIE_PCB)
+    gdir = tmp_path / "g"
+    fab, text, bg = _tie_case(gdir)
+    bg._pads.append(_Pad("C9", "1", "OTHER"))
+    plant(gdir, "s-F_Cu.gtl", flash(8, 8))
+    (gdir / "t.ipc").write_text(text.replace("327GND_A", "327X    ").replace(
+        "999", rec("327", "X", "C9", "1", 8, 8, 1) + "\n999"))
+    vios: list = []
+    facts, _ = dfm_check.check_netlist(gerblib.open_fab(gdir), pcb, bg, gdir,
+                                       tmp_path, vios)
+    assert sorted(v["kind"] for v in vios) == ["dfm_net_short",
+                                               "dfm_netlist_name_clash"]
+    (sh,) = [v for v in vios if v["kind"] == "dfm_net_short"]
+    assert "also stands for a net outside the tie" in sh["msg"]
+    assert facts["netlist"]["name_clashes"] == 1
+
+
+def test_export_names_ties_after_jumpers_and_survives_a_failed_tie_rename(
+        tmp_path, monkeypatch):
+    import fab_export
+    pcb = tmp_path / "t.kicad_pcb"
+    pcb.write_text(TIE_PCB.replace("net_tie_pad_groups", "x"))
+    _, text, _ = _tie_case(tmp_path / "g")
+    ipc = tmp_path / "t.ipc"
+    ipc.write_text(text)
+    # no tie on the board: nothing to read, nothing written
+    assert fab_export.name_net_ties(pcb, ipc, tmp_path / "g") == []
+    assert ipc.read_text() == text
+
+    calls = []
+    monkeypatch.setattr(fab_export, "_export_ipc_absolute",
+                        lambda cli, pcb, f: {"status": "pass"})
+    monkeypatch.setattr(fab_export, "name_jumper_islands",
+                        lambda *a: calls.append("jumpers") or [])
+    def boom(*a, **k):
+        calls.append("ties")
+        raise ipcd356.D356Error("no gerbers")
+    monkeypatch.setattr(fab_export, "name_net_ties", boom)
+    res = fab_export.export_ipc_absolute(Path("cli"), pcb, ipc, tmp_path)
+    assert calls == ["jumpers", "ties"] and res["status"] == "pass"
+    assert res["tie_rename_error"] == "D356Error: no gerbers"
+    assert "jumper_rename_error" not in res
+    assert ipc.read_text() == text
+
+
+def test_kicad_cli_keeps_the_last_14_characters_upper_cased():
+    """What the name clash and the tie checks lean on: kicad-cli writes a
+    net's name upper-cased, cut to its last 14 characters."""
+    bg = geom.load_board(PD_PCB)
+    d = ipcd356.parse(PD_IPC.read_text())
+    ipcd356.resolve(d, bg)
+    pairs = {(p.net, p.board_net) for p in d.points if p.board_net}
+    assert any(len(b) > 14 and b != b.upper() for _, b in pairs)
+    assert all(name == board[-14:].upper() for name, board in pairs)
 
 
 # #962: a flow-through ESD part (USBLC6-2SC6) joins pins 1-6 and 3-4 inside
@@ -697,14 +970,15 @@ def test_pinned_board_ships_a_netlist_its_gerbers_match(board, tmp_path):
     res = ipcd356.compare(gerblib.open_fab(man["gerber_dir"]), d,
                           ipcd356.net_tie_classes(pcb.read_text(), bg))
     assert res["shorts"] == [] and res["opens"] == []
+    assert res["tie_opens"] == []
     for net, frags in res["fragments_per_net"].items():
         assert frags <= _netconn_pad_components(bg, net), net
 
     rep = dfm_check.run(pcb, fab_dir=tmp_path / "fab", polarity=False,
                         skip=("zone_fill", "placement"))
     assert rep["netlist"]["source"] == "package"
-    assert not [v for v in rep["violations"]
-                if v["kind"] in ("dfm_net_short", "dfm_net_open")]
+    assert not [v for v in rep["violations"] if v["kind"] in (
+        "dfm_net_short", "dfm_net_open", "dfm_net_tie_open")]
 
 
 def test_layers_named_by_the_board_are_found_by_protel_extension(tmp_path):

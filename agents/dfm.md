@@ -125,6 +125,10 @@ scripts with the repo venv python; JSON out, exit 0/1/2. Keep output ASCII.
    and `dfm_net_short` reports shorts that aren't in the copper. Keep
    every panel ref at 6 characters or fewer. Net names keep their last 14
    characters, so put a copy tag at the end of a net name, not the front.
+   A `dfm_net_short` with `tie` set is a net tie the IPC-D-356 still names
+   apart: re-export the package with fab_export, which gives a tie one
+   name. `dfm_net_tie_open` is a tie whose bridge the package's copper
+   lacks: re-export, and if `check_net_tie` fails, put the bridge back.
    At release, attest re-judges `reports/dfm_release.json` with the
    board's `reports/verify-waivers.json` only (`releaselib.waivers_for_input`).
    A dfm waiver kept in another file and passed with `--waivers` clears the
