@@ -21,7 +21,8 @@ pre-routed critical nets (route_critical.py) survive without an explicit lock.
 Zones export as "(plane NET ...)"; Freerouting connects pads to planes itself
 (including dropping stitch vias to reach an inner/back plane).
 
-After the ladder, KRT's mop-up (its under-width tracks on power nets are
+After the ladder, KRT's mop-up (never on a net a filled zone carries, see
+_plane_carried; its under-width tracks on power nets are
 stripped, not kept; a power net with a courtyard neck rule goes to KRT at
 the neck width and keeps it only inside its neck zone, #937), then route_finish's maze pass: it rips the tracks and
 vias DRC names in a short/clearance/crossing error and routes them again,
@@ -176,8 +177,10 @@ def _dsn_hole_rules(staged: Path, dsn: Path, bg: geom.BoardGeom) -> dict:
     vias min_hole_to_hole apart (routelib.dsn_hole_floor; undone in the SES
     by _ses_restore before import), and a keepout over every NPTH hole
     grown by max(min_hole_clearance, min_copper_edge_clearance)
-    (routelib.dsn_npth_keepouts). Returns the facts, with "grown" (the
-    padstack map _ses_restore needs)."""
+    (routelib.dsn_npth_keepouts), and a keepout band along every board
+    edge as wide as min_copper_edge_clearance (routelib.dsn_edge_keepouts).
+    Returns the facts, with "grown" (the padstack map _ses_restore
+    needs)."""
     rules = _pro_rules(staged)
     h2h = float(rules.get("min_hole_to_hole") or 0.25)
     margin = max(float(rules.get("min_hole_clearance") or 0.25),
@@ -196,10 +199,18 @@ def _dsn_hole_rules(staged: Path, dsn: Path, bg: geom.BoardGeom) -> dict:
     holes = [{"at": list(p.center), "drill": list(p.drill), "angle": p.angle}
              for p in bg.npth]
     text, kept_out = routelib.dsn_npth_keepouts(text, holes, margin)
+    edge_m = float(rules.get("min_copper_edge_clearance") or 0.0)
+    rings = []
+    for face in bg.outline_faces:
+        rings.append(list(face.exterior.coords))
+        rings += [list(r.coords) for r in face.interiors]
+    text, edge_out = routelib.dsn_edge_keepouts(
+        text, routelib.edge_segments(rings), edge_m)
     dsn.write_text(text, encoding="utf-8")
     return {"hole_to_hole_mm": h2h, "grown": grown,
             "via_padstacks_grown": {k: list(v) for k, v in grown.items()},
             "npth_keepouts": kept_out, "npth_margin_mm": margin,
+            "edge_keepouts": edge_out, "edge_margin_mm": edge_m,
             **({"hdi_build": build, "via_spans_offered": added} if build else {})}
 
 
@@ -230,6 +241,41 @@ def _routable_nets(bg: geom.BoardGeom) -> set[str]:
         if p.net:
             counts[p.net] = counts.get(p.net, 0) + 1
     return {n for n, c in counts.items() if c >= 2}
+
+
+def _plane_carried(bg: geom.BoardGeom) -> set[str]:
+    """Nets a filled zone carries. The KRT finish leaves them alone: the
+    pour is their trunk, and the maze finish (a via per pour piece),
+    stitch_vias and plane_repair join their pads. KRT joined such pads
+    with traces across another net's
+    thermal pour (bb-ldo: 25.6 mm of GND on F.Cu through the +3V3 pour,
+    -2.6 % of the effective area)."""
+    return {z.net for z in bg.zones_of() if z.net and z.filled}
+
+
+def _finish_targets(unrouted: list[str], rip: list[tuple[str, str]],
+                    skip: set[str]) -> tuple[list[str], list, list[str]]:
+    """What the KRT finish works on: (nets, vias to rip, plane nets left
+    for stitch_vias). A skipped net's vias stay: nothing would re-route
+    what ripping them cut."""
+    rip = [(u, n) for u, n in rip if n not in skip]
+    every = set(unrouted) | {n for _, n in rip}
+    left = sorted(n for n in unrouted if n in skip)
+    return sorted(every - skip), rip, left
+
+
+def _ses_import_check(fr_facts: dict | None, drc: dict) -> dict | None:
+    """Nets the board shows unrouted right after the SES import although
+    Freerouting reported none unrouted: the import dropped them (ultra-
+    front: fr_completion 1.0, three connections missing)."""
+    if not fr_facts or fr_facts.get("unrouted") != 0:
+        return None
+    lost = _drc_unrouted(drc)
+    if not lost:
+        return None
+    return {"dropped_nets": lost,
+            "note": "Freerouting reported every connection routed; these "
+                    "were unrouted after the SES import"}
 
 
 def _drc_unrouted(report: dict) -> list[str]:
@@ -275,6 +321,7 @@ def _placement_adjust_request(bg: geom.BoardGeom, unrouted: list[str],
 
 def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
                 power_layers: list[str] | None = None,
+                skip_nets: set[str] = frozenset(),
                 refill: bool, parity: bool, timeout_s: int) -> dict | None:
     """Deterministic post-Freerouting mop-up via the vendored
     KiCadRoutingTools (S11 acceptance: FR leaves 0.5 mm-pitch LQFP GND pins
@@ -288,6 +335,7 @@ def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
          --no-fix-drc-settings) - KRT only routes what is disconnected;
       3. refill + re-DRC; keep only if strictly better (fewer errors +
          no new error types), else restore the backup.
+    Nets in skip_nets (plane-carried, see _plane_carried) are left out.
     Returns facts (kept, nets, ripped_vias, drc) or None when KRT is absent
     or there is nothing to fix."""
     unrouted = _drc_unrouted(drc)
@@ -303,12 +351,13 @@ def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
             m = via_re.match(item.get("msg", ""))
             if m and item.get("uuid"):
                 rip.append((item["uuid"], m.group(1)))
-    nets = sorted(set(unrouted) | {n for _, n in rip})
+    nets, rip, left = _finish_targets(unrouted, rip, set(skip_nets))
     if not nets:
-        return None
+        return {"kept": False, "nets": [], "plane_nets_left": left} \
+            if left else None
     krt = env.find_krt()
     if krt is None:
-        return {"kept": False, "nets": nets,
+        return {"kept": False, "nets": nets, "plane_nets_left": left,
                 "note": "KRT not vendored; finish pass skipped"}
     import route_critical as rc
 
@@ -386,15 +435,17 @@ def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
                   and _barrier_errors(after) <= _barrier_errors(drc))
         if not better:
             shutil.copy2(backup, staged)
-            return {"kept": False, "nets": nets,
+            return {"kept": False, "nets": nets, "plane_nets_left": left,
                     "ripped_vias": len(rip), "narrow_stripped": len(narrow),
                     "errors_before": b_err, "errors_after": a_err}
-        return {"kept": True, "nets": nets, "ripped_vias": len(rip),
+        return {"kept": True, "nets": nets, "plane_nets_left": left,
+                "ripped_vias": len(rip),
                 "narrow_stripped": len(narrow),
                 "errors_before": b_err, "errors_after": a_err, "drc": after}
     except CheckError as exc:
         shutil.copy2(backup, staged)
-        return {"kept": False, "nets": nets, "error": str(exc)[:300]}
+        return {"kept": False, "nets": nets, "plane_nets_left": left,
+                "error": str(exc)[:300]}
 
 
 def krt_widths(wide: dict[str, float], necks: dict) -> dict[str, float]:
@@ -575,6 +626,10 @@ def run(argv: list[str] | None = None):
                     help="skip the KRT mop-up pass after the ladder")
     ap.add_argument("--no-maze-finish", action="store_true",
                     help="skip route_finish's maze pass after KRT")
+    ap.add_argument("--finish-plane-nets", action="store_true",
+                    help="let the KRT finish route nets a filled zone "
+                         "carries (default: left to the maze finish's "
+                         "vias and to stitch_vias)")
     args = ap.parse_args(argv)
     global OFFER_SPANS
     OFFER_SPANS = args.offer_spans
@@ -797,6 +852,9 @@ def run(argv: list[str] | None = None):
         drc = kc.run_drc(cli, staged, parity=sch.is_file(),
                          all_track_errors=True)
 
+    ses_check = _ses_import_check(best_facts if fr_ok else None, drc)
+    plane_skip = set() if args.finish_plane_nets else _plane_carried(bg)
+
     # 5b. KRT pass: with a Freerouting result this is the mop-up (fine-pitch
     # pads FR cannot fan out, sliver vias inside the hole-clearance floor);
     # with NO usable Freerouting result it is the FALLBACK autorouter for
@@ -805,6 +863,7 @@ def run(argv: list[str] | None = None):
     if not args.no_krt_finish:
         finish_facts = _krt_finish(cli, staged, work, drc,
                                    power_layers=power_layers,
+                                   skip_nets=plane_skip,
                                    refill=has_zones,
                                    parity=sch.is_file(),
                                    timeout_s=min(args.timeout_s, 600))
@@ -873,6 +932,7 @@ def run(argv: list[str] | None = None):
             "dsn_hole_rules": hole_rules,
             "dsn_wires_merged": dsn_wires_merged,
             "krt_finish": finish_facts,
+            "ses_import_check": ses_check,
             "maze_finish": maze_facts,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),
             "neckdowns_snapped": dedup_facts.get("neckdowns_snapped", 0),

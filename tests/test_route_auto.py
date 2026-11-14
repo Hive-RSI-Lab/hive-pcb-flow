@@ -150,6 +150,35 @@ def test_auto_power_layers_on_golden_usbbuck4():
     assert route_auto._auto_power_layers(bg) == ["In1.Cu", "In2.Cu"]
 
 
+def test_krt_finish_leaves_plane_carried_nets():
+    # bb-ldo: KRT joined GND's SMD pads with F.Cu traces through the +3V3
+    # thermal pour; a net a filled zone carries is left to the vias
+    bg = geom.BoardGeom.from_file(GOLDEN / "usbbuck4" / "usbbuck4.kicad_pcb")
+    planes = route_auto._plane_carried(bg)
+    assert "GND" in planes and "/MCO" not in planes
+    nets, rip, left = route_auto._finish_targets(
+        ["GND", "/MCO"], [("u1", "GND"), ("u2", "/SWDIO")], planes)
+    assert nets == ["/MCO", "/SWDIO"]
+    assert rip == [("u2", "/SWDIO")]
+    assert left == ["GND"]
+    nets, rip, _ = route_auto._finish_targets(["GND"], [("u1", "GND")], set())
+    assert nets == ["GND"] and rip == [("u1", "GND")]
+
+
+def test_ses_import_check_names_what_the_import_dropped():
+    drc = {"violations": [
+        {"source": "unconnected", "net": "GND"},
+        {"source": "unconnected", "net": "+3V3"},
+        {"source": "drc", "net": "X", "check": "clearance"}]}
+    got = route_auto._ses_import_check({"unrouted": 0}, drc)
+    assert got["dropped_nets"] == ["+3V3", "GND"]
+    # Freerouting said some were left: not a drop
+    assert route_auto._ses_import_check({"unrouted": 2}, drc) is None
+    assert route_auto._ses_import_check(None, drc) is None
+    assert route_auto._ses_import_check({"unrouted": 0},
+                                        {"violations": []}) is None
+
+
 def test_routable_nets_and_adjust_request_on_golden():
     bg = geom.BoardGeom.from_file(GOLDEN / "usbbuck4" / "usbbuck4.kicad_pcb")
     nets = route_auto._routable_nets(bg)
