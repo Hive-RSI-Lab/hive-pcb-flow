@@ -1,0 +1,36 @@
+# Seeded faults for check_pinouts (#1027): off-board connectors wired against
+# their standard pinout (reference/connector_pinouts.yaml), one per real
+# erratum the check was seeded from (sizif-1, echoplayer-2, bedlift-6).
+mutants:
+  pinout-jtag-swap:
+    board: usbbuck4
+    script: mutations/pinout_jtag_swap.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: an Altera 10-pin JTAG header J98 whose TCK and TDO pins
+      reach the FPGA's TDO and TCK; the net names follow the header, so ERC
+      and a name check see nothing
+    expect:
+      kind: pinout_mismatch
+      ref: J98
+  pinout-jack-tip-ground:
+    board: usbbuck4
+    script: mutations/pinout_jack_tip_ground.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: a 3.5 mm stereo jack J97 with its tip on GND and left on
+      the sleeve; a standard headphone shorts its left channel
+    expect:
+      kind: pinout_mismatch
+      ref: J97
+  pinout-cable-supply-volts:
+    board: usbbuck4
+    script: mutations/pinout_cable_supply_volts.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: actuator harness J96, its mate stated in
+      constraints.json (bedlift-lift-actuator), feeds the hall sensors' 5 V
+      supply pin from +3V3
+    expect:
+      kind: pinout_supply_volts
+      ref: J96
