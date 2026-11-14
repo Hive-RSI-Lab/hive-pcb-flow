@@ -12,6 +12,7 @@ An agent designs a PCB from a written brief: research, architecture, parts, sche
 - [docs/errata-corpus.md](docs/errata-corpus.md): public boards whose rev B fixed a rev A defect, and which of those defects pcb-flow's checks catch on rev A (`bin/pcb-flow errata_corpus fetch|run|table`)
 - [docs/research/](docs/research/README.md): current research turned into checks: `bin/pcb-flow papers` scans the topics in `reference/research/watch.yaml`, reads legitimate open copies (the rest go on [the person's list](docs/research/paywalled.md)), and gives each claim pcb-flow's own verdict, with the test that reached it; only reproduced claims become [guidelines](docs/research/guidelines.md)
 - [docs/route-quality.md](docs/route-quality.md): a layout judged as good, not only legal: `route_quality` scores each net class against its shortest 45-degree routes, `route_improve` re-routes the worst nets in rounds and stops when a round stops gaining
+- `bin/pcb-flow part_repair`: move, rotate or re-pad parts on a routed board (place_edit's `swap_fp` puts a fixed library footprint in, `renumber` gives pads new numbers): it rips the copper the change spoils in a window round each part, makes the change, routes every net back to as few islands as it had, and keeps the result only if no net has more islands and DRC is no worse; it writes the three op files that replay it and a REPORT.md
 
 ## Test and score
 
