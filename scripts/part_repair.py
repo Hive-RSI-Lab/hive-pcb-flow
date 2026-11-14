@@ -548,7 +548,7 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
                              f" applied (the op files in {out} still"
                              " replay)")
         tmp = pcb.with_name(f".{pcb.name}.part_repair")
-        shutil.copy2(work / pcb.name, tmp)
+        shutil.copy2(work, tmp)  # work is DIR/work/B itself
         os.replace(tmp, pcb)
         payload["applied"] = True
     return _finish(payload, out)

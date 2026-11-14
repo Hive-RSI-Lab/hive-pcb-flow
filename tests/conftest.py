@@ -157,6 +157,8 @@ SLOW = {
     "tests/test_tolerance.py::test_live_ngspice_divider_wca_and_mc": "runs ~60 ngspice decks in sim_run batch workers",
     "tests/test_tolerance.py::test_live_ngspice_rc_fc_corners": "runs ngspice AC sweeps in sim_run batch workers",
     "tests/test_tolerance.py::test_live_xyce_sampling_agrees_with_python_mc": "runs Xyce .sampling from the IIC-OSIC-TOOLS tree",
+    "tests/test_part_repair.py::test_live_renumber_r6_applies_and_replays": _TOOLS,
+    "tests/test_part_repair.py::test_live_swap_fp_r6_to_0805_leaves_the_board": _TOOLS,
 }
 
 
