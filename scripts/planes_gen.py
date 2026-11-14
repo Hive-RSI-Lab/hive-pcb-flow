@@ -62,6 +62,11 @@ are removed (at any fill coverage: a board that grew a lot is the same
 case, #923 point 2) and the planned one added in their place (status "regrown").
 That is what lets "re-run planes_gen" after a resize reach the new edge.
 
+Thermal vias honour constraints.json["thermal"][*].min_vias per ref: 0
+skips that part's grid (a live tab such as an LDO's VOUT must not be
+drilled into the GND plane), and a grid short of a positive floor is noted
+in facts.thermal_pads.
+
 Known limitation: zero-fill detection intersects the net's fill with the
 planned region - a PRE-EXISTING same-net fill inside the region can mask a
 new zone that filled to nothing (zone creation itself is count-verified).
@@ -590,7 +595,8 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
                     ep_min_mm2: float = EP_MIN_MM2, size: float = VIA_SIZE_MM,
                     drill: float = VIA_DRILL_MM,
                     pitch: float = VIA_PITCH_MM,
-                    pour_layers: dict[str, set[str]] | None = None
+                    pour_layers: dict[str, set[str]] | None = None,
+                    min_vias: dict[str, int] | None = None
                     ) -> tuple[list[dict], list[dict]]:
     """-> (route_edit add_via ops, per-pad facts). T6 (P7A-5): existing
     drills inside the land are respected - grid points inside the hole
@@ -598,11 +604,22 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
     EP_OWN_ARRAY thru-hole items skips the grid entirely (the footprint
     ships its own via array). #435: no via inside a rule area that forbids
     vias, and none for a pad whose net has no pour on another copper layer
-    (pour_layers: net -> layers poured; None = don't ask)."""
+    (pour_layers: net -> layers poured; None = don't ask).
+    min_vias (ref -> constraints.thermal[*].min_vias): 0 means the part
+    wants no thermal vias (a live tab, an LDO's VOUT) and its grid is
+    skipped; a grid that fits fewer than a positive floor says so in the
+    pad's note (check_thermal holds the floor as an error)."""
+    min_vias = min_vias or {}
     ops: list[dict] = []
     pads: list[dict] = []
     keepouts = via_keepouts(bg)
     for ep in ep_pads(bg, plane_nets, ep_min_mm2):
+        if min_vias.get(ep.ref) == 0:
+            pads.append({"ref": ep.ref, "pad": ep.number, "net": ep.net,
+                         "vias": 0,
+                         "note": "constraints.thermal min_vias is 0; "
+                                 "grid skipped"})
+            continue
         if pour_layers is not None and \
                 not (set(pour_layers.get(ep.net) or ()) - set(ep.layers)):
             pads.append({"ref": ep.ref, "pad": ep.number, "net": ep.net,
@@ -640,9 +657,24 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
         for x, y in pts:
             ops.append({"op": "add_via", "at": [x, y], "size": size,
                         "drill": drill, "net": ep.net})
-        pads.append({"ref": ep.ref, "pad": ep.number, "net": ep.net,
-                     "vias": len(pts)})
+        fact = {"ref": ep.ref, "pad": ep.number, "net": ep.net,
+                "vias": len(pts)}
+        want = min_vias.get(ep.ref)
+        if want and len(pts) < want:
+            fact["note"] = (f"grid fits {len(pts)} vias, under "
+                            f"constraints.thermal min_vias {want}")
+        pads.append(fact)
     return ops, pads
+
+
+def thermal_min_vias(constraints: dict | None) -> dict[str, int]:
+    """ref -> min_vias from constraints["thermal"] entries that set it."""
+    out: dict[str, int] = {}
+    for e in (constraints or {}).get("thermal") or []:
+        if isinstance(e, dict) and e.get("ref") \
+                and e.get("min_vias") is not None:
+            out[str(e["ref"])] = int(e["min_vias"])
+    return out
 
 
 # ------------------------------------------------------------- verification
@@ -796,7 +828,8 @@ def run(argv: list[str] | None = None):
             via_ops, via_pads = thermal_via_ops(
                 bg, plane_nets, ep_min_mm2=args.ep_min_mm2,
                 size=args.via_size, drill=args.via_drill,
-                pitch=args.via_pitch, pour_layers=pour_layers(bg, plan))
+                pitch=args.via_pitch, pour_layers=pour_layers(bg, plan),
+                min_vias=thermal_min_vias(constraints))
             if via_ops:
                 route_edit.apply_ops(staged, via_ops)
 

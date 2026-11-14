@@ -13,7 +13,10 @@ Critical-net sources (constraints.json, sidecar default like place_metrics):
               max_skew_mm?, max_uncoupled_mm?}] PLUS auto-discovery over the
               high_speed net names via check_diffpair.discover_pairs - the S5
               checker's own suffix rules (_P/_N, DP/DM, D+/D-), so the pipeline
-              and the checker can never pair differently.
+              and the checker can never pair differently. A pair of kind
+              sense / kelvin / dc_sense / low_frequency (or a discovered
+              pair with a shunt-sense name) is NOT routed here: it needs
+              equal legs, not a coupled run, so it goes to facts.skipped.
   rf          constraints["rf"] [{net, impedance_ohm}] plus high_speed entries
               carrying impedance_ohm that are not half of a diff pair; routed
               single-ended at solve_width() impedance width. Via FENCING is
@@ -263,9 +266,14 @@ def default_impedance(p: str, n: str) -> int:
     return 90 if "USB" in (p + n).upper() else 100
 
 
-def diff_specs(constraints: dict, board_nets) -> list[dict]:
+def diff_specs(constraints: dict, board_nets, *,
+               sense: list | None = None) -> list[dict]:
     """Explicit constraints['diff_pairs'] entries PLUS S5-discovered pairs
-    over the high_speed net names. Returns [{p, n, impedance_ohm, ...}]."""
+    over the high_speed net names. Returns [{p, n, impedance_ohm, ...}].
+    A sense / low-frequency pair (check_diffpair.is_sense, or on discovery
+    is_sense_name) is left out: it wants equal legs, not a coupled run at
+    an impedance, and coupling it to a gap breaks the symmetry it needs.
+    Its [p, n] goes into `sense` when a list is given."""
     hs = constraints.get("high_speed", []) or []
     imp_of = {e.get("net"): e.get("impedance_ohm") for e in hs}
     specs: list[dict] = []
@@ -273,6 +281,11 @@ def diff_specs(constraints: dict, board_nets) -> list[dict]:
     for entry in constraints.get("diff_pairs", []) or []:
         p, n = entry.get("p"), entry.get("n")
         if not p or not n:
+            continue
+        if check_diffpair.is_sense(entry):
+            used.update((p, n))
+            if sense is not None:
+                sense.append([p, n])
             continue
         spec = dict(entry)
         spec.setdefault("impedance_ohm",
@@ -282,6 +295,11 @@ def diff_specs(constraints: dict, board_nets) -> list[dict]:
     hs_nets = [e.get("net") for e in hs if e.get("net")]
     for p, n in check_diffpair.discover_pairs(hs_nets):
         if p in used or n in used:
+            continue
+        if check_diffpair.is_sense_name(p, n):
+            used.update((p, n))
+            if sense is not None:
+                sense.append([p, n])
             continue
         z = imp_of.get(p) or imp_of.get(n) or default_impedance(p, n)
         specs.append({"p": p, "n": n, "impedance_ohm": z})
@@ -2114,7 +2132,8 @@ def run(argv: list[str] | None = None):
     bg0 = geom.BoardGeom.from_file(pcb)
     cu_outer = bg0.stackup.copper_thickness.get(bg0.copper_layers[0], 0.035)
 
-    d_specs = diff_specs(constraints, bg0.nets)
+    sense_pairs: list = []
+    d_specs = diff_specs(constraints, bg0.nets, sense=sense_pairs)
     pair_nets = {x for s in d_specs for x in (s["p"], s["n"])}
     r_specs = rf_specs(constraints, pair_nets)
     p_specs = [s for s in power_specs(constraints, cu_outer)
@@ -2124,6 +2143,11 @@ def run(argv: list[str] | None = None):
     todo = [(k, by_kind[k]) for k in order if by_kind[k]]
     skipped = [{"kind": k, "count": len(by_kind[k]), "why": "not in --only/plan"}
                for k in DEFAULT_ORDER if by_kind[k] and k not in order]  # bus is opt-in
+    if sense_pairs:
+        skipped.append({"kind": "diff", "count": len(sense_pairs),
+                        "pairs": sense_pairs,
+                        "why": "sense / low-frequency pair: routed for "
+                               "symmetry, not coupled to an impedance"})
 
     if not todo:
         payload = checklib.report(SCRIPT, str(pcb), [], facts={

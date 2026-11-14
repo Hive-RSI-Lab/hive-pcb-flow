@@ -37,7 +37,10 @@ output ASCII.
    at P6), per-sheet refdes ranges (refs must be unique ACROSS sheets,
    including a #PWR range per sheet, e.g. power sheet pwr_base=100).
 5. `constraints.json` - merge every research fragment into ONE file with
-   EXACTLY the schema shapes: high_speed, power, diff_pairs, voltages,
+   EXACTLY the schema shapes: high_speed, power, diff_pairs (a pair that
+   needs equal legs but no impedance, such as a precision DC input or a
+   shunt sense, gets `"kind": "low_frequency"` or `"sense"`; without it the
+   pair is routed coupled at 90-100 ohm), voltages,
    voltage_pairs (differentials node voltages cannot express - bridge/AC
    taps), coating, thermal, placement (connector edges here), planes (only
    when the defaults are wrong), blocks (one entry per topology block,

@@ -477,6 +477,28 @@ def test_thermal_grid_needs_a_pour_on_another_layer(tmp_path):
         == {"GND": {"In1.Cu", "B.Cu"}}
 
 
+
+def test_thermal_grid_honours_min_vias(tmp_path):
+    """#967: constraints.thermal[ref].min_vias 0 must stop the grid (an
+    LDO's live VOUT tab on the plane net would be drilled into GND), and a
+    grid short of a positive floor says so."""
+    body = _fp("U1", 20, 20, _pad("4", 0, 0, "+3V3", 4, 4))
+    body += _fp("U2", 45, 20, _pad("9", 0, 0, "+3V3", 4, 4))
+    bg = _bg(tmp_path, body=body)
+    mv = planes_gen.thermal_min_vias(
+        {"thermal": [{"ref": "U1", "power_w": 0.5, "min_vias": 0},
+                     {"ref": "U2", "power_w": 1, "min_vias": 12},
+                     {"ref": "U3", "power_w": 1}]})
+    assert mv == {"U1": 0, "U2": 12}
+    ops, pads = planes_gen.thermal_via_ops(bg, {"+3V3"}, min_vias=mv)
+    by = {p["ref"]: p for p in pads}
+    assert by["U1"]["vias"] == 0 and "min_vias is 0" in by["U1"]["note"]
+    assert by["U2"]["vias"] == 9 and "under" in by["U2"]["note"]
+    assert len(ops) == 9 and all(abs(o["at"][0] - 45) < 3 for o in ops)
+    # without the constraints both grids are laid, as before
+    ops, _ = planes_gen.thermal_via_ops(bg, {"+3V3"})
+    assert len(ops) == 18
+
 # ============================================================ pure: validation
 
 def test_plan_validation_errors(tmp_path):
