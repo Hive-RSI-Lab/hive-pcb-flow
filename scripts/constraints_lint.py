@@ -196,7 +196,7 @@ SCHEMA_TOP_KEYS = set(SECTIONS) | {"placement", "coating", "antennas", "pcb_ante
                                    "enclosure", "ambient_c", "ambient_min_c",
                                    "cable_pf", "pin_modes", "io_supply", "ddr",
                                    "testpoints", "rf_match", "surge", "isolation",
-                                   "mechanical", "transformers"}
+                                   "mechanical", "transformers", "pinouts"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
                     "voltage_constraints": "voltages"}
@@ -475,6 +475,18 @@ class _FileLint:
                     self.add("error", "bad_type",
                              f"{path}: mechanical.allow_off_board must be a "
                              "list of {refs: [A, ...], why: text}", path)
+            elif key == "pinouts":
+                # check_pinouts (#1027): an off-board connector held to a row
+                # of reference/connector_pinouts.yaml
+                if not (isinstance(val, list) and all(
+                        isinstance(e, dict)
+                        and isinstance(e.get("ref"), str)
+                        and isinstance(e.get("standard"), str)
+                        for e in val)):
+                    self.add("error", "bad_type",
+                             f"{path}: pinouts must be a list of "
+                             "{ref: J8, standard: <connector_pinouts row>}",
+                             path)
             elif key == "testpoints":
                 # check_testpoints (#470): probe rules and the nets in scope
                 nums = {"probe_mm", "fixture_mm", "pitch_mm", "body_mm",

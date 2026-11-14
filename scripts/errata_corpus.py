@@ -18,12 +18,17 @@ constraints file, what hwde reads before anyone has written one:
 netlist_audit on the schematic, check_mate_pins and check_current on the
 board, check_straps on the board with the netlist kicad-cli exports from the
 schematic, check_connector_fit and check_silk on the board (no parts/),
-check_bom_sync on the board with --live (the package of each LCSC part
+check_pinouts on the schematic, check_bom_sync on the board with --live (the package of each LCSC part
 comes from JLC's record, as nothing in the foreign tree holds it), check_thermal on the board
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
 copy of it. A catch for another script is reported as not run.
+
+A catch may give `constraints: {rev_a: {...}, rev_b: {...}}`: what that
+revision's constraints.json would say, written in place of the empty file
+(a defect only a stated fact can show, such as the mate a cable goes to; its
+verdict is caught_with_constraints).
 """
 from __future__ import annotations
 
@@ -105,6 +110,11 @@ def _check_current(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--constraints", str(empty)]
 
 
+def _check_pinouts(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    return ["check_pinouts.py", "--sch", str(repo / b[rev]["sch"]),
+            "--constraints", str(empty)]
+
+
 def _check_connector_fit(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_connector_fit.py", "--pcb", str(repo / b[rev]["pcb"])]
 
@@ -173,14 +183,22 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_bom_sync": _check_bom_sync,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
-           "dfm": _dfm}
+           "check_pinouts": _check_pinouts, "dfm": _dfm}
 
 
-def audit(cache: Path, b: dict, rev: str, script: str) -> list[dict]:
-    out = cache / "runs" / b["id"] / f"{rev}-{script}.json"
+def audit(cache: Path, b: dict, rev: str, script: str,
+          constraints: dict | None = None) -> list[dict]:
+    """`script` on one revision, with `constraints` as its constraints.json
+    (none: an empty one)."""
+    tag = ""
+    if constraints:
+        import hashlib
+        tag = "-c" + hashlib.sha1(json.dumps(constraints, sort_keys=True)
+                                  .encode()).hexdigest()[:8]
+    out = cache / "runs" / b["id"] / f"{rev}-{script}{tag}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    empty = out.parent / "constraints.json"
-    empty.write_text("{}", encoding="utf-8")
+    empty = out.parent / f"constraints{tag}.json"
+    empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
     cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b), empty)
     subprocess.run([sys.executable, str(SCRIPTS / cmd), *args, "--out", str(out)],
                    capture_output=True, text=True, timeout=900)
@@ -190,7 +208,7 @@ def audit(cache: Path, b: dict, rev: str, script: str) -> list[dict]:
 
 
 def run(cache: Path, b: dict) -> dict:
-    found: dict[tuple[str, str], list[dict]] = {}
+    found: dict[tuple[str, str, str], list[dict]] = {}
     res = {}
     for d in b["defects"]:
         c = d.get("catch")
@@ -199,12 +217,14 @@ def run(cache: Path, b: dict) -> dict:
         if c["script"] not in RUNNERS:
             res[d["id"]] = {"ran": False}
             continue
+        hit = {}
         for rev in ("rev_a", "rev_b"):
-            if (rev, c["script"]) not in found:
-                found[rev, c["script"]] = audit(cache, b, rev, c["script"])
-        res[d["id"]] = {"ran": True,
-                        "rev_a": any(matches(v, c) for v in found["rev_a", c["script"]]),
-                        "rev_b": any(matches(v, c) for v in found["rev_b", c["script"]])}
+            cons = (c.get("constraints") or {}).get(rev) or {}
+            key = (rev, c["script"], json.dumps(cons, sort_keys=True))
+            if key not in found:
+                found[key] = audit(cache, b, rev, c["script"], cons)
+            hit[rev] = any(matches(v, c) for v in found[key])
+        res[d["id"]] = {"ran": True, **hit}
     (cache / "runs" / b["id"]).mkdir(parents=True, exist_ok=True)
     (cache / "runs" / b["id"] / "result.json").write_text(json.dumps(res, indent=1))
     return res
@@ -241,7 +261,8 @@ def table(cache: Path, boards: list[dict]) -> str:
             catch = d.get("catch")
             how = outcome(d, res.get(d["id"]))
             if catch:
-                how += f" (`{catch['script']}` {catch['kind']})"
+                how += f" (`{catch['script']}` {catch['kind']}" + (
+                    ", with constraints" if catch.get("constraints") else "") + ")"
             lines.append(f"| {d['id']}: {d['summary']} | {d['fault_class']} | {how} | "
                          f"{d.get('follow_up') or d.get('note') or ''} |".replace("\n", " "))
         lines.append("")

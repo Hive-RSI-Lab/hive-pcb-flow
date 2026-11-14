@@ -9,8 +9,11 @@
 # catch is a miss: `follow_up` is the check to build or the brief filed for it.
 #
 # verdict: caught (an hwde check finds it on rev A, unprompted by any
-# constraint a designer would only write after knowing the bug) | missed |
-# not_static (a fact no file holds: a firmware choice, a vendor's chip bug).
+# constraint a designer would only write after knowing the bug) |
+# caught_with_constraints (found once constraints.json states a fact the files
+# lack, such as which mate a cable goes to: the catch's `constraints`) |
+# missed | not_static (a fact no file holds: a firmware choice, a vendor's
+# chip bug).
 boards:
 - id: digits
   url: https://github.com/justinlindh/digits
@@ -343,8 +346,12 @@ boards:
     summary: HP/LO 3.5 mm jacks wired against the standard headphone pinout
     source_quote: "Due to a mistake in the pin assignment for the 3.5mm jack footprint, both jacks are incorrectly wired and will not work with standard headphones."
     fault_class: LIB (standard connector pinout)
-    verdict: missed
-    follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
+    verdict: caught
+    catch: {script: check_pinouts, kind: pinout_mismatch, refs: [J4]}
+    note: >-
+      check_pinouts reads J4's pads T/R1/R2/S from their names: rev1 has the
+      tip on /audio/hp_com and left on R1 (J5, the line out, has its tip on
+      GND and fires too); rev1.1 has both in the CTIA order.
   - id: echoplayer-3
     summary: ESD diodes D1-D4 load the SDMMC lines past the bus's capacitance limit
     source_quote: "Diodes D1-D4 should be left unpopulated since they add too much capacitance and cause the SDMMC bus to fail at higher speeds."
@@ -363,9 +370,19 @@ boards:
     summary: lift actuator connectors J8/J9 pins 2 and 3 swapped, reversing the hall sensors' supply
     source_quote: "The lift actuator connector pins 2 and 3 are swapped which reverses the polarity of the power supply to the hall sensors."
     fault_class: SCH (off-board connector pinout)
-    verdict: missed
-    note: v0.2 has pin 2 on VHALL and pin 3 on GND; v1 has pin 2 on GND and pin 3 on +5V. Only the actuator's own pinout says which is right.
-    follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
+    verdict: caught_with_constraints
+    catch:
+      script: check_pinouts
+      kind: pinout_mismatch
+      refs: [J8]
+      constraints:
+        rev_a: {pinouts: [{ref: J8, standard: bedlift-lift-actuator}]}
+        rev_b: {pinouts: [{ref: J10, standard: bedlift-lift-actuator}]}
+    note: >-
+      v0.2 has pin 2 on VHALL and pin 3 on GND; v1 has pin 2 on GND and pin 3
+      on +5V. Only the actuator's own pinout says which is right, so the
+      catch states the mate (reference/connector_pinouts.yaml
+      bedlift-lift-actuator) on J8 (v1's actuator connector is J10).
   - id: bedlift-2
     summary: DRV8434S nSCS tied to GND, but the part needs a falling edge to start each SPI frame
     source_quote: "nSCS was tied to ground because it was believed no chip select was needed due to the absence of other devices on the SPI bus."
@@ -409,8 +426,18 @@ boards:
     summary: actuator hall sensors powered at 3.3 V where they are meant for 5 V
     source_quote: "They are intended to be driven at 5 V and while they seem to tolerate 3.3 V most of the time, sometimes they produce inconsistent pulses or no pulses at all."
     fault_class: SCH (off-board part supply)
-    verdict: missed
-    follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
+    verdict: caught_with_constraints
+    catch:
+      script: check_pinouts
+      kind: pinout_supply_volts
+      net: /VHALL
+      constraints:
+        rev_a: {pinouts: [{ref: J8, standard: bedlift-lift-actuator}]}
+        rev_b: {pinouts: [{ref: J10, standard: bedlift-lift-actuator}]}
+    note: >-
+      /VHALL is U4's output (a 74LVC1G17 on +3.3V), so check_pinouts puts it
+      at 3.3 V against the 5 V the actuator row asks on its supply pin; v1
+      feeds pin 3 from +5V.
 - id: pdlc
   url: https://github.com/brown-studios/pdlc
   commit: 423481719baefe24c1663eb4cf88b208b6401eb4
@@ -475,13 +502,14 @@ boards:
     summary: JTAG header pinout differs from the Altera standard
     source_quote: "JTAG pinout differs from Altera standard"
     fault_class: SCH (standard connector pinout)
-    verdict: missed
+    verdict: caught
+    catch: {script: check_pinouts, kind: pinout_mismatch, refs: [J11]}
     note: >-
-      A KiCad 5 legacy schematic, read since #1023 through lib/legacy_net
-      (pads from the board, pin names from the -cache.lib): netlist_audit
-      reads 186 parts on both revisions and reports the same four undeclared
-      rails on each, so nothing it checks tells rev.C from rev.C1.
-    follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
+      A KiCad 5 legacy schematic, read through lib/legacy_net. J11's net
+      names follow the Altera pinout on both revisions; the fault is at the
+      FPGA end (rev.C puts /TCK on U6's TDO, /TDI on its TCK, /TDO on its
+      TDI). check_pinouts judges each header pin by the JTAG pin function it
+      meets on the IC, so rev.C fires and rev.C1 is clean.
   - id: sizif-2
     summary: J3 header's silkscreen is wrong
     source_quote: "Incorrect silkscreen for J3 header"

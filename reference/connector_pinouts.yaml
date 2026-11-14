@@ -1,0 +1,81 @@
+# connector_pinouts.yaml - standard pinouts of off-board connectors, read by
+# scripts/check_pinouts.py (#1027). Each row is a pinout an off-board mate
+# expects, with the source that fixes it. Seeded only from the real errata
+# that needed one (reference/errata_corpus.yaml: sizif-1, echoplayer-2,
+# bedlift-1, bedlift-6); add a row when a defect or a design needs another.
+#
+#   kind: how a connector is found to be this standard
+#     jtag        - a connector whose nets reach >= 3 IC pins named TCK, TMS,
+#                   TDI or TDO, with the row's `ground` pins on ground and its
+#                   `supply` pins off it (the layout says which standard the
+#                   designer meant). Pins are judged by the IC pin function on
+#                   each net, not by net names: the names can agree with the
+#                   header while the IC end is wrong (sizif rev.C).
+#     audio_jack  - a part whose pins are named T, R (or R1, R2) and S: a
+#                   3.5 mm phone jack. Roles come from the net names (left,
+#                   right, gnd/com, mic); an unnamed net is not judged.
+#     stated      - only when constraints.json names the connector:
+#                     "pinouts": [{"ref": "J8", "standard": "<row>"}]
+#                   (an off-board part with no standard of its own: a cable
+#                   wired to a part's leads).
+#   pinout: pin -> role. Roles: GND (a ground net), SUPPLY (a powered net,
+#     `volts` when the mate needs a level), NC (not judged), and signal names
+#     (a signal role must not be on a ground or supply rail; for jtag the IC
+#     pin function on the net must be that name).
+#   source: where the pinout comes from; url: the document.
+
+standards:
+  altera-jtag-10:
+    kind: jtag
+    pins: 10
+    source: >-
+      Altera/Intel USB-Blaster Download Cable User Guide, "USB-Blaster 10-pin
+      female plug signal names", JTAG mode column: 1 TCK, 2 GND, 3 TDO,
+      4 VCC(TRGT), 5 TMS, 6-8 no connect, 9 TDI, 10 GND (the header on the
+      target is the same pinout, seen from above)
+    url: https://www.intel.com/content/dam/www/programmable/us/en/pdfs/literature/ug/ug_usb_blstr.pdf
+    ground: ["2", "10"]
+    supply: ["4"]
+    pinout: {"1": TCK, "2": GND, "3": TDO, "4": SUPPLY, "5": TMS, "6": NC,
+             "7": NC, "8": NC, "9": TDI, "10": GND}
+
+  audio-trs:
+    kind: audio_jack
+    source: >-
+      Stereo phone plug (TRS): tip left, ring right, sleeve ground
+      (Wikipedia, Phone connector (audio), "Stereo")
+    url: https://en.wikipedia.org/wiki/Phone_connector_(audio)
+    pinout: {T: LEFT, R: RIGHT, R1: RIGHT, S: GND}
+
+  audio-trrs-ctia:
+    kind: audio_jack
+    source: >-
+      Headset plug (TRRS), CTIA/AHJ: tip left, ring 1 right, ring 2 ground,
+      sleeve mic (Wikipedia, Phone connector (audio), "TRRS standards"); the
+      layout echoplayer rev2.1 rewired its jacks to
+    url: https://en.wikipedia.org/wiki/Phone_connector_(audio)#TRRS_standards
+    pinout: {T: LEFT, R1: RIGHT, R2: GND, S: MIC}
+
+  audio-trrs-omtp:
+    kind: audio_jack
+    source: >-
+      Headset plug (TRRS), OMTP: tip left, ring 1 right, ring 2 mic, sleeve
+      ground (Wikipedia, Phone connector (audio), "TRRS standards")
+    url: https://en.wikipedia.org/wiki/Phone_connector_(audio)#TRRS_standards
+    pinout: {T: LEFT, R1: RIGHT, R2: MIC, S: GND}
+
+  bedlift-lift-actuator:
+    kind: stated
+    pins: 6
+    source: >-
+      The bed-lift controller's harness to a Progressive Automation PA-09
+      linear actuator (motor and quadrature hall sensors) on a Molex
+      Mini-Fit Jr 39-30-1060: 1 hall 2, 2 GND, 3 hall supply, 4 motor,
+      5 motor, 6 hall 1, as v1 wires J10/J11 after v0.2's errata ("pins 2
+      and 3 are swapped which reverses the polarity of the power supply to
+      the hall sensors"). The hall sensors want 5 V ("supplying the hall
+      sensors with 3.3 V instead of 5 V as indicated in the actuator
+      datasheet"; v1: "The lift hall sensors require 5 V").
+    url: https://github.com/j9brown/bed-lift/blob/main/hardware/v0.2/design-and-errata.md
+    pinout: {"1": HALL2, "2": GND, "3": {role: SUPPLY, volts: 5.0},
+             "4": MOTOR, "5": MOTOR, "6": HALL1}
