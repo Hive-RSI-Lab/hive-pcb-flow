@@ -93,6 +93,14 @@ schematic-level structural problems BEFORE board work starts:
  - i2c_address_collision (error): two devices on one SCL net whose
    address straps (reference/i2c_addresses.yaml) give the same 7-bit
    address (#1034, glasgow-2). A strap it can't read leaves that device out.
+ - bus_cap_load (SD: error; I2C: warning past the 400 pF budget, error
+   past 550 pF): the capacitance the board puts on one bus line, from
+   reference/bus_load.yaml's parts (ESD clamps) and each capacitor from
+   the line to ground or a rail, over the line's budget (#1031,
+   echoplayer-3: CESD3V3AP clamps on every SDMMC line). SD lines are the
+   nets on a card socket's CLK/CMD/DAT pins; I2C lines are SDA/SCL pins.
+   The sum leaves out the host, the card and the copper, so it is a
+   floor. A part marked DNP is not fitted and adds nothing.
  - pull_vs_leakage: a signal net (0 ohm links followed) pulled to a rail
    of known volts by resistors too weak for the pins on it that
    reference/pin_leakage.yaml says sink or source current before they are
@@ -160,6 +168,7 @@ PIN_REQUIREMENTS = HERE.parent / "reference" / "pin_requirements.yaml"
 PIN_STATES = HERE.parent / "reference" / "pin_states.yaml"
 MCU_PINS = HERE.parent / "reference" / "mcu_pins.yaml"
 I2C_ADDRESSES = HERE.parent / "reference" / "i2c_addresses.yaml"
+BUS_LOAD = HERE.parent / "reference" / "bus_load.yaml"
 PIN_LEAKAGE = HERE.parent / "reference" / "pin_leakage.yaml"
 IO_LEVELS = HERE.parent / "reference" / "io_levels.yaml"
 
@@ -227,6 +236,10 @@ def parse_netlist(path: Path | str) -> dict:
                 continue
             comps[ref] = {"value": _atom(c, "value"),
                           "footprint": _atom(c, "footprint")}
+            # KiCad writes do-not-populate as a valueless
+            # `(property (name "dnp"))`, present only when set
+            if any(_atom(pr, "name") == "dnp" for pr in _kids(c, "property")):
+                comps[ref]["dnp"] = True
             sp = _kids(c, "sheetpath")
             if sp and _atom(sp[0], "names"):
                 comps[ref]["sheet"] = _atom(sp[0], "names")
@@ -608,6 +621,73 @@ def load_mcu_pins(path: Path = MCU_PINS) -> dict:
 def load_i2c_addresses(path: Path = I2C_ADDRESSES) -> list[dict]:
     """reference/i2c_addresses.yaml's devices (its header says the form)."""
     return _load_yaml(path, "i2c addresses").get("devices") or []
+
+
+def load_bus_load(path: Path = BUS_LOAD) -> dict:
+    """reference/bus_load.yaml (its header says the form)."""
+    return _load_yaml(path, "bus load")
+
+
+_SD_SOCKET_PINS = {"CLK", "CMD", "DAT0"}
+_SD_PIN_RE = re.compile(r"^(CLK|CMD|DAT[0-7])$")
+
+
+def _bus_lines(nets: dict, comps: dict,
+               comp_pins: dict[str, dict[str, str]]
+               ) -> dict[str, tuple[str, set[str]]]:
+    """{net: (bus kind, refs left out of the sum)} for every SD line (a
+    net on a card socket's CLK/CMD/DATn pin; the socket is the card's, not
+    the board's load) and every I2C line (a net on an SDA or SCL pin)."""
+    lines: dict[str, tuple[str, set[str]]] = {}
+    for ref in sorted(comps):
+        funcs = {_pin_base(f): pn
+                 for f, pn in _pin_funcs(ref, nets, comp_pins).items()}
+        if _SD_SOCKET_PINS <= set(funcs):
+            for base, (_, net) in funcs.items():
+                if _SD_PIN_RE.match(base):
+                    lines.setdefault(net, ("sd", set()))[1].add(ref)
+    for ref in sorted(comps):
+        for f, (_, net) in _pin_funcs(ref, nets, comp_pins).items():
+            if _pin_base(f) in ("SDA", "SCL") and net not in lines:
+                lines[net] = ("i2c", set())
+    return {n: k for n, k in lines.items()
+            if not n.startswith("unconnected-")}
+
+
+def _line_load(net: str, skip: set[str], nets: dict, comps: dict,
+               comp_pins: dict[str, dict[str, str]], rails: dict,
+               parts: list[dict]) -> tuple[float, list[tuple]]:
+    """(pF, [(ref, pF, why)]) that the parts on NET put on it: a
+    bus_load.yaml row's c_pf for each of its pins on the net, and each
+    two-pin capacitor whose other side is ground or a rail."""
+    total, who = 0.0, []
+    for ref in sorted({m["ref"] for m in nets[net]} - skip):
+        comp = comps.get(ref) or {}
+        if comp.get("dnp"):
+            continue
+        n_on = sum(1 for m in nets[net] if m["ref"] == ref)
+        row = next((r for r in parts if _spec_matches(r, comp)), None)
+        if row:
+            pf = float(row["c_pf"]) * n_on
+            total += pf
+            who.append((ref, pf, row))
+            continue
+        pins = comp_pins.get(ref, {})
+        if _part_kind(ref) != "C" or len(pins) != 2:
+            continue
+        other = [n for n in pins.values() if n != net]
+        if len(other) != 1:
+            continue
+        o = other[0]
+        if not (_is_ground_name(o) or _supply_net(o, nets.get(o, []), rails)):
+            continue
+        val = engcalc.parse_value(comp.get("value"))
+        if val is None or val <= 0:
+            continue
+        pf = val * 1e12
+        total += pf
+        who.append((ref, pf, None))
+    return total, who
 
 
 def _pin_base(func: str | None) -> str:
@@ -1740,7 +1820,8 @@ def audit(parsed: dict, constraints: dict,
           mcu_pins: dict | None = None,
           i2c_addresses: list[dict] | None = None,
           pin_leakage: list[dict] | None = None,
-          io_levels: dict | None = None
+          io_levels: dict | None = None,
+          bus_load: dict | None = None
           ) -> tuple[list[dict], dict]:
     nets = parsed["nets"]
     comps = parsed["components"]
@@ -2381,6 +2462,40 @@ def audit(parsed: dict, constraints: dict,
           f"Gate the load's enable on it, or leave it unconnected if "
           f"sequencing is not needed", pg_pin=f"{ref}.{pin}")
 
+    # 21. more capacitance on a bus line than the bus allows
+    # (reference/bus_load.yaml, #1031; errata corpus: echoplayer r1-rev1
+    # put a CESD3V3AP clamp, 120 pF, on every SDMMC line)
+    bl = load_bus_load() if bus_load is None else bus_load
+    budgets, bl_parts = bl.get("buses") or {}, bl.get("parts") or []
+    lines = _bus_lines(nets, comps, comp_pins)
+    for net, (bus, skip) in sorted(lines.items()):
+        b = budgets.get(bus)
+        if not b:
+            continue
+        total, who = _line_load(net, skip, nets, comps, comp_pins,
+                                ps_rails, bl_parts)
+        budget, top = float(b["budget_pf"]), b.get("max_pf")
+        if total <= budget:
+            continue
+        sev = "error" if bus == "sd" or top is None or total > float(top) \
+            else "warning"
+        parts = ", ".join(
+            f"{r} ({comps[r].get('value')}) {pf:g} pF" for r, pf, _ in who)
+        srcs = [b] + [row for _, _, row in who if row]
+        cite = "; ".join(dict.fromkeys(
+            " ".join(s["source"].split()).split(":")[0].split(" (")[0]
+            for s in srcs))
+        v(sev, "bus_cap_load", net, sorted(r for r, _, _ in who),
+          f"{bus.upper()} line '{net}' carries at least {total:g} pF from "
+          f"{parts}, over the {budget:g} pF {bus.upper()} budget"
+          + (f" ({b['what']})" if b.get("what") else "")
+          + (f" (and over {float(top):g} pF)" if top and total > float(top)
+             else "")
+          + f"; the host, the card and the copper add more [{cite}]"
+          + ("" if all(s.get("verified") for s in srcs)
+             else " (not yet re-read)"),
+          bus=bus, load_pf=round(total, 3), budget_pf=budget)
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -2401,6 +2516,7 @@ def audit(parsed: dict, constraints: dict,
         "mcu_input_only_parts_checked": io_checked,
         "i2c_buses_checked": len(buses),
         "i2c_devices_placed": sum(len(d) for d in buses.values()),
+        "bus_lines_checked": len(lines),
         "pulls_vs_leakage_checked": pulls_checked,
         "reset_contention_found": contention_checked,
         "io_drive_pins_checked": iolv_checked,
