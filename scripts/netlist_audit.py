@@ -92,7 +92,9 @@ schematic-level structural problems BEFORE board work starts:
    input-only (#1032, glasgow-10: flash select on the FX2's RDY0).
  - i2c_address_collision (error): two devices on one SCL net whose
    address straps (reference/i2c_addresses.yaml) give the same 7-bit
-   address (#1034, glasgow-2). A strap it can't read leaves that device out.
+   address (#1034, glasgow-2). A strap it can't read leaves that device out;
+   a fixed-address part (no strap) counts only when its SCL net is plainly
+   a bus (another part on it, no pull to ground) (#1105).
  - bus_cap_load (SD: error; I2C: warning past the 400 pF budget, error
    past 550 pF): the capacitance the board puts on one bus line, from
    reference/bus_load.yaml's parts (ESD clamps) and each capacitor from
@@ -876,7 +878,11 @@ def _i2c_buses(nets: dict, comps: dict,
                comp_pins: dict[str, dict[str, str]], rails: dict,
                devices: list[dict]) -> dict[str, list[tuple]]:
     """{SCL net: [(address, ref, row, strap)]} for every device in
-    i2c_addresses.yaml whose strap reads plainly."""
+    i2c_addresses.yaml whose strap reads plainly, and every fixed-address
+    device (a row with `address` and no `pin`) whose SCL is plainly a bus
+    (another part's pin on it, no tie or pull to ground: a hub's
+    SCL/CFG_SEL0 pulled down is a config strap) and whose `when` strap,
+    if any, reads in one of its states."""
     buses: dict[str, list[tuple]] = {}
     for row in devices:
         for ref in sorted(comps):
@@ -885,7 +891,23 @@ def _i2c_buses(nets: dict, comps: dict,
             funcs: dict[str, tuple[str, str]] = {}
             for f, pn in _pin_funcs(ref, nets, comp_pins).items():
                 funcs.setdefault(_pin_base(f), pn)
-            scl, sda = funcs.get("SCL"), funcs.get("SDA")
+            scl = next((funcs[n.upper()] for n in row.get("scl") or ["SCL"]
+                        if n.upper() in funcs), None)
+            sda = next((funcs[n.upper()] for n in row.get("sda") or ["SDA"]
+                        if n.upper() in funcs), None)
+            if "pin" not in row:
+                when = row.get("when") or {}
+                at = next((funcs[n.upper()] for n in when.get("pins") or ()
+                           if n.upper() in funcs), None)
+                if when and (not at or not _net_states(
+                        at[1], ref, at[0], nets, comps, comp_pins, rails,
+                        {})[0] & set(when.get("states") or ())):
+                    continue
+                if scl and "address" in row and _i2c_bus_line(
+                        scl, ref, nets, comps, comp_pins, rails):
+                    buses.setdefault(scl[1], []).append(
+                        (int(row["address"]), ref, row, "fixed"))
+                continue
             strap = funcs.get(row["pin"].upper())
             if not scl or not strap:
                 continue
@@ -912,6 +934,19 @@ def _i2c_buses(nets: dict, comps: dict,
                 buses.setdefault(scl[1], []).append(
                     (int(adr[where]), ref, row, where))
     return buses
+
+
+def _i2c_bus_line(scl: tuple[str, str], ref: str, nets: dict, comps: dict,
+                  comp_pins: dict[str, dict[str, str]], rails: dict) -> bool:
+    """True when REF's SCL pin (pin, net) sits on a bus: another part
+    (not a resistor, capacitor or inductor) has a pin on the net, and
+    nothing ties or pulls it to ground."""
+    pin, net = scl
+    if not any(m["ref"] != ref and _part_kind(m["ref"]) is None
+               for m in nets.get(net, [])):
+        return False
+    st, _, _ = _net_states(net, ref, pin, nets, comps, comp_pins, rails, {})
+    return not st & {"ground", "pulled_down", "open"}
 
 
 def _rail_volts(constraints: dict, nets: dict) -> dict[str, float]:
@@ -2714,7 +2749,8 @@ def audit(parsed: dict, constraints: dict,
             if len(same) < 2:
                 continue
             who = ", ".join(f"{r} ({comps[r].get('value')}, "
-                            f"{row['pin']} to {where})"
+                            + (f"{row['pin']} to {where})" if "pin" in row
+                               else "fixed address)")
                             for _, r, row, where in same)
             vt((scl, adr) in i2c_ok, "error", "i2c_address_collision", scl,
               sorted(d[1] for d in same),

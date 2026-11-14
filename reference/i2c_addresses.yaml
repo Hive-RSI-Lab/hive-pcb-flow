@@ -17,6 +17,17 @@
 #   A strap the rule can't read (open, driven, on a net it can't place)
 #   leaves the device out: it never guesses an address.
 #   source     the datasheet, its revision, the table
+#   cite       optional: [{doc, sha256, page, table, quote, fields}] for
+#              scripts/part_rows.py --verify (an address field matches its
+#              binary 0101100b, hex 2Ch or 0x2C form in the quote)
+# A part with one fixed address has no `pin`; instead (#1105):
+#   address    its 7-bit address
+#   scl / sda  pin names for its clock / data pin when not SCL / SDA
+#   when       {pins: [names], states: [pin_states.yaml state words]}: the
+#              part answers only with that strap in one of those states
+#   It counts on a bus only when its SCL net is plainly one: another
+#   part's pin on it and no tie or pull to ground (a hub's SCL/CFG_SEL0
+#   pulled down is a configuration strap, not a bus).
 # verified: true means the source was re-read for this row.
 #
 # Seeded from the errata corpus's I2C address defects (#1034): glasgow-2
@@ -58,3 +69,30 @@ devices:
       PCA6416A Rev. 2 (10 January 2013) section 7.1 Fig 6 and Table 5:
       slave address 0100 00 ADDR, so 20h and 21h; pin table "Address
       input. Connect directly to VDD(P) or ground"
+
+  - mpn: USB2512B / USB2513B / USB2514B (SMBus slave mode)
+    match: '^USB251[234]B'
+    verified: true   # Microchip DS00001692C read 2026-11-14
+    address: 0x2C
+    scl: [SCL, SMBCLK, CFG_SEL0]
+    sda: [SDA, SMBDATA, NON_REM1]
+    when: {pins: [CFG_SEL1, HS_IND], states: [ground, pulled_down]}
+    source: >-
+      Microchip DS00001692C section 5.3 SMBus: "The 7-bit slave address
+      is 0101100b" (2Ch). Table 5-1: the hub is an SMBus slave only with
+      CFG_SEL[1:0] = 01 (SCL/SMBCLK/CFG_SEL0 pulled up, HS_IND/CFG_SEL1
+      low); with 11 it is the master of an I2C EEPROM at 1010000b
+      (section 5.2) and answers at no address
+    cite:
+      - doc: usb2514b.pdf
+        sha256: 3fca1a17701a3fd513c867f4deab71887b317302ff7cbbc22310c1ddaa6bdaa9
+        page: 33
+        table: ""
+        quote: The 7-bit slave address is 0101100b.
+        fields: [address]
+      - doc: usb2514b.pdf
+        sha256: 3fca1a17701a3fd513c867f4deab71887b317302ff7cbbc22310c1ddaa6bdaa9
+        page: 19
+        table: "TABLE 5-1: INITIAL INTERFACE/CONFIGURATION OPTIONS"
+        quote: "0 1 The hub is configured externally over SMBus (as an SMBus slave"
+        fields: []

@@ -195,3 +195,68 @@ def test_every_repo_cite_verifies_when_the_datasheets_are_here():
     res = part_rows.verify(tables, sorted(Path(d).glob("*.pdf")))
     assert res["counts"]["fail"] == 0, [
         c for c in res["cites"] if c["status"] == "fail"]
+
+
+# ------------------------------------------- mcu_pins and i2c_addresses (#1105)
+
+AF_PAGES = [
+    ["Table 13. Port A alternate function mapping",
+     "Port AF0 AF1 AF2",
+     "PA0 SPI2_SCK USART2_CTS TIM2_CH1_ETR",
+     "PA1 SPI1_SCK/ I2S1_CK USART2_RTS TIM2_CH2",
+     "PA2 SPI1_MOSI USART2_TX TIM2_CH3",
+     "PA7 SPI1_MOSI TIM3_CH2 TIM1_CH1N",
+     "PA8 MCO SPI2_NSS",
+     "PA9 MCO USART1_TX",
+     "TIM1_CH2"],
+    ["5.3 SMBus",
+     "The 7-bit slave address is 0101100b.",
+     "In host mode it reads the EEPROM at I2C address 0x50."],
+]
+
+
+@pytest.fixture()
+def af_pdf(tmp_path):
+    return _pdf(tmp_path / "mcu.pdf", AF_PAGES)
+
+
+def test_af_table_drafts_timer_pins_with_wrapped_cells(af_pdf):
+    d = part_rows.draft("TESTMCU", af_pdf)
+    [mcu] = d["mcu_pins"]
+    assert mcu["verified"] is False and mcu["match"] == "TODO"
+    # TIM2_CH1_ETR counts as TIM2_CH1; PA9's TIM1_CH2 is on its wrapped line
+    assert mcu["timers"] == {"PA0": ["TIM2_CH1"], "PA1": ["TIM2_CH2"],
+                             "PA2": ["TIM2_CH3"],
+                             "PA7": ["TIM1_CH1N", "TIM3_CH2"],
+                             "PA9": ["TIM1_CH2"]}
+    assert {c["page"] for c in mcu["cite"]} == {1}
+    assert mcu["cite"][0]["table"].startswith("Table 13")
+
+
+def test_address_draft_keeps_each_stated_address(af_pdf):
+    rows = part_rows.draft("TESTHUB", af_pdf)["i2c_addresses"]
+    assert [(r["address"], r["cite"][0]["page"]) for r in rows] == [
+        (0x2C, 2), (0x50, 2)]
+    assert all(r["verified"] is False for r in rows)
+
+
+def _addr_table(pdf: Path, address: int) -> dict:
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    return {"devices": [{
+        "mpn": "TESTHUB", "match": "^TESTHUB", "verified": True,
+        "address": address,
+        "cite": [{"doc": pdf.name, "sha256": sha, "page": 2, "table": "",
+                  "fields": ["address"],
+                  "quote": "The 7-bit slave address is 0101100b."}]}]}
+
+
+def test_a_right_address_cite_verifies(tmp_path, af_pdf):
+    res = _verify(tmp_path, af_pdf, _addr_table(af_pdf, 0x2C))
+    assert res["counts"] == {"ok": 1, "fail": 0, "unchecked": 0}
+
+
+def test_planted_wrong_address_is_caught(tmp_path, af_pdf):
+    # 0x2D: one bit off what the quote's 0101100b says
+    res = _verify(tmp_path, af_pdf, _addr_table(af_pdf, 0x2D))
+    assert res["cites"][0]["problems"] == [
+        "address=45 is not in the quote as 7-bit binary, 0xNN or NNh"]

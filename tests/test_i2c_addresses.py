@@ -105,7 +105,53 @@ def test_every_row_cites_its_datasheet():
         (REPO / "reference" / "i2c_addresses.yaml").read_text())
     for row in doc["devices"]:
         assert row["verified"] is True and row["match"], row["mpn"]
-        assert row["source"].strip() and row["pin"]
+        assert row["source"].strip()
+        if "pin" not in row:   # a fixed address, read only under `when`
+            assert 0x08 <= row["address"] <= 0x77 and row["when"]["pins"]
+            continue
         assert set(row["addresses"]) <= {"ground", "supply", "high",
                                          "sda", "scl"}
         assert all(0x08 <= a <= 0x77 for a in row["addresses"].values())
+
+
+# ---------------------------------------- fixed address under a strap (#1105)
+
+def _hub(scl_pull="+3V3", cfg_sel1="GND"):
+    """Two USB2514B hubs on one MCU's /SCL, /SDA. U8 is strapped as an
+    SMBus slave (CFG_SEL1 low); U7 has HS_IND/CFG_SEL1 on `cfg_sel1`, and
+    the bus's SCL pull-up R1 goes to `scl_pull`."""
+    comps = {"U7": "USB2514B/M2", "U8": "USB2514B", "U1": "STM32G031",
+             "R1": "10k", "R2": "10k"}
+    nets = {"/SCL": [_m("U7", "24", "SMBCLK/CFG_SEL0", "input"),
+                     _m("U8", "24", "SMBCLK/CFG_SEL0", "input"),
+                     _m("U1", "12", "PB6", "bidirectional"), _m("R1", "1")],
+            "/SDA": [_m("U7", "22", "SMBDATA/NON_REM1", "bidirectional"),
+                     _m("U8", "22", "SMBDATA/NON_REM1", "bidirectional"),
+                     _m("U1", "13", "PB7", "bidirectional"), _m("R2", "1")],
+            "+3V3": [_m("R2", "2"), _m("U7", "5", "VDD33", "power_in"),
+                     _m("U8", "5", "VDD33", "power_in")],
+            "GND": [_m("U7", "0", "VSS", "power_in"),
+                    _m("U8", "0", "VSS", "power_in"),
+                    _m("U8", "25", "HS_IND/CFG_SEL1", "bidirectional")]}
+    nets.setdefault(scl_pull, []).append(_m("R1", "2"))
+    nets.setdefault(cfg_sel1, []).append(
+        _m("U7", "25", "HS_IND/CFG_SEL1", "bidirectional"))
+    return comps, nets
+
+
+def test_two_smbus_slave_hubs_collide_at_0x2c():
+    hits, facts = _audit(*_hub())
+    assert [(h["refs"], h["address"]) for h in hits] == [
+        (["U7", "U8"], "0x2C")]
+    assert "fixed address" in hits[0]["msg"]
+
+
+def test_a_hub_whose_scl_is_pulled_down_is_not_on_a_bus():
+    # the voice board's U701: SCL_24 to GND through 100k, so no SMBus at all
+    assert _audit(*_hub(scl_pull="GND"))[0] == []
+
+
+def test_a_hub_strapped_for_eeprom_mode_answers_at_no_address():
+    # CFG_SEL1 high: U7 masters an EEPROM and is no SMBus slave
+    hits, facts = _audit(*_hub(cfg_sel1="+3V3"))
+    assert hits == []
