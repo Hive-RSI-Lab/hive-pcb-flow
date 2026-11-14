@@ -925,11 +925,15 @@ def _leak_row(specs: list[dict], comp: dict, m: dict
     """(spec, pin row) of reference/pin_leakage.yaml for net member M."""
     if _base_type(m.get("pintype")) in _POWER_TYPES:
         return None
-    func = _norm_pin(m.get("pinfunction")).split("/", 1)[0]
+    full = _norm_pin(m.get("pinfunction"))
+    func = full.split("/", 1)[0]
     for spec in specs:
         if not _spec_matches(spec, comp):
             continue
         for row in spec.get("pins") or []:
+            if row.get("function") and not re.search(row["function"], full,
+                                                     re.I):
+                continue
             rx = re.compile(row["pin"], re.I)
             if (func and rx.search(func)) or rx.search(str(m["pin"])):
                 return spec, row

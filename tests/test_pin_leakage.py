@@ -143,8 +143,8 @@ def test_zero_ohm_groups_join_nets():
 def test_every_row_cites_its_datasheet():
     doc = yaml.safe_load(
         (REPO / "reference" / "pin_leakage.yaml").read_text())
-    fields = {"pin", "ipd", "ipu", "leak", "rpu", "vil", "vih", "vil_frac",
-              "vih_frac", "reset", "source", "cite"}
+    fields = {"pin", "function", "ipd", "ipu", "leak", "rpu", "vil", "vih",
+              "vil_frac", "vih_frac", "reset", "source", "cite"}
     for part in doc["parts"]:
         assert part["match"] and part["state"], part["mpn"]
         assert isinstance(part["verified"], bool), part["mpn"]
@@ -152,6 +152,7 @@ def test_every_row_cites_its_datasheet():
         for row in part["pins"]:
             assert set(row) <= fields, set(row) - fields
             re.compile(row["pin"])
+            re.compile(row.get("function") or "")
             assert re.search(r"\d", row["source"]), row["source"]
             assert any(k in row for k in ("ipd", "ipu", "leak", "rpu",
                                           "vil", "vil_frac", "reset"))
@@ -185,3 +186,45 @@ def test_a_divider_the_leakage_drags_to_the_wrong_state_is_still_an_error():
     nets["GND"].append(_m("R10", "2"))
     hits, _ = _audit(comps, nets)
     assert [h["severity"] for h in hits] == ["error"]
+
+
+def _config_flash(r):
+    """byte-hamr rev B FLASH_MISO: R28 pull-up against the ECP5's
+    PB11A/D1/MISO/IO1, the sysCONFIG pin wired to the config flash."""
+    nets = _rails()
+    nets["+3V3"].append(_m("R28", "1"))
+    nets["/FLASH_MISO"] = [_m("R28", "2"),
+                           _m("U8", "46", "PB11A/D1/MISO/IO1",
+                              "bidirectional")]
+    return {**BASE, "R28": r}, nets
+
+
+def test_ecp5_config_flash_data_pin_has_no_pulldown():
+    """#1096: D[7:0] have no pull during configuration (FPGA-TN-02039
+    Table 4.5), so a 10k pull-up on MISO is quiet."""
+    assert _audit(*_config_flash("10k"))[0] == []
+
+
+def test_ecp5_config_pin_still_counts_its_leakage():
+    hits, facts = _audit(*_config_flash("1M"))   # 3.3 V - 1M * 10 uA
+    assert facts["pulls_vs_leakage_checked"] == 1
+    assert [h["kind"] for h in hits] == ["pull_vs_leakage"]
+    assert abs(hits[0]["sink_a"] - 10e-6) < 1e-9
+
+
+def test_ecp5_csspin_pulls_up_not_down():
+    """HOLDN/DI/BUSY/CSSPIN/CEN pulls UP during configuration: a pull-up
+    on it is quiet however weak; a pull-down must beat the 150 uA IPU."""
+    nets = _rails()
+    nets["+3V3"].append(_m("R30", "1"))
+    nets["/FLASH_CS"] = [_m("R30", "2"),
+                         _m("U8", "48", "PB15A/HOLDN/DI/BUSY/CSSPIN/CEN",
+                            "bidirectional")]
+    assert _audit({**BASE, "R30": "47k"}, nets)[0] == []
+
+
+def test_ecp5_user_io_keeps_its_pulldown():
+    """A plain PT11B is still 150 uA down: the narrower rows only take
+    pins whose function names a sysCONFIG role."""
+    hits, _ = _audit(*_alert("100k"))
+    assert abs(hits[0]["sink_a"] - 170e-6) < 1e-9
