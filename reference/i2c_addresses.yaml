@@ -49,11 +49,12 @@ devices:
 
   - mpn: TCA6416A / PCA6416A
     match: '^[TP]CA6416A'
-    verified: true   # TI SCPS194F (revised January 2023) read 2026-11-14
+    verified: true   # TI SCPS194F (Jan 2023) and NXP PCA6416A Rev. 2 (Jan 2013) read 2026-11-14
     pin: ADDR
     addresses: {ground: 0x20, high: 0x21}
     source: >-
       TI SCPS194F Table 8-3 Address Reference: ADDR L 20h, H 21h (pin
-      table: "Address input. Connect directly to VCCP or ground"). The
-      NXP PCA6416A datasheet gives the same two addresses but was not
-      re-read here
+      table: "Address input. Connect directly to VCCP or ground"). NXP
+      PCA6416A Rev. 2 (10 January 2013) section 7.1 Fig 6 and Table 5:
+      slave address 0100 00 ADDR, so 20h and 21h; pin table "Address
+      input. Connect directly to VDD(P) or ground"
