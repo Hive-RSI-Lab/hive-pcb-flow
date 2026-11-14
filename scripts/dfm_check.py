@@ -103,10 +103,12 @@ Checks (all thresholds from reference/jlc_capabilities.yaml, keyed
            (blind/buried by their drill file's span), against the IPC-D-356
            netlist (the package's `<name>.ipc`, else kicad-cli's from the
            board; lib/ipcd356.py). One island holding two nets = ERROR
-           dfm_net_short (net ties exempt); one net in two islands, or a
-           test point on no copper = ERROR dfm_net_open; a D-356 name that
+           dfm_net_short (a net tie's island only while the netlist names
+           its nets apart); one net in two islands, or a test point on no
+           copper = ERROR dfm_net_open; a net tie whose nets the copper
+           leaves in pieces = ERROR dfm_net_tie_open; a D-356 name that
            stands for two board nets (kicad-cli truncates to 14 chars) =
-           WARNING dfm_netlist_name_clash
+           WARNING dfm_netlist_name_clash (not for a net tie's one name)
   release  gerber layer completeness (against the BOARD's declared layer set,
            never the files being audited - a package that dropped a layer must
            read as incomplete, not as a smaller board), drill validity,
@@ -1824,7 +1826,7 @@ def check_netlist(fab, pcb: Path, bg, gdir: Path, tmp: Path,
     import ipcd356
     src = _shipped_netlist(gdir)
     origin = "package"
-    rename_error = None
+    rename_error = tie_error = None
     if src is None:
         origin = "board"
         try:
@@ -1837,6 +1839,7 @@ def check_netlist(fab, pcb: Path, bg, gdir: Path, tmp: Path,
                 return {}, ("kicad-cli ipcd356 export failed: "
                             f"{res.get('stderr_tail')}")
             rename_error = res.get("jumper_rename_error")
+            tie_error = res.get("tie_rename_error")
         except Exception as exc:  # noqa: BLE001 (no kicad-cli = coverage hole)
             return {}, f"no IPC-D-356 netlist ({type(exc).__name__}: {exc})"
     try:
@@ -1846,7 +1849,13 @@ def check_netlist(fab, pcb: Path, bg, gdir: Path, tmp: Path,
     clashes = ipcd356.resolve(d356, bg)
     pcb_text = pcb.read_text(encoding="utf-8", errors="replace")
     ties = ipcd356.net_tie_classes(pcb_text, bg)
-    res = ipcd356.compare(fab, d356, ties, ipcd356.jumper_groups(pcb_text))
+    res = ipcd356.compare(fab, d356, ties, ipcd356.jumper_groups(pcb_text),
+                          ipcd356.net_tie_refs(pcb_text))
+    # One name for the nets a tie's copper joins is what the tester needs
+    # (fab_export's name_net_ties), not a clash.
+    clashes = [c for c in clashes if not any(
+        set(c["board_nets"]) <= set(j["nets"]) and c["d356_net"] in j["d356_names"]
+        for j in res["tie_joins"])]
     for c in clashes:
         vios.append(checklib.violation(
             CHECK, "warning", None, None, None, [],
@@ -1866,10 +1875,11 @@ def check_netlist(fab, pcb: Path, bg, gdir: Path, tmp: Path,
             f"one conductor (nearest test points {near})"
             + (" - the IPC-D-356 names these islands apart (jumper pads), "
                "but the copper joins them: re-export the netlist with the "
-               "gerbers, or fix the copper" if sh.get("jumper") else ""),
+               "gerbers, or fix the copper" if sh.get("jumper") else "")
+            + (_tie_short_note(sh, tie_error) if sh.get("tie") else ""),
             SOURCE,
             kind="dfm_net_short", nets=sh["nets"], points=sh["points"],
-            island=sh["island"]))
+            island=sh["island"], tie=bool(sh.get("tie"))))
     for op in res["opens"]:
         x, y = op["at"]
         if "no_copper" in op:
@@ -1899,12 +1909,45 @@ def check_netlist(fab, pcb: Path, bg, gdir: Path, tmp: Path,
             CHECK, "error", (x, y), None, op["net"], refs, msg, SOURCE,
             kind="dfm_net_open", fragments=op["fragments"],
             jumper=bool(op.get("jumper"))))
+    for to in res["tie_opens"]:
+        x, y = to["at"]
+        near = " / ".join(f"{p['ref']}-{p['pin']}".rstrip("-")
+                          for p in to["near"])
+        vios.append(checklib.violation(
+            CHECK, "error", (x, y), None, None,
+            sorted({p["ref"] for p in to["near"]} - {"VIA"}),
+            f"net tie open in the shipped copper: the board ties nets "
+            f"{', '.join(to['nets'])} (net_tie_pad_groups), but the "
+            f"package's copper leaves them in {len(to['groups'])} pieces "
+            f"({'; '.join(', '.join(g) for g in to['groups'])}; nearest test "
+            f"points {near}). The IPC-D-356 names these nets apart, so a "
+            "bare-board tester can't see it: re-export the package from the "
+            "board, and if check_net_tie fails, put the bridge back first",
+            SOURCE, kind="dfm_net_tie_open", nets=to["nets"],
+            groups=to["groups"]))
     return {"netlist": {
         "source": origin, "file": src.name, "test_points": res["n_points"],
         "nets": res["n_nets"], "plated_holes": res["n_plated_holes"],
         "islands": res["n_islands"], "shorts": len(res["shorts"]),
         "opens": len(res["opens"]), "name_clashes": len(clashes),
-        "jumper_splits": len(res["jumper_splits"])}}, None
+        "jumper_splits": len(res["jumper_splits"]),
+        "net_ties": len(res["tie_joins"]),
+        "net_tie_opens": len(res["tie_opens"])}}, None
+
+
+def _tie_short_note(sh: dict, tie_error: str | None) -> str:
+    names = ", ".join(sh.get("d356_names") or ())
+    if not sh.get("mergeable", True):
+        return (f" - a net tie joins these nets, but the IPC-D-356 names them "
+                f"apart ({names}) and one of those names also stands for a "
+                "net outside the tie (kicad-cli keeps the last 14 "
+                "characters): rename the nets, then re-export")
+    note = (f" - a net tie joins these nets on purpose, but the IPC-D-356 "
+            f"names them apart ({names}), so a bare-board tester fails a good "
+            "board: re-export with fab_export, which gives each tie one name")
+    if tie_error:
+        note += f" - here the naming itself failed ({tie_error}): fix that first"
+    return note
 
 
 # ------------------------------------------------------------------ driver
@@ -1932,7 +1975,8 @@ DFM_FAMILIES = {
             "dfm_assembly_qty_mismatch", "dfm_unplaced_in_package"),
     "release": ("dfm_open_outline", "dfm_missing_layer", "dfm_no_drill"),
     "castellation": castellation.KINDS + ("castellated_rules_unknown",),
-    "netlist": ("dfm_net_short", "dfm_net_open", "dfm_netlist_name_clash"),
+    "netlist": ("dfm_net_short", "dfm_net_open", "dfm_net_tie_open",
+                "dfm_netlist_name_clash"),
     "teardrop": ("dfm_ring_breakout", "dfm_teardrop_missing"),
 }
 

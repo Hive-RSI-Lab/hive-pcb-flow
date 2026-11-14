@@ -161,20 +161,36 @@ def detect(text: str, doc: dict | None = None) -> str | None:
 
     Only the leading non-empty, non-heading lines are searched: a mode is a
     declaration at the top of the brief, not a word somewhere in its prose.
+    A brief quoted as a markdown blockquote (the owner's words, verbatim) is
+    read through its `>` markers: a quoted line that opens with a token
+    declares it, and a quoted line that does not (a provenance note) is
+    passed over, so only a plain line ends the search.
     """
     doc = doc or load()
     for raw in (text or "").splitlines():
         ln = raw.strip()
-        if not ln or ln.startswith("#") or ln.startswith(">"):
+        if not ln or ln.startswith("#"):
             continue
-        low = ln.lower()
-        for tok in doc["tokens"]:
-            if tok != GENERIC_TOKEN and low.startswith(tok.lower()):
-                return tok
-        m = _TOKEN_RE.match(ln)
-        if m:
-            return f"learning {m.group(1).lower()}:"
-        return None                     # first real line decides
+        quoted = ln.startswith(">")
+        if quoted:
+            ln = ln.lstrip("> \t")
+            if not ln or ln.startswith("#"):
+                continue
+        tok = _token_at(ln, doc)
+        if tok is not None or not quoted:
+            return tok                  # first plain line decides
+    return None
+
+
+def _token_at(ln: str, doc: dict) -> str | None:
+    """The mode token line `ln` opens with, or None."""
+    low = ln.lower()
+    for tok in doc["tokens"]:
+        if tok != GENERIC_TOKEN and low.startswith(tok.lower()):
+            return tok
+    m = _TOKEN_RE.match(ln)
+    if m:
+        return f"learning {m.group(1).lower()}:"
     return None
 
 

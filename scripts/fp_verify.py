@@ -11,6 +11,8 @@ Checks (land_pattern fields drive which run):
   - pad_count : # copper pads vs land_pattern.pad_count            (error)
   - pin1      : a copper pad numbered land_pattern.pin1 ('1')      (error)
   - pad_pitch : nearest-neighbour pad spacing vs pitch_mm          (error)
+  - row_spacing: centre-to-centre spacing of the two pad rows vs
+                row_spacing_mm, either axis of a quad              (error)
   - pad_size  : MIN and MAX pad size vs pad_size_mm (the mode hid a (warning)
                 tied asymmetric column 0.25 mm over max - LEARNINGS
                 2026-07-28 SSOP-20)
@@ -60,6 +62,36 @@ def _nearest_neighbour_pitch(centers: list[tuple[float, float]]) -> float | None
     return best if best < math.inf else None
 
 
+def _clusters(vals: list[float], tol: float = 0.02) -> list[list[float]]:
+    out: list[list[float]] = []
+    for v in sorted(vals):
+        if out and v - out[-1][-1] <= tol:
+            out[-1].append(v)
+        else:
+            out.append([v])
+    return out
+
+
+def _row_spacings(centers: list[tuple[float, float]]) -> list[float]:
+    """Centre-to-centre spacing of the two pad rows, one per axis that has
+    them: an axis qualifies when exactly two coordinate groups hold the most
+    pads (a SOIC's columns; a QFP's left/right and top/bottom). An axis of
+    equal small groups (a SOIC's pitch axis) or a lone biggest group
+    (SOT-23) has no row pair."""
+    spacings = []
+    for axis in (0, 1):
+        groups = _clusters([c[axis] for c in centers])
+        if len(groups) < 2:
+            continue
+        top = max(len(g) for g in groups)
+        rows = [g for g in groups if len(g) == top]
+        if len(rows) != 2:
+            continue
+        a, b = (sum(g) / len(g) for g in rows)
+        spacings.append(abs(b - a))
+    return spacings
+
+
 def _modal_size(pads: list[fplib.Pad]) -> tuple[float, float] | None:
     if not pads:
         return None
@@ -106,6 +138,26 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               f"nearest-pad pitch {measured_pitch:.3f} mm != datasheet "
               f"{exp:.3f} mm (tol {pitch_tol})",
               "pad_pitch", expected_mm=exp, measured_mm=round(measured_pitch, 4))
+
+    # --- row spacing (error): on a two-row leaded package it decides
+    # whether the pads catch the lead feet at all, and a wrong one slides
+    # both rows off the leads while pad count and pitch still pass
+    measured_rows = _row_spacings(centers)
+    if land.get("row_spacing_mm") is not None and copper:
+        exp = float(land["row_spacing_mm"])
+        if not measured_rows:
+            v("warning", None,
+              f"datasheet row spacing {exp:g} mm, but the footprint has no "
+              "two pad rows to measure it on: check it by hand",
+              "row_spacing_unmeasured", expected_mm=exp)
+        elif all(abs(m - exp) > size_tol for m in measured_rows):
+            got = ", ".join(f"{m:.3f}" for m in measured_rows)
+            v("error", None,
+              f"pad row spacing {got} mm != datasheet {exp:g} mm "
+              f"(tol {size_tol}, centre to centre): the rows may miss the "
+              "lead feet",
+              "row_spacing", expected_mm=exp,
+              measured_mm=[round(m, 4) for m in measured_rows])
 
     # --- pad size (warning): bound MIN and MAX, never the mode - a 10/10 tie
     # on an asymmetric SSOP-20 hid a column 0.25 mm over the datasheet max
@@ -176,6 +228,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "total_pads": len(fp.pads),
         "measured_pitch_mm": round(measured_pitch, 4) if measured_pitch else None,
         "measured_pad_size_mm": list(measured_size) if measured_size else None,
+        "measured_row_spacing_mm": [round(m, 4) for m in measured_rows] or None,
         "has_courtyard": fp.has_courtyard,
         "has_silk": fp.has_layer_kind("SilkS"),
         "land_pattern": land,
@@ -278,7 +331,8 @@ def main(argv: list[str] | None = None) -> int:
         svg_path = Path(args.svg) if args.svg else fp_path.with_suffix(".overlay.svg")
         # A pitch/size finding implicates the whole pad field; count/pin1 don't
         # point at a specific pad, so nothing is reddened for those.
-        flag = any(v["kind"] in ("pad_pitch", "pad_size") for v in viol)
+        flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing")
+                   for v in viol)
         bad_pads = {p.number for p in fp.copper_pads} if flag else set()
         write_svg(svg_path, fp, bad_pads, facts["land_pattern"])
         facts["svg"] = str(svg_path)

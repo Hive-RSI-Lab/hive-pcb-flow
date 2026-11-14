@@ -8,7 +8,9 @@ is checked as it is in the scorecard: caught at R2 by bom_dnp_populated.
 """
 from __future__ import annotations
 
+import csv
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
@@ -87,7 +89,7 @@ def test_golden_has_no_findings_and_says_which_legs_skipped():
     assert viols == []
     skipped = legs.pop("skipped")
     assert legs == {"schematic": True, "parts": False, "fab": False,
-                    "packages": 0}
+                    "packages": 0, "files": {}}
     assert [s.split(":")[0] for s in skipped] == ["fab", "parts"]
 
 
@@ -346,3 +348,194 @@ def test_lcsc_packages_add_reads_jlc_and_records_a_missing_code(tmp_path):
     lcsc_packages.save(parts, path)
     assert set(lcsc_packages.load(path)) == {"C1", "C2"}
     assert lcsc_packages.load(tmp_path / "absent.json") == {}
+
+
+# ---- the fab leg reads the BOM and CPL a board ships under other names: a
+# KiCad pos export and a distributor BOM in a folder of the fab dir were
+# never read, so the leg was skipped as if there were no fab files
+
+def _foreign_ws(tmp_path, pcb_text=GOLDEN_PCB, sch_dnp=None):
+    """blinky2 as a workspace (kicad/, fab/) with no file under bom_cpl's
+    names. Returns (board, fab dir)."""
+    (tmp_path / "kicad").mkdir()
+    pcb = _workspace(tmp_path / "kicad", pcb_text, sch_dnp, fab=False)
+    (tmp_path / "fab").mkdir()
+    return pcb, tmp_path / "fab"
+
+
+def _golden_rows(name):
+    return list(csv.DictReader(io.StringIO(MUT.fab_files(GOLDEN_PCB)[name])))
+
+
+def _write_bom(path, drop=(), extra=()):
+    """The golden BOM as a distributor BOM: a Designators column whose refs
+    a space joins."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [[r["Comment"], " ".join(x for x in r["Designator"].split(",")
+                                     if x not in drop), r["Footprint"]]
+            for r in _golden_rows("BOM.csv")] + [list(e) for e in extra]
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["Value", "Designators", "Footprint"])
+        w.writerows(r for r in rows if r[1])
+    return path
+
+
+def _write_pos(path, refs=None):
+    """The golden CPL as a KiCad pos export (Ref, Val, ... Side), of refs
+    (default: every one)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["Ref", "Val", "Package", "PosX", "PosY", "Rot", "Side"])
+        for r in _golden_rows("CPL.csv"):
+            if refs is None or r["Designator"] in refs:
+                w.writerow([r["Designator"], "", "", r["Mid X"], r["Mid Y"],
+                            r["Rotation"], "top"])
+    return path
+
+
+def _fab_lines(legs):
+    return [s for s in legs["skipped"] if s.startswith("fab")]
+
+
+def test_a_bom_and_pos_in_a_folder_of_the_fab_dir_are_read(tmp_path):
+    pcb, fab = _foreign_ws(tmp_path)
+    _write_bom(fab / "out" / "BOM-US.csv")
+    _write_pos(fab / "out" / "blinky2-pos.csv")
+    viols, legs = _run(pcb)
+    assert legs["fab"] is True
+    assert legs["files"] == {"BOM": ["out/BOM-US.csv"],
+                             "CPL": ["out/blinky2-pos.csv"]}
+    assert _errors(viols) == []
+    assert _fab_lines(legs) == []
+
+
+def test_foreign_files_still_catch_unknown_and_missing_refs(tmp_path):
+    pcb, fab = _foreign_ws(tmp_path)
+    _write_bom(fab / "out" / "BOM-US.csv", drop={"C4"},
+               extra=[("10k", "R99", "R_0603_1608Metric")])
+    every = {r["Designator"] for r in _golden_rows("CPL.csv")}
+    _write_pos(fab / "out" / "blinky2-pos.csv", refs=every - {"D1"})
+    viols, _ = _run(pcb)
+    unknown = _errors(viols, "bom_ref_unknown")
+    assert [(v["refs"][0], "out/BOM-US.csv" in v["msg"]) for v in unknown] \
+        == [("R99", True)]
+    missing = _errors(viols, "bom_ref_missing")
+    assert {(v["refs"][0], v["msg"].rsplit(" ", 1)[1]) for v in missing} \
+        == {("C4", "out/BOM-US.csv"), ("D1", "out/blinky2-pos.csv")}
+
+
+def test_two_files_that_fit_a_role_leave_it_unread_and_say_which(tmp_path):
+    pcb, fab = _foreign_ws(tmp_path)
+    _write_bom(fab / "out" / "BOM-US.csv")
+    _write_bom(fab / "out" / "BOM-EU.csv", drop={"C4"})
+    _write_pos(fab / "out" / "blinky2-pos.csv")
+    viols, legs = _run(pcb)
+    assert legs["files"] == {"CPL": ["out/blinky2-pos.csv"]}
+    [note] = _fab_lines(legs)
+    assert "out/BOM-EU.csv, out/BOM-US.csv" in note and "--bom" in note
+    assert _errors(viols) == []
+    # --bom names the one to judge
+    viols, legs = check_bom_sync.check(pcb, fab, None,
+                                       bom=fab / "out" / "BOM-EU.csv")
+    assert legs["files"]["BOM"] == ["out/BOM-EU.csv"]
+    assert _refs(_errors(viols), "bom_ref_missing") == {"C4"}
+    assert _fab_lines(legs) == []
+
+
+def test_a_pos_export_split_by_side_is_read_as_one_cpl(tmp_path):
+    pcb, fab = _foreign_ws(tmp_path)
+    refs = [r["Designator"] for r in _golden_rows("CPL.csv")]
+    _write_pos(fab / "blinky2-top-pos.csv", refs=set(refs[:9]))
+    _write_pos(fab / "blinky2-bottom-pos.csv", refs=set(refs[9:]))
+    viols, legs = _run(pcb)
+    assert legs["files"] == {"CPL": ["blinky2-top-pos.csv",
+                                     "blinky2-bottom-pos.csv"]}
+    assert _errors(viols) == []
+    # two pos files of different boards are no pair
+    (fab / "blinky2-bottom-pos.csv").rename(fab / "other-bottom-pos.csv")
+    _, legs = _run(pcb)
+    assert legs["files"] == {}
+    assert "2 files could be the CPL" in _fab_lines(legs)[0]
+
+
+def test_a_kicad_grouped_bom_range_is_each_ref_in_it(tmp_path):
+    split = check_bom_sync._split_refs
+    assert split("C1-C4,C9 R1;R2") == ["C1", "C2", "C3", "C4", "C9", "R1",
+                                       "R2"]
+    # no range: a ref with a dash, a reversed or zero-padded pair
+    assert split("TP-1 U1-A R4-R2 C01-C03 C1-D4") == [
+        "TP-1", "U1-A", "R4-R2", "C01-C03", "C1-D4"]
+    # kicad-cli sch export bom --group-by "Value,Footprint", as it writes it
+    pcb, fab = _foreign_ws(tmp_path)
+    (fab / "blinky2-bom.csv").write_text(
+        '"Refs","Value","Footprint","Qty","DNP"\n'
+        '"C1-C4,C9","100nF","C_0603_1608Metric","5",""\n'
+        '"C5,C6","10uF","C_0805_2012Metric","2",""\n'
+        '"C7,C8","22pF","C_0603_1608Metric","2",""\n'
+        '"D1","LED_red","LED_0805_2012Metric","1",""\n'
+        '"J1","PWR_5V","PinHeader_1x02_P2.54mm_Vertical","1",""\n'
+        '"J2","SWD","PinHeader_1x04_P2.54mm_Vertical","1",""\n'
+        '"R1","10k","R_0603_1608Metric","1",""\n'
+        '"R2","470","R_0603_1608Metric","1",""\n'
+        '"U1","STM32F103C8T6","LQFP-48_7x7mm_P0.5mm","1",""\n'
+        '"U2","AMS1117-3.3","SOT-223-3_TabPin2","1",""\n'
+        '"Y1","8MHz","Crystal_SMD_3225-4Pin_3.2x2.5mm","1",""\n',
+        encoding="utf-8")
+    viols, legs = _run(pcb)
+    assert legs["files"] == {"BOM": ["blinky2-bom.csv"]}
+    assert _errors(viols) == []
+
+
+def test_dnp_in_a_foreign_file_is_named_not_an_error(tmp_path):
+    # a KiCad pos or BOM export lists DNP parts unless told not to, and its
+    # rows may say DNP in a column of their own: only bom_cpl's files are
+    # held to the DNP rule
+    pcb_text = MUT.mutlib.edit_footprint(
+        GOLDEN_PCB, "R2", "(attr smd)", "(attr smd dnp)", "R2 dnp")
+    pcb, fab = _foreign_ws(tmp_path, pcb_text, sch_dnp="R2")
+    _write_bom(fab / "out" / "BOM-US.csv")
+    _write_pos(fab / "out" / "blinky2-pos.csv")
+    viols, legs = _run(pcb)
+    assert _errors(viols) == []
+    lines = [s for s in _fab_lines(legs) if "lists DNP R2" in s]
+    assert len(lines) == 2
+    # bom_cpl's own BOM.csv still is
+    (fab / "out" / "BOM-US.csv").rename(fab / "BOM.csv")
+    viols, legs = _run(pcb)
+    assert legs["files"]["BOM"] == ["BOM.csv"]
+    assert _refs(_errors(viols), "bom_dnp_populated") == {"R2"}
+    assert all("BOM.csv" in v["msg"]
+               for v in _errors(viols, "bom_dnp_populated"))
+
+
+def test_a_file_with_no_designator_column_is_said_and_skipped(tmp_path):
+    pcb, fab = _foreign_ws(tmp_path)
+    (fab / "blinky2-bom.csv").write_text("Value,Qty\n10k,1\n",
+                                         encoding="utf-8")
+    _write_pos(fab / "blinky2-pos.csv")
+    viols, legs = _run(pcb)
+    assert legs["files"] == {"CPL": ["blinky2-pos.csv"]}
+    [note] = _fab_lines(legs)
+    assert note.startswith("fab: blinky2-bom.csv has no designator column")
+    assert _errors(viols) == []
+
+
+def test_cli_bom_and_cpl_name_the_files(tmp_path):
+    pcb, _ = _foreign_ws(tmp_path)
+    bom = _write_bom(tmp_path / "order" / "parts-list.csv", drop={"C4"})
+    refs = [r["Designator"] for r in _golden_rows("CPL.csv")]
+    top = _write_pos(tmp_path / "order" / "a.csv", refs=set(refs[:9]))
+    bottom = _write_pos(tmp_path / "order" / "b.csv", refs=set(refs[9:]))
+    out = tmp_path / "r.json"
+    assert check_bom_sync.main(["--pcb", str(pcb), "--bom", str(bom),
+                                "--cpl", str(top), str(bottom),
+                                "--out", str(out)]) == 1
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert rep["legs"]["fab"] is True
+    assert rep["fab_files"] == {"BOM": [str(bom)],
+                                "CPL": [str(top), str(bottom)]}
+    assert {v["refs"][0] for v in rep["violations"]} == {"C4"}
+    assert check_bom_sync.main(["--pcb", str(pcb), "--bom",
+                                str(tmp_path / "nope.csv")]) == 2

@@ -190,6 +190,21 @@ def test_detect_reads_only_the_opening_declaration():
     assert modeslib.detect("", d) is None
 
 
+def test_detect_reads_a_blockquoted_brief():
+    """An owner's brief quoted verbatim as a markdown blockquote still
+    declares its mode; a quoted provenance line above the token is passed
+    over, and plain prose before any token still decides None."""
+    d = modeslib.load()
+    want = modeslib.detect("learning stage-placement: a buck", d)
+    assert modeslib.detect("> learning stage-placement: a buck", d) == want
+    assert modeslib.detect(
+        "# Brief\n\n> Owner brief, verbatim, received 2026-08-16\n>\n"
+        "> learning stage-placement: a buck", d) == want
+    assert modeslib.detect("Design a buck.\n\n> learning fit-check: no",
+                           d) is None
+    assert modeslib.detect("> Design a buck, please.", d) is None
+
+
 def test_the_legacy_token_is_canonical_now():
     """The owner ruling (2026-08-16): `ultra bare bones design:` always meant
     'the smallest outline that keeps the layout HONEST', which is a canonical
@@ -434,6 +449,17 @@ def test_check_requirements_fails_an_unnamed_mode(tmp_path):
     v = payload["violations"][0]
     assert v["target"] == "stage-placement" and v["binding"] == "canonical"
     assert "stage-placement" in v["msg"] and "canonical" in v["msg"]
+
+
+def test_check_requirements_reads_a_blockquoted_brief(tmp_path):
+    """The owner's brief quoted verbatim as a blockquote used to switch the
+    whole mode leg off: no token, so req_mode_unnamed could never fire and
+    the lint passed. The quoted token now counts."""
+    ws = _ws(tmp_path, "> Owner brief, verbatim\n>\n"
+                       "> learning stage-placement: a buck\n")
+    code, payload = _lint(ws)
+    assert payload["brief_token"] == "learning stage-placement:"
+    assert code == 1 and _kinds(payload) == ["req_mode_unnamed"]
 
 
 def test_check_requirements_fails_an_unmarked_relaxable_size(tmp_path):

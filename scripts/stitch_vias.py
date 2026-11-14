@@ -6,7 +6,9 @@ Three jobs (SPEC P7.4: "GND stitching at rise-time-derived pitch"):
    NOT carry that net's plane gets a through via tying it to the plane.
    Candidates form a small ring just past the pad edge (on-pad vias short
    neighbours at fine pitch - prior-attempt fact; 0.65 mm from pad centre
-   verified safe), tried away-from-body first. A spot whose via disc misses
+   verified safe for a 1.0 mm pad), measured from the pad's own edge along
+   each bearing so a big pad's drill never lands on it (an open barrel
+   under the paste wicks solder away), tried away-from-body first. A spot whose via disc misses
    the pad's own copper gets a short connecting track (corridor clearance-
    checked against foreign copper too). A pad with no clear spot is SKIPPED
    with a note, never forced. Pads already within 0.2 mm of a same-net via
@@ -143,18 +145,44 @@ def outward_deg(pad_center: tuple[float, float],
     return math.degrees(math.atan2(dy, dx))
 
 
+def _edge_reach(center: tuple[float, float], a: float, pad_poly) -> float:
+    """Distance from `center` to `pad_poly`'s far boundary along bearing
+    `a` (radians); 0 when the ray never leaves the pad's outline."""
+    far = max(pad_poly.bounds[2] - pad_poly.bounds[0],
+              pad_poly.bounds[3] - pad_poly.bounds[1]) + 1.0
+    ray = LineString([center, (center[0] + far * math.cos(a),
+                               center[1] + far * math.sin(a))])
+    hit = ray.intersection(pad_poly.boundary)
+    if hit.is_empty:
+        return 0.0
+    parts = getattr(hit, "geoms", [hit])
+    return max(math.dist(center, c) for g in parts for c in g.coords)
+
+
 def ring_candidates(center: tuple[float, float], outward: float,
                     radii: tuple[float, ...] = RING_RADII,
-                    offsets: tuple[float, ...] = RING_OFFSETS
+                    offsets: tuple[float, ...] = RING_OFFSETS,
+                    pad_poly=None, drill_r: float = 0.15
                     ) -> list[tuple[float, float]]:
     """Candidate via spots around a pad: rings just past the pad edge,
-    nearest radius first, away-from-body angles first. Deterministic."""
+    nearest radius first, away-from-body angles first. Deterministic.
+
+    With `pad_poly` the rings are measured from the pad EDGE along each
+    bearing, so the drill stays off the pad: the first ring puts the drill
+    edge on the pad edge (as 0.65 mm does for a 1.0 mm pad and a 0.3 mm
+    drill), the later ones step out as before. Radii from the centre alone
+    put a big pad's via inside it, an open barrel under the paste."""
     out = []
     for r in radii:
         for off in offsets:
             a = math.radians(outward + off)
-            out.append((round(center[0] + r * math.cos(a), 3),
-                        round(center[1] + r * math.sin(a), 3)))
+            if pad_poly is not None:
+                r_eff = max(r, _edge_reach(center, a, pad_poly) + drill_r
+                            + (r - radii[0]))
+            else:
+                r_eff = r
+            out.append((round(center[0] + r_eff * math.cos(a), 3),
+                        round(center[1] + r_eff * math.sin(a), 3)))
     return out
 
 
@@ -496,9 +524,13 @@ def stitch_one_net(bg: geom.BoardGeom, scene: Scene, net: str, pitch: float,
         requested += 1
         bearing = outward_deg(pad.center, cents.get(pad.ref, pad.center))
         hit = None
-        for x, y in ring_candidates(pad.center, bearing):
+        for x, y in ring_candidates(pad.center, bearing,
+                                    pad_poly=pad.poly,
+                                    drill_r=via_drill / 2.0):
             if not fill.covers(Point(x, y)):
                 continue  # via would miss the plane entirely
+            if pad.poly.distance(Point(x, y)) < via_drill / 2.0 - 1e-6:
+                continue  # drill on its own pad: paste wicks down it
             if scene.via_check(x, y, via_r, net, pad_edge_margin):
                 continue
             track_op = None

@@ -78,6 +78,43 @@ def test_ring_candidates_deterministic_order():
     assert c90[0] == (10.0, 10.65)
 
 
+def test_ring_candidates_start_at_a_big_pad_edge():
+    """A 3 x 3 mm pad reaches 1.5 mm from its centre: rings measured from the
+    centre (0.65 mm) put the via inside it. From the edge, the first ring
+    puts the drill edge on the pad edge, the others step out by the same
+    0.25 mm as before."""
+    big = box(8.5, 8.5, 11.5, 11.5)
+    c = stitch_vias.ring_candidates((10, 10), 0.0, pad_poly=big)
+    assert c[0] == (11.65, 10.0)
+    assert c[8] == (11.9, 10.0) and c[16] == (12.15, 10.0)
+    for x, y in c:
+        assert big.distance(Point(x, y)) >= 0.15 - 1e-3, (x, y)
+    # a 1.0 mm pad keeps its 0.65 mm ring square to its sides; the 45 deg
+    # spots, whose drill sat on the pad's corner, step out past it
+    small = box(9.5, 9.5, 10.5, 10.5)
+    cs = stitch_vias.ring_candidates((10, 10), 0.0, pad_poly=small)
+    assert cs[0] == (10.65, 10.0) and cs[3] == (10.0, 10.65)
+    for x, y in cs:
+        assert small.distance(Point(x, y)) >= 0.15 - 1e-3, (x, y)
+
+
+def test_dry_run_keeps_the_drill_off_a_big_pad(tmp_path):
+    """LEARNINGS: a stitch via inside its own big pad is an open barrel
+    under the paste (JLC economy PCBA neither fills nor plugs)."""
+    body = _fp("U1", 10, 10, _pad("1", 0, 0, "GND", size=3.0))
+    body += _zone(1, "GND", "B.Cu", 1, 1, 29, 29)
+    pcb = _board(tmp_path, "bigpad", body)
+    payload, _ = stitch_vias.run(
+        ["--pcb", str(pcb), "--dry-run", "--pads-only"])
+    vias = [op for op in payload["ops"] if op["op"] == "add_via"]
+    assert len(vias) == 1
+    pad = box(8.5, 8.5, 11.5, 11.5)
+    assert pad.distance(Point(vias[0]["at"])) >= 0.15 - 1e-6
+    # the disc still bites the pad, so no stub track is needed
+    assert Point(vias[0]["at"]).buffer(0.3).intersects(pad)
+    assert [op for op in payload["ops"] if op["op"] == "add_track"] == []
+
+
 def test_outward_deg():
     assert stitch_vias.outward_deg((11, 10), (10, 10)) == pytest.approx(0.0)
     assert stitch_vias.outward_deg((10, 11), (10, 10)) == pytest.approx(90.0)

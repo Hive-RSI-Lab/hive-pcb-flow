@@ -15,20 +15,24 @@ statement bom_cpl does not consult.
 
 Rules, each a finding's `kind` (error unless marked):
  - bom_dnp_populated: a ref the schematic, the board's `dnp` attr or parts.json
-   marks DNP is listed in BOM.csv or CPL.csv - it would be placed.
+   marks DNP is listed in BOM.csv or CPL.csv - it would be placed. Only
+   files named so are bom_cpl's and held to it; another maker's BOM or
+   pos file (a KiCad pos lists DNP parts unless told not to) is judged on
+   unknown and missing refs only, and the DNP refs it lists are named in
+   `not_judged`.
  - bom_dnp_mismatch: the schematic says DNP but the class bom_cpl resolves is
    still smt_placed or tht (board attr and parts.json both silent), or the board's
    `dnp` attr is set while the schematic says `(dnp no)`. The next bom_cpl run
    would place a part the schematic leaves empty, or the reverse.
  - bom_ref_missing: a board footprint whose class is smt_placed or tht is absent from
-   BOM.csv or CPL.csv, or a ref of any class but board_feature is absent from
+   the BOM or the CPL, or a ref of any class but board_feature is absent from
    BOM-full.csv (the BOM of record).
- - bom_ref_unknown: BOM.csv, CPL.csv or BOM-full.csv names a designator that is
-   no footprint on the board. A designator matches whatever its case, as at
-   JLC (the board's boot1 is the CPL's BOOT1), unless two footprints differ
-   only by case.
+ - bom_ref_unknown: the BOM, the CPL or BOM-full.csv names a designator that
+   is no footprint on the board. A designator matches whatever its case, as
+   at JLC (the board's boot1 is the CPL's BOOT1), unless two footprints
+   differ only by case.
  - bom_package_mismatch: the part a ref is bought as (its LCSC number, from
-   the board's footprint field, parts.json or BOM.csv - each is checked) is
+   the board's footprint field, parts.json or the BOM - each is checked) is
    a chip of another size than the footprint's (an 0402 resistor on an 0603
    pad: oasis v0.2 Rfbb1, which JLC's BOM review caught and hwde did not,
    docs/errata-corpus.md). The part's package comes from the workspace's part
@@ -50,12 +54,25 @@ has no fab files and that is no fault of the design. Instead the report's
 
 Inputs, each found beside a pipeline workspace's board when not given:
   schematic   <pcb stem>.kicad_sch beside the board, its sheets followed
-  fab files   --fab-dir, else the board's dir when it holds BOM.csv or
+  fab dir     --fab-dir, else the board's dir when it holds BOM.csv or
               CPL.csv, else <ws>/fab
+  fab files   in the fab dir, each role by its own name first (BOM.csv,
+              CPL.csv, BOM-full.csv), else the one file in the fab dir or
+              a folder directly in it that fits the role, by order_submit's
+              patterns in any case: the BOM is *bom*.csv (BOM-full.csv
+              aside), the CPL *cpl*.csv, else *-pos.csv (a -top-/-bottom-pos
+              pair is read as one). Where order_submit takes the first of
+              two files that fit one role, this leaves the role unread and
+              says so; --bom and --cpl name the files outright. The
+              designators are read from a Designator, Designators, Ref,
+              Reference or RefDes column, split on commas, spaces or
+              semicolons, a range (C1-C4) read as each ref in it. The
+              report's `fab_files` names what each role read.
   parts.json  --parts (a parts dir or the file), else <ws>/parts/parts.json
 
-CLI: --pcb board.kicad_pcb [--fab-dir DIR] [--parts DIR|parts.json]
-     [--live] [--out report.json]   exit 0/1/2 per SPEC section 6.
+CLI: --pcb board.kicad_pcb [--fab-dir DIR] [--bom FILE] [--cpl FILE...]
+     [--parts DIR|parts.json] [--live] [--out report.json]
+     exit 0/1/2 per SPEC section 6.
 """
 from __future__ import annotations
 
@@ -63,6 +80,7 @@ import argparse
 import csv
 import io
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -82,7 +100,18 @@ SCRIPT = "check_bom_sync"
 PLACED = bom_cpl.PLACED_CLASS
 ASSEMBLED = bom_cpl.ASSEMBLED_CLASSES
 FAB_FILES = ("BOM.csv", "CPL.csv", "BOM-full.csv")
+# the role each of bom_cpl's own files plays; any other file is a foreign one
+ROLES = {"BOM": "BOM.csv", "CPL": "CPL.csv", "BOM-full": "BOM-full.csv"}
 LCSC_COLS = ("LCSC Part #", "LCSC", "JLCPCB Part #", "LCSC Part")
+# the designator column, whatever its case: vendor.py's names for it (KiCad's
+# pos says Ref, a distributor BOM Designators) bar its loose "parts"
+REF_COLS = ("designator", "designators", "reference", "references", "refdes",
+            "ref des", "ref", "refs", "part/designator")
+# a KiCad pos export split by side, read as one CPL
+POS_PAIRS = (("-top-pos.csv", "-bottom-pos.csv"),
+             ("-front-pos.csv", "-back-pos.csv"))
+# a designator range in a grouped BOM: C1-C4
+_RANGE = re.compile(r"([A-Za-z_]+)(\d+)-([A-Za-z_]+)(\d+)")
 
 
 def _head(n):
@@ -169,26 +198,49 @@ def schematic_dnp(sch: Path) -> dict[str, bool]:
     return out
 
 
-def csv_designators(path: Path) -> set[str]:
-    """Every designator a BOM/CPL csv names (BOM rows join them by commas)."""
+def _csv(path: Path) -> tuple[str | None, list[dict]]:
+    """(its designator column or None, its rows) for a fab csv."""
     text = path.read_text(encoding="utf-8-sig")
-    refs: set[str] = set()
-    for row in csv.DictReader(io.StringIO(text)):
-        cell = row.get("Designator") or ""
-        refs |= {r.strip() for r in cell.split(",") if r.strip()}
-    return refs
+    reader = csv.DictReader(io.StringIO(text))
+    names = {str(f).strip().lower(): f for f in reader.fieldnames or () if f}
+    col = next((names[c] for c in REF_COLS if c in names), None)
+    return col, list(reader)
+
+
+def _split_refs(cell) -> list[str]:
+    """A BOM row's designators, joined by commas, spaces or semicolons. A
+    range (C1-C4, as kicad-cli's grouped BOM writes them) is each ref in
+    it."""
+    out: list[str] = []
+    for tok in re.split(r"[,;\s]+", str(cell or "")):
+        m = _RANGE.fullmatch(tok)
+        lo, hi = (int(m[2]), int(m[4])) if m else (0, 0)
+        if m and m[1] == m[3] and m[2] == str(lo) and m[4] == str(hi) \
+                and lo < hi <= lo + 10000:
+            out += [f"{m[1]}{n}" for n in range(lo, hi + 1)]
+        elif tok:
+            out.append(tok)
+    return out
+
+
+def csv_designators(path: Path) -> set[str] | None:
+    """Every designator a BOM/CPL csv names, None when it has no designator
+    column (REF_COLS) to read them from."""
+    col, rows = _csv(path)
+    if col is None:
+        return None
+    return {r for row in rows for r in _split_refs(row.get(col))}
 
 
 def csv_lcsc(path: Path) -> dict[str, str]:
     """ref -> the LCSC number a BOM csv buys it as (rows with one)."""
-    text = path.read_text(encoding="utf-8-sig")
+    col, rows = _csv(path)
     out: dict[str, str] = {}
-    for row in csv.DictReader(io.StringIO(text)):
+    for row in rows if col else ():
         code = next((str(row[c]).strip() for c in LCSC_COLS
                      if row.get(c)), "")
-        for r in str(row.get("Designator") or "").split(","):
-            if r.strip() and code:
-                out[r.strip()] = code
+        for r in _split_refs(row.get(col)) if code else ():
+            out[r] = code
     return out
 
 
@@ -244,6 +296,94 @@ def find_fab_dir(pcb: Path, given: str | None) -> Path | None:
     return ws_fab if ws_fab.is_dir() else None
 
 
+def _fab_csvs(fab_dir: Path) -> list[Path]:
+    """The csv files in fab_dir and in each folder directly inside it."""
+    out: list[Path] = []
+    dirs = [fab_dir] + sorted(
+        d for d in fab_dir.iterdir() if d.is_dir()
+        and not d.name.startswith(".") and d.name != "__pycache__")
+    for d in dirs:
+        out += sorted(p for p in d.iterdir()
+                      if p.is_file() and p.suffix.lower() == ".csv")
+    return out
+
+
+def _pos_pair(hits: list[Path]) -> list[Path] | None:
+    """A KiCad pos export split by side ([top, bottom]), else None."""
+    if len(hits) != 2 or hits[0].parent != hits[1].parent:
+        return None
+    for top, bottom in POS_PAIRS:
+        t = [p for p in hits if p.name.lower().endswith(top)]
+        b = [p for p in hits if p.name.lower().endswith(bottom)]
+        if len(t) == 1 and len(b) == 1 and \
+                t[0].name.lower()[:-len(top)] == \
+                b[0].name.lower()[:-len(bottom)]:
+            return [t[0], b[0]]
+    return None
+
+
+def fab_files(fab_dir: Path | None, bom=None, cpl=None) \
+        -> tuple[dict[str, list[Path]], list[str]]:
+    """role (BOM, CPL, BOM-full) -> the files it is read from, and a line
+    for each role two or more files could fill. --bom/--cpl first, then the
+    role's own name in fab_dir, then the one file in fab_dir or a folder
+    directly in it that fits (order_submit.collect_package's patterns, in
+    any case)."""
+    files: dict[str, list[Path]] = {}
+    notes: list[str] = []
+    for role, given in (("BOM", bom), ("CPL", cpl)):
+        if given:
+            paths = [Path(g) for g in
+                     ([given] if isinstance(given, (str, Path)) else given)]
+            for p in paths:
+                if not p.is_file():
+                    raise checklib.CheckError(
+                        f"--{role.lower()} file not found: {p}")
+            files[role] = paths
+    if fab_dir is None or not fab_dir.is_dir():
+        return files, notes
+    csvs = _fab_csvs(fab_dir)
+
+    def low(p):
+        return p.name.lower()
+    fits = {
+        "BOM": [[p for p in csvs if "bom" in low(p)
+                 and low(p) != "bom-full.csv"]],
+        "CPL": [[p for p in csvs if "cpl" in low(p)],
+                [p for p in csvs if low(p).endswith("-pos.csv")]],
+        "BOM-full": [[p for p in csvs if low(p) == "bom-full.csv"]]}
+    for role, name in ROLES.items():
+        if role in files:
+            continue
+        if (fab_dir / name).is_file():
+            files[role] = [fab_dir / name]
+            continue
+        for hits in fits[role]:
+            if len(hits) == 1:
+                files[role] = hits
+            elif role == "CPL" and _pos_pair(hits):
+                files[role] = _pos_pair(hits)
+            elif hits:
+                flag = {"BOM": " (--bom names the one to read)",
+                        "CPL": " (--cpl names the one to read)"}
+                notes.append(
+                    f"fab: {len(hits)} files could be the {role} ("
+                    + ", ".join(_rel(p, fab_dir) for p in hits)
+                    + f"), so the {role} leg did not run"
+                    + flag.get(role, ""))
+            if hits:
+                break
+    return files, notes
+
+
+def _rel(p: Path, base: Path | None) -> str:
+    """p as the report names it: from the fab dir when it is in it."""
+    try:
+        return str(p.relative_to(base)) if base is not None else str(p)
+    except ValueError:
+        return str(p)
+
+
 def find_parts(pcb: Path, given: str | None) -> Path | None:
     if given:
         p = Path(given)
@@ -256,7 +396,8 @@ def find_parts(pcb: Path, given: str | None) -> Path | None:
 
 
 def check(pcb: Path, fab_dir: Path | None, parts: Path | None,
-          live: bool = False, fetch=None, table: dict | None = None) -> tuple:
+          live: bool = False, fetch=None, table: dict | None = None,
+          bom=None, cpl=None) -> tuple:
     fps = board_footprints(pcb)
     sch_path = pcb.with_suffix(".kicad_sch")
     sch = schematic_dnp(sch_path) if sch_path.is_file() else {}
@@ -319,13 +460,32 @@ def check(pcb: Path, fab_dir: Path | None, parts: Path | None,
         return hit[0] if len(hit) == 1 else ref
 
     legs = {"schematic": bool(sch), "parts": have_parts, "fab": False}
-    files: dict[str, set[str]] = {}
-    if fab_dir is not None:
-        for name in FAB_FILES:
-            if (fab_dir / name).is_file():
-                files[name] = {board_ref(r)
-                               for r in csv_designators(fab_dir / name)}
+    found, fab_notes = fab_files(fab_dir, bom, cpl)
+    # role -> (label, refs listed, strict): bom_cpl's own BOM.csv and CPL.csv
+    # are held to its DNP rule; another maker's file only to the refs
+    files: dict[str, tuple[str, set[str], bool]] = {}
+    for role, paths in found.items():
+        label = " + ".join(_rel(p, fab_dir) for p in paths)
+        refs: set[str] = set()
+        for p in paths:
+            try:
+                got = csv_designators(p)
+            except (OSError, UnicodeDecodeError, csv.Error) as exc:
+                got, why = None, f"could not be read ({exc})"
+            else:
+                why = "has no designator column (" + ", ".join(
+                    c.title() for c in REF_COLS[:5]) + ")"
+            if got is None:
+                fab_notes.append(f"fab: {_rel(p, fab_dir)} {why}, so the "
+                                 f"{role} leg did not run")
+                break
+            refs |= {board_ref(r) for r in got}
+        else:
+            files[role] = (label, refs, all(p.name == ROLES[role]
+                                            for p in paths))
     legs["fab"] = bool(files)
+    legs["files"] = {role: [_rel(p, fab_dir) for p in found[role]]
+                     for role in files}
 
     # The part each ref is bought as against its pad's chip size. Every
     # source that names an LCSC number for a ref is a statement of its own.
@@ -336,9 +496,11 @@ def check(pcb: Path, fab_dir: Path | None, parts: Path | None,
     for rec in records:
         for ref in rec["refs"] if rec["lcsc"] else ():
             bought.setdefault((ref, rec["lcsc"]), []).append("parts.json")
-    if fab_dir is not None and (fab_dir / "BOM.csv").is_file():
-        for ref, code in csv_lcsc(fab_dir / "BOM.csv").items():
-            bought.setdefault((board_ref(ref), code), []).append("BOM.csv")
+    if "BOM" in files:
+        for p in found["BOM"]:
+            for ref, code in csv_lcsc(p).items():
+                bought.setdefault((board_ref(ref), code), []).append(
+                    _rel(p, fab_dir))
     known = part_packages(records, parts if have_parts else None)
     table = lcsc_packages.load() if table is None else table
     unknown: set[str] = set()
@@ -374,41 +536,51 @@ def check(pcb: Path, fab_dir: Path | None, parts: Path | None,
                 f"the pads (LCSC number from {', '.join(where)})")
     legs["packages"] = compared
     legs["skipped"] = [m for m, missing in (
-        ("fab: no BOM.csv, CPL.csv or BOM-full.csv found, so the BOM and "
-         "CPL legs did not run", not files),
+        ("fab: no BOM or CPL file found (BOM.csv, CPL.csv, BOM-full.csv, "
+         "*bom*.csv, *cpl*.csv or *-pos.csv, in the fab dir or a folder in "
+         "it), so the BOM and CPL legs did not run",
+         not files and not fab_notes),
         ("parts: no parts.json found, so classes come from board attrs and "
          "the schematic only", not have_parts),
         ("schematic: no schematic DNP marks read", not sch),
         (f"packages: no package on record for {', '.join(sorted(unknown))}"
          + ("" if live else "; --live asks JLC"), unknown)) if missing]
+    legs["skipped"][:0] = fab_notes
 
-    for name in ("BOM.csv", "CPL.csv"):
-        listed = files.get(name)
-        if listed is None:
+    for role in ("BOM", "CPL"):
+        if role not in files:
             continue
+        name, listed, strict = files[role]
+        dnp_listed = []
         for ref in sorted(listed, key=bom_cpl._natural_key):
             if ref not in fps:
                 add("bom_ref_unknown", "error", ref,
                     f"{name} lists {ref}, which is no footprint on the board")
-            elif is_dnp(ref):
+            elif is_dnp(ref) and strict:
                 add("bom_dnp_populated", "error", ref,
                     f"{ref} is DNP but {name} lists it, so it would be placed")
+            elif is_dnp(ref):
+                dnp_listed.append(ref)
         for ref in sorted(fps, key=bom_cpl._natural_key):
             if classes.get(ref) in ASSEMBLED and not is_dnp(ref) \
                     and ref not in listed:
                 add("bom_ref_missing", "error", ref,
                     f"{ref} is {classes[ref]} but missing from {name}")
-    full = files.get("BOM-full.csv")
-    if full is not None:
+        if dnp_listed:
+            legs["skipped"].append(
+                f"fab: {name} lists DNP {', '.join(dnp_listed)}; only "
+                "bom_cpl's BOM.csv and CPL.csv are judged on DNP, so see "
+                "that the assembler leaves them off")
+    if "BOM-full" in files:
+        name, full, _ = files["BOM-full"]
         for ref in sorted(full - set(fps), key=bom_cpl._natural_key):
             add("bom_ref_unknown", "error", ref,
-                f"BOM-full.csv lists {ref}, which is no footprint on the "
-                "board")
+                f"{name} lists {ref}, which is no footprint on the board")
         for ref in sorted(fps, key=bom_cpl._natural_key):
             if classes.get(ref) != "board_feature" and ref not in full:
                 add("bom_ref_missing", "error", ref,
                     f"{ref} ({classes.get(ref, PLACED)}) is missing from "
-                    "BOM-full.csv, the BOM of record")
+                    f"{name}, the BOM of record")
     return viols, legs
 
 
@@ -417,6 +589,12 @@ def run(argv=None):
     ap.add_argument("--pcb", required=True)
     ap.add_argument("--fab-dir", help="dir holding BOM.csv / CPL.csv / "
                     "BOM-full.csv (default: beside the board, else <ws>/fab)")
+    ap.add_argument("--bom", help="the BOM csv to judge (default: the fab "
+                    "dir's BOM.csv, else its one *bom*.csv)")
+    ap.add_argument("--cpl", nargs="+", metavar="FILE",
+                    help="the CPL or pos csv(s) to judge, read as one "
+                    "(default: the fab dir's CPL.csv, else its one *cpl*.csv "
+                    "or *-pos.csv)")
     ap.add_argument("--parts", help="parts dir or parts.json (default "
                     "<ws>/parts/parts.json)")
     ap.add_argument("--live", action="store_true",
@@ -429,11 +607,13 @@ def run(argv=None):
         raise checklib.CheckError(f"board not found: {pcb}")
     fab = find_fab_dir(pcb, args.fab_dir)
     parts = find_parts(pcb, args.parts)
-    viols, legs = check(pcb, fab, parts, live=args.live)
+    viols, legs = check(pcb, fab, parts, live=args.live, bom=args.bom,
+                        cpl=args.cpl)
     skipped = legs.pop("skipped")
+    fab_files_read = legs.pop("files")
     return checklib.report(
         SCRIPT, pcb, viols, legs=legs, skipped=skipped,
-        fab_dir=str(fab) if fab else None,
+        fab_dir=str(fab) if fab else None, fab_files=fab_files_read,
         parts=str(parts) if parts else None,
         not_judged=skipped,
         nothing_to_judge=None if any(legs.values()) else
