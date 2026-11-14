@@ -257,3 +257,43 @@ def test_tpa3118_gain_slv_with_no_r1_to_gnd_is_the_planted_fault(net):
 def test_tpa3118_as_pcb0017_wires_it_is_quiet():
     hits, facts = _audit(*_tpa())
     assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+def _ap64350(rt="/RT", func="RT/CLK"):
+    """PCB-0008-B's AP64350SP-13 U1: RT/CLK on R4 200k to GND (500 kHz),
+    EN on the R2/R3 divider from +VIN."""
+    comps = {"U1": "AP64350SP-13", "R2": "105k 1%", "R3": "24.0k 1%",
+             "R4": "200k 1%", "C1": "100nF 50V X7R"}
+    nets = {"GND": [_m("U1", "7", "GND", "power_in"),
+                    _m("U1", "9", "EP", "power_in"), _m("R3", "2"),
+                    _m("R4", "2")],
+            "+VIN": [_m("U1", "2", "VIN", "power_in"), _m("R2", "1")],
+            "/EN": [_m("U1", "3", "EN"), _m("R2", "2"), _m("R3", "1")],
+            "/SW": [_m("U1", "8", "SW", "power_out"), _m("C1", "2")],
+            "/BST": [_m("U1", "1", "BST"), _m("C1", "1")],
+            "/RT": [_m("R4", "1")]}
+    nets.setdefault(rt, []).append(_m("U1", "4", func))
+    return comps, nets
+
+
+@pytest.mark.parametrize("func", ["RT/CLK", "RT"])
+def test_ap64350_rt_clk_unconnected_is_the_planted_fault(func):
+    net = "unconnected-(U1-RT/CLK-Pad4)"
+    hits, facts = _audit(*_ap64350(rt=net, func=func))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("RT/CLK", net, "error")]
+    assert "DS41976" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ap64350_rt_clk_on_gnd_is_the_planted_fault():
+    hits, facts = _audit(*_ap64350(rt="GND"))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("RT/CLK", "GND", "error")]
+    assert "DS41976" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ap64350_as_pcb0008b_wires_it_is_quiet():
+    hits, facts = _audit(*_ap64350())
+    assert hits == [] and facts["pin_state_parts_checked"] == 1

@@ -289,3 +289,29 @@ parts:
           - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 14, table: 'Table 1. Gain and Master/Slave', quote: 'MODE GAIN R1 (to GND) (1) R2 (to GVDD) (1) INPUT IMPEDANCE', fields: []}
           - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 14, table: 'Table 1. Gain and Master/Slave', quote: 'Master 20 dB 5.6 kΩ OPEN 60 kΩ', fields: []}
           - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 4, table: 'Pin Functions', quote: 'Selects Gain and selects between Master and Slave mode depending on pin voltage divider.', fields: []}
+
+  - mpn: AP64350
+    match: '^AP64350'
+    verified: true   # Diodes DS41976 Rev. 5-2 read 2026-11-14
+    aliases: {RT: RT/CLK}
+    pins:
+      - pin: RT/CLK
+        forbid: [open]
+        allow: [pulled_down, driven, external]
+        why: >-
+          RT/CLK sets the switching frequency, by a resistor to GND or by an
+          external clock, the only two modes the datasheet gives; it cannot
+          be left floating
+        source: >-
+          DS41976 Rev. 5-2 Programming Switching Frequency: "The switching
+          frequency of the AP64350 can be programmed through either of two
+          modes, Resistor Timing or External Clock Synchronization." and
+          "The RT/CLK pin cannot be left floating." Pin Descriptions,
+          RT/CLK: "Connect a resistor from RT/CLK to GND to set the internal
+          oscillator frequency. An external clock can be input directly to
+          the RT/CLK pin".
+        cite:
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 13, table: 'Programming Switching Frequency', quote: 'The RT/CLK pin cannot be left floating.', fields: []}
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 13, table: 'Programming Switching Frequency', quote: 'The switching frequency of the AP64350 can be programmed through either of two modes, Resistor Timing or External Clock Synchronization.', fields: []}
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: 'Connect a resistor from RT/CLK to GND to set the internal oscillator frequency.', fields: []}
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: 'An external clock can be input directly to the RT/CLK pin', fields: []}
