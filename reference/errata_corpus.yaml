@@ -430,15 +430,19 @@ boards:
     summary: the driver does not wait for power-good before driving the panel
     source_quote: "The driver does not wait for the power-good signal to be asserted before driving the panel which results in hiccups."
     fault_class: PI (power-good sequencing)
-    verdict: missed
-    note: v1's PGOOD net has two members and gates no driver enable.
-    follow_up: "a power-good pin that gates nothing; a switched load against the converter's limit (#1030)"
+    verdict: caught
+    catch: {script: netlist_audit, kind: power_good_unused, net: PGOOD}
+    note: >-
+      #1030: v1's LM5158 PGOOD reaches only R1 2.2k and the D2 power LED, so
+      nothing holds the half-bridge off until the boost is in regulation; v2
+      takes every PG (/HV_PG, /PDLC_PG_A, /PDLC_PG_B) into a 74LVC1G08 and
+      STM32 inputs.
   - id: pdlc-2
     summary: no current limit on the panel drive, so large panels drain the output capacitor
     source_quote: "The driver does not limit the current to the panel so it exceeds the available charge in the output capacitor when driving larger panels and hiccups."
     fault_class: PI (load current limit)
     verdict: missed
-    follow_up: "a power-good pin that gates nothing; a switched load against the converter's limit (#1030)"
+    follow_up: "a switched capacitive load against the boost's output charge and current limit: needs the load's capacitance, which no schematic carries (#1030, survey)"
   - id: pdlc-3
     summary: the EN input is too sensitive when left floating
     source_quote: "The `EN` input is much too sensitive when left floating."
@@ -457,11 +461,15 @@ boards:
     summary: OPL3 at 5 V drives the FPGA's 3.3 V inputs through dropping resistors only
     source_quote: "5 V signals from the OPL3 to the FPGA currently go by a simplified circuit through dropping resistors."
     fault_class: SCH (I/O supply domain)
-    verdict: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: io_overvoltage, net: YM_DATA}
     note: >-
-      The errata's /RST items are fixed in the revA files at this commit, and
-      the revA1 items have no next revision here, so only this one is judged.
-    follow_up: "driver supply against receiver bank voltage without parts.json (#1029)"
+      reference/io_levels.yaml (#1029): the YMF262's VOH min VDD-1.0 V on its
+      5 V rail is 4 V at the Spartan-6 IO_ pins through R13-R16 27 ohm, over
+      DS162's 3.95 V VIN max (YM_DATA, YM_DCLK, YM_SMP1, YM_SMP2); revA1 runs
+      it from +3V3. The errata's /RST items are fixed in the revA files at
+      this commit, and the revA1 items have no next revision here, so only
+      this one is judged.
 - id: sizif
   url: https://github.com/UzixLS/zx-sizif-512
   commit: d9b1f4d7138359cc4a0e54e57f7025f2e0c5747c

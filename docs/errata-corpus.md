@@ -14,7 +14,7 @@ the number that says how the flow does on a board it has never seen.
 
 ## Count
 
-- Training: 29 of 42 caught (29 caught, 9 missed, 4 not_static).
+- Training: 31 of 42 caught (31 caught, 7 missed, 4 not_static).
 - Holdout, blind: 1 of 12 caught (1 caught, 11 missed).
 - Holdout, with the rules written since: 1 of 12 caught (1 caught, 11 missed).
 
@@ -102,8 +102,8 @@ the number that says how the flow does on a board it has never seen.
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| pdlc-1: the driver does not wait for power-good before driving the panel | PI (power-good sequencing) | missed | a power-good pin that gates nothing; a switched load against the converter's limit (#1030) |
-| pdlc-2: no current limit on the panel drive, so large panels drain the output capacitor | PI (load current limit) | missed | a power-good pin that gates nothing; a switched load against the converter's limit (#1030) |
+| pdlc-1: the driver does not wait for power-good before driving the panel | PI (power-good sequencing) | caught on rev A, gone on rev B (`netlist_audit` power_good_unused) | #1030: v1's LM5158 PGOOD reaches only R1 2.2k and the D2 power LED, so nothing holds the half-bridge off until the boost is in regulation; v2 takes every PG (/HV_PG, /PDLC_PG_A, /PDLC_PG_B) into a 74LVC1G08 and STM32 inputs. |
+| pdlc-2: no current limit on the panel drive, so large panels drain the output capacitor | PI (load current limit) | missed | a switched capacitive load against the boost's output charge and current limit: needs the load's capacitance, which no schematic carries (#1030, survey) |
 | pdlc-3: the EN input is too sensitive when left floating | SCH (input pull strength) | missed | cable pickup on a floating off-board input: no datasheet leakage to size against, so #1026's rule leaves it (survey #1079) |
 
 ### megabuzz: revA -> revA1
@@ -112,7 +112,7 @@ the number that says how the flow does on a board it has never seen.
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| megabuzz-1: OPL3 at 5 V drives the FPGA's 3.3 V inputs through dropping resistors only | SCH (I/O supply domain) | missed | driver supply against receiver bank voltage without parts.json (#1029) |
+| megabuzz-1: OPL3 at 5 V drives the FPGA's 3.3 V inputs through dropping resistors only | SCH (I/O supply domain) | caught on rev A, gone on rev B (`netlist_audit` io_overvoltage) | reference/io_levels.yaml (#1029): the YMF262's VOH min VDD-1.0 V on its 5 V rail is 4 V at the Spartan-6 IO_ pins through R13-R16 27 ohm, over DS162's 3.95 V VIN max (YM_DATA, YM_DCLK, YM_SMP1, YM_SMP2); revA1 runs it from +3V3. The errata's /RST items are fixed in the revA files at this commit, and the revA1 items have no next revision here, so only this one is judged. |
 
 ### sizif: rev.C -> rev.C1
 

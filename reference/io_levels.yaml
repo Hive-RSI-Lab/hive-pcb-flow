@@ -1,0 +1,55 @@
+# The level a part's outputs reach and the most its inputs take, for
+# netlist_audit.py's io_overvoltage rule (#1029): a driver powered from a
+# higher rail than its receiver's I/O can stand, joined to it directly or
+# through series resistors only.
+#
+# match: a regex tried against the part's Value, then its symbol name
+# (case-insensitive).
+# drivers: parts whose outputs swing to their own supply.
+#   supply    regex on the pin function of the pin(s) whose rail the outputs
+#             swing to (the highest on a rail of known volts)
+#   pins      regex on the pin function (upper-cased, KiCad's ~{...}
+#             overbar dropped) of the push-pull outputs; open-drain pins
+#             are left out
+#   voh_drop  V: the datasheet's guaranteed VOH is at least the supply less
+#             this (worst case over its load and range): the rule compares
+#             that minimum high, so a hit can't be a corner case
+# receivers: parts whose I/O pins have a fixed absolute input limit.
+#   pins      regex on the pin function of the I/O pins it covers
+#   vin_max   V: the most those pins take, worst case over the grades
+# source: the datasheet, its revision and the table. verified: true means
+# the source was re-read for this row.
+#
+# A series resistor into a high-impedance input divides nothing at DC: the
+# input sees the driver's level until a clamp diode conducts. The rule
+# solves the receiver's net with the driver's minimum high behind the
+# series resistance and any resistor on that net to a rail of known volts
+# or ground (a divider), and flags a level above vin_max.
+#
+# Seeded from the errata corpus (#1029): megabuzz-1.
+
+drivers:
+  - mpn: YMF262 (OPL3)
+    match: '^YMF262'
+    verified: true   # Yamaha YMF262 catalogue (1991-10) read 2026-11-14
+    supply: '^VDD$'
+    pins: '^(D[0-7]|DOAB|DOCD|SMPAC|SMPBD|[Ø0O]SY)$'
+    voh_drop: 1.0
+    source: >-
+      Yamaha YMF262 (OPL3) catalogue, ELECTRICAL CHARACTERISTICS 3. DC
+      Characteristics: VOH min VDD -1.0 V at IOH -80 uA, VDD 4.75 to 5.25 V
+      (2. Recommended Operating Conditions). PIN CONFIGURATION: D0-D7 I/O,
+      SMPBD, SMPAC, DOAB, DOCD, OSY outputs, /IRQ open drain.
+
+receivers:
+  - mpn: Spartan-6 (XC6SLX)
+    match: '^XC6SLX'
+    verified: true   # Xilinx DS162 v3.1 (2014-06-27) read 2026-11-14
+    pins: '^IO_'
+    vin_max: 3.95
+    source: >-
+      DS162 v3.1 Table 1 Absolute Maximum Ratings: VIN, all user and
+      dedicated I/Os, DC -0.60 to 4.10 V commercial and -0.60 to 3.95 V
+      industrial and expanded (Q); Table 2 Recommended Operating Conditions:
+      VIN max 4.0 V (C), 3.95 V (I, Q), and IIN (clamp diode current) is
+      given only for the PCI I/O standard.

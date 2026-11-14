@@ -113,6 +113,16 @@ schematic-level structural problems BEFORE board work starts:
    shares its net with output, bidirectional or tri-state pins of two or
    more other parts (connectors and open-collector pins aside): they can
    fight on the line (#1026).
+ - io_overvoltage (error): an output of a reference/io_levels.yaml driver
+   whose guaranteed minimum high (its supply rail less voh_drop) reaches,
+   directly or through series resistors (any divider to a known rail or
+   ground solved), an I/O pin of a listed receiver above its vin_max: a 5 V
+   part into a 3.3 V FPGA through dropping resistors only (#1029).
+ - power_good_unused (warning): an IC's power-good output (PG, PGOOD,
+   PWRGD, POK...) wired to its net but read by nothing there or one series
+   resistor on: only resistors, capacitors, LEDs, test points and jumpers.
+   Whatever the converter powers starts before its output is in regulation
+   (#1030). A PG left unconnected is a choice and is not flagged.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -160,6 +170,7 @@ MCU_PINS = HERE.parent / "reference" / "mcu_pins.yaml"
 I2C_ADDRESSES = HERE.parent / "reference" / "i2c_addresses.yaml"
 BUS_LOAD = HERE.parent / "reference" / "bus_load.yaml"
 PIN_LEAKAGE = HERE.parent / "reference" / "pin_leakage.yaml"
+IO_LEVELS = HERE.parent / "reference" / "io_levels.yaml"
 
 # Strong differential suffix families (subset of check_diffpair.SUFFIX_PAIRS:
 # the bare +/- and P/N tokens are too ambiguous for unpaired-net warnings).
@@ -1068,6 +1079,152 @@ def _driver_contention(nets: dict, comps: dict,
                    sorted(drivers.values()), spec)
 
 
+def load_io_levels(path: Path = IO_LEVELS) -> dict:
+    """reference/io_levels.yaml as {drivers: [...], receivers: [...]}."""
+    import yaml  # noqa: PLC0415
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise checklib.CheckError(f"io levels {path}: {exc}") from exc
+    return {"drivers": doc.get("drivers") or [],
+            "receivers": doc.get("receivers") or []}
+
+
+def _io_receiver(table: dict, comp: dict, m: dict) -> dict | None:
+    """The io_levels.yaml receiver row for net member M, or None."""
+    if _base_type(m.get("pintype")) in _POWER_TYPES:
+        return None
+    func = _norm_pin(m.get("pinfunction"))
+    return next((r for r in table.get("receivers") or []
+                 if _spec_matches(r, comp) and re.search(r["pins"], func,
+                                                         re.I)), None)
+
+
+def _io_overvoltage(nets: dict, comps: dict,
+                    comp_pins: dict[str, dict[str, str]],
+                    rails: dict[str, float], table: dict):
+    """Yield one dict per (driver output, receiver I/O pin) pair of
+    reference/io_levels.yaml joined directly or through one 2-pin resistor
+    in series, with the receiver net's level solved from the driver's
+    minimum high behind the series resistance and that net's other
+    resistors to known rails or ground; 'over' is True when the level
+    exceeds the receiver's vin_max. The last item is {'checked': n}: the
+    driver outputs with a known supply that were followed."""
+    checked = 0
+    for dref, comp in sorted(comps.items()):
+        drow = next((r for r in table.get("drivers") or []
+                     if _spec_matches(r, comp)), None)
+        if not drow:
+            continue
+        funcs = {}
+        for pnum, net in comp_pins.get(dref, {}).items():
+            m = next((x for x in nets.get(net, []) if x["ref"] == dref
+                      and x["pin"] == pnum), {})
+            funcs[pnum] = (_norm_pin(m.get("pinfunction")), net)
+        sup = [rails[n] for f, n in funcs.values()
+               if re.search(drow["supply"], f, re.I) and n in rails]
+        if not sup:
+            continue
+        vdd = max(sup)
+        vhigh = vdd - float(drow.get("voh_drop") or 0)
+        prx = re.compile(drow["pins"], re.I)
+        for pnum, (func, net) in sorted(funcs.items()):
+            if (not prx.search(func) or net.startswith("unconnected-")
+                    or _is_ground_name(net) or net in rails):
+                continue
+            checked += 1
+            reach: list[tuple[str, float, str | None]] = [(net, 0.0, None)]
+            for m in nets.get(net, []):
+                rp = comp_pins.get(m["ref"], {})
+                if _part_kind(m["ref"]) != "R" or len(rp) != 2:
+                    continue
+                far = next((n for p, n in rp.items() if p != m["pin"]), None)
+                ohm = engcalc.parse_value(comps.get(m["ref"], {})
+                                          .get("value"))
+                if (far and ohm is not None and far not in rails
+                        and not _is_ground_name(far)):
+                    reach.append((far, float(ohm), m["ref"]))
+            for rnet, rs, rref in reach:
+                for m in nets.get(rnet, []):
+                    if m["ref"] == dref:
+                        continue
+                    rrow = _io_receiver(table, comps.get(m["ref"], {}), m)
+                    if not rrow:
+                        continue
+                    srcs = [(vhigh, rs)] if rs > 0 else []
+                    divs = []
+                    for x in nets.get(rnet, []) if rs > 0 else []:
+                        xp = comp_pins.get(x["ref"], {})
+                        if (x["ref"] == rref or _part_kind(x["ref"]) != "R"
+                                or len(xp) != 2):
+                            continue
+                        far = next((n for p, n in xp.items()
+                                    if p != x["pin"]), None)
+                        fv = (0.0 if far and _is_ground_name(far)
+                              else rails.get(far))
+                        ohm = engcalc.parse_value(
+                            comps.get(x["ref"], {}).get("value"))
+                        if fv is not None and ohm:
+                            srcs.append((fv, float(ohm)))
+                            divs.append(f"{x['ref']} "
+                                        f"{comps[x['ref']].get('value')} "
+                                        f"to {far}")
+                    level = (sum(v / r for v, r in srcs)
+                             / sum(1 / r for _, r in srcs)) if srcs else vhigh
+                    yield {"driver": dref, "dpin": pnum, "dfunc": func,
+                           "drow": drow, "vdd": vdd, "vhigh": vhigh,
+                           "net": rnet, "series": rref, "rs": rs,
+                           "divider": divs, "receiver": m["ref"],
+                           "rpin": m["pin"],
+                           "rfunc": _norm_pin(m.get("pinfunction")),
+                           "rrow": rrow, "level": level,
+                           "over": level > float(rrow["vin_max"])}
+    yield {"checked": checked}
+
+
+_PG_FUNC_RE = re.compile(
+    r"^(PG|PGOOD\d*|PGD|POK|PWRGD|PWR_?GOOD|PWR_?OK|PGOOD_?\w)$", re.I)
+_NOT_A_READER_RE = re.compile(r"^(R|RN|C|L|FB|D|LED|TP|JP|SJ|H|MH)\d")
+
+
+def _pg_unused(nets: dict, comps: dict,
+               comp_pins: dict[str, dict[str, str]], rails: dict[str, float]):
+    """Yield (ref, pin, func, net, members) for each IC power-good output
+    whose net, and the nets one 2-pin resistor away (not rails or ground),
+    hold no reader: no pin of an active part or connector other than
+    power-good pins. The last item is ('checked', n)."""
+    checked = 0
+    for net, members in sorted(nets.items()):
+        if net.startswith("unconnected-") or net in rails:
+            continue
+        for m in members:
+            func = _norm_pin(m.get("pinfunction"))
+            if (not m["ref"].startswith("U") or not _PG_FUNC_RE.match(func)
+                    or _base_type(m.get("pintype")) in _POWER_TYPES):
+                continue
+            checked += 1
+            if len(members) < 2:
+                continue
+            reach = {net}
+            for x in members:
+                xp = comp_pins.get(x["ref"], {})
+                if _part_kind(x["ref"]) == "R" and len(xp) == 2:
+                    far = next((n for p, n in xp.items() if p != x["pin"]),
+                               None)
+                    if far and far not in rails and not _is_ground_name(far):
+                        reach.add(far)
+            seen = [y for n in sorted(reach) for y in nets.get(n, [])]
+            readers = [y for y in seen if y is not m
+                       and not _NOT_A_READER_RE.match(y["ref"])
+                       and not (_PG_FUNC_RE.match(
+                           _norm_pin(y.get("pinfunction")))
+                           and y["ref"].startswith("U"))]
+            if not readers:
+                yield (m["ref"], m["pin"], func, net,
+                       sorted({y["ref"] for y in seen} - {m["ref"]}))
+    yield ("checked", checked, "", "", [])
+
+
 def _dc_level(net: str, nets: dict, comps: dict,
               comp_pins: dict[str, dict[str, str]],
               rails: dict[str, float]) -> tuple[float | None, list[str], str]:
@@ -1644,8 +1801,9 @@ def audit(parsed: dict, constraints: dict,
           pin_states: list[dict] | None = None,
           mcu_pins: dict | None = None,
           i2c_addresses: list[dict] | None = None,
-          bus_load: dict | None = None,
-          pin_leakage: list[dict] | None = None
+          pin_leakage: list[dict] | None = None,
+          io_levels: dict | None = None,
+          bus_load: dict | None = None
           ) -> tuple[list[dict], dict]:
     nets = parsed["nets"]
     comps = parsed["components"]
@@ -2233,7 +2391,60 @@ def audit(parsed: dict, constraints: dict,
           f"(a gate or open-drain) or confirm firmware keeps all but one "
           f"as inputs", reset_pin=rpin, drivers=drivers)
 
-    # 18. more capacitance on a bus line than the bus allows
+    # 19. a driver on a higher rail than its receiver's I/O can stand,
+    # through series resistors only (reference/io_levels.yaml, #1029;
+    # errata corpus: megabuzz revA ran the YMF262 at 5 V into the Spartan-6
+    # through 27 ohm dropping resistors)
+    io_table = load_io_levels() if io_levels is None else io_levels
+    iolv_checked = 0
+    for hit in _io_overvoltage(nets, comps, comp_pins, pl_rails, io_table):
+        if "checked" in hit:
+            iolv_checked = hit["checked"]
+            continue
+        if not hit["over"]:
+            continue
+        d, r = hit["drow"], hit["rrow"]
+        via = (f" through {hit['series']} "
+               f"{comps[hit['series']].get('value')}" if hit["series"]
+               else " directly")
+        div = (f", divided by {'; '.join(hit['divider'])}"
+               if hit["divider"] else "")
+        v("error", "io_overvoltage", hit["net"],
+          sorted({hit["driver"], hit["receiver"]}
+                 | ({hit["series"]} if hit["series"] else set())),
+          f"{hit['driver']} ({comps[hit['driver']].get('value')}) "
+          f"{hit['dfunc'] or hit['dpin']} on a {hit['vdd']:g} V supply "
+          f"drives {hit['receiver']} "
+          f"({comps[hit['receiver']].get('value')}) "
+          f"{hit['rfunc'] or hit['rpin']}{via}{div}: its high is at least "
+          f"{hit['level']:.3g} V, over the {float(r['vin_max']):g} V that "
+          f"pin takes. A series resistor only limits the clamp current; "
+          f"shift the level (a translator or a divider) or run the driver "
+          f"from the receiver's rail "
+          f"[{' '.join(d['source'].split()).split(',')[0]}; "
+          f"{' '.join(r['source'].split()).split(' Table')[0]}]"
+          + ("" if d.get("verified") and r.get("verified")
+             else " (not yet re-read)"),
+          level_v=round(hit["level"], 3), vin_max=float(r["vin_max"]),
+          driver_supply_v=hit["vdd"], series_ohm=hit["rs"])
+
+    # 20. a power-good output that gates nothing (#1030; errata corpus:
+    # pdlc v1's LM5158 PGOOD lit an LED and the half-bridge drove the panel
+    # before the boost was in regulation)
+    pg_checked = 0
+    for ref, pin, func, net, others in _pg_unused(nets, comps, comp_pins,
+                                                  pl_rails):
+        if ref == "checked":
+            pg_checked = pin
+            continue
+        v("warning", "power_good_unused", net, [ref] + others,
+          f"{ref} ({comps.get(ref, {}).get('value')}) {func} (pin {pin}) "
+          f"reaches only {', '.join(others)}: no enable, reset or MCU input "
+          f"reads it, so the load starts before the rail is in regulation. "
+          f"Gate the load's enable on it, or leave it unconnected if "
+          f"sequencing is not needed", pg_pin=f"{ref}.{pin}")
+
+    # 21. more capacitance on a bus line than the bus allows
     # (reference/bus_load.yaml, #1031; errata corpus: echoplayer r1-rev1
     # put a CESD3V3AP clamp, 120 pF, on every SDMMC line)
     bl = load_bus_load() if bus_load is None else bus_load
@@ -2290,6 +2501,8 @@ def audit(parsed: dict, constraints: dict,
         "bus_lines_checked": len(lines),
         "pulls_vs_leakage_checked": pulls_checked,
         "reset_contention_found": contention_checked,
+        "io_drive_pins_checked": iolv_checked,
+        "power_good_pins_checked": pg_checked,
     }
     return violations, facts
 

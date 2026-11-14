@@ -192,3 +192,19 @@ def test_package_rating_layer_keeps_the_other_side_at_its_floor():
     with pytest.raises(ValueError):
         rules_gen.package_rules({"package_ratings": [
             {"ref": "U4", "clearance_mm": 0.13, "layer": "In1.Cu"}]})
+
+
+def test_sense_width_rule_only_for_declared_sense_lines():
+    """#1042: a rail with sense_pads gets one track_width rule at the fab
+    minimum, held to its tracks inside route_critical's sense marks; a rail
+    without them gets none."""
+    cons = {"power": [
+        {"net": "KP", "current_a": 3.0, "sense_pads": {"R911.1": "C911.1"}},
+        {"net": "+5V", "current_a": 3.0}]}
+    rules, facts = rules_gen.sense_width_rules(cons, CAP)
+    [r] = rules
+    assert r.name == "aiee_sense_width_KP" and r.constraint == "track_width"
+    assert "A.NetName == 'KP'" in r.condition
+    assert f"enclosedByArea('{rules_gen.SENSE_MARK}_*')" in r.condition
+    assert facts == [{"net": "KP", "width_mm": CAP["min_trace_width_mm"],
+                      "rule": r.name, "sense_pads": ["R911.1"]}]

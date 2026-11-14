@@ -596,7 +596,12 @@ def sense_walk(bg, sense, tap) -> dict:
             if other[1] == goal:
                 reached = True
                 continue
-            if other[1] in seen or near.contains(contact):
+            if other[1] in seen:
+                continue
+            # a contact by the tap is the tap itself when it meets power
+            # copper; the sense line's own short jogs there still lead on
+            # to the pad (#1042)
+            if near.contains(contact) and other[1] in power:
                 continue
             seen.add(other[1])
             if other[1] in power:

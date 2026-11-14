@@ -253,6 +253,41 @@ def neck_rules(bg, power_facts: list[dict], cap: dict
     return rules, facts
 
 
+SENSE_MARK = "aiee_sensew"  # route_critical.SENSE_MARK: its sense lines' marks
+
+
+def sense_width_rules(constraints: dict, cap: dict
+                      ) -> tuple[list[Rule], list[dict]]:
+    """The sense-line width rule (#1042). A power entry's sense_pads lines
+    (route_critical lays each from its sense pad to its declared tap) carry
+    a feedback divider's or SENSE pin's microamps, not the rail's current:
+    the regulator notes ask for a short, thin trace (TI SNVA721A section
+    2.5; LMR33630 SNVSAN3F section 10.1, a 100 kOhm RFBT; knowledge record
+    buck-fb-route-rules). So the line's tracks, and only them, may run at
+    the fab's minimum width: the rule holds a track of the net that lies
+    wholly inside an aiee_sensew_* rule area, the mark route_critical draws
+    a hair round each line it lays. A wider rail track is never enclosed.
+    Emitted after the power width and neck rules (the later rule wins).
+    check_current still judges the rail: it skips only the declared sense
+    pads' own path. Returns (rules, facts)."""
+    rules: list[Rule] = []
+    facts: list[dict] = []
+    floor = round(float(cap["min_trace_width_mm"]), 4)
+    for entry in constraints.get("power", []) or []:
+        if not entry.get("sense_pads"):
+            continue
+        net = entry["net"]
+        name = f"aiee_sense_width_{_safe(net)}"
+        rules.append(Rule(name, "track_width", floor, condition=(
+            f"A.NetName == '{net}' && A.Type == 'track' "
+            f"&& A.enclosedByArea('{SENSE_MARK}_*')"), comment=(
+            f"{net}: its sense lines (route_critical's {SENSE_MARK}_* marks)"
+            " carry microamps; a thin trace at the fab minimum")))
+        facts.append({"net": net, "width_mm": floor, "rule": name,
+                      "sense_pads": sorted(entry["sense_pads"])})
+    return rules, facts
+
+
 SWITCH_KEEP_AWAY_MM = 1.0   # switch_node.keep_away_mm default
 
 
@@ -1254,6 +1289,7 @@ def build(constraints: dict, cap: dict, stackup: dict, baseline_only: bool,
         pr, pf = power_rules(constraints, cu_mm)
         sr, sf, sw_warn = switch_node_rules(constraints, bg, pf, cu_mm)
         nr, nf = neck_rules(bg, pf, cap) if bg is not None else ([], [])
+        snr, snf = sense_width_rules(constraints, cap)
         pairs = detect_diff_pairs(constraints)
         floor = float(cap.get("min_trace_width_mm", 0.0) or 0.0)
         bga_refs = _bga_refs(bg)
@@ -1273,10 +1309,13 @@ def build(constraints: dict, cap: dict, stackup: dict, baseline_only: bool,
         # rules come after the necks, before HV and isolation
         sw_width = [r for r in sr if r.constraint == 'track_width']
         sw_other = [r for r in sr if r.constraint != 'track_width']
-        rules += pr + sw_width + nr + sw_other + dr + zr + br + hr + kr + ir
+        # the sense-line widths (#1042) come after the necks: they win
+        # on the line's own tracks, inside its aiee_sensew_* marks
+        rules += pr + sw_width + nr + snr + sw_other + dr + zr + br + hr + kr + ir
         report["package_rules"] = kf
         report["isolation_rules"] = if_
         report["necks"] = nf
+        report["sense_widths"] = snf
         report["switch_nodes"] = sf
         report["switch_warnings"] = sw_warn
         report["bga_escape"] = bf
@@ -1455,6 +1494,7 @@ def main(argv: list[str] | None = None) -> int:
             "isolation_rules": report.get("isolation_rules", []),
             "package_rules": report.get("package_rules", []),
             "necks": report["necks"],
+            "sense_widths": report.get("sense_widths", []),
             "switch_nodes": report.get("switch_nodes", []),
             "warnings": [
                 f"{f['net']} is plane_fed but constraints planes has no pour "
