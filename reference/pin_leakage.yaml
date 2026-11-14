@@ -9,8 +9,11 @@
 # state: when the row holds (unconfigured, from reset).
 # pins: each row's `pin` is a regex tried against the netlist pinfunction
 #   (upper-cased, KiCad's ~{...} overbar dropped, the text before the first
-#   '/') and then against the pin number. A row only counts on a pin whose
-#   type is not power. Fields, all worst case over the datasheet's range:
+#   '/') and then against the pin number. An optional `function` regex must
+#   also match the whole pin function, every '/' role in it (a dual-purpose
+#   pin's second name). A pin takes the first row that matches, so the
+#   narrower rows go first. A row only counts on a pin whose type is not
+#   power. Fields, all worst case over the datasheet's range:
 #   ipd       A   the most a weak pull-down sinks (a pull-up must beat it)
 #   ipu       A   the most a weak pull-up sources (a pull-down must beat it)
 #   leak      A   the most input leakage, either way
@@ -34,13 +37,37 @@
 # 0.7 / 0.3 of the pull's rail.
 #
 # Seeded from the errata corpus (#1026): glasgow-5, glasgow-6, glasgow-7.
+# The ECP5 sysCONFIG rows (#1096) are from Lattice's sysCONFIG guide, after
+# the holdout board byte-hamr rev B drew a false warning on its config flash.
 
 parts:
   - mpn: ECP5 (LFE5U, LFE5UM)
     match: '^LFE5U'
     state: during configuration (unconfigured)
-    verified: true   # Lattice FPGA-DS-02012-3.4 read 2026-11-14
+    verified: true   # FPGA-DS-02012-3.4 and FPGA-TN-02039-2.6 read 2026-11-14
     pins:
+      # sysCONFIG dual-purpose pins first: they do not take the user I/O
+      # pull-down while the FPGA configures (#1096).
+      - pin: '^P[TBLR]\d+[A-D]$'
+        function: '/D[0-7](/|$)'
+        leak: 10.0e-6
+        source: >-
+          FPGA-TN-02039-2.6 (ECP5 and ECP5-5G sysCONFIG User Guide) Table 4.5
+          Default State of the sysCONFIG Pins: D7..D0 (D1/MISO, D0/MOSI,
+          D3/IO3, D2/IO2) Pull During Configuration "NO"; section 5:
+          "Before/during configuration, the D[7:0] pins have no
+          pull-up/down." Note 4: MOSI and MISO should have 10 kOhm pull-ups
+          for MSPI. IIL/IIH max 10 uA from FPGA-DS-02012-3.4 Table 3.7.
+      - pin: '^P[TBLR]\d+[A-D]$'
+        function: '/(SN|CSN|CS1N|WRITEN|HOLDN|DI|BUSY|CSSPIN|CEN|DOUT|CSON)(/|$)'
+        ipu: 150.0e-6
+        leak: 10.0e-6
+        source: >-
+          FPGA-TN-02039-2.6 Table 4.5: CSN/SN, CS1N, WRITEN,
+          HOLDN/DI/BUSY/CSSPIN/CEN and DOUT/CSON Pull During Configuration
+          "UP". IPU max 150 uA ("I/O Active Pull-up Current, pulling down
+          from logic HIGH state") and IIL/IIH 10 uA from FPGA-DS-02012-3.4
+          Table 3.7.
       - pin: '^P[TBLR]\d+[A-D]$'
         ipd: 150.0e-6
         leak: 10.0e-6
