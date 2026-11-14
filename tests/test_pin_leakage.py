@@ -119,7 +119,7 @@ def test_revd0_mcu_rst_is_held_low_and_contended():
                    ("driver_contention", "/MCU_~{RST}", "warning")}
     pull = next(h for h in hits if h["kind"] == "pull_vs_leakage")
     assert "internal pull-up 55k" in pull["msg"]   # the STM32's own, weakest
-    assert "(not yet re-read)" in pull["msg"]
+    assert "(not yet re-read)" not in pull["msg"]   # every row re-read (#1080)
     cont = next(h for h in hits if h["kind"] == "driver_contention")
     assert cont["refs"] == ["U2", "U8"] and cont["reset_pin"] == "U6.5"
     assert facts["reset_contention_found"] == 1

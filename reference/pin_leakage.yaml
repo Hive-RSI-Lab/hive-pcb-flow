@@ -64,7 +64,7 @@ parts:
   - mpn: STM32G031 / STM32G030
     match: '^STM32G03[01]'
     state: from reset (NRST in its default bidirectional reset mode)
-    verified: false  # st.com did not answer 2026-11-14; not re-read
+    verified: true   # DS12992 Rev 4 (June 2025) and DS12991 Rev 4 read 2026-11-14
     pins:
       - pin: '^(NRST|PF2|PF2-NRST)$'
         reset: true
@@ -72,9 +72,10 @@ parts:
         vil_frac: 0.3
         vih_frac: 0.7
         source: >-
-          STM32G031x4/x6/x8 datasheet DS12992 section 5.3 NRST input
-          characteristics: VIL(NRST) max 0.3 VDD, VIH(NRST) min 0.7 VDD, RPU
-          weak pull-up 25-55 kOhm (the STM32G0 family values, also DS13564);
+          STM32G031x4/x6/x8 datasheet DS12992 Rev 4 5.3.15 Table 56 NRST pin
+          characteristics: VIL(NRST) max 0.3 x VDDIO1, VIH(NRST) min 0.7 x
+          VDDIO1, RPU weak pull-up 25/40/55 kOhm at VIN = VSS; STM32G030
+          DS12991 Rev 4 5.3.15 Table 52 gives the same values;
           RM0444 3.4.1: PF2-NRST resets to bidirectional reset mode.
 
   - mpn: 74LVC1G08
