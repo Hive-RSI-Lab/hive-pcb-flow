@@ -487,3 +487,190 @@ boards:
       defect and no check can see it (#1044). The errata's other line,
       "Random trace on pin32?", is a question with no stated fix, so it is
       not judged.
+
+# Boards no rule was written from (see `holdout` in scripts/errata_corpus.py).
+# Each was swept with every check, both revisions, at `swept.flow` before its
+# findings were read against the errata; `blind` is that judgement and stays.
+# Chosen as the training boards were: a licence, a pinned commit, the
+# designer's own words. Errata a later revision did not fix are left out (no
+# rev B to tell a catch from a rule that fires on everything); each board's
+# note says which.
+holdout:
+- id: one-rom-fire28
+  url: https://github.com/piersfinlayson/one-rom
+  commit: 1b189260d85a5feced19e969399986f5f1d1cabe
+  licence: CERN-OHL-W-2.0
+  rev_a: {name: fire-28-a2, sch: hardware/pcb/verified/fire-28-a2/kicad/fire-28-a2.kicad_sch,
+          pcb: hardware/pcb/verified/fire-28-a2/kicad/fire-28-a2.kicad_pcb,
+          cpl: hardware/pcb/verified/fire-28-a2/fab/fire-28-a2-top-pos.csv}
+  rev_b: {name: fire-28-a3, sch: hardware/pcb/verified/fire-28-a3/kicad/fire-28-a3.kicad_sch,
+          pcb: hardware/pcb/verified/fire-28-a3/kicad/fire-28-a3.kicad_pcb,
+          cpl: hardware/pcb/verified/fire-28-a3/fab/fire-28-a3-top-pos.csv}
+  source: hardware/pcb/verified/fire-28-a2/README.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  defects:
+  - id: one-rom-1
+    summary: SWD header silk labels CLK and DIO swapped
+    source_quote: "The silkscreen on this revision mislabels the SWD CLK and DIO pins.  The CLK is DIO and DIO is CLK."
+    fault_class: SILK (pin label vs net)
+- id: netscore-main
+  url: https://github.com/arcticlula/Netscore
+  commit: 4426f309aab51d447e32f062f66db48317256ff4
+  licence: MIT
+  rev_a: {name: main-board v3.0, sch: hardware/pcb/v3.0/main-board/main-board.kicad_sch,
+          pcb: hardware/pcb/v3.0/main-board/main-board.kicad_pcb,
+          cpl: hardware/pcb/v3.0/main-board/production/positions.csv}
+  rev_b: {name: main-board v3.1, sch: hardware/pcb/v3.1/main-board/main-board.kicad_sch,
+          pcb: hardware/pcb/v3.1/main-board/main-board.kicad_pcb,
+          cpl: hardware/pcb/v3.1/main-board/production/positions.csv}
+  source: hardware/docs/versions.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  note: >-
+    v3.1 fixes both in the schematic only; its PCB is v3.0's. The C9
+    footprint polarity ("pad 1 (the footprint's +) is on GND") is on v3.1
+    too, so it is not judged.
+  defects:
+  - id: netscore-1
+    summary: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT
+    source_quote: "Q3 power mux FET reversed — source/drain swapped, body diode points VCC→+BATT"
+    fault_class: SCH (part orientation)
+  - id: netscore-2
+    summary: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped
+    source_quote: "BMS1 (FS312MH) GND and BAT- swapped — datasheet §6/§8: pin 1 GND is the cell negative and pin 3 BAT- is \"negative of charger or load\""
+    fault_class: SCH (pin function vs datasheet)
+- id: netscore-big
+  url: https://github.com/arcticlula/Netscore
+  commit: 4426f309aab51d447e32f062f66db48317256ff4
+  licence: MIT
+  rev_a: {name: display-board-big v2.0, sch: hardware/pcb/v2.0/display-board-big/display-board.kicad_sch,
+          pcb: hardware/pcb/v2.0/display-board-big/display-board.kicad_pcb,
+          cpl: hardware/pcb/v2.0/display-board-big/production/positions.csv}
+  rev_b: {name: display-board-big v3.0, sch: hardware/pcb/v3.0/display-board-big/display-board.kicad_sch,
+          pcb: hardware/pcb/v3.0/display-board-big/display-board.kicad_pcb,
+          cpl: hardware/pcb/v3.0/display-board-big/production/positions.csv}
+  source: hardware/docs/versions.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  note: >-
+    The DCSCK-on-shift-clock fault is reworked on v3.0 boards too, so it is
+    not judged.
+  defects:
+  - id: netscore-big-1
+    summary: 0.8 in score digits placed with the 0.2 in digit symbol, so common anode and two segments land wrong
+    source_quote: "placed with the 7Seg 0.2in (GS-2011AB) symbol, whose pin numbering does not match the 0.8\" part; the common-anode and two segment pins land wrong"
+    fault_class: LIB (symbol pin map vs part)
+- id: byte-hamr
+  url: https://github.com/robertrico/project_byte_hamr
+  commit: f3e105fb7585f033e00b76cff71ce3e86d2bcfd3
+  licence: MIT
+  rev_a: {name: Rev 2, sch: hardware/byte_hamr/kicad/project_byte_hamr.kicad_sch,
+          pcb: hardware/byte_hamr/kicad/project_byte_hamr.kicad_pcb}
+  rev_b: {name: Rev 3, sch: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_sch,
+          pcb: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_pcb}
+  source: hardware/byte_hamr/rev2_errata.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  defects:
+  - id: byte-hamr-1
+    summary: U14 SN74LVC8T245 drives the Apple II slot's wired-OR lines (IRQ, NMI, DMA, INH, RES) push-pull, DIR and OE tied to GND
+    source_quote: "DIR (pin 2) and OE (pin 22) are tied to GND, so it always drives B -> A, push-pull."
+    fault_class: SCH (driver type on a shared line)
+- id: cmm2-jlc
+  url: https://github.com/Manawyrm/CMM2-JLC
+  commit: 318b012b10ac030cdc8469f89d6df7e5b2cf0741
+  licence: GPL-3.0
+  rev_a: {name: Rev.A, commit: 1e5cae8825122915fe3d53ce2bb309bd67f631a2,
+          sch: CMM2-JLC.sch, pcb: CMM2-JLC.kicad_pcb,
+          cpl: gerbers/RevA/CMM2-JLC/CMM2-JLC_cpl_jlc.csv}
+  rev_b: {name: Rev.B, commit: 303e179a44d47570990be31921f977698ea9ae3b,
+          sch: CMM2-JLC.sch, pcb: CMM2-JLC.kicad_pcb,
+          cpl: gerbers/RevB/CMM2-JLC/CMM2-JLC_cpl_jlc.csv}
+  source: README.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  note: >-
+    Each revision is a commit ("Add final-2 revA gerber", "Rev B: Hook up
+    SDRAM address line A12"). The SRV05 pin-1 mark and the reversed Nunchuck
+    footprint are in Rev.B's errata too, so they are not judged.
+  defects:
+  - id: cmm2-1
+    summary: no mounting holes
+    source_quote: "Missing mounting holes"
+    fault_class: MECH (mounting)
+  - id: cmm2-2
+    summary: SDRAM address line A12 not connected
+    source_quote: "SDRAM pinout is missing A12 line"
+    fault_class: SCH (net connectivity)
+- id: smart-lcc
+  url: https://github.com/magnusnordlander/smart-lcc
+  commit: 8f4f0c26a3d17ff0c846170c0741dc469ed158e7
+  licence: CERN-OHL-P-2.0
+  rev_a: {name: Rev A, commit: 0da2e0994198e0421076b9e808ffcb825b447d44,
+          sch: pcb/smart-lcc/smart-lcc.sch, pcb: pcb/smart-lcc/smart-lcc.kicad_pcb}
+  rev_b: {name: Rev B, commit: 8a939a5f3801481efa9ddee81d55864d9bed8a62,
+          sch: pcb/smart-lcc/smart-lcc.sch, pcb: pcb/smart-lcc/smart-lcc.kicad_pcb}
+  source: pcb/errata.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  note: >-
+    Each revision is a commit ("Added Mk 1 manufacturing data", "Rev B as
+    sent to manufacturing"); the licence is pcb/LICENSE.
+  defects:
+  - id: smart-lcc-1
+    summary: auxiliary UART RX and TX crossed the wrong way
+    source_quote: "Aux RX and TX should be flipped"
+    fault_class: SCH (signal direction)
+  - id: smart-lcc-2
+    summary: no zener/diode protection on the RX and TX ports
+    source_quote: "Add Zeners to RX, and diodes to TX (primary and auxilliary) to protect those ports from burning out accidentally"
+    fault_class: SCH (port protection)
+- id: fc980c
+  url: https://github.com/wlhlm/fc980c-controller
+  commit: 6e5bdc90e22744e33c552bb7725e03fd9a6de9f5
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: rev1, sch: rev1/fc980c-controller.kicad_sch, pcb: rev1/fc980c-controller.kicad_pcb,
+          cpl: rev1/jlcpcb/production_files/CPL-fc980c-controller.csv}
+  rev_b: {name: rev2, sch: rev2/fc980c-controller.kicad_sch, pcb: rev2/fc980c-controller.kicad_pcb,
+          cpl: rev2/jlcpcb/production_files/CPL-fc980c-controller.csv}
+  source: README.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  note: The licence is rev1/LICENSE.txt and the README's "CERN OHL-S v2".
+  defects:
+  - id: fc980c-1
+    summary: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13
+    source_quote: "SWDIO has been routed to the wrong pin on the MCU (PA15 instead of PA13)"
+    fault_class: SCH (pin function vs datasheet)
+  - id: fc980c-2
+    summary: KEY_STATE open-collector line has no 5V pull-up
+    source_quote: "the KEY_STATE pin is missing a 5V pull-up resistor"
+    fault_class: SCH (missing pull-up)
+- id: lofence
+  url: https://github.com/kiu/lofence
+  commit: 9a1d09bd57b84be4a4ec193df7fd8c69c1f981a8
+  licence: MIT
+  rev_a: {name: rev_a, sch: rev_a/hardware/kicad/lofence.sch, pcb: rev_a/hardware/kicad/lofence.kicad_pcb}
+  rev_b: {name: rev_b, sch: rev_b/hardware/kicad/lofence.sch, pcb: rev_b/hardware/kicad/lofence.kicad_pcb}
+  source: rev_b/errata.txt
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  note: >-
+    The errata's other lines are a part left unpopulated, a divider the
+    designer would do differently, and a BOM value; none is a fix rev_b's
+    files hold.
+  defects:
+  - id: lofence-1
+    summary: ISP header silk marks RES where 3V3 is
+    source_quote: "Fixed silkscreen for ISP connector (3V3 in upper right corner instead of RES)"
+    fault_class: SILK (pin label vs net)
+- id: identidem-breakout
+  url: https://github.com/acornelissen/IDENTIDEM.design-MRF2
+  commit: e495d6494dc63f787853599f9da19c583d280a12
+  licence: GPL-3.0
+  rev_a: {name: MRF-Pro-v7.5 breakout, sch: PCBs/v1.0/Breakout/KiCAD/MRF-Pro-v7.5-breakout.kicad_sch,
+          pcb: PCBs/v1.0/Breakout/KiCAD/MRF-Pro-v7.5-breakout.kicad_pcb,
+          cpl: PCBs/v1.0/Breakout/JLCPCB/positions.csv}
+  rev_b: {name: MRF-Pro-v8 breakout, sch: PCBs/v2.0/Breakout/KiCAD/MRF-Pro-v8-breakout.kicad_sch,
+          pcb: PCBs/v2.0/Breakout/KiCAD/MRF-Pro-v8-breakout.kicad_pcb,
+          cpl: PCBs/v2.0/Breakout/JLCPCB/positions.csv}
+  source: Documentation/hardware-errata/lidar-stage1-decoupling.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14}
+  defects:
+  - id: identidem-1
+    summary: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it
+    source_quote: "with no decoupling capacitor anywhere near the sensor."
+    fault_class: PI (local decoupling)
