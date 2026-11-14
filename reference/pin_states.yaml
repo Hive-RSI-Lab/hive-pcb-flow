@@ -367,3 +367,51 @@ parts:
         cite:
           - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 13, table: '8.1.3 CH224K绝对最大值', quote: 'VIOCC CC1 、CC2、CFG1引脚上的电压 -0.5 8 V', fields: [max_v]}
           - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.1 CH224A和 CH224K不同点', quote: 'CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V', fields: [max_v]}
+
+  - mpn: ADS8326
+    match: '^ADS8326'
+    verified: true   # TI SBAS343C (May 2007, revised September 2009) read 2026-11-14
+    aliases: {CS: CS/SHDN, 'IN-': '-IN'}
+    pins:
+      - pin: CS/SHDN
+        allow: [driven, external]
+        why: >-
+          CS/SHDN selects the converter when low and shuts it down when
+          high, and each conversion starts on a falling CS; held high it
+          stays shut down, held low it never sees the edge that starts a
+          conversion
+        source: >-
+          SBAS343C pin assignments: "CS/SHDN 5 Digital input Chip select when
+          low; Shutdown mode when high." Digital interface: "A falling CS
+          signal initiates the conversion and data transfer."
+        cite:
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 7, table: 'PIN ASSIGNMENTS', quote: 'CS/SHDN 5 Digital input Chip select when low; Shutdown mode when high.', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 23, table: 'DIGITAL INTERFACE', quote: 'A falling CS signal initiates the conversion and data transfer.', fields: []}
+      - pin: '-IN'
+        max_v: 0.5
+        why: >-
+          -IN, the inverting analog input, is specified at -0.3 to 0.5 V
+          from GND, and the input span is +IN - (-IN) from 0 to VREF; on a
+          supply it is outside its operating range
+        source: >-
+          SBAS343C recommended operating conditions: "–IN to GND –0.3 0 0.5 V"
+          and "+IN – (–IN) 0 VREF V".
+        cite:
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 3, table: 'RECOMMENDED OPERATING CONDITIONS', quote: '–IN to GND –0.3 0 0.5 V', fields: [max_v]}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 3, table: 'RECOMMENDED OPERATING CONDITIONS', quote: '+IN – (–IN) 0 VREF V', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 7, table: 'PIN ASSIGNMENTS', quote: '–IN 3 Analog input Inverting analog input', fields: []}
+      - pin: REF
+        forbid: [open, ground]
+        why: >-
+          REF takes the external reference that sets the input range, 0.1 V
+          to VDD; open or grounded the converter has no range to convert
+          against
+        source: >-
+          SBAS343C reference input: "The external reference sets the analog
+          input range. The ADS8326 operates with a reference in the range of
+          0.1V to VDD." Recommended operating conditions: "Reference input
+          voltage 0.1 VDD V".
+        cite:
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 22, table: 'REFERENCE INPUT', quote: 'The external reference sets the analog input range. The ADS8326 operates with a reference in the range of 0.1V to VDD.', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 3, table: 'RECOMMENDED OPERATING CONDITIONS', quote: 'Reference input voltage 0.1 VDD V', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 7, table: 'PIN ASSIGNMENTS', quote: 'REF 1 Analog input Reference input', fields: []}

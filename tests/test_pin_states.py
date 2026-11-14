@@ -368,3 +368,73 @@ def test_ch224k_as_pcb0003_wires_it_is_quiet():
         vdd="+3V3", cfg1="+3V3", extra_comps={"U2": "AP2112K-3.3"},
         extra_nets={"+3V3": [_m("U2", "5", "VOUT", "power_out")]}))
     assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+def _ads8326(cs="/CS", nin="/AGND_SENSE", ref="VREF", cs_func="~{CS}/SHDN",
+             extra_comps=None, extra_nets=None):
+    """PCB-0014's ADS8326 U1: REF on the ADR4520 U2's VREF, -IN to GND
+    through R8 0 ohm (R5 200K from the attenuator), CS/SHDN from J2.
+    REF, -IN and CS/SHDN go on the nets named; the rest stays as built."""
+    comps = {"U1": "ADS8326IB", "U2": "ADR4520B", "R4": "200K 0.02% 10ppm/C",
+             "R5": "200K 0.02% 10ppm/C", "R6": "49.9 ohm 1%",
+             "R7": "10 ohm 1%", "R8": "0 ohm 1%", "C2": "100nF 16V X7R",
+             "C3": "47uF 16V X7R", "C5": "2.2uF 10V X7R",
+             "C7": "1nF 50V C0G/NP0", "J2": "1x6P 2.54mm male header",
+             **(extra_comps or {})}
+    nets = {"GND": [_m("U1", "4", "GND", "power_in"),
+                    _m("U2", "4", "GND", "power_in"), _m("R8", "2"),
+                    _m("C2", "2"), _m("C3", "2"), _m("C5", "2"),
+                    _m("C7", "2")],
+            "+3V3": [_m("U2", "2", "VIN", "power_in"), _m("R7", "1"),
+                     _m("J2", "1")],
+            "VDD_ADC": [_m("R7", "2"), _m("C2", "1"),
+                        _m("U1", "8", "VDD", "power_in")],
+            "VREF": [_m("U2", "6", "VOUT", "power_out"), _m("C3", "1"),
+                     _m("C5", "1")],
+            "/ATT_C": [_m("R4", "2"), _m("R5", "1")],
+            "/AGND_SENSE": [_m("R5", "2"), _m("R8", "1")],
+            "/AIN_ADC": [_m("R6", "2"), _m("C7", "1"),
+                         _m("U1", "2", "+IN")],
+            "/CS": [_m("J2", "3")],
+            "/SCLK": [_m("J2", "4"), _m("U1", "7", "DCLOCK")],
+            "/DOUT": [_m("J2", "5"), _m("U1", "6", "DOUT")]}
+    for name, ms in (extra_nets or {}).items():
+        nets.setdefault(name, []).extend(ms)
+    nets.setdefault(ref, []).append(_m("U1", "1", "REF"))
+    nets.setdefault(nin, []).append(_m("U1", "3", "-IN"))
+    nets.setdefault(cs, []).append(_m("U1", "5", cs_func))
+    return comps, nets
+
+
+@pytest.mark.parametrize("cs_func", ["~{CS}/SHDN", "~{CS}"])
+@pytest.mark.parametrize("net", ["GND", "+3V3",
+                                 "unconnected-(U1-~{CS}/SHDN-Pad5)"])
+def test_ads8326_cs_shdn_not_driven_is_the_planted_fault(net, cs_func):
+    hits, facts = _audit(*_ads8326(cs=net, cs_func=cs_func))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("CS/SHDN", net, "error")]
+    assert "SBAS343C" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ads8326_minus_in_on_a_3v3_rail_is_the_planted_fault():
+    hits, facts = _audit(*_ads8326(nin="+3V3"))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("-IN", "+3V3", "error")]
+    assert "above its 0.5 V limit" in hits[0]["msg"]
+    assert "SBAS343C" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+@pytest.mark.parametrize("net", ["GND", "unconnected-(U1-REF-Pad1)"])
+def test_ads8326_ref_grounded_or_open_is_the_planted_fault(net):
+    hits, facts = _audit(*_ads8326(ref=net))
+    assert [(h["pin"], h["net"], h["severity"]) for h in hits] == [
+        ("REF", net, "error")]
+    assert "SBAS343C" in hits[0]["msg"]
+    assert facts["pin_state_parts_checked"] == 1
+
+
+def test_ads8326_as_pcb0014_wires_it_is_quiet():
+    hits, facts = _audit(*_ads8326())
+    assert hits == [] and facts["pin_state_parts_checked"] == 1
