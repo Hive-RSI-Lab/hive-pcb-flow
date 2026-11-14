@@ -185,13 +185,15 @@ def test_invalid_json_is_error(tmp_path):
 
 def test_unknown_entry_key_without_close_match_warns(tmp_path):
     """The shipped carrier power.json class: thermal entries carrying
-    prose keys 'role'/'notes' stay advisory."""
+    prose keys stay advisory. 'role' warns; 'notes' is prose the schema
+    page allows on any entry, so it does not."""
     vs, _ = lint_doc(tmp_path, {"thermal_constraints": [
         {"ref": "U2", "power_w": 0.8, "role": "PoE switcher",
          "notes": "datasheet 8.2"}]})
     assert not errors(vs)
-    assert sorted(w["kind"] for w in warnings(vs)) == [
-        "unknown_key", "unknown_key"]
+    ws = warnings(vs)
+    assert [w["kind"] for w in ws] == ["unknown_key"]
+    assert "key 'role'" in ws[0]["msg"]
 
 
 def test_underscore_keys_allowed_everywhere(tmp_path):
@@ -347,6 +349,57 @@ def test_note_beside_a_documented_key_is_not_a_misspelling(tmp_path):
     payload, _ = constraints_lint.run(["--file", str(p)])
     kinds = {v["kind"] for v in payload["violations"]}
     assert "misspelled_key" not in kinds and "unknown_key" in kinds
+
+
+def test_note_and_notes_are_prose_on_entries_and_objects(tmp_path):
+    """"note" and "notes" pass on any entry or object section, with any
+    value, without a warning."""
+    vs, _ = lint_doc(tmp_path, {
+        "power": [{"net": "+5V", "current_a": 1, "note": "fan header",
+                   "notes": ["two", "lines"]}],
+        "esd": {"connectors": ["J1"], "notes": {"why": "front panel"}},
+        "placement": {"note": "edge parts first"}})
+    assert vs == [], vs
+
+
+def test_strict_sections_take_no_prose_keys(tmp_path):
+    """planes[] and teardrops stop their consumer on a key it does not
+    know, so neither takes note or notes; length_groups[] takes "note"
+    (its own key) and reads "notes" as a misspelling of it."""
+    plane = {"layer": "In1.Cu", "net": "GND"}
+    for doc, consumer in (
+            ({"planes": [dict(plane, note="x")]}, "planes_gen"),
+            ({"planes": [dict(plane, notes="x")]}, "planes_gen"),
+            ({"teardrops": {"enabled": True, "note": "x"}}, "teardroplib"),
+            ({"teardrops": {"enabled": True, "notes": "x"}}, "teardroplib"),
+            ({"length_groups": [{"nets": ["D*"], "notes": "x"}]},
+             "check_length_groups")):
+        vs, _ = lint_doc(tmp_path, doc)
+        assert any(consumer in v["msg"] for v in vs), (doc, vs)
+    vs, _ = lint_doc(tmp_path, {"length_groups": [
+        {"nets": ["D*"], "note": "byte lane 0"}]})
+    assert vs == [], vs
+    vs, _ = lint_doc(tmp_path, {"length_groups": [
+        {"nets": ["D*"], "notes": "byte lane 0"}]})
+    assert [v["kind"] for v in errors(vs)] == ["misspelled_key"]
+
+
+def test_word_notes_key_warns_and_is_no_misspelling(tmp_path):
+    """exempt_notes beside esd's exempt_nets is prose about it: an unknown-
+    key warning, not a misspelled_key error."""
+    vs, _ = lint_doc(tmp_path, {"esd": {"exempt_nets": ["/SENSE"],
+                                        "exempt_notes": "inside the box"}})
+    assert not errors(vs)
+    assert [w["kind"] for w in warnings(vs)] == ["unknown_key"]
+
+
+def test_null_top_object_means_none(tmp_path):
+    """A top object read with .get(key) or {} may be null; enclosure may
+    not, because check_thermal indexes one it finds."""
+    vs, _ = lint_doc(tmp_path, {"pd_source": None, "esd": None})
+    assert vs == [], vs
+    vs, _ = lint_doc(tmp_path, {"enclosure": None})
+    assert [v["kind"] for v in errors(vs)] == ["bad_type"]
 
 
 def test_documented_top_keys_without_a_branch_are_not_unknown(tmp_path):

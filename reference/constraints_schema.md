@@ -6,6 +6,17 @@ key is absent no-ops cleanly. Net names must match the FINAL netlist names
 (local-label nets carry a leading `/` like `/MCO`; power nets are bare: `+3V3`,
 `GND`, `VBUS`).
 
+Keys starting with `_` (`_comment`, `_why`) are comments, allowed at every
+level. `"note"` and `"notes"` are prose on any entry or object section,
+except where the consumer stops on a key it does not know: `planes[]` and
+`teardrops` take neither, `length_groups[]` takes `note` only.
+`scripts/constraints_lint.py` holds a file to this page: a key it does not
+know warns (consumers ignore it), a close misspelling of a known key is an
+error, and a `<word>_note` or `<word>_notes` key is never taken for a
+misspelling but still warns. `tests/test_constraints_consumer_keys.py`
+fails when a checker reads a constraints key that this page or the lint
+does not know.
+
 Consumers per key (script -> phase):
 
 ```jsonc
@@ -110,6 +121,18 @@ Consumers per key (script -> phase):
   // between the regulator and its plane can pass unseen. Add "source_ref"
   // (a ref: the regulator, or the part where its feedback senses, to get
   // the drop it does not correct) and "sinks": [{ref, current_a}] to the entry.
+  // irdrop_mv_max and jmax_a_per_mm are the rail's limits (irdrop_excess,
+  // current_density_excess); cell_mm sets the grid (0.015..0.4 mm).
+  // check_pdn_z (P8): a rail is judged only with pdn_target_mohm (the
+  // target) or transient_a (the load step: target = voltage x ripple_pct,
+  // default 5, / transient_a; "voltage", else read from the name, +1V1).
+  // The band ends at the lowest of edge_ns's knee (0.35 / t_r), f_max_mhz
+  // and the package corner. package {l_pkg_nh, c_die_nf (both required),
+  // r_pkg_mohm, r_die_mohm} replaces the package table's row for the IC;
+  // vrm {r_out_mohm, l_out_nh | f_bw_khz} is the regulator's output
+  // (default 10 mOhm flat to 50 kHz, flagged as assumed).
+  // check_current: a rail of 3 A or more also gets its return net judged
+  // (return_net, default GND) unless that net has an entry of its own.
 
   // check_diffpair (P8), rules_gen gap rules (P5), route_critical (P7).
   // Omit entirely to auto-discover pairs by name suffix (_P/_N, DP/DM,
@@ -123,7 +146,12 @@ Consumers per key (script -> phase):
     // running skew (#476): flagged where it stays over max_phase_skew_mm
     // (default max_skew_mm) for phase_window_mm (else rise_ps / 10 as
     // distance, else 5 mm); route_tune bumps the short leg there
-    "max_phase_skew_mm": 0.15, "phase_window_mm": 5, "rise_ps": 500
+    "max_phase_skew_mm": 0.15, "phase_window_mm": 5, "rise_ps": 500,
+    // coupling_factor (3.0): the legs count as coupled where the gap is
+    // within this many nominal pitches; max_via_asym (0): how many more
+    // vias one leg may have; impedance_tol_pct (10) on impedance_ohm;
+    // max_width_imbalance_pct (10): a pair drawn as zones, its two sides
+    "coupling_factor": 3.0, "max_via_asym": 0, "impedance_tol_pct": 10
   }, {
     // DC Kelvin / low-frequency shunt-sense pair: "kind" sense|kelvin|
     // dc_sense|low_frequency drops the skew, uncoupled-length and impedance
@@ -166,7 +194,7 @@ Consumers per key (script -> phase):
   // target (paired by position). Sheet parts pair by symbol uuid (the
   // netlist's tstamps: the same in every instance of a sheet file), else
   // by ref number mod 100 (R101 <-> R201). transform grid: target i sits
-  // at (i+1) * pitch; explicit: one {dx, dy, rot 0|90|180|270} per target,
+  // at (i+1) * pitch; explicit: offsets, one {dx, dy, rot 0|90|180|270} per target,
   // rotated about origin (default the centre of the source parts). route
   // false = placement only. margin_mm (1.0): slack round the source
   // courtyards' hull inside which shared nets' (GND) copper is copied.
@@ -343,7 +371,13 @@ Consumers per key (script -> phase):
                                // drives ("U1" or "U1.3"), the receiver's load,
                                // its noise margin (default 12% of its swing)
                                "driver": "U1", "c_in_pf": 3, "r_in_ohm": 1e6,
-                               "noise_margin_v": 0.4}},
+                               "noise_margin_v": 0.4,
+                               // aggressor false: no crosstalk is worked out
+                               // from this net; victim analog|digital|ignore
+                               // (as "victims"). zdiff: a pair half's target
+                               // (its class's: USB 90, eth_mdi 100);
+                               // zdiff_ohm overrides it, zdiff_tol_pct (15)
+                               "aggressor": true, "victim": "digital"}},
          "ignore": ["/SLOW_CLK"],
          "victims": {"/VREF": "analog"},
          "groups": [{"name": "rmii_tx", "ui_ns": 20,
@@ -375,7 +409,8 @@ Consumers per key (script -> phase):
   // edge_max_mm: to the board edge. reference: a name in
   // reference/pcb_antennas.yaml or {source, polys, anchor, ground_mm}; rot
   // degrees about the anchor, the anchor put on feed, compared by area
-  // (geometry_tol_pct). sim: `sim_solve antenna --out`'s result.json, judged
+  // (geometry_tol_pct, else the reference's area_tol_pct, else 5 %).
+  // sim: `sim_solve antenna --out`'s result.json, judged
   // against band_hz and min_efficiency.
   "pcb_antennas": [{"name": "A4", "refs": ["AE1"], "ground_nets": ["GND_A4"],
                     "keepout_mm": 2.0, "feed": [12.0, 3.0], "short": [10.2, 3.0],
@@ -456,6 +491,7 @@ Consumers per key (script -> phase):
   // Vent areas in series: inlet low, riser (edge gap past the board),
   // outlet high. material sets Tg (PLA PETG PCTG ABS ASA PC) or tg_c.
   // floor: feet (default, half the floor convects) | flat | open.
+  // k_w_mk: the walls' conductivity in W/mK (default 0.2, printed plastic).
   "enclosure": {"box_mm": [106, 96, 46.8], "wall_mm": 2.4,
                 "material": "PETG", "room_c": 30, "other_w": 1.4,
                 "inlet_mm2": 3300, "riser_mm2": 228, "outlet_mm2": 3300,
@@ -491,7 +527,12 @@ Consumers per key (script -> phase):
     //        edge in left|right|top|bottom (render-oriented: top = min y);
     //        pos 0..1 along the edge: where the part's ORIGIN sits, as a
     //        fraction of the edge's length (omit = distributed); rot optional
-    "groups": [{"name": "xtal", "anchor": "Y1", "members": ["C8", "C9"]}],
+    "groups": [{"name": "xtal", "anchor": "Y1", "members": ["C8", "C9"],
+                "template": "crystal"}],
+    //        template: lib/placetemplates.py's slotting for the members
+    //        ("crystal": symmetric load caps, GND outboard); absent, generic
+    "backside_decoupling": false,
+    //        false keeps every decoupling cap on its IC's side (place_seed)
     "keepouts": [{"rect": [x1, y1, x2, y2], "side": "front",
                   "reason": "antenna"}],   // or "poly": [[x,y], ...]
     "fixed": ["H1", "H2"],
@@ -524,7 +565,11 @@ Consumers per key (script -> phase):
   // pour on the copper above and below is stripline and gets solved
   // per-layer impedance widths (#323). Defaults when absent: 2-layer -> B.Cu GND pour;
   // 4-layer -> In1 GND + In2 dominant-power; high_speed references are
-  // always guaranteed a plane.
+  // always guaranteed a plane. Optional per plane: priority (raised by
+  // itself so a smaller zone inside a larger one on the layer wins),
+  // min_island_mm2, clearance (mm), min_width (0.25 mm), connect "solid"
+  // (pads join the pour without thermal relief, for a high-current lobe).
+  // planes_gen stops on any other key.
   "planes": [{"layer": "In2.Cu", "net": "+3V3",
               "region": [x1, y1, x2, y2]}],  // region optional (full board)
 
@@ -557,7 +602,77 @@ Consumers per key (script -> phase):
                                   "switching_kind": "hard",
                                   "rectifier_kind": "sync",
                                   "integration_kind": "integrated-fet",
-                                  "source_kind": "usb-pd"}}]
+                                  "source_kind": "usb-pd"}}],
+
+  // check_power_path (P8): a high-current path judged whole, the max-flow
+  // route on net from the part "from" to the part "to" at current_a, for a
+  // rise of dt_c (default: the check's --dt). check_kelvin splits a shunt's
+  // current by the paths that end at it.
+  "power_paths": [{"net": "+5V", "from": "J1", "to": "U2", "current_a": 1.5,
+                   "dt_c": 10}],
+  // A USB-PD input's contract. check_power_path judges the VBUS path at
+  // contract_a (else 3 A, flagged, when a PD sink IC is on the board);
+  // sim_inrush judges the inrush against contract_v and contract_a (its
+  // --contract-v/--contract-a win; else the highest switch-input rail, 3 A).
+  "pd_source": {"contract_a": 3, "contract_v": 5},
+  // check_creepage: working voltages per net, read after "voltages", so an
+  // entry here wins; an entry with no voltage is skipped.
+  "nets": [{"net": "+12V", "voltage": 12}],
+  // check_paste: the stencil foil in mm (default 0.12; --stencil-mm wins).
+  "stencil_mm": 0.12,
+  // RF nets. check_via_stubs judges a via stub at the net's knee (t_rise_ns
+  // or rise_ps, data_rate_mbps, f_max_ghz); route_critical routes the net
+  // single-ended at impedance_ohm (default 50), as it does a high_speed
+  // entry with impedance_ohm that is not half of a diff pair.
+  "rf": [{"net": "/RF_OUT", "impedance_ohm": 50, "f_max_ghz": 2.5}],
+
+  // check_esd (run by hand). connectors: the refs a strike reaches (default
+  // J*, P*, CN*, X*, USB*, not TP*); internal drops board-to-board ones
+  // nobody touches; exempt_nets drops nets; clamps adds clamp parts the name
+  // match misses. level_kv: the IEC 61000-4-2 contact level (8).
+  // corridor_mm: how far a neighbour counts as in the strike's corridor
+  // (else the gap where a full-length neighbour picks up corridor_v, 3.6 V,
+  // at most 10 mm). victim_abs_max_v: a number or {net glob: V} (else the
+  // lowest absolute maximum of a pin on the net, else 3.6 V).
+  "esd": {"connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
+          "clamps": ["D1"], "level_kv": 8, "victim_abs_max_v": {"/USB*": 6}},
+
+  // check_mate_pins (MECH-05): a connector and its mate. ref and mate_ref
+  // are required; mate_pcb: the mate's board, relative to this file (absent:
+  // this board); mount stack (default) | flip | cable, as in
+  // reference/connector_pinmap.yaml; rotation: the mate board's turn,
+  // degrees CCW in the top view (0); net_map {net here: the mate's name}.
+  // cable: kind ffc | fpc (type A | B) or idc | discrete (pin_map straight |
+  // reversed | rows_swapped | {near pin: far pin}); ends {REF: {contact top
+  // | bottom | dual, entry tabs | leads, source}} for a socket not in
+  // ffc_sockets; name, length_mm, pitch_mm and part go to --wireviz.
+  "mating_pairs": [{"ref": "J2", "mate_ref": "J1",
+                    "mate_pcb": "mate/d.kicad_pcb", "mount": "stack",
+                    "rotation": 0, "net_map": {"+3V3": "VDD"}},
+                   {"ref": "J3", "mate_ref": "J1", "mount": "cable",
+                    "cable": {"kind": "ffc", "type": "A", "length_mm": 100,
+                              "pitch_mm": 0.5}}],
+
+  // route_teardrops adds them, dfm_check judges them. required: true |
+  // false | null (null: true on a board with a FLEX_* area); a missing
+  // teardrop is then an error (dfm_teardrop_missing). enabled: off unless
+  // required. The values below are the defaults; any other key is an error.
+  "teardrops": {"enabled": false, "required": null, "vias": true,
+                "pth": true, "smd": false, "fine_pitch_mm": 0.65,
+                "nets": ["*"], "exclude_nets": [], "length_ratio": 0.5,
+                "max_length_mm": 1, "width_ratio": 1, "max_width_mm": 2,
+                "filter_ratio": 0.9, "curved": false},
+
+  // verify_all: a check that does not apply to this board, by its name (an
+  // unknown name is an error), with reason and approved (who and when; a
+  // placeholder such as TBD or <who> <when> is not an approval).
+  "verification": {"not_applicable": {"check_thermal": {
+                     "reason": "under 0.1 W",
+                     "approved": "A. Reviewer 2026-11-14"}}},
+  // release: the same waiver for the sim gate, the only one it takes.
+  "release": {"not_applicable": {"sim": {
+                "reason": "no analog stage",
+                "approved": "A. Reviewer 2026-11-14"}}}
 }
 ```
 
