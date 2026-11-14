@@ -1,8 +1,10 @@
 # connector_pinouts.yaml - standard pinouts of off-board connectors, read by
 # scripts/check_pinouts.py (#1027). Each row is a pinout an off-board mate
-# expects, with the source that fixes it. Seeded only from the real errata
-# that needed one (reference/errata_corpus.yaml: sizif-1, echoplayer-2,
-# bedlift-1, bedlift-6); add a row when a defect or a design needs another.
+# expects, with the source that fixes it. The jtag, audio and stated rows
+# were seeded from the real errata that needed one (reference/
+# errata_corpus.yaml: sizif-1, echoplayer-2, bedlift-1, bedlift-6); the
+# header rows (#1070) from each standard's own published pinout. Add a row
+# from the standard's document, never from one board's wiring.
 #
 #   kind: how a connector is found to be this standard
 #     jtag        - a connector whose nets reach >= 3 IC pins named TCK, TMS,
@@ -14,6 +16,16 @@
 #     audio_jack  - a part whose pins are named T, R (or R1, R2) and S: a
 #                   3.5 mm phone jack. Roles come from the net names (left,
 #                   right, gnd/com, mic); an unnamed net is not judged.
+#     header      - a part whose footprint and value match `shape` (a regex)
+#                   and whose numbered pins all fall within `pins`, found to
+#                   be this standard when the value or footprint matches
+#                   `name`, or at least `signals` of the row's signal roles
+#                   are on its nets (from the IC pin function on each net,
+#                   one series resistor away, else the net name), or at
+#                   least `anchors` of its GND/SUPPLY pins sit on ground or
+#                   a named rail (one a supply). Rows found by name win over
+#                   the rest; a part is clean when any row it fits is. IO
+#                   is a signal pin only kept off the rails.
 #     stated      - only when constraints.json names the connector:
 #                     "pinouts": [{"ref": "J8", "standard": "<row>"}]
 #                   (an off-board part with no standard of its own: a cable
@@ -79,3 +91,143 @@ standards:
     url: https://github.com/j9brown/bed-lift/blob/main/hardware/v0.2/design-and-errata.md
     pinout: {"1": HALL2, "2": GND, "3": {role: SUPPLY, volts: 5.0},
              "4": MOTOR, "5": MOTOR, "6": HALL1}
+
+  # ---- standard headers (#1070), each from the standard's document ----
+
+  cortex-swd-10:
+    kind: header
+    pins: 10
+    shape: '2x0?5.*1\.27|1\.27.*2x0?5|10P.*P1\.27|TC2050'
+    name: 'SWD|Cortex|TC2050'
+    signals: 2
+    source: >-
+      Arm Cortex Debug Connector (10-pin, 1.27 mm), as Tag-Connect's
+      TC2030-CTX datasheet tabulates it: 1 VTref, 2 SWDIO/TMS, 3 GND,
+      4 SWCLK/TCK, 5 GND, 6 SWO/TDO, 7 key/NC, 8 NC/TDI, 9 GNDDetect,
+      10 nRESET (KiCad's Conn_ARM_JTAG_SWD_10 symbol agrees; the TC2050
+      footprint uses the same numbering)
+    url: https://www.tag-connect.com/wp-content/uploads/bsk-pdf-manager/TC2030-CTX_1.pdf
+    pinout: {"1": SUPPLY, "2": SWDIO, "3": GND, "4": SWCLK, "5": GND,
+             "6": SWO, "7": NC, "8": TDI, "9": GND, "10": NRESET}
+
+  tc2030-swd:
+    kind: header
+    pins: 6
+    shape: 'TC2030'
+    signals: 2
+    source: >-
+      Tag-Connect TC2030-CTX datasheet, TC2030 SWD footprint: 1 VCC,
+      2 SWDIO, 3 nRESET, 4 SWCLK, 5 GND, 6 SWO (found by SWD signals only:
+      the same footprint carries AVR ISP)
+    url: https://www.tag-connect.com/wp-content/uploads/bsk-pdf-manager/TC2030-CTX_1.pdf
+    pinout: {"1": SUPPLY, "2": SWDIO, "3": NRESET, "4": SWCLK, "5": GND,
+             "6": SWO}
+
+  rpi-debug-3:
+    kind: header
+    pins: 3
+    shape: 'JST_SH.*1x03|[SB]M03B-SRSS'
+    name: 'debug'
+    signals: 2
+    source: >-
+      Raspberry Pi 3-pin Debug Connector Specification (RP-008189-DS):
+      JST SH 1.0 mm 3-pin, 1 SC (SWCLK), 2 GND, 3 SD (SWDIO); the cable is
+      straight through, pin 1 to pin 1
+    url: https://pip-assets.raspberrypi.com/categories/885-raspberry-pi-debug-probe/documents/RP-008189-DS-1-debug-connector-specification.pdf
+    pinout: {"1": SWCLK, "2": GND, "3": SWDIO}
+
+  qwiic:
+    kind: header
+    pins: 4
+    shape: 'JST_SH.*1x04|[SB]M04B-SRSS|Qwiic|STEMMA'
+    name: 'Qwiic'
+    signals: 2
+    source: >-
+      SparkFun Qwiic Connect System: JST SH 1.0 mm 4-pin (SM04B-SRSS-TB),
+      GND / 3.3V / SDA / SCL, "Boards must be 3.3V"
+    url: https://www.sparkfun.com/qwiic
+    pinout: {"1": GND, "2": {role: SUPPLY, volts: 3.3}, "3": SDA, "4": SCL}
+
+  stemma-qt:
+    kind: header
+    pins: 4
+    shape: 'JST_SH.*1x04|[SB]M04B-SRSS|Qwiic|STEMMA'
+    name: 'STEMMA'
+    signals: 2
+    source: >-
+      Adafruit STEMMA QT: the Qwiic pinout (JST SH 4-pin, GND, V+, SDA,
+      SCL) with V+ at 3 to 5 V, so its level is not judged
+    url: https://learn.adafruit.com/introducing-adafruit-stemma-qt/technical-specs
+    pinout: {"1": GND, "2": SUPPLY, "3": SDA, "4": SCL}
+
+  pmod-6:
+    kind: header
+    pins: 6
+    shape: 'Pmod'
+    name: 'Pmod'
+    source: >-
+      Digilent Pmod Interface Specification 1.2.0, 6-pin: 1-4 signals,
+      5 GND, 6 VCC (3.3 V, which a host may switch to 5 V, so its level is
+      not judged)
+    url: https://digilent.com/reference/_media/reference/pmod/pmod-interface-specification-1_2_0.pdf
+    pinout: {"1": IO, "2": IO, "3": IO, "4": IO, "5": GND, "6": SUPPLY}
+
+  pmod-12:
+    kind: header
+    pins: 12
+    shape: 'Pmod'
+    name: 'Pmod'
+    source: >-
+      Digilent Pmod Interface Specification 1.2.0, 12-pin, numbered as the
+      spec does (upper row 1-6, lower row 7-12): 5 and 11 GND, 6 and 12
+      VCC
+    url: https://digilent.com/reference/_media/reference/pmod/pmod-interface-specification-1_2_0.pdf
+    pinout: {"1": IO, "2": IO, "3": IO, "4": IO, "5": GND, "6": SUPPLY,
+             "7": IO, "8": IO, "9": IO, "10": IO, "11": GND, "12": SUPPLY}
+
+  pmod-12-odd-even:
+    kind: header
+    pins: 12
+    shape: 'Pmod'
+    name: 'Pmod'
+    source: >-
+      Digilent Pmod Interface Specification 1.2.0, 12-pin, on a KiCad
+      2x06 odd/even footprint (the spec calls its own numbering
+      non-standard): spec pins 5 and 11 (GND) are pads 9 and 10, 6 and 12
+      (VCC) pads 11 and 12
+    url: https://digilent.com/reference/_media/reference/pmod/pmod-interface-specification-1_2_0.pdf
+    pinout: {"1": IO, "2": IO, "3": IO, "4": IO, "5": IO, "6": IO,
+             "7": IO, "8": IO, "9": GND, "10": GND, "11": SUPPLY,
+             "12": SUPPLY}
+
+  arduino-uno-r3:
+    kind: header
+    pins: 32
+    shape: 'Arduino_UNO_R3'
+    name: 'Arduino_UNO_R3'
+    source: >-
+      Arduino UNO R3 (A000066) pinout: power header NC, IOREF, RESET, 3V3,
+      5V, GND, GND, VIN; analog A0-A5 (A4 SDA, A5 SCL); digital D0-D13,
+      GND, AREF, SDA, SCL, as KiCad's Module:Arduino_UNO_R3 pads 1-32
+      number them
+    url: https://docs.arduino.cc/resources/pinouts/A000066-full-pinout.pdf
+    pinout: {"1": NC, "2": SUPPLY, "3": NRESET,
+             "4": {role: SUPPLY, volts: 3.3}, "5": {role: SUPPLY, volts: 5.0},
+             "6": GND, "7": GND, "8": SUPPLY, "13": SDA, "14": SCL,
+             "29": GND, "31": SDA, "32": SCL}
+
+  rpi-40:
+    kind: header
+    pins: 40
+    shape: '2x20.*2\.54|2\.54.*2x20'
+    name: 'Raspberry|RPi'
+    anchors: 2
+    source: >-
+      Raspberry Pi 40-pin GPIO header (pinout.xyz; KiCad's Raspberry_Pi_2_3
+      symbol): 3V3 on 1 and 17, 5V on 2 and 4, GND on 6, 9, 14, 20, 25,
+      30, 34 and 39, I2C1 SDA on 3 and SCL on 5 (GPIO pins not judged)
+    url: https://pinout.xyz/
+    pinout: {"1": {role: SUPPLY, volts: 3.3}, "2": {role: SUPPLY, volts: 5.0},
+             "3": SDA, "4": {role: SUPPLY, volts: 5.0}, "5": SCL, "6": GND,
+             "9": GND, "14": GND, "17": {role: SUPPLY, volts: 3.3},
+             "20": GND, "25": GND, "30": GND, "34": GND, "39": GND}

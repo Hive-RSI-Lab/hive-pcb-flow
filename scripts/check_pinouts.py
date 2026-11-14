@@ -15,6 +15,14 @@ document that fixes the pinout):
        the tip, left or right off T and R1, or ground on R1 of a headset
        (TRRS) jack, which neither CTIA nor OMTP allows (echoplayer rev2: the
        common on the tip).
+     header (a part whose footprint and value fit the row's `shape`, found
+       by its name (Qwiic, Pmod, SWD), by the row's signals on its nets
+       (SWDIO and SWCLK, SDA and SCL: the IC pin function, else the net
+       name) or by its ground and supply pins (a Pi 40-pin header): a GND
+       pin off ground, a SUPPLY pin on ground or another rail's volts, or a
+       signal pin on a rail or carrying another of the standard's signals
+       (a Qwiic port with SDA and SCL crossed; a Cortex SWD header with
+       SWCLK on the SWDIO pin).
      stated (constraints.json "pinouts": [{"ref", "standard"}], a mate with
        no standard of its own): a GND pin off ground, a SUPPLY pin on ground
        or a signal pin on a ground or supply rail (bed-lift v0.2: the hall
@@ -59,6 +67,16 @@ ROLE_WORDS = {
     "RIGHT": {"R", "RIGHT", "HPR", "ROUT", "OUTR", "RO"},
     "GND": {"GND", "AGND", "COM", "COMMON", "SLEEVE"},
     "MIC": {"MIC", "MICIN", "MIC_IN"},
+}
+# header rows: the words (of an IC pin function, else a net name) that
+# carry each signal role; a role not listed here is its own word.
+SIGNAL_WORDS = {
+    "SWDIO": {"SWDIO", "TMS", "SWD_IO"},
+    "SWCLK": {"SWCLK", "TCK", "SWD_CLK"},
+    "SWO": {"SWO", "TDO", "TRACESWO"},
+    "NRESET": {"NRST", "NRESET", "RESET", "RST", "XRES"},
+    "SDA": {"SDA"},
+    "SCL": {"SCL"},
 }
 
 
@@ -280,6 +298,153 @@ def judge_stated(board: Board, ref: str, pins: dict, name: str, row: dict):
     return out
 
 
+def _words(text: str) -> set[str]:
+    return set(re.split(r"[^A-Z0-9]+", text.upper())) - {""}
+
+
+def _signal_roles(board: Board, net: str, roles: set[str]) -> set[str]:
+    """The roles among `roles` a net carries: from the function of the IC
+    pins on it (or one series resistor beyond), else from its name."""
+    if net.startswith("Net-(") and not board.nets.get(net):
+        return set()
+
+    def of(words):
+        return {r for r in roles if words & SIGNAL_WORDS.get(r, {r})}
+
+    def ic_words(n):
+        return [_words(m.get("pinfunction") or "")
+                for m in board.nets.get(n, ()) if IC_RE.match(m["ref"] or "")]
+    found = set()
+    for w in ic_words(net):
+        found |= of(w)
+    if not found:
+        for m in board.nets.get(net, ()):
+            ref = m["ref"] or ""
+            if ref.upper().startswith("R") and len(board.pins.get(ref, {})) == 2:
+                for p, far in board.pins[ref].items():
+                    if p != str(m["pin"]) and far != net:
+                        for w in ic_words(far):
+                            found |= of(w)
+    if found or net.startswith("Net-(") or net.startswith("unconnected-"):
+        return found
+    return of(_words(net.rsplit("/", 1)[-1]))
+
+
+def _header_fits(board: Board, ref: str, pins: dict, row: dict) -> str | None:
+    """How a connector is found to be this header row (name, signals or
+    anchors), or None when it is not."""
+    comp = board.comps.get(ref, {})
+    text = f"{comp.get('footprint') or ''} {comp.get('value') or ''}"
+    if not re.search(row["shape"], text, re.I):
+        return None
+    n = int(row["pins"])
+    nums = [p for p in pins if p.isdigit() and 1 <= int(p) <= n]
+    extra = [p for p in pins if p not in nums]
+    # other pads (numbered past the pinout, MP, SH) are mounting pads:
+    # unwired or ground
+    if not nums or any(not (pins[p].startswith("unconnected-")
+                            or board.is_ground(pins[p])) for p in extra):
+        return None
+    if row.get("name") and re.search(row["name"], text, re.I):
+        return "name"
+    sigs = {_role(s)[0] for s in row["pinout"].values()} - {"GND", "SUPPLY", "NC", "IO"}
+    if row.get("signals"):
+        seen = set()
+        for p in nums:
+            seen |= _signal_roles(board, pins[p], sigs)
+        if len(seen) >= int(row["signals"]):
+            return "signals"
+    if row.get("anchors"):
+        # its wired ground and supply pins, most of them where the row
+        # puts them (byte-hamr's 2x20 card edge has a few by chance)
+        good, wrong = [], 0
+        for p, spec in row["pinout"].items():
+            role, want = _role(spec)
+            if (p not in pins or role not in ("GND", "SUPPLY")
+                    or pins[p].startswith("unconnected-")):
+                continue
+            gnd = board.is_ground(pins[p])
+            v = _volts_from_name(pins[p])
+            if (role == "GND" and gnd) or (
+                    role == "SUPPLY" and v and v > 0
+                    and (want is None or abs(v - float(want)) <= 0.05 * float(want))):
+                good.append(role)
+            else:
+                wrong += 1
+        if (len(good) >= int(row["anchors"]) and "SUPPLY" in good
+                and len(good) > wrong):
+            return "anchors"
+    return None
+
+
+def judge_header(board: Board, ref: str, pins: dict, name: str, row: dict):
+    """Violations of one connector against a header row."""
+    sigs = {_role(s)[0] for s in row["pinout"].values()} - {"GND", "SUPPLY", "NC", "IO"}
+    out = []
+    for p, spec in row["pinout"].items():
+        role, volts = _role(spec)
+        if role == "NC" or p not in pins:
+            continue
+        net = pins[p]
+        if net.startswith("unconnected-"):
+            continue
+        gnd = board.is_ground(net)
+        rail = _volts_from_name(net)
+        bad = None
+        if role == "GND" and not gnd:
+            bad = f"is GND in {name} but carries {net}"
+        elif role == "SUPPLY" and gnd:
+            bad = f"is the {name} supply but sits on ground ({net})"
+        elif role not in ("GND", "SUPPLY"):
+            if gnd or (rail is not None and rail > 0):
+                bad = f"is {role} in {name} but carries the rail {net}"
+            elif role != "IO":
+                got = _signal_roles(board, net, sigs)
+                if got and role not in got:
+                    bad = (f"is {role} in {name} but its net {net} carries "
+                           f"{'/'.join(sorted(got))}")
+        if bad:
+            out.append(_viol("pinout_mismatch", ref, net,
+                             f"{ref} pin {p} {bad} ({_cite(row)})",
+                             pin=p, standard=name, expected=role))
+            continue
+        if role == "SUPPLY" and volts is not None:
+            v = board.volts(net)
+            want = float(volts)
+            if v is not None and abs(v - want) > 0.05 * want:
+                how = ("" if _volts_from_name(net) is not None else
+                       f", the output of {board.driver(net)} on its "
+                       f"{v:g} V rail")
+                out.append(_viol(
+                    "pinout_supply_volts", ref, net,
+                    f"{ref} pin {p} is the {want:g} V supply in {name} "
+                    f"({_cite(row)}) but carries {net} at {v:g} V{how}",
+                    pin=p, standard=name, volts=v, want_volts=want))
+    return out
+
+
+def judge_headers(board: Board, ref: str, pins: dict, rows: dict):
+    """(violations, judged entry or None): every header row the connector
+    fits is tried, rows found by name before the others, and it is clean
+    when one row is; else the first row's faults are reported."""
+    fits = {}
+    for name, row in rows.items():
+        how = _header_fits(board, ref, pins, row)
+        if how:
+            fits[name] = how
+    if any(h == "name" for h in fits.values()):
+        fits = {k: h for k, h in fits.items() if h == "name"}
+    if not fits:
+        return [], None
+    first = None
+    for name in fits:
+        v = judge_header(board, ref, pins, name, rows[name])
+        if not v:
+            return [], {"ref": ref, "standard": name, "by": fits[name]}
+        first = first or (name, v)
+    return first[1], {"ref": ref, "standard": first[0], "by": fits[first[0]]}
+
+
 def check(parsed: dict, constraints: dict, table: dict | None = None):
     table = load_table() if table is None else table
     board = Board(parsed)
@@ -296,6 +461,7 @@ def check(parsed: dict, constraints: dict, table: dict | None = None):
             continue
         stated[ref] = std
     jacks = {k: r for k, r in table.items() if r.get("kind") == "audio_jack"}
+    headers = {k: r for k, r in table.items() if r.get("kind") == "header"}
     for ref in sorted(board.pins):
         pins = board.pins[ref]
         if ref in stated:
@@ -307,6 +473,8 @@ def check(parsed: dict, constraints: dict, table: dict | None = None):
                 viols += judge_jtag(board, ref, pins, name, row)[0]
             elif row["kind"] == "audio_jack":
                 viols += judge_jack(board, ref, pins, {name: row})[0]
+            elif row["kind"] == "header":
+                viols += judge_header(board, ref, pins, name, row)
             judged.append({"ref": ref, "standard": name, "stated": True})
             continue
         if is_jack(board, ref, pins):
@@ -314,6 +482,11 @@ def check(parsed: dict, constraints: dict, table: dict | None = None):
             viols += v
             judged.append({"ref": ref, "standard": "audio_jack",
                            "fits": fits})
+            continue
+        v, got = judge_headers(board, ref, pins, headers)
+        if got:
+            viols += v
+            judged.append(got)
             continue
         if not CONN_RE.match(ref):
             continue
@@ -372,8 +545,9 @@ def run(argv=None):
     return checklib.report(
         SCRIPT, board, viols, connectors=judged,
         nothing_to_judge=None if judged else
-        "no connector the pinout table knows (JTAG header, 3.5 mm jack, "
-        "or one named in constraints.json pinouts)"), args.out
+        "no connector the pinout table knows (JTAG or SWD header, "
+        "Tag-Connect, Pmod, Qwiic, Arduino or Raspberry Pi header, 3.5 mm "
+        "jack, or one named in constraints.json pinouts)"), args.out
 
 
 def main(argv=None) -> int:

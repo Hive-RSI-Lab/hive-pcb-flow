@@ -1,6 +1,7 @@
 # Seeded faults for check_pinouts (#1027): off-board connectors wired against
 # their standard pinout (reference/connector_pinouts.yaml), one per real
-# erratum the check was seeded from (sizif-1, echoplayer-2, bedlift-6).
+# erratum the check was seeded from (sizif-1, echoplayer-2, bedlift-6), and
+# one from a published standard (#1070: Qwiic).
 mutants:
   pinout-jtag-swap:
     board: usbbuck4
@@ -34,3 +35,14 @@ mutants:
     expect:
       kind: pinout_supply_volts
       ref: J96
+  pinout-qwiic-swap:
+    board: usbbuck4
+    script: mutations/pinout_qwiic_swap.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: a Qwiic port J95 whose SDA and SCL pins reach the
+      sensor's SCL and SDA (#1070, from the SparkFun Qwiic standard); the
+      net names follow the header, so ERC and a name check see nothing
+    expect:
+      kind: pinout_mismatch
+      ref: J95
