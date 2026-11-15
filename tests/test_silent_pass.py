@@ -275,6 +275,20 @@ def test_identical_unkeyed_connectors_are_judged(tmp_path):
     assert {v["kind"] for v in p["violations"]} == {"mate_unkeyed_rail_swap"}
 
 
+def test_identical_unkeyed_connectors_that_pass_show_as_judged(tmp_path):
+    """Two same-net unkeyed headers: the rail-swap rule ran and passed, so the
+    report names the group and the corpus reads it as judged, not as a run
+    that judged nothing with no reason given."""
+    import errata_corpus as ec
+    nets = ["+5V", "A", "B", "GND"]
+    p = _mate(tmp_path, mate_fp("J1", HDR4, 5, 5, nets)
+              + mate_fp("J2", HDR4, 5, 15, nets))
+    assert not p["violations"]
+    assert "nothing_to_judge" not in p
+    assert p["unkeyed_groups"] and "J1, J2" in p["unkeyed_groups"][0]
+    assert ec.coverage(p, "check_mate_pins")["status"] == "judged"
+
+
 def test_identical_connector_no_family_knows_is_named(tmp_path):
     """The rule can't say if they're keyed: same pinout swap as above, unseen."""
     odd = "Vendor:Mystery_1x04"
