@@ -1392,6 +1392,9 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
 
         def ref_volts(name):
             hits = idx.get(str(name).upper()) or []
+            if not hits:  # a name aliases() drops: a passive's "2" (rating_fill)
+                hits = [q for q in ext.get("pinout") or []
+                        if str(name) in (q["pin"], q["name"])]
             if not hits and str(name).upper() in ("VS", "V+"):
                 hits = idx.get("V+") or []
             if not hits and str(name).upper().startswith("V"):
