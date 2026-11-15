@@ -19,10 +19,17 @@ Where the part's record comes from, first found wins:
      (--live) JLC's record;
   2. an MPN field (`MPN`, `Manufacturer_Part_Number`, `MFR PN`, ...), or for
      a D, Q or U whose Value is a part number (`1N5819`, `W25Q80DVSNIG`),
-     that Value: (--live) JLC's search, judged only when every row whose
-     model is that exact name gives the same package. A Value-named part is
-     reported as a warning: the designer may mean a variant the Value does
-     not spell (1N5819W).
+     that Value: first its ordering code, read from the maker's own table
+     (reference/mpn_packages.yaml via lib/mpn_decode.py, offline too:
+     SN74HC595PW is TSSOP-16, ATTINY85-20SU the 208 mil SOIC,
+     STM32F103C8T6 LQFP-48 7x7), else (--live) JLC's search, judged only
+     when every row whose model is that exact name gives the same package.
+     A Manufacturer field naming another maker than the table's leaves the
+     code undecoded. A Value-named part is reported as a warning: the
+     designer may mean a variant the Value does not spell (1N5819W).
+  A code with no record, or a record whose package name is not read, falls
+  back to the decoded MPN field, then to the record's own model.
+  Neither read: "not judged", never a guess.
 --live answers are cached in --cache (default ~/.cache/hwde/fp_package) so
 a sweep asks JLC once per code or name.
 
@@ -36,12 +43,23 @@ the record's description gives the capacitance, resistance or inductance,
 and a Value more than 2 % off is a hit (flexgrid V3 C9: "100 uF" bought as
 C12530, a 2.2 uF part).
 
+Every C and R on a chip-size footprint, part number or not, has its stated
+value held to its case (reference/case_limits.yaml, the makers' lineup
+charts): a 22 uF 0402 or a 1 W 0603 cannot be bought. Its `case_limits_judged`
+counts them.
+
 Kinds:
   footprint_package_mismatch  the footprint and the named part's package
                               disagree on mount, family, pins, pitch or
                               body width
   lcsc_value_mismatch         the Value and the LCSC/JLC record's value
                               disagree
+  passive_case_limit          a C or R states more than its chip case holds:
+                              a capacitance over 2.5x the largest the Yageo
+                              and KEMET charts list for the case, voltage
+                              and dielectric (X5R, X7R; C0G or unstated is
+                              held to any dielectric's), or a power over 2x Yageo RC_L's
+                              rating (lib/case_limits.py; a warning)
 
 The report's `judged` counts parts both sides could be read for; `not_judged`
 says why each other part wasn't.
@@ -63,10 +81,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "lib"))
 import bom_cpl  # noqa: E402  (is_lcsc_field)
+import case_limits  # noqa: E402
 import checklib  # noqa: E402
 import engcalc  # noqa: E402
 import fpfix  # noqa: E402
 import lcsc_packages  # noqa: E402
+import mpn_decode  # noqa: E402
 import pkgname  # noqa: E402
 import stocklib  # noqa: E402
 
@@ -79,6 +99,8 @@ _MPN_FIELD = re.compile(
     r"^(?:MPN#?|MFR\.?\s*(?:PART\s*)?(?:#|PN|NO\.?|NUMBER)?|MF?PN|"
     r"MANUFACTURER[_\s]*PART[_\s]*(?:NUMBER|#|NO\.?)?|PART\s*NUMBER|PN)$",
     re.I)
+_MAKER_FIELD = re.compile(r"^(?:MANUFACTURER|MFR\.?|MFG|MAKER|VENDOR)"
+                          r"(?:[_\s]*NAME)?$", re.I)
 _CODE = re.compile(r"^C\d{3,9}$")
 # a Value that is a part number: letters and digits, at least 5 long, with
 # both a letter and two digits, and no value unit standing alone
@@ -261,9 +283,15 @@ class Records:
                     "source": "reference/lcsc_packages.json"}
         return None
 
-    def by_mpn(self, mpn: str) -> tuple[dict | None, str]:
-        """(record, why not) for an exact model name: the rows whose model
-        is the name, judged only when they agree on the package."""
+    def by_mpn(self, mpn: str, maker: str | None = None
+               ) -> tuple[dict | None, str]:
+        """(record, why not) for an exact model name: its ordering code
+        read from the maker's own table (lib/mpn_decode.py), else (--live)
+        the JLC rows whose model is the name, judged only when they agree
+        on the package."""
+        dec = decoded(mpn, maker)
+        if dec:
+            return dec, ""
         if not self.live:
             return None, "an MPN is looked up only with --live"
         try:
@@ -292,6 +320,43 @@ class Records:
                 "rows": len(exact)}, ""
 
 
+def maker_of(fp: dict) -> str | None:
+    return next((v.strip() for k, v in fp["props"].items()
+                 if _MAKER_FIELD.match(k.strip()) and v.strip()), None)
+
+
+def decoded(mpn: str | None, maker: str | None = None) -> dict | None:
+    """The record an MPN's ordering code gives (reference/
+    mpn_packages.yaml), or None. A Manufacturer field naming another maker
+    than the table's (a 74HC595D from Toshiba) is not decoded: the code
+    letters are that maker's own."""
+    if not mpn:
+        return None
+    dec = mpn_decode.decode(mpn)
+    if not dec:
+        return None
+    if maker:
+        words = {w for w in re.split(r"[^a-z]+", dec["maker"].split()[0]
+                                     .lower()) if len(w) > 2}
+        words |= {"atmel"} if "microchip" in words else set()
+        words |= {"fairchild"} if "onsemi" in words else set()
+        words |= {"siliconix"} if "vishay" in words else set()
+        mk = maker.lower()
+        if words and not any(w in mk for w in words) and not (
+                "texas" in words and re.search(r"\bti\b", mk)) and not (
+                "onsemi" in words and "on semi" in mk):
+            return None
+    return {"package": dec["package"], "desc": dec["desc"],
+            "description": "", "model": None, "source": dec["source"],
+            "decoded": True, "rows": 2}
+
+
+def _mpn_field(fp: dict) -> str | None:
+    return next((v.strip() for k, v in fp["props"].items()
+                 if _MPN_FIELD.match(k.strip()) and v.strip()
+                 and v.strip() not in ("~", "-")), None)
+
+
 # ------------------------------------------------------------------ values
 
 _DESC_VAL = {
@@ -313,11 +378,17 @@ def record_value(kind: str, description: str) -> float | None:
 
 # ------------------------------------------------------------------ check
 
+def _reads(package: str) -> bool:
+    d = pkgname.describe(package or "")
+    return bool(d["family"] or d["chip"])
+
+
 def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
     viols: list[dict] = []
     judged: list[dict] = []
     not_judged: dict[str, int] = {}
     values = 0
+    limits = 0
 
     def skip(why: str) -> None:
         not_judged[why] = not_judged.get(why, 0) + 1
@@ -330,6 +401,27 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
         code, mpn, where = part_number(fp)
         if ref in recs.refs:  # parts.json says what this ref buys
             code, mpn, where = recs.refs[ref][0], None, "parts.json row"
+        kind = (re.match(r"[A-Z]+", ref.upper()) or [""])[0]
+        if kind in ("C", "R"):
+            cl = case_limits.judge(kind, fp["value"], fp["fpid"], fp["props"])
+            if cl:
+                limits += 1
+                if not cl["ok"]:
+                    unit = cl["unit"]
+                    viols.append(checklib.violation(
+                        SCRIPT, "warning", fp["at"], fp["layer"], None, [ref],
+                        f"{ref} is {cl['what']} ({fp['value']!r} on "
+                        f"{fp['fpid']}), but the largest "
+                        f"{'capacitor' if kind == 'C' else 'rated power'} "
+                        f"the makers' charts give for that case is "
+                        f"{case_limits._si(cl['limit'], unit)} "
+                        f"({'; '.join(cl['cites'][:3])}; "
+                        f"reference/case_limits.yaml). Fix: the case the "
+                        f"part's datasheet gives, or a value that fits "
+                        f"{cl['case']}",
+                        SCRIPT, kind="passive_case_limit", case=cl["case"],
+                        value=fp["value"], stated=cl["stated"],
+                        limit=cl["limit"], unit=unit))
         if not code and not mpn:
             skip("no part number on the footprint")
             continue
@@ -337,11 +429,24 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             rec, why = recs.by_code(code), "no record of the code" + (
                 "" if recs.live else " (--live asks JLC)")
         else:
-            rec, why = recs.by_mpn(mpn)
-        if not rec:
+            rec, why = recs.by_mpn(mpn, maker_of(fp))
+        pkg = rec
+        if code and (not rec or not _reads(rec["package"])):
+            # no record of the code, or one whose package name is not
+            # read: the MPN on the part, else the record's own model, may
+            # still decode from its ordering code
+            for alt, src in ((_mpn_field(fp), "MPN field"),
+                             ((rec or {}).get("model"), "record's model")):
+                dec = decoded(alt, maker_of(fp))
+                if dec:
+                    pkg, mpn = dec, alt
+                    where = f"{where}; package from the {src} {alt}"
+                    break
+        if not rec and not pkg:
             skip(why)
             continue
-        part = pkgname.describe(rec["package"])
+        rec = rec or pkg
+        part = pkg.get("desc") or pkgname.describe(pkg["package"])
         foot = pkgname.describe(fp["fpid"])
         if fp["pad_mount"]:
             foot["mount"] = fp["pad_mount"]
@@ -349,7 +454,6 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             and _norm(rec["model"]) != _norm(code or mpn) else (code or mpn)
         warn = where == "Value"
         # the value of a passive bought by number
-        kind = (re.match(r"[A-Z]+", ref.upper()) or [""])[0]
         if code and kind in _DESC_VAL:
             # "2.2 uF": engcalc reads the number alone without the unit
             # and the Greek mu (U+03BC) is read as the micro sign
@@ -387,17 +491,18 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             # body; one JLC row in SMD says nothing of a THT footprint
             skip("the Value names a part JLC has once, in another mount")
             continue
-        same = _norm(rec["package"]) == _norm(fp["fpid"].split(":")[-1])
+        same = not pkg.get("decoded") and \
+            _norm(pkg["package"]) == _norm(fp["fpid"].split(":")[-1])
         why_not = [] if same else pkgname.compare(part, foot, fp["pads"])
         judged.append({"ref": ref, "named": code or mpn, "from": where,
-                       "package": rec["package"], "footprint": fp["fpid"],
+                       "package": pkg["package"], "footprint": fp["fpid"],
                        "ok": not why_not})
         if not why_not:
             continue
         viols.append(checklib.violation(
             SCRIPT, "warning" if warn else "error", fp["at"], fp["layer"],
             None, [ref],
-            f"{ref} is {named}, a {rec['package']} part ({rec['source']}; "
+            f"{ref} is {named}, a {pkg['package']} part ({pkg['source']}; "
             f"the part number from its {where}), but its footprint is "
             f"{fp['fpid']}: {'; '.join(why_not)}"
             + (". The Value names that part; if a variant is meant, put its "
@@ -405,10 +510,11 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             + ". Fix: the footprint the part's datasheet gives, or the part "
               "that fits these pads",
             SCRIPT, kind="footprint_package_mismatch", footprint=fp["fpid"],
-            package=rec["package"], part=code or mpn, part_from=where,
+            package=pkg["package"], part=code or mpn, part_from=where,
             reasons=why_not))
     return viols, {"judged": len(judged), "not_judged": not_judged,
-                   "values_judged": values, "parts": judged,
+                   "values_judged": values, "case_limits_judged": limits,
+                   "parts": judged,
                    "lookup_errors": recs.errors[:20]}
 
 

@@ -115,11 +115,12 @@ def parse_volts(text) -> float | None:
     return float(m.group(1)) if m else None
 
 
-_WATT = re.compile(r"(\d+(?:\.\d+)?)\s*(m?)W\b")
+_WATT = re.compile(r"(?<![\d.])(\d*\.\d+|\d+)\s*(m?)W\b")
 
 
 def parse_watts(text) -> float | None:
-    """'100mW' -> 0.1, '1/4W' -> 0.25, '0.125W' -> 0.125, else None."""
+    """'100mW' -> 0.1, '1/4W' -> 0.25, '0.125W' -> 0.125, '.1W' -> 0.1,
+    else None."""
     s = str(text or "")
     m = re.search(r"(\d+)\s*/\s*(\d+)\s*W\b", s)
     if m and float(m.group(2)):

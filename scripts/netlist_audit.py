@@ -170,8 +170,11 @@ schematic-level structural problems BEFORE board work starts:
    symbol in its package is compared with its datasheet pin table in
    reference/part_pinouts.yaml (matched on name and footprint, at least 3
    names in common; an unverified row's finding is not judged) (#1135).
-   Needs the stock symbol dir (lib/env.kicad_symbol_dir); not judged
-   without it.
+   A stock symbol's package is its default footprint, else its
+   ki_fp_filters: a PLCC-44 part is not compared with a DIP-40-numbered
+   stock symbol, and a footprint naming no package among stock symbols of
+   several packages is not judged (#1203). Needs the stock symbol dir
+   (lib/env.kicad_symbol_dir); not judged without it.
  - bus_order_flipped (warning): two units of one part with channel pins of
    one stem (1QA..1QD, 2QA..2QD) whose nets carry one varying number that
    rises along one unit and falls along the other: one unit's pins drawn
@@ -3049,7 +3052,11 @@ def _symbol_pinmap_hits(parsed: dict, symdir, pinouts: list[dict] | None = None
     part whose Value or MPN names a stock KiCad part, in the same package,
     whose pin map disagrees with the placed symbol's; how many parts were
     compared; and how many of those were compared with a part_pinouts.yaml
-    row. A part some same-package stock candidate agrees with is quiet.
+    row. A stock symbol's package is its default Footprint, else its
+    ki_fp_filters (pinmaplib.stock_package_match): a PLCC-44 part is not
+    compared with a DIP-40-numbered stock symbol, and one whose package
+    can't be told among several stock packages is not judged. A part
+    some same-package stock candidate agrees with is quiet.
     One with no same-package stock symbol is compared with the first
     pinouts row whose `match` takes its Value, MPN or symbol name and
     whose `footprint` takes its footprint (a pad numbering is a
@@ -3070,13 +3077,24 @@ def _symbol_pinmap_hits(parsed: dict, symdir, pinouts: list[dict] | None = None
                  sp[1]]
         cands = [h for h in pinmaplib.stock_candidates(names, symdir)
                  if (h[0], h[1]) != sp]
-        same_pkg = []
+        same_pkg, unsure = [], False
         for lib, name, path in cands:
             st = pinmaplib.stock_symbol(path)
-            if st and len(st["pins"]) >= 3 and pinmaplib.same_package(
-                    c.get("footprint"), st["footprint"]):
+            if not st or len(st["pins"]) < 3:
+                continue
+            fits = pinmaplib.stock_package_match(c.get("footprint"), st)
+            unsure |= fits is None
+            if fits:
                 same_pkg.append(((lib, name, st),
                                  pinmaplib.pinmap_diffs(placed, st["pins"])))
+        # the board's package unknown and the stock symbols drawn for
+        # several: which one's numbering holds can't be told (not judged)
+        if pinmaplib.package_family(c.get("footprint")) is None and len(
+                {pinmaplib.package_family(h[0][2]["footprint"])
+                 for h in same_pkg} - {None}) > 1:
+            unsure = True
+        if same_pkg and unsure and all(d for _, d in same_pkg):
+            continue
         if same_pkg:
             checked += 1
             if all(d for _, d in same_pkg):

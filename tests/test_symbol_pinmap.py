@@ -177,6 +177,111 @@ def test_package_family_reads_the_package_token():
     assert pinmaplib.same_package("MyLib:Custom", _SOT223)
 
 
+
+# ------------------------------------------------ symbol_pinmap: package
+# numbering (a board's PLCC-44 symbol against a stock symbol of the same
+# name numbered for the DIP-40: every pin "swapped" by the shift)
+
+_DIP40 = "Package_DIP:DIP-40_W15.24mm"
+_PLCC44 = "Package_LCC:PLCC-44_SMD-Socket"
+_CPU_DIP = {"30": "A0", "31": "A1", "32": "A2", "33": "A3", "14": "D0",
+            "21": "~{RD}", "22": "~{WR}", "29": "GND"}
+# the same die in the PLCC-44: each pin a few pads on from the DIP's
+_CPU_PLCC = {"34": "A0", "35": "A1", "36": "A2", "37": "A3", "16": "D0",
+             "24": "~{RD}", "25": "~{WR}", "33": "GND"}
+
+
+def _sym_f(name, fp, pins, filters):
+    body = "".join(
+        f'(pin bidirectional line (at 0 0 0) (length 2.54) (name "{n}") '
+        f'(number "{num}"))' for num, n in pins.items())
+    return (f'(kicad_symbol_lib (version 20251024) (symbol "{name}" '
+            f'(property "Reference" "U") (property "Footprint" "{fp}") '
+            f'(property "ki_fp_filters" "{filters}") '
+            f'(symbol "{name}_0_1" {body})))\n')
+
+
+@pytest.fixture()
+def cpus(tmp_path):
+    """A CPU lib: XZ80P, DIP-40 by default; XZ80A, no default footprint
+    and filters for the DIP-40 and an SSOP; XZ80D, no default footprint
+    and only the DIP's filter. All three numbered for the DIP."""
+    lib = tmp_path / "CPU.kicad_symdir"
+    lib.mkdir()
+    (lib / "XZ80P.kicad_sym").write_text(_sym_f(
+        "XZ80P", _DIP40, _CPU_DIP, "DIP*W15.24*"))
+    (lib / "XZ80A.kicad_sym").write_text(_sym_f(
+        "XZ80A", "", _CPU_DIP, "DIP*W15.24* SSOP*8.8x17.5mm?P0.8mm*"))
+    (lib / "XZ80D.kicad_sym").write_text(_sym_f(
+        "XZ80D", "", _CPU_DIP, "DIP*W15.24*"))
+    pinmaplib.stock_index.cache_clear()
+    pinmaplib.stock_symbol.cache_clear()
+    return str(tmp_path)
+
+
+def _cpu(pins, value, fp):
+    comp = {"value": value, "footprint": fp, "libsource": ("MyLib", "CPU")}
+    nets: dict = {}
+    for num, name in pins.items():
+        nets.setdefault(f"/{name}", []).append(_m("U1", num, name, "bidi"))
+    return {"U1": comp}, nets, {("MyLib", "CPU"): dict(pins)}
+
+
+@pytest.mark.parametrize("value", ["XZ80P", "XZ80A", "XZ80D"])
+def test_a_plcc_part_against_a_dip_numbered_stock_symbol_is_quiet(cpus,
+                                                                  value):
+    # the stock symbol is the DIP's (by its footprint, else its filters):
+    # the PLCC's own numbering is not compared with it
+    comps, nets, lp = _cpu(_CPU_PLCC, value, _PLCC44)
+    hits, facts = _audit(comps, nets, cpus, lp)
+    assert hits == [] and facts["symbol_pinmaps_checked"] == 0
+
+
+def test_a_custom_footprint_naming_the_plcc_is_quiet(cpus):
+    comps, nets, lp = _cpu(_CPU_PLCC, "XZ80A", "MyLib:Z80_PLCC_44")
+    assert _audit(comps, nets, cpus, lp)[0] == []
+
+
+def test_a_footprint_naming_no_package_among_several_is_not_judged(cpus):
+    # XZ80A fits the DIP-40 and an SSOP: which numbering holds for a
+    # footprint called 'Z80' can't be told
+    comps, nets, lp = _cpu(_CPU_PLCC, "XZ80A", "MyLib:Z80")
+    hits, facts = _audit(comps, nets, cpus, lp)
+    assert hits == [] and facts["symbol_pinmaps_checked"] == 0
+
+
+@pytest.mark.parametrize("value", ["XZ80P", "XZ80A", "XZ80D"])
+def test_a_real_swap_within_the_dip_is_the_planted_fault(cpus, value):
+    # ~RD and ~WR swapped on the DIP-40 itself
+    pins = dict(_CPU_DIP)
+    pins["21"], pins["22"] = pins["22"], pins["21"]
+    comps, nets, lp = _cpu(pins, value, _DIP40)
+    hits, facts = _audit(comps, nets, cpus, lp)
+    assert [(h["kind"], h["stock"]) for h in hits] == [
+        ("symbol_pinmap", f"CPU:{value}")]
+    assert facts["symbol_pinmaps_checked"] == 1
+
+
+def test_the_dip_drawn_as_its_stock_symbol_is_quiet(cpus):
+    comps, nets, lp = _cpu(_CPU_DIP, "XZ80A", _DIP40)
+    hits, facts = _audit(comps, nets, cpus, lp)
+    assert hits == [] and facts["symbol_pinmaps_checked"] == 1
+
+
+def test_stock_package_match_reads_footprint_then_filters():
+    dip = {"footprint": _DIP40, "filters": ["DIP*W15.24*"]}
+    two = {"footprint": "", "filters": ["DIP*W15.24*", "SSOP*8.8x17.5mm*"]}
+    assert pinmaplib.stock_package_match(_DIP40, dip) is True
+    assert pinmaplib.stock_package_match(_PLCC44, dip) is False
+    assert pinmaplib.stock_package_match(_PLCC44, two) is False
+    assert pinmaplib.stock_package_match(_DIP40, two) is True
+    assert pinmaplib.stock_package_match("MyLib:Z80", two) is None
+    assert pinmaplib.stock_package_match(
+        "MyLib:Z80", {"footprint": "", "filters": ["DIP*"]}) is True
+    assert pinmaplib.stock_package_match(_PLCC44, {"footprint": ""}) is True
+    assert pinmaplib.package_family("MyLib:Z80_PLCC_44") == "PLCC44"
+    assert pinmaplib.package_family("MyLib:Custom") is None
+
 # ------------------------------------------------ symbol_pinmap: pin tables
 # (#1135) a part with no stock symbol in its package is judged against a
 # reference/part_pinouts.yaml row read from its datasheet's pin table

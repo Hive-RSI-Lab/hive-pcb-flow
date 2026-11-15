@@ -100,6 +100,7 @@ def test_parse_ratings():
     assert engcalc.parse_volts("470uF/50V") == 50
     assert engcalc.parse_watts("100mW") == pytest.approx(0.1)
     assert engcalc.parse_watts("1/4W") == pytest.approx(0.25)
+    assert engcalc.parse_watts("R_0402_.1W") == pytest.approx(0.1)
     assert engcalc.parse_tolerance("±1%") == pytest.approx(0.01)
 
 

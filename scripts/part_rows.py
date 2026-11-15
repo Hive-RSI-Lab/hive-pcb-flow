@@ -663,8 +663,13 @@ def check_cite(row: dict, cite: dict, pages: list[str]) -> list[str]:
                              "7-bit binary, 0xNN or NNh")
             continue
         if f == "value":  # an SI string: "100n" is 0.1 in "0.1-uF"
+            # ...and 0.1 nF is "100 pF", 2.2 nF is "2,200 pF"
             val = _si(row[f])
-            if val is None or not _in_quote(val, nums):
+            nums_k = numbers(re.sub(r"(?<=\d),(?=\d{3}(?!\d))", "",
+                                    cite.get("quote") or ""))
+            if val is None or not any(_in_quote(val * s, ns)
+                                      for s in (1.0, 1e12)
+                                      for ns in (nums, nums_k)):
                 probs.append(f"value={row[f]!r} is not a number in the "
                              "quote")
             continue
