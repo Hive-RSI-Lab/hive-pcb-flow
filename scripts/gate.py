@@ -371,11 +371,13 @@ def run_verify(board: Path, strict: bool = False) -> dict:
         argv = ["--pcb", str(board), "--reports-dir", str(reports)]
         if strict:
             argv.append("--strict")
-        for fname, flag in (("constraints.json", "--constraints"),
-                            ("decoupling.json", "--decoupling")):
-            f = board.parent / fname
-            if f.exists():
-                argv += [flag, str(f)]
+        # a state_snapshots/ copy walks up to its board's constraints.json
+        cons = checklib.find_constraints(board)
+        if cons is not None:
+            argv += ["--constraints", str(cons)]
+        f = board.parent / "decoupling.json"
+        if f.exists():
+            argv += ["--decoupling", str(f)]
         summary, _ = verify_all.run(argv)
     finally:
         shutil.rmtree(reports, ignore_errors=True)
