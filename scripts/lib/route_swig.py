@@ -203,9 +203,16 @@ def verb_apply_ops(job):
     board = pcbnew.LoadBoard(job["board"])
     tol = iu(0.001)
 
-    # Read pass: index existing items (before any mutation).
-    tracks = [t for t in board.GetTracks() if t.GetClass() == "PCB_TRACK"]
-    vias = [t for t in board.GetTracks() if t.GetClass() == "PCB_VIA"]
+    # Read pass: index existing items (before any mutation). An item a
+    # remove in this list takes is left out, whatever the order: the
+    # removal pass deletes it, so an add matching it (the push rips a via,
+    # the route lays one on the same spot) makes a new item, not "exists".
+    # A re-run finds that uuid absent and the new item there.
+    gone = {op["uuid"] for op in job["ops"] if op["op"] == "remove"}
+    tracks = [t for t in board.GetTracks() if t.GetClass() == "PCB_TRACK"
+              and t.m_Uuid.AsString() not in gone]
+    vias = [t for t in board.GetTracks() if t.GetClass() == "PCB_VIA"
+            and t.m_Uuid.AsString() not in gone]
     track_keys = {_track_key(t) for t in tracks}
     via_index = {}
     for v in vias:

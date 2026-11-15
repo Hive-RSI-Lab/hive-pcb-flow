@@ -433,6 +433,43 @@ def test_route_edit_set_point_applies_and_replays(kicad, pd, tmp_path):
             for p, q in zip(e, w))
 
 
+def test_add_on_an_item_removed_in_the_same_list(kicad, pd, tmp_path):
+    """A via and a track the list removes, and adds again on the same spot
+    (part_repair's push rips a via the route then lays there again): the
+    adds make new items and the run verifies, whichever comes first. The
+    adds used to answer "exists" off the item the removal pass then took,
+    so _verify rolled the run back. A re-run finds both done."""
+    before = geom.BoardGeom.from_file(pd)
+    via = next(v for v in before.vias_of(net="/CC1")
+               if abs(v.at[0] - CC1_VIA[0]) < 1e-3
+               and abs(v.at[1] - CC1_VIA[1]) < 1e-3)
+    stub = next(t for t in before.tracks_of(net="/CFG3")
+                if t.uuid.startswith(CFG3_STUB))
+    a, b = list(stub.shape.coords)
+    ops = [{"op": "remove", "uuid": via.uuid},
+           {"op": "add_via", "at": list(via.at), "size": via.diameter,
+            "drill": via.drill, "net": "/CC1"},
+           {"op": "add_track", "start": list(a), "end": list(b),
+            "width": stub.width, "layer": stub.layer, "net": "/CFG3"},
+           {"op": "remove", "uuid": stub.uuid}]
+    f = tmp_path / "again.route_edit.json"
+    f.write_text(json.dumps({"version": 1, "ops": ops}))
+    for want in (["removed", "added", "added", "removed"],
+                 ["absent", "exists", "exists", "absent"]):
+        payload, _ = route_edit.run(["--pcb", str(pd), "--ops", str(f)])
+        assert [r["status"] for r in payload["results"]] == want
+        text = pd.read_text(encoding="utf-8")
+        assert via.uuid not in text and stub.uuid not in text
+        after = geom.BoardGeom.from_file(pd)
+        assert len(after.vias_of(net="/CC1")) \
+            == len(before.vias_of(net="/CC1"))
+        assert len([v for v in after.vias_of(net="/CC1")
+                    if abs(v.at[0] - via.at[0]) < 1e-3
+                    and abs(v.at[1] - via.at[1]) < 1e-3]) == 1
+        assert len(after.tracks_of(net="/CFG3")) \
+            == len(before.tracks_of(net="/CFG3"))
+
+
 def test_place_edit_silk_clear_region(kicad, pd):
     """silk_clear with a region takes only the silk lying inside it
     (silk_rm.py: one end of U16's body outline)."""
