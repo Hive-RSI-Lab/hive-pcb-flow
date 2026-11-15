@@ -696,7 +696,7 @@ holdout:
     fault_class: LIB (symbol pin map vs part)
     blind: missed
     verdict: caught
-    caught_by: "#PRNUM"
+    caught_by: "#1134"
     catch: {script: netlist_audit, kind: symbol_value_mismatch, refs: [U2, U4, U9, U11]}
     note: >-
       Not an independent catch: the rule (#1086) was written after this
@@ -961,7 +961,7 @@ holdout:
     fault_class: SCH (swapped signals)
     blind: missed
     verdict: caught
-    caught_by: "#PRNUM"
+    caught_by: "#1134"
     catch: {script: netlist_audit, kind: mcu_i2c_role, refs: [U301]}
     note: >-
       Not an independent catch: the rule was written after this defect was
@@ -999,7 +999,7 @@ holdout:
     fault_class: LIB (symbol pinout)
     blind: missed
     verdict: caught
-    caught_by: "#PRNUM"
+    caught_by: "#1134"
     catch: {script: netlist_audit, kind: bus_order_flipped, refs: [U26, U27, U33, U34]}
     note: >-
       Not an independent catch: the rule was written after this defect was

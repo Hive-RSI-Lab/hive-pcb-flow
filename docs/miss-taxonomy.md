@@ -4,12 +4,12 @@ Every defect in `reference/errata_corpus.yaml` that no check catches today,
 grouped by the check that would see it, so the next rules go where they
 catch the most. Read with [errata-corpus.md](errata-corpus.md).
 
-**Counted (2026-11-14, main at 0e14f1e plus #PRNUM).** 35 misses:
+**Counted (2026-11-14, main at 0e14f1e plus #1134).** 35 misses:
 - training: 6 (2 missed, 4 not_static; flexgrid-v3-2 is caught since #1129);
-- holdout round 1: 7 (netscore-1 is caught since #1085, netscore-big-1 since #PRNUM);
-- holdout round 2: 22 (gcm-v50-2 and pico-if1-v13-1 are caught since #PRNUM).
+- holdout round 1: 7 (netscore-1 is caught since #1085, netscore-big-1 since #1134);
+- holdout round 2: 22 (gcm-v50-2 and pico-if1-v13-1 are caught since #1134).
 
-The count before #PRNUM, on the same main, was 38 (6, 8 and 24).
+The count before #1134, on the same main, was 38 (6, 8 and 24).
 
 ## How classes are cut and ranked
 
@@ -47,7 +47,7 @@ parts on an ordinary board.
 | 9 | Shared-bus drivers | 3 | 1 | 3 | netlist | driver type per part (push-pull vs open drain), I2C masters per bus, bus strobes |
 | 10 | Silk pin labels (two-column legends) | 1 | 2 | 2 | footprint + silk | none; extends #1028 |
 | 11 | Load against a source's limit | 1 | 1 | 1 | netlist + a stated load | the off-board load's capacitance |
-| 5 | Symbol pin map vs the part (landed, #PRNUM) | 0 | 3 | 0 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts |
+| 5 | Symbol pin map vs the part (landed, #1134) | 0 | 3 | 0 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts |
 | - | Not static | 4 | - | - | not static | firmware, radio power, MCU timer and interrupt pin choice |
 
 ## Members
@@ -89,7 +89,7 @@ parts on an ordinary board.
    - pico-if1-v10-3: a via under U4 that can't be reached.
    - cmm2-1: no mounting holes.
 
-5. **Symbol pin map vs the part.** All three are caught since #PRNUM, scored
+5. **Symbol pin map vs the part.** All three are caught since #1134, scored
    on holdouts already read, so none is independent:
    - netscore-big-1: a 0.8 in digit drawn with the 0.2 in digit's symbol.
      `symbol_value_mismatch` reads the size in the symbol's name against the
