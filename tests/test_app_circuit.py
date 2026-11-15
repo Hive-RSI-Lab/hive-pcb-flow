@@ -356,3 +356,56 @@ def test_lipo_enable_pins_must_not_float(ref, pin, name, sev):
     viol, _ = _audit(*_lipo(open_pins=[(ref, pin, name)]))
     hits = [v for v in viol if v["kind"] == "pin_state"]
     assert [(v["severity"], v["refs"]) for v in hits] == [(sev, [ref])]
+
+
+# ------------------------------------- LM5017 + LMG1020 (PCB-0007, #1224)
+
+def _de20m(values=None, drop=()):
+    """PCB-0007 as wired: U101 LM5017 buck from +40V, U201 LMG1020 GaN
+    driver on +5V_DRV. `values` changes part values, `drop` removes parts."""
+    comps = {"U101": "LM5017 100V sync COT buck",
+             "U201": "LMG1020 5V GaN driver 7A/5A",
+             "C107": "10nF", "C106": "2.2uF", "R103": "100k",
+             "C201": "100nF", "C202": "10nF", "C213": "1uF"}
+    comps.update(values or {})
+    nets = {
+        "+40V": [_m("U101", "2", "VIN", "power_in"),
+                 _m("U101", "3", "UVLO", "input"), _m("R103", "1")],
+        "/hk/RON": [_m("U101", "4", "RON", "input"), _m("R103", "2")],
+        "/hk/BST": [_m("U101", "7", "BST", "input"), _m("C107", "1")],
+        "/hk/BUCK_SW": [_m("U101", "8", "SW", "power_out"),
+                        _m("C107", "2")],
+        "/hk/VCC": [_m("U101", "6", "VCC", "power_out"), _m("C106", "1")],
+        "+5V_DRV": [_m("U201", "A1", "VDD", "power_in")]
+        + [_m(r, "1") for r in ("C201", "C202", "C213")],
+        "GND": [_m("U101", "1", "RTN", "power_in"),
+                _m("U101", "9", "PAD", "passive"),
+                _m("U201", "B1", "GND", "power_in"),
+                _m("U201", "C2", "IN-", "input")]
+        + [_m(r, "2") for r in ("C106", "C201", "C202", "C213")],
+    }
+    for r in drop:
+        del comps[r]
+        for n in nets:
+            nets[n] = [x for x in nets[n] if x["ref"] != r]
+    return comps, nets
+
+
+def test_pcb0007_as_wired_is_quiet():
+    """VCC's 2.2 uF is one E3 step from the 1 uF the datasheet names."""
+    viol, _ = _audit(*_de20m())
+    assert _parts(viol) == []
+
+
+@pytest.mark.parametrize("values,drop,want", [
+    ({}, ("C107",), [("error", "U101", "CBST")]),
+    ({"C107": "100nF"}, (), [("error", "U101", "CBST")]),
+    ({}, ("C106",), [("warning", "U101", "CVCC")]),
+    ({"C106": "10uF"}, (), [("warning", "U101", "CVCC")]),
+    ({}, ("R103",), [("error", "U101", "RON")]),
+    ({}, ("C201", "C213"), [("error", "U201", "CVDD")]),
+    ({"C201": "10nF", "C213": "4.7uF"}, (), [("error", "U201", "CVDD")]),
+])
+def test_de20m_part_rows_catch_each_planted_fault(values, drop, want):
+    viol, _ = _audit(*_de20m(values, drop))
+    assert _parts(viol) == want

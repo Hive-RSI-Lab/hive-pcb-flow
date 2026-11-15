@@ -216,3 +216,30 @@ parts:
          source: "SLVSF14B 6.3 Recommended Operating Conditions and 8.2.2.3: COUT 4 uF to 1000 uF effective",
          cite: [{doc: tps61023.pdf, sha256: a8c0a51b17502e4cb39dbe55852c27ec4579047c76676704ddcb9b4c5da7dd9a, page: 4, table: 'Recommended Operating Conditions', quote: 'COUT Effective output capacitance range 4 10 1000', fields: [min, max]},
                 {doc: tps61023.pdf, sha256: a8c0a51b17502e4cb39dbe55852c27ec4579047c76676704ddcb9b4c5da7dd9a, page: 14, table: '', quote: 'TI recommends using the X5R or X7R ceramic output capacitor in the range of 4-μF to 1000-μF effective', fields: [min, max]}]}
+
+  # PCB-0007 rf-de-20m (#1224).
+  - mpn: LM5017
+    match: '^LM5017'
+    verified: true   # TI SNVS783K read 2026-11-15, Pin Functions, 7.3 and 8.2.2
+    aliases: {EP: RTN, PAD: RTN, GND: RTN}
+    requires:
+      - {id: CBST, pin: BST, to: SW, kinds: [C], value: 10n,
+         source: "SNVS783K Pin Functions BST and 7.3: an external 0.01 uF ceramic capacitor is required between BST and SW",
+         cite: [{doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 3, table: 'Pin Functions', quote: 'An external capacitor is required between the BST and SW pins (0.01-μF', fields: [value]},
+                {doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 11, table: '', quote: 'A 0.01 uF ceramic capacitor connected between the BST pin and the SW pin', fields: [value]}]}
+      - {id: CVCC, pin: VCC, to: RTN, kinds: [C], value: 1u, severity: warning,
+         source: "SNVS783K Pin Functions VCC and 8.2.2: a 1 uF VCC bypass capacitor is recommended (a recommendation, so a warning)",
+         cite: [{doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 3, table: 'Pin Functions', quote: 'A 1-μF decoupling capacitor is recommended.', fields: [value]},
+                {doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 23, table: '', quote: 'A 1-µF capacitor of 16 V or higher rating is recommended for the VCC regulator bypass capacitor.', fields: [value]}]}
+      - {id: RON, pin: RON, to: VIN, kinds: [R],
+         source: "SNVS783K Pin Functions RON: a resistor between RON and VIN sets the buck switch on-time",
+         cite: [{doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 3, table: 'Pin Functions', quote: 'A resistor between this pin and VIN sets the buck switch on-time as a', fields: []}]}
+
+  - mpn: LMG1020
+    match: '^LMG1020'
+    verified: true   # TI SNOSD45B read 2026-11-15, Pin Functions and 10.1.2
+    requires:
+      - {id: CVDD, pin: VDD, to: GND, kinds: [C], min: 0.1e-6, max: 1.0e-6,
+         source: "SNOSD45B 10.1.2 Bypass Capacitor: VDD bypassed to GND by at least 0.1 uF, up to 1 uF, X7R or better",
+         cite: [{doc: lmg1020.pdf, sha256: 4a25e40c21b910a8008e3e8b77a97fd16b42cc743cfbc0cacec37b2c5585c13d, page: 3, table: 'Pin Functions', quote: 'Decouple through a small size, low inductance capacitor to GND', fields: []},
+                {doc: lmg1020.pdf, sha256: 4a25e40c21b910a8008e3e8b77a97fd16b42cc743cfbc0cacec37b2c5585c13d, page: 16, table: '', quote: 'This bypass capacitor has to be at least a 0.1 µF, up to 1 µF', fields: [min, max]}]}
