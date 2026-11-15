@@ -2361,7 +2361,7 @@ def declared_switch_load(bg: geom.BoardGeom, entry: dict,
         if not isinstance(b, dict):
             continue
         op = b.get("operating_point") or {}
-        iout = op.get("iout_a", b.get("iout_a"))
+        iout = op.get("iout_a")
         if iout is not None and re.search(rf"(?<![A-Za-z0-9]){re.escape(ref)}"
                                           rf"(?![0-9])", str(b.get("name", ""))):
             found.append((float(iout), 10.0,
