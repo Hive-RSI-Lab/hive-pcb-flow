@@ -203,9 +203,11 @@ def norm_fn(fn: str, pin: str) -> list[str]:
 
 
 def load_board(net_path: Path) -> dict:
-    parsed = simlib.parse_netlist(net_path)
+    parsed = simlib.parse_netlist(net_path, fields=True)
     comps = {r: {"ref": r, "value": c.get("value") or "",
-                 "footprint": c.get("footprint") or "", "pins": {}}
+                 "footprint": c.get("footprint") or "", "pins": {},
+                 "mpn": next((c["fields"][k] for k in check_ratings.MPN_PROPS
+                              if (c.get("fields") or {}).get(k)), "")}
              for r, c in parsed["components"].items()}
     for net, nodes in parsed["nets"].items():
         if net.startswith("unconnected-"):
@@ -224,12 +226,23 @@ def load_board(net_path: Path) -> dict:
                                             for p in c["pins"].values()})}
 
 
-def load_parts(parts_dir: Path | None) -> dict[str, dict]:
-    """parts.json rows by refdes, attributes flattened to {name: value}."""
+def _mpn_key(mpn: str) -> str:
+    return re.sub(r"[\s\-_/.]", "", mpn or "").upper()
+
+
+def load_parts(parts_dir: Path | None, board: dict | None = None,
+               unmatched: list | None = None) -> dict[str, dict]:
+    """parts.json rows by refdes, attributes flattened to {name: value}.
+    A row with no `refdes` falls back to its `mpn`: given the board, every
+    comp whose netlist MPN field is the same part (case, spaces, dashes,
+    slashes and dots aside) gets the row, unless a refdes row already names that comp
+    (#1260). Such a row that matches no comp goes on `unmatched` as
+    {mpn, why}."""
     out: dict[str, dict] = {}
     pj = parts_dir / "parts.json" if parts_dir else None
     if not pj or not pj.is_file():
         return out
+    by_mpn: list[tuple[str, dict]] = []
     for p in checklib.load_json(pj, "parts.json").get("parts") or []:
         attrs = {a.get("name", ""): str(a.get("value", ""))
                  for a in p.get("attributes") or []}
@@ -237,6 +250,21 @@ def load_parts(parts_dir: Path | None) -> dict[str, dict]:
                p.get("description") or "", "attrs": attrs}
         for r in p.get("refdes") or []:
             out[r] = row
+        if not p.get("refdes") and _mpn_key(row["mpn"]):
+            by_mpn.append((_mpn_key(row["mpn"]), row))
+    if board is None:
+        return out
+    comps: dict[str, list[str]] = {}
+    for ref, c in sorted(board["comps"].items()):
+        if c.get("mpn"):
+            comps.setdefault(_mpn_key(c["mpn"]), []).append(ref)
+    for key, row in by_mpn:
+        refs = [r for r in comps.get(key, []) if r not in out]
+        for r in refs:
+            out[r] = {**row, "matched_by": "mpn"}
+        if not comps.get(key) and unmatched is not None:
+            unmatched.append({"mpn": row["mpn"], "why": "parts.json row with "
+                              "no refdes and no netlist comp with that MPN"})
     return out
 
 
@@ -2071,7 +2099,8 @@ def run(a) -> dict:
             "no ngspice shared library found - install KiCad 10 with its "
             "simulator or set HWDE_NGSPICE_DLL")
     board = load_board(inp["net"])
-    parts = load_parts(inp["parts"])
+    unmatched: list[dict] = []
+    parts = load_parts(inp["parts"], board, unmatched)
     cons = checklib.load_json(inp["constraints"], "constraints") \
         if inp["constraints"] else None
     rails = resolve_rails(board, parts, cons, inp["power_tree"],
@@ -2112,6 +2141,8 @@ def run(a) -> dict:
                          "--rail if it is one)"}
                  for n in sorted(_passive_only_nets(board))
                  if n not in rails and check_ratings.volts_from_name(n)]
+    unknowns += [{"ref": "", "what": f"parts.json row {u['mpn']}",
+                  "why": u["why"]} for u in unmatched]
     ics = sorted(u["ref"] for u in model["unmodelled"]
                  if u["why"].startswith("IC/"))
     return checklib.report(

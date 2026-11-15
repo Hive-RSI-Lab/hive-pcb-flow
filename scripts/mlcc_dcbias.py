@@ -337,7 +337,8 @@ def judge(a) -> dict:
         a.net = str(beside)
     inp = sim_board.resolve_inputs(a)
     board = sim_board.load_board(inp["net"])
-    parts = sim_board.load_parts(inp["parts"])
+    unmatched: list[dict] = []
+    parts = sim_board.load_parts(inp["parts"], board, unmatched)
     cons = checklib.load_json(inp["constraints"], "constraints") \
         if inp["constraints"] else None
     rails = sim_board.resolve_rails(board, parts, cons, inp["power_tree"],
@@ -379,7 +380,9 @@ def judge(a) -> dict:
         capacitors=caps, dc_unknown=unknown,
         known_unknowns=[{"ref": r, "what": "dielectric",
                          "why": "not named in value or parts.json: X5R "
-                                "assumed for >= 1 uF"} for r in assumed])
+                                "assumed for >= 1 uF"} for r in assumed]
+        + [{"ref": "", "what": f"parts.json row {u['mpn']}", "why": u["why"]}
+           for u in unmatched])
 
 
 def parse(argv: list[str] | None = None) -> argparse.Namespace:

@@ -80,9 +80,29 @@ def _atom(node, tag, default=None):
     return default
 
 
-def parse_netlist(path: Path | str) -> dict:
+def _comp_fields(comp) -> dict[str, str]:
+    """{name: value} from a comp's (fields (field (name N) "v")) and its
+    (property (name N) (value v)) entries; empty values left out."""
+    out: dict[str, str] = {}
+    for blk in _kids(comp, "fields"):
+        for f in _kids(blk, "field"):
+            name = _atom(f, "name")
+            val = next((str(x) for x in f[1:] if isinstance(x, str)), "")
+            if name and val.strip():
+                out.setdefault(name, val.strip())
+    for pr in _kids(comp, "property"):
+        name, val = _atom(pr, "name"), _atom(pr, "value", "")
+        if name and val.strip():
+            out.setdefault(name, val.strip())
+    return out
+
+
+def parse_netlist(path: Path | str, fields: bool = False) -> dict:
     """kicadsexpr netlist -> {"components": {ref: {value, footprint}},
-    "nets": {name: [{ref, pin, pintype, pinfunction}]}}.
+    "nets": {name: [{ref, pin, pintype, pinfunction}]}}. With fields=True
+    each component also carries `fields`: its non-empty user fields and
+    properties ({"MPN": ...}). The default shape is the golden contract fwe
+    copies (tests/golden/netlist), so it stays as it is.
 
     Hierarchical exports drop `unconnected-*` singleton nets entirely, so
     nothing downstream may rely on their presence (synth_fragment emits
@@ -104,6 +124,8 @@ def parse_netlist(path: Path | str) -> dict:
             if ref:
                 comps[ref] = {"value": _atom(c, "value"),
                               "footprint": _atom(c, "footprint")}
+                if fields:
+                    comps[ref]["fields"] = _comp_fields(c)
     nets: dict[str, list] = {}
     for blk in _kids(data, "nets"):
         for n in _kids(blk, "net"):
