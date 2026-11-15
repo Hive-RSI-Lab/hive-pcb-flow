@@ -509,6 +509,16 @@ Consumers per key (script -> phase):
                   "loads": {"U5": {"pins": "VDDA", "vmin_v": 1.71,
                                    "current_a": 0.13}}},
 
+  // netlist_audit pair_polarity_swap / pair_split / pair_lane_order
+  // (#1217): a connector's pinout where its symbol's pins are bare numbers
+  // (a generic header, a magjack drawn as Conn_01x12). Each pin's name is
+  // read like a symbol's: USB D+/D-, TD+/RD-, BI_DA+, LVDS RXIN0+/CLK-,
+  // HDMI/DSI D0P/CLKN, E1 TTIP/RRING. A connector neither this nor its
+  // symbol names is reported not_judged, never guessed.
+  "connector_pinouts": [{"ref": "J4", "pins": {"1": "TD+", "2": "TD-",
+                         "3": "RD+", "6": "RD-"},
+                         "source": "HR911105A datasheet pin table"}],
+
   // check_thermal (P8), place_anneal spreading term (P6)
   "thermal": [{"ref": "U2", "power_w": 0.8, "net": "GND", "dt_c": 40,
                "min_vias": 4},
