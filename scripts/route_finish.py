@@ -194,12 +194,14 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
                     and r["condition"].strip() == VIA_ONLY)):
                 base[r["constraint"]] = max(base.get(r["constraint"], 0.0),
                                             r["min_mm"])
-    pro_rules = {}
+    pro_json: dict = {}
     try:
-        pro_rules = json.loads(pro.read_text(encoding="utf-8")).get(
-            "board", {}).get("design_settings", {}).get("rules", {})
+        pro_json = json.loads(pro.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
+    pro_json = pro_json if isinstance(pro_json, dict) else {}
+    pro_rules = (pro_json.get("board") or {}).get(
+        "design_settings", {}).get("rules", {}) or {}
     # The via's annular ring: the DRU's, or the .kicad_pro's, whichever is
     # larger (KiCad's 0.1 mm stock default when neither sets one).
     annular = max(base.get("annular_width", 0.0),
@@ -243,7 +245,9 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
         necks=board_necks(pcb, bg, rc.dru_neck_rules(dru, "track_width")),
         bans=routelib.dru_layer_bans(
             dru.read_text(encoding="utf-8") if dru.is_file() else "",
-            list(bg.copper_layers)),
+            list(bg.copper_layers),
+            net_classes=routelib.pro_net_classes(pro_json, bg.nets),
+            layer_names=getattr(bg, "layer_user_names", None)),
         margin=margin, **hdi)
 
 

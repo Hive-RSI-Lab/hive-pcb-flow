@@ -235,8 +235,8 @@ def test_dru_layer_bans():
     assert bans.unread == ["courtyard"]
     facts = bans.facts()
     assert facts["unread"] == ["courtyard"]
-    assert {"nets": ["/SW"], "not": [], "kinds": [
-        "blind", "buried", "micro", "through"]} in facts["via"]
+    assert {"nets": ["/SW"], "not": [], "classes": [], "not_classes": [],
+            "kinds": ["blind", "buried", "micro", "through"]} in facts["via"]
     assert json.loads(json.dumps(facts)) == facts
     # a case-sensitive layer: 'f.cu' is no layer, so /SW is banned off all
     low = _LAYER_DRU.replace("A.Layer != 'F.Cu'", "A.Layer != 'f.cu'")
@@ -248,6 +248,115 @@ def test_dru_layer_bans():
     assert routelib.dru_layer_bans("", _SIX).track == []
     with pytest.raises(Exception, match="unbalanced"):
         routelib.dru_layer_bans('(rule "x" (constraint disallow track)', _SIX)
+
+
+_PRO = {"net_settings": {
+    "classes": [{"name": "Default"}, {"name": "USB", "priority": 0},
+                {"name": "PWR", "priority": 1}],
+    "netclass_assignments": {"/A": "USB", "/B": ["PWR", "USB"],
+                             "/C": "Gone"},
+    "netclass_patterns": [{"netclass": "USB", "pattern": "/USB*"},
+                          {"netclass": "PWR", "pattern": "/V.*"},
+                          {"netclass": "Nope", "pattern": "*"}]}}
+_NETS = ["/A", "/B", "/C", "/USB0_DM", "/VBUS", "/K", "/D"]
+_CLASS_DRU = """(version 1)
+(rule "usb_off_in1"
+\t(layer "In1.Cu")
+\t(constraint disallow track)
+\t(condition "A.NetClass == 'usb'")
+)
+(rule "classed_off_in2"
+\t(layer "In2.Cu")
+\t(constraint disallow track)
+\t(condition "A.NetClass != 'Default'")
+)
+(rule "both_off_in3"
+\t(layer "In3.Cu")
+\t(constraint disallow track)
+\t(condition "A.NetClass == 'USB,PWR'")
+)
+(rule "pw_no_blind"
+\t(constraint disallow blind_via)
+\t(condition "A.NetClass == 'PW?'")
+)
+(rule "k_no_buried"
+\t(constraint disallow buried_via)
+\t(condition "A.NetName == '/K'")
+)
+(rule "by_own_name"
+\t(layer "SIG4")
+\t(constraint disallow track)
+\t(condition "A.NetName == '/K'")
+)
+(rule "own_name_in_condition"
+\t(constraint disallow track)
+\t(condition "A.NetName == '/D' && A.Layer == 'SIG4'")
+)
+(rule "no_such_layer"
+\t(layer "Bogus.Cu")
+\t(constraint disallow track)
+)
+"""
+
+
+def test_pro_net_classes():
+    """#1140: KiCad 10's net classes from the .kicad_pro: the assignment
+    (a name or a list), then every pattern that matches the whole name (a
+    wildcard, or a regex when it is one); a class the pro doesn't define
+    goes, a net with none is Default (left out); priority orders them."""
+    got = routelib.pro_net_classes(_PRO, _NETS)
+    assert got == {"/A": ("USB",), "/B": ("USB", "PWR"),
+                   "/USB0_DM": ("USB",), "/VBUS": ("PWR",)}
+    assert routelib.pro_net_classes(None, _NETS) == {}
+    assert routelib.pro_net_classes({"net_settings": None}, _NETS) == {}
+
+
+def test_dru_bans_read_classes_kinds_and_layer_names():
+    """#1140: A.NetClass ==/!= as KiCad compares it (any of the net's
+    classes or their joined name, any case, wildcards; Default when it has
+    none), blind and buried vias apart, a layer by the board's own name,
+    and a layer KiCad has no name for named as unread."""
+    bans = routelib.dru_layer_bans(
+        _CLASS_DRU, _SIX, net_classes=routelib.pro_net_classes(_PRO, _NETS),
+        layer_names={"In4.Cu": "SIG4"})
+    assert bans.track_layers("/A") == {"In1.Cu", "In2.Cu"}
+    assert bans.track_layers("/B") == {"In1.Cu", "In2.Cu", "In3.Cu"}
+    assert bans.track_layers("/USB0_DM") == {"In1.Cu", "In2.Cu"}
+    assert bans.track_layers("/VBUS") == {"In2.Cu"}
+    assert bans.track_layers("/C") == set()       # Default: no class rule
+    assert bans.track_layers("/K") == {"In4.Cu"}
+    assert bans.track_layers("/D") == {"In4.Cu"}
+    assert bans.via_kinds("/VBUS") == {"blind"} == bans.via_kinds("/B")
+    assert bans.via_kinds("/A") == set()
+    assert bans.via_kinds("/K") == {"buried"}
+    assert bans.unread == ["no_such_layer"]
+    assert {"nets": [], "not": [], "classes": ["usb"], "not_classes": [],
+            "layers": ["In1.Cu"]} in bans.facts()["track"]
+    # without the board's own names SIG4 is no layer KiCad knows
+    plain = routelib.dru_layer_bans(_CLASS_DRU, _SIX)
+    assert plain.unread == ["by_own_name", "no_such_layer"]
+    assert plain.track_layers("/D") == set()
+    assert plain.track_layers("/A") == set()   # no classes: all Default
+    # the DSN's per-net reader leaves class rules to DRC
+    assert routelib.dru_track_bans(
+        _CLASS_DRU, _SIX, layer_names={"In4.Cu": "SIG4"}) == {
+        "/K": {"In4.Cu"}, "/D": {"In4.Cu"}}
+
+
+@pytest.mark.parametrize("rule", [
+    '(rule "ignored" (severity ignore) (constraint disallow track via))',
+    '(rule "silk" (layer "F.SilkS") (constraint disallow track))',
+    '(rule "own_silk" (layer "F.Silkscreen") (constraint disallow track))',
+    '(rule "off_board" (layer "In9.Cu") (constraint disallow track)'
+    ' (condition "A.Type == \'track\'"))'])
+def test_dru_bans_that_keep_nothing_out(rule):
+    """A rule at severity ignore, or on a layer that is no copper layer
+    here (by either name), keeps no route out and is no unread rule,
+    whatever its condition."""
+    bans = routelib.dru_layer_bans(
+        "(version 1)\n" + rule + "\n", _SIX,
+        layer_names={"F.SilkS": "F.Silkscreen"})
+    assert (bans.track, bans.via, bans.unread) == ([], [], [])
 
 
 def test_dsn_apply_track_bans():

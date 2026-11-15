@@ -713,6 +713,9 @@ class BoardGeom:
 
         # ---- layers (copper order = file order, top->bottom) ----
         self._layer_by_ord: dict[int, str] = {}
+        # canonical name -> the board's own name for it (`(5 "F.SilkS" user
+        # "F.Silkscreen")`), which a DRU rule may name the layer by (#1140)
+        self.layer_user_names: dict[str, str] = {}
         copper: list[str] = []
         layers_node = _kid(root, "layers")
         if layers_node is None:
@@ -728,6 +731,10 @@ class BoardGeom:
             name = _strs(entry)[0] if _strs(entry) else None
             if name is None:
                 continue
+            own = [x for x in entry[2:] if isinstance(x, str)
+                   and not isinstance(x, sexpdata.Symbol)]
+            if own and own[0] != name:
+                self.layer_user_names[name] = own[0]
             if ordn is not None:
                 self._layer_by_ord[ordn] = name
             if name.endswith(".Cu"):

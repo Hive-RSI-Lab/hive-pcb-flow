@@ -123,6 +123,7 @@ TOL = 1e-3     # mm
 SHOWN = 40     # new violations listed in REPORT.md (all in part_repair.json)
 TOUCH = 1e-3   # mm: copper this close is one piece (as net_islands has it)
 NEAR = 0.05    # mm: a neighbour query's reach, past every rule's tol
+REPRUNE = 3    # peels after a refill, at most (#1140)
 RIP_FILE = "01-rip.route_edit.json"
 PLACE_FILE = "02-place.place_edit.json"
 ROUTE_FILE = "03-route.route_edit.json"
@@ -603,6 +604,20 @@ def _dangling(pcb: Path, bg, nets, *, gone=(), adds=(), seed=None,
     return old, trimmed
 
 
+def _made(ops: list, results: list, first: int) -> tuple[dict, set]:
+    """route_edit's results for ops, whose adds start at index first: the
+    uuid each add made, to its index among the adds, and the indices of
+    the adds that made nothing (the copper was there already)."""
+    made, dup = {}, set()
+    for i in range(first, len(ops)):
+        r = results[i] if i < len(results) else {}
+        if r.get("uuid"):
+            made[r["uuid"]] = i - first
+        elif r.get("status") == "exists":
+            dup.add(i - first)
+    return made, dup
+
+
 def touch_shorts(bg, refs, before=frozenset()) -> list[str]:
     """Tracks and vias of another net whose copper touches a pad of refs on
     bg (KiCad would carry them onto the pad's net when it saves), less the
@@ -799,7 +814,7 @@ def _write_ops(path: Path, ops: list) -> None:
 
 
 def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
-           keep=(), apply: bool = False) -> dict:
+           keep=(), apply: bool = False, allow_unread: bool = False) -> dict:
     """The steps in the module docstring, in out; the payload. Once out is
     made, an error is written to part_repair.json and REPORT.md (status
     "error") before it is raised."""
@@ -815,7 +830,7 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
                      "notes": [], "applied": False}
     try:
         return _steps(pcb, ops, out, payload, cli=cli, margin=margin,
-                      keep=keep, apply=apply)
+                      keep=keep, apply=apply, allow_unread=allow_unread)
     except Exception as e:
         payload["status"] = "error"
         payload["error"] = f"{type(e).__name__}: {e}"
@@ -827,11 +842,24 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
 
 
 def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
-           keep, apply) -> dict:
+           keep, apply, allow_unread=False) -> dict:
     refs = payload["refs"]
 
     # 1. base: refilled, DRC'd
     base = route_auto._stage_board(pcb, out / "base")
+    # a disallow rule the router can't read stops the run before the DRC
+    # (#1140): the routes could break it
+    bans = rf.board_rules(base, geom.BoardGeom.from_file(base)).bans
+    unread = list(bans.unread) if bans else []
+    if unread:
+        payload["unread_dru_rules"] = unread
+        payload["allow_unread_rules"] = bool(allow_unread)
+        if not allow_unread:
+            raise CheckError(
+                "the .kicad_dru's disallow rule(s) " + ", ".join(unread)
+                + " have a condition the router doesn't read, so its routes"
+                " could break them: --allow-unread-rules routes anyway and"
+                " leaves them to the DRC gate")
     drc0 = kc.run_drc(cli, base, refill=True, save_board=True)
     bg0 = geom.BoardGeom.from_file(base)
 
@@ -906,8 +934,6 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                          " pad's net): " + "; ".join(shorts))
     # spokes: the routes keep off the thermal spokes the refill keeps (#1140)
     router = mazeroute.Router(bgw, spokes=True)
-    if router.unread_rules:     # #1140: left to the DRC gate
-        payload["unread_dru_rules"] = router.unread_rules
     for ref, num, layer, n in router.obs.short_spokes(refs):
         payload["notes"].append(
             f"{ref}.{num} on {layer}: the refill after the moves leaves it"
@@ -984,7 +1010,7 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     anchors = set(_dangling(base, bg0, nets)[0])
     pruned, cut = _dangling(work, bgw, nets, gone=pushed, adds=adds,
                             seed=seed, anchors=anchors)
-    payload["pruned"] = pruned
+    payload["pruned"] = list(pruned)
     payload["trimmed"] = [adds[i] for i in cut]
     kept = [op for i, op in enumerate(adds) if i not in set(cut)] \
         if cut else adds
@@ -995,16 +1021,59 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         "vias": sum(o["op"] == "add_via" for o in kept)}
 
     # 7. check
+    made: dict = {}
+    dup: set = set()
     if route_ops:
-        route_edit.apply_ops(work, route_ops)
+        res = route_edit.apply_ops(work, route_ops)
+        # an add that met its copper already there made nothing, and goes
+        # from the replay too: else a later peel of that copper would
+        # leave the replay with it and work without
+        made, dup = _made(route_ops, res, len(route_ops) - len(kept))
     drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
     bg1 = geom.BoardGeom.from_file(work)
-    area = repair_area(reach, adds, ripped + [
-        by_uuid[u] for u in dict.fromkeys(pushed + pruned) if u in by_uuid])
-    pours = {z.net for g in (bg0, bg1) for z in g.zones_of()
-             if z.net and not z.teardrop
-             and any(f.intersects(area) for fs in z.fills.values()
-                     for f in fs)}
+
+    def gate_area():
+        return repair_area(reach, adds, ripped + [
+            by_uuid[u] for u in dict.fromkeys(pushed + pruned)
+            if u in by_uuid])
+
+    def pour_nets(area):
+        return {z.net for g in (bg0, bg1) for z in g.zones_of()
+                if z.net and not z.teardrop
+                and any(f.intersects(area) for fs in z.fills.values()
+                        for f in fs)}
+
+    # the refill reshapes the pours, so copper the prune kept for a pour
+    # that no longer meets it is a dead end now: peel again on the
+    # refilled board, as DRC finds it, until nothing more goes (#1140)
+    area = gate_area()
+    late_nets = nets | pour_nets(area)
+    extra = late_nets - nets
+    late_anchors = anchors | (set(_dangling(base, bg0, extra)[0])
+                              if extra else set())
+    drop: set = set()
+    for _ in range(REPRUNE):
+        dead = _dangling(work, bg1, late_nets, seed=area,
+                         anchors=late_anchors)[0]
+        if not dead:
+            break
+        route_edit.apply_ops(work, [{"op": "remove", "uuid": u}
+                                    for u in dead])
+        pruned += [u for u in dead if u not in made]
+        drop |= {made[u] for u in dead if u in made}
+        drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
+        bg1 = geom.BoardGeom.from_file(work)
+        area = gate_area()
+    if drop or dup or len(pruned) != len(payload["pruned"]):
+        payload["trimmed"] += [kept[i] for i in sorted(drop)]
+        kept = [op for i, op in enumerate(kept) if i not in drop | dup]
+        payload["pruned"] = pruned
+        route_ops = [{"op": "remove", "uuid": u}
+                     for u in dict.fromkeys(pushed + pruned)] + kept
+        payload["added"] = {
+            "tracks": sum(o["op"] == "add_track" for o in kept),
+            "vias": sum(o["op"] == "add_via" for o in kept)}
+    pours = pour_nets(area)
     isl = {n: [base_count(n), len(rf.net_islands(bg1, n))]
            for n in sorted(nets | pours)}
     payload["islands"] = isl
@@ -1097,9 +1166,11 @@ def report_md(p: dict) -> str:
             lines.append(f"- and {len(nv) - SHOWN} more in part_repair.json")
         lines.append("")
     if p.get("unread_dru_rules"):
-        lines += ["The router kept to the .kicad_dru's disallow rules but"
-                  " these, whose condition it doesn't read; DRC judged"
-                  " them: " + ", ".join(p["unread_dru_rules"]) + ".", ""]
+        how = "; --allow-unread-rules routed anyway and left them to DRC." \
+            if p.get("allow_unread_rules") else ", so the run stopped."
+        lines += ["The .kicad_dru's disallow rule(s) "
+                  + ", ".join(p["unread_dru_rules"])
+                  + " have a condition the router doesn't read" + how, ""]
     if p.get("drc"):
         b, a = p["drc"]["before"], p["drc"]["after"]
         lines += [f"DRC total {b.get('total')} -> {a.get('total')}.", ""]
@@ -1144,6 +1215,10 @@ def run(argv: list[str] | None = None):
     ap.add_argument("--apply", action="store_true",
                     help="on a pass, put the repaired board in place of"
                          " --pcb")
+    ap.add_argument("--allow-unread-rules", action="store_true",
+                    help="route even when the .kicad_dru has a disallow rule"
+                         " whose condition the router doesn't read (the DRC"
+                         " gate judges it); without this the run stops")
     ap.add_argument("--out-report", default=None)
     args = ap.parse_args(argv)
     if args.margin <= 0:
@@ -1157,7 +1232,7 @@ def run(argv: list[str] | None = None):
         raise CheckError("--out must be a directory of its own, not the"
                          " board's or one above it")
     payload = repair(pcb, ops, out, margin=args.margin, keep=args.keep,
-                     apply=args.apply)
+                     apply=args.apply, allow_unread=args.allow_unread_rules)
     return checklib.stamp(payload, pcb), args.out_report
 
 

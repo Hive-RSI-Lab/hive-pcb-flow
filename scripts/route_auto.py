@@ -163,8 +163,9 @@ def _dsn_track_bans(staged: Path, dsn: Path, bg: geom.BoardGeom) -> list[dict]:
         return []
     text, done = routelib.dsn_apply_track_bans(
         dsn.read_text(encoding="utf-8"),
-        routelib.dru_track_bans(dru.read_text(encoding="utf-8"),
-                                list(bg.copper_layers)))
+        routelib.dru_track_bans(
+            dru.read_text(encoding="utf-8"), list(bg.copper_layers),
+            layer_names=getattr(bg, "layer_user_names", None)))
     if done:
         dsn.write_text(text, encoding="utf-8")
     return done

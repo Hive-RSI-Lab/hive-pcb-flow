@@ -381,6 +381,58 @@ def test_run_refuses_bad_arguments(tmp_path):
                 "--out", str(tmp_path / "o")])
 
 
+UNREAD_DRU = ('(version 1)\n(rule "odd_F" (layer "F.Cu")'
+              ' (constraint disallow track)'
+              ' (condition "A.Type == \'track\'"))\n')
+
+
+class _PastTheStop(Exception):
+    """run_drc was called: the run got past the unread-rule stop."""
+
+
+def test_an_unread_disallow_rule_stops_the_run_unless_allowed(tmp_path,
+                                                                monkeypatch):
+    pcb = _board(tmp_path, U1)
+    pcb.with_suffix(".kicad_dru").write_text(UNREAD_DRU, encoding="utf-8")
+    monkeypatch.setattr(pr.env, "find_kicad_cli", lambda: Path("kicad-cli"))
+    monkeypatch.setattr(pr.env, "find_kicad_python",
+                        lambda cli: Path("python"))
+
+    def drc(*a, **k):
+        raise _PastTheStop()
+    monkeypatch.setattr(pr.kc, "run_drc", drc)
+    op = json.dumps({"op": "rotate", "ref": "U1", "deg": 90})
+    out = tmp_path / "o"
+    with pytest.raises(CheckError, match="odd_F.*--allow-unread-rules"):
+        pr.run(["--pcb", str(pcb), "--op", op, "--out", str(out)])
+    p = _report(out)
+    assert (p["status"], p["unread_dru_rules"], p["allow_unread_rules"]) \
+        == ("error", ["odd_F"], False)
+    assert "odd_F have a condition the router doesn't read, so the run" \
+        " stopped." in (out / "REPORT.md").read_text(encoding="utf-8")
+    with pytest.raises(_PastTheStop):
+        pr.run(["--pcb", str(pcb), "--op", op, "--out", str(tmp_path / "o2"),
+                "--allow-unread-rules"])
+    p = _report(tmp_path / "o2")
+    assert (p["unread_dru_rules"], p["allow_unread_rules"]) \
+        == (["odd_F"], True)
+    # an error after the stop is not the stop's: the report says the run
+    # went on
+    assert "routed anyway and left them to DRC" in (
+        tmp_path / "o2" / "REPORT.md").read_text(encoding="utf-8")
+
+
+def test_made_maps_each_adds_uuid_to_its_index_and_names_the_dups():
+    ops = [{"op": "delete_track"}] + [{"op": "add_track"}] * 3 \
+        + [{"op": "add_via"}]
+    results = [{"status": "ok"}, {"uuid": "t1", "status": "ok"},
+               {"status": "exists"}, {"status": "ok"},
+               {"uuid": "v1", "status": "ok"}]
+    assert pr._made(ops, results, 1) == ({"t1": 0, "v1": 3}, {1})
+    # results that stop short made nothing past their end
+    assert pr._made(ops, results[:2], 1) == ({"t1": 0}, set())
+
+
 def test_gates_fail_on_a_new_violation_near_the_repair():
     """A repair that clears one violation and makes another of the same
     check leaves every count as it was: the gate fails on the new one when
