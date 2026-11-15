@@ -41,8 +41,13 @@ graphic counts for its own exposed pad; a board graphic for any it covers.
 An exposed pad is a footprint's SMD copper pad numbered "EP", or one at
 least EP_AREA_RATIO times the median of the footprint's other pads (four or
 more of them) whose centre lies inside their hull: a QFN/DFN/SOIC-EP's
-belly, never a SOT-223 tab at the edge of the pads. Each one's coverage goes
-into the facts (`exposed_pads`) whether it passes or not.
+belly, never a SOT-223 tab at the edge of the pads. Only pads with copper
+on the footprint's own side (its `(layer "F.Cu")` or `"B.Cu"`) count, as
+exposed pads and as the other pads: a pad on the far side is never under
+the part. KiCad's stock *_ThermalVias footprints carry such a bottom copy
+of the belly for their vias to land on (hive-pcb-flow #1174). A footprint
+with no layer keeps both sides. Each one's coverage goes into the facts
+(`exposed_pads`) whether it passes or not.
 
 CLI: --pcb board.kicad_pcb [--out report.json]
      exit 0 pass / 1 violations / 2 error, per SPEC section 6.
@@ -91,12 +96,13 @@ class Ap:
     """A pad as the paste check sees it, in the board frame."""
 
     def __init__(self, ref, number, kind, shape, size, center, angle,
-                 rratio, copper, paste, margin, prims):
+                 rratio, copper, paste, margin, prims, side=None):
         self.ref, self.number, self.kind = ref, number, kind
         self.shape, self.size, self.center = shape, size, center
         self.angle, self.rratio = angle, rratio
         self.copper, self.paste = copper, paste    # sides: {"F", "B"}
         self.margin, self.prims = margin, prims
+        self.side = side    # the footprint's side, "F"/"B", None unknown
 
     def poly(self, grow=(0.0, 0.0)) -> Polygon:
         w, h = self.size[0] + 2 * grow[0], self.size[1] + 2 * grow[1]
@@ -184,6 +190,9 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
         fa = at[2] if len(at) > 2 else 0.0
         fpm = _margin(fp, ("solder_paste_margin", "solder_paste_ratio",
                            "solder_paste_margin_ratio"))
+        fl = _kid(fp, "layer")
+        fside = {"F.Cu": "F", "B.Cu": "B"}.get(
+            str(_tok(fl[1])) if fl is not None and len(fl) > 1 else "")
         for pad in _kids(fp, "pad"):
             if len(pad) < 4:
                 continue
@@ -213,7 +222,8 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
                            str(_tok(pad[3])), (sz[0], sz[-1]),
                            (fx + dx, fy + dy), rest[0] if rest else 0.0,
                            _nums(rr)[0] if rr is not None else 0.0,
-                           sides("Cu"), sides("Paste"), (m, r), prims))
+                           sides("Cu"), sides("Paste"), (m, r), prims,
+                           fside))
         for g in fp[1:]:
             if not (isinstance(g, list) and g) or \
                     str(_tok(g[0])) not in tuple("fp_" + k for k in _GFX):
@@ -241,7 +251,8 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
 def exposed_pads(pads: list[Ap]) -> list[Ap]:
     by_ref: dict[str, list[Ap]] = {}
     for p in pads:
-        if p.kind == "smd" and p.copper:
+        if p.kind == "smd" and p.copper and \
+                (p.side is None or p.side in p.copper):
             by_ref.setdefault(p.ref, []).append(p)
     out = []
     for ref, ps in by_ref.items():
@@ -303,7 +314,7 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
     ep_list = exposed_pads(pads)
     ep_cu = {(ep.ref, ep.number): ep.copper_poly() for ep in ep_list}
     for ep in ep_list:
-        side = next(iter(sorted(ep.copper)))
+        side = ep.side or next(iter(sorted(ep.copper)))
         cu = ep.copper_poly()
         mine = [poly for p, poly in apertures[side]
                 if (p.ref == ep.ref or p.ref is None)

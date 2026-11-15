@@ -7,6 +7,8 @@ then fixed."""
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -19,6 +21,7 @@ sys.path.insert(0, str(SCRIPTS / "lib"))
 import check_connector_fit as ccf  # noqa: E402
 import check_ep_paste as cep  # noqa: E402
 import datasheet_extract  # noqa: E402
+import env  # noqa: E402
 import verify_all  # noqa: E402
 
 
@@ -282,6 +285,61 @@ def test_no_paste_on_the_ep_and_a_plugged_via(tmp_path):
     vs, facts = cep.check(_board(tmp_path, qfn() + via(
         extra=" (capping yes) (filling yes)")))
     assert _kinds(vs) == ["ep_paste_high"] and facts["vias_under_paste"] == 1
+
+
+def _thermal_vias(bottom='"B.Cu"'):
+    """qfn() as KiCad's stock *_ThermalVias footprints draw it: the exposed
+    pad again on the bottom, the copper its thermal vias land on."""
+    copy = f'    (pad "9" smd rect (at 0 0) (size 3 3) (layers {bottom}))\n'
+    return qfn('"F.Cu" "F.Mask"', True).replace(
+        "    (attr smd)\n", "    (attr smd)\n" + copy)
+
+
+def _flip(body):
+    """The footprint on the back: every F. layer to B. and back (the
+    geometry needn't mirror for this)."""
+    return re.sub(r'"([FB])\.', lambda m: '"B.' if m[1] == "F" else '"F.',
+                  body)
+
+
+@pytest.mark.parametrize("bottom", ['"B.Cu"', '"B.Cu" "B.Mask"'])
+def test_copper_on_the_far_side_is_not_an_exposed_pad(tmp_path, bottom):
+    # hive-pcb-flow #1174: the bottom copy was a second exposed pad with no
+    # paste, an error on 417 of KiCad's 482 stock *_ThermalVias footprints
+    for body, side in ((_thermal_vias(bottom), "F"),
+                       (_flip(_thermal_vias(bottom)), "B")):
+        vs, facts = cep.check(_board(tmp_path, body))
+        assert vs == [], side
+        assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
+            [("9", side)]
+
+
+def _stock_footprints():
+    """KiCad's stock footprint library, or None (as test_check_net_tie's)."""
+    for key, val in sorted(os.environ.items()):
+        if re.fullmatch(r"KICAD\d*_FOOTPRINT_DIR", key) and Path(val).is_dir():
+            return Path(val)
+    try:
+        cli = env.find_kicad_cli()
+    except env.EnvError:
+        return None
+    fp = cli and Path(cli).parents[1] / "share" / "kicad" / "footprints"
+    return fp if fp and fp.is_dir() else None
+
+
+def test_stock_thermal_vias_qfn_passes_on_either_side(tmp_path):
+    lib = _stock_footprints()
+    mod = lib and lib / "Package_DFN_QFN.pretty" / \
+        "QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
+    if not (mod and mod.is_file()):
+        pytest.skip("needs KiCad's footprint library")
+    first, rest = mod.read_text(encoding="utf-8").split("\n", 1)
+    body = first + "\n  (at 15 10)\n" + rest.replace('"REF**"', '"U1"', 1)
+    for text, side in ((body, "F"), (_flip(body), "B")):
+        vs, facts = cep.check(_board(tmp_path, text + "\n"))
+        assert vs == [], side
+        assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
+            [("17", side)]
 
 
 def _gfx_windows(prefix="fp", layer="F.Paste", fill="yes", at=(0, 0)):
