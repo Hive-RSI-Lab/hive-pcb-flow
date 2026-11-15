@@ -40,6 +40,12 @@ without trusting anything nobody read:
                                    -0.3), vmax_vdd from "VDD + n" (VCC,
                                    IOVDD, VDDIOx too), else vmax from the
                                    next number ("VI -0.5 7 V")
+                      pin_requirements  a part a sentence puts between two
+                                   pins ("connect 0.1-uF capacitor between
+                                   VBST and SW"): pin, to, kinds [C],
+                                   value; rows a figure shows (a divider,
+                                   a second filter capacitor) the reader
+                                   adds by hand
                     A draft is a lead list for a reader, not a table: the
                     reader fixes the fields, the match regex and the
                     source, then runs --verify, and only then sets
@@ -51,7 +57,7 @@ without trusting anything nobody read:
                     table named on it or the two pages before, and each
                     number of the row's cited fields must be a number in the
                     quote at some SI scale (1.0e-6 A matches "1 uA", 30000
-                    ohm matches "30 kohm"); an `address` must be in the
+                    ohm matches "30 kohm", a value "100n" matches "0.1-uF"); an `address` must be in the
                     quote as 7-bit binary (0101100b), 0x2C or 2Ch. A quote found only on another
                     page is reported with the page it is on. Rows whose PDF
                     was not given are listed as unchecked.
@@ -118,6 +124,16 @@ def sha256(path: Path) -> str:
 # ---------------------------------------------------------------- drafting
 
 _FLOAT = re.compile(r"[Dd]o not leave (?:the )?([A-Z][A-Z0-9_]*) pin floating")
+# "Connect 0.1-uF capacitor between VBST and SW pins", "A 0.1-uF ceramic
+# capacitor must be connected between the VBST to SW pin", "100nF capacitor
+# is recommended from BST to SW": a typical-application part between pins
+_PIN_CAP = re.compile(
+    r"(\d+(?:\.\d+)?)\s*-?\s*(p|n|µ|μ|u)F\s+(?:\w+\s+){0,2}capacitor\s+"
+    r"(?:(?:must|should)\s+be\s+(?:connected|placed)\s+|is\s+(?:required|"
+    r"recommended)\s+)?(?:between|from)\s+(?:the\s+)?([A-Z][A-Z0-9_+]*)\s+"
+    r"(?:pin\s+)?(?:and|to)\s+(?:the\s+)?([A-Z][A-Z0-9_+]*)\b")
+_SI = {"p": 1e-12, "n": 1e-9, "u": 1e-6, "µ": 1e-6, "μ": 1e-6, "m": 1e-3,
+       "k": 1e3, "M": 1e6, "": 1.0}
 _VDD = r"V\s*DD\w*"
 _FRAC = re.compile(r"(0\s*\.\s*\d+)\s*[x×*]?\s*" + _VDD)
 _VOH_DROP = re.compile(_VDD + r"\s*-\s*(\d\s*\.\s*\d+)")
@@ -140,6 +156,34 @@ _ABS_END = re.compile(r"recommended\s+operating|electrical\s+characteristics|"
                       r"thermal\s+information|ESD\s+ratings", re.I)
 _ABS_VDD = re.compile(r"(?:IO)?V\s*(?:DD|CC)\w*\s*(?:\(\d\))?\s*\+\s*"
                       r"(\d+(?:\.\d+)?)")
+
+
+def _si(v) -> float | None:
+    """A value as a table writes it: 100n, 0.1u, 4.7uF, 10k, 1.0e-6."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?(?:e-?\d+)?)\s*([pnuµμmkM]?)"
+                     r"(?:F|H|ohm|Ω)?\s*", str(v or ""))
+    return float(m.group(1)) * _SI[m.group(2)] if m else None
+
+
+def _pin_parts(pages, doc, digest) -> list[dict]:
+    """pin_requirements rows from 'connect a 0.1-uF capacitor between A
+    and B' sentences, one per distinct pin pair."""
+    rows, seen = [], set()
+    for pno, text in enumerate(pages, 1):
+        flat = re.sub(r"\s+", " ", text)
+        for m in _PIN_CAP.finditer(flat):
+            num, unit, a, b = m.groups()
+            if (a, b) in seen:
+                continue
+            seen.add((a, b))
+            unit = "u" if unit in "µμ" else unit
+            rows.append({"id": f"C_{a}", "pin": a, "to": b, "kinds": ["C"],
+                         "value": f"{num}{unit}", "source": "TODO",
+                         "cite": [_cite(doc, digest, pno, "", m.group(0),
+                                        ["value"])]})
+    return rows
 
 
 def _window(lines: list[str], i: int, n: int) -> str:
@@ -322,7 +366,7 @@ def draft(part: str, pdf: Path) -> dict:
     out: dict = {"part": part, "doc": doc, "sha256": digest,
                  "pages": len(pages), "pin_states": [], "pin_leakage": [],
                  "io_levels": [], "mcu_pins": [], "i2c_addresses": [],
-                 "pin_abs_max": []}
+                 "pin_abs_max": [], "pin_requirements": []}
     pins_seen = set()
     for pno, text in enumerate(pages, 1):
         for m in _FLOAT.finditer(text.replace("\n", " ")):
@@ -366,8 +410,9 @@ def draft(part: str, pdf: Path) -> dict:
         out["mcu_pins"].append(mcu)
     out["i2c_addresses"] = _addresses(pages, doc, digest, part)
     out["pin_abs_max"] = _abs_rows(pages, part, doc, digest)
+    out["pin_requirements"] = _pin_parts(pages, doc, digest)
     for key in ("pin_states", "pin_leakage", "io_levels", "mcu_pins",
-                "i2c_addresses", "pin_abs_max"):
+                "i2c_addresses", "pin_abs_max", "pin_requirements"):
         for r in out[key]:
             r["verified"] = False
     return out
@@ -453,6 +498,12 @@ def check_cite(row: dict, cite: dict, pages: list[str]) -> list[str]:
                 probs.append(f"address={row[f]!r} is not in the quote as "
                              "7-bit binary, 0xNN or NNh")
             continue
+        if f == "value":  # an SI string: "100n" is 0.1 in "0.1-uF"
+            val = _si(row[f])
+            if val is None or not _in_quote(val, nums):
+                probs.append(f"value={row[f]!r} is not a number in the "
+                             "quote")
+            continue
         for v in _flat(row[f]):
             if not _in_quote(v, nums):
                 probs.append(f"{f}={v:g} is not a number in the quote")
@@ -506,7 +557,7 @@ def main(argv: list[str] | None = None) -> int:
             res = draft(a.part, a.pdf[0])
             code = 0 if any(res[k] for k in (
                 "pin_states", "pin_leakage", "io_levels", "mcu_pins",
-                "i2c_addresses", "pin_abs_max")) else 1
+                "i2c_addresses", "pin_abs_max", "pin_requirements")) else 1
         else:
             ap.error("give PART --pdf FILE, or --verify YAML... --pdf FILE...")
     except (OSError, ValueError) as e:

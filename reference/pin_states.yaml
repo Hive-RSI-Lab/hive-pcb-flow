@@ -316,6 +316,23 @@ parts:
           - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: 'Connect a resistor from RT/CLK to GND to set the internal oscillator frequency.', fields: []}
           - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: 'An external clock can be input directly to the RT/CLK pin', fields: []}
 
+  - mpn: TLV62569
+    match: '^TLV62569'
+    verified: true   # TI SLVSDG1C read 2026-11-14
+    pins:
+      - pin: EN
+        forbid: [open]
+        why: >-
+          EN is a logic input with no default: high enables, low shuts the
+          converter down; it must be tied or driven, not left floating
+        source: >-
+          TLV62569 Pin Functions, EN: "Do not leave floating." Feature
+          description: "The EN input must be terminated and should not be
+          left floating."
+        cite:
+          - {doc: tlv62569.pdf, sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4, page: 3, table: 'Pin Functions', quote: 'disables the device and turns it into shutdown. Do not leave floating.', fields: []}
+          - {doc: tlv62569.pdf, sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4, page: 7, table: '', quote: 'The EN input must be terminated and should not be left floating.', fields: []}
+
   - mpn: CH224K
     match: '^CH224K'
     verified: true   # WCH CH224 datasheet V2.1 (CH224手册1) read 2026-11-14

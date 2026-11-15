@@ -19,7 +19,7 @@ only for the round's first reading: each round is swept once.
 - Holdout round 1, blind: 1 of 4 caught (1 caught, 3 missed).
 - Holdout round 1, with the rules written since: 2 of 4 caught (2 caught, 2 missed).
 - Holdout round 2, blind: 1 of 21 caught (1 caught, 20 missed).
-- Holdout round 2, with the rules written since: 9 of 21 caught (9 caught, 12 missed).
+- Holdout round 2, with the rules written since: 11 of 21 caught (11 caught, 10 missed).
 
 ## A new holdout round
 
@@ -231,7 +231,7 @@ round, pinned and swept before those rules are:
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` pin_role_net) | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
-| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | caught (not run here), since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
+| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | caught on rev A, gone on rev B, since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
 
 ## Holdout round 1
 
@@ -350,5 +350,5 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| healthmonitor-1: AD8232 missing its 4.7 uF capacitor between IOUT and SW | SCH (missing component) | missed | missed | a part's required external parts from its datasheet (AD8232's IOUT to SW capacitor) |
-| healthmonitor-2: AD8232 resistor and capacitor between REFIN and GND wired wrongly | SCH (wrong connectivity) | missed | missed | a reference pin's network against the datasheet's typical circuit (AD8232 REFIN) |
+| healthmonitor-1: AD8232 missing its 4.7 uF capacitor between IOUT and SW | SCH (missing component) | missed | caught on rev A, gone on rev B, since #1158 (`netlist_audit` pin_part_missing) | Not an independent catch: the rows were written after this defect was read, from the AD8232 datasheet (Rev. A, Table 3 pin 6 and Figure 55), not from this board. HM-Rev1 ties SW straight to IAOUT, which the rule's `distinct` check reports as an error; HM-Rev2's C28 between them is quiet. |
+| healthmonitor-2: AD8232 resistor and capacitor between REFIN and GND wired wrongly | SCH (wrong connectivity) | missed | caught on rev A, gone on rev B, since #1158 (`netlist_audit` pin_part_missing) | Not an independent catch: the rows were written after this defect was read, from the AD8232 datasheet (Rev. A, Figure 47 and Application Circuits). HM-Rev1 has only the upper 10 M from REFIN to +VS: the missing lower resistor is an error and the missing filter capacitor a warning. HM-Rev2's 10 M / 10 M / 100 n divider is quiet. A REFIN driven by another part is not judged (`when: undriven`). |

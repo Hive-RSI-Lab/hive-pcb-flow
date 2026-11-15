@@ -285,7 +285,7 @@ def test_pin_part_buck_inductor_only_when_sw_bk_is_used(tmp_path):
 
 def test_pin_part_value_window(tmp_path):
     # CDVDD 1u: a 100n across DVDD/DGND is off-value, a 2.2u is in
-    spec = [{"mpn": "X", "match": "^X1$", "requires": [
+    spec = [{"mpn": "X", "match": "^X1$", "verified": True, "requires": [
         {"id": "CDVDD", "pin": "DVDD", "to": "DGND", "kinds": ["C"], "value": "1u"}]}]
     def board(val):
         nets = {"DV": [("U1", "1", "power_out", "DVDD"), ("C1", "1", "passive", "")],
@@ -302,7 +302,7 @@ def test_pin_requirements_table_rows_are_well_formed():
         for r in part["requires"]:
             assert r["pin"] and r["to"] and r["source"]
             assert set(r["kinds"]) <= {"C", "L", "R"}
-            assert r.get("when") in (None, "connected")
+            assert r.get("when") in (None, "connected", "undriven")
 
 
 def test_check_current_catch_runs_on_the_board():

@@ -488,11 +488,19 @@ def _req_window(req: dict) -> tuple[float | None, float | None]:
             float(hi) if hi is not None else None)
 
 
+def _driven(nets: dict, names: set[str], ref: str) -> bool:
+    """A pin of a part other than ref and the two-pin passives (R, C, L)
+    is on one of these nets: something else sets its level."""
+    return any(m["ref"] != ref and _part_kind(m["ref"]) is None
+               for n in names for m in nets.get(n, []))
+
+
 def _pin_requirements(nets: dict, comps: dict,
                       comp_pins: dict[str, dict[str, str]],
                       specs: list[dict]):
     """Yield (severity, net, ic, req, found, elsewhere, off_value) per
-    datasheet-required pin part that is missing or not drawn with its IC."""
+    datasheet-required pin part that is missing or not drawn with its IC;
+    found is None when a `distinct` pair of pins is tied into one net."""
     hierarchical = len({c.get("sheet") for c in comps.values()} - {None}) > 1
     for spec in specs:
         rx = re.compile(spec["match"], re.I)
@@ -516,9 +524,14 @@ def _pin_requirements(nets: dict, comps: dict,
                     continue  # this symbol has no such pin
                 a = {n for n in a if not n.startswith("unconnected-")}
                 b = {n for n in b if not n.startswith("unconnected-")}
-                if not a and req.get("when") == "connected":
+                if not a and req.get("when") in ("connected", "undriven"):
                     continue
+                if req.get("when") == "undriven" and _driven(nets, a, ref):
+                    continue  # another part drives the pin (REFIN fed a ref)
                 if a & b:
+                    if req.get("distinct"):
+                        # tied straight across: the part it needs is not there
+                        yield "error", sorted(a & b)[0], ref, req, None, [], []
                     continue  # the two pins are one net: nothing to span
                 lo, hi = _req_window(req)
                 found, off = [], []
@@ -537,7 +550,8 @@ def _pin_requirements(nets: dict, comps: dict,
                     found.append(other)
                 net = sorted(a)[0] if a else None
                 if not found:
-                    yield "error", net, ref, req, [], [], off
+                    yield (req.get("severity", "error"), net, ref, req, [],
+                           [], off)
                     continue
                 sheet = comp.get("sheet")
                 if hierarchical and sheet and not any(
@@ -3285,21 +3299,33 @@ def audit(parsed: dict, constraints: dict,
     # caps were all drawn on other sheets for other parts)
     specs = (load_pin_requirements() if pin_requirements is None
              else pin_requirements)
+    # A row of a part without verified: true (a part_rows.py draft) gives
+    # not_judged only (#1100).
+    pr_ok = {(h[2], h[3]["id"], h[3]["pin"], h[3]["to"]) for h in
+             _pin_requirements(nets, comps, comp_pins,
+                               _verified_only(specs))}
     for sev, net, ic, req, found, elsewhere, off in _pin_requirements(
             nets, comps, comp_pins, specs):
+        judged = (ic, req["id"], req["pin"], req["to"]) in pr_ok
         want = req.get("value") or "/".join(req["kinds"])
         what = (f"{ic} ({comps[ic].get('value')}) needs {req['id']} "
                 f"({want}) from {req['pin']} to {req['to']} "
-                f"[{req.get('source', 'datasheet')}]")
-        if sev == "error":
+                f"[{' '.join(str(req.get('source', 'datasheet')).split())}]")
+        if found is None:  # a `distinct` pair tied into one net
+            vt(judged, "error", "pin_part_missing", net, [ic],
+               f"{what}: {req['pin']} is tied straight to {req['to']} on "
+               f"'{net}', so there is no {req['id']} between them",
+               part=req["id"], pin=req["pin"], to=req["to"], tied=True,
+               off_value=[])
+        elif not elsewhere:
             extra = (f"; off-value parts across it: {', '.join(off)}"
                      if off else "")
-            v("error", "pin_part_missing", net, [ic],
+            vt(judged, sev, "pin_part_missing", net, [ic],
               f"{what}: no part spans those pins{extra}",
               part=req["id"], pin=req["pin"], to=req["to"],
               off_value=off)
         else:
-            v("warning", "pin_part_missing", net, [ic],
+            vt(judged, "warning", "pin_part_missing", net, [ic],
               f"{what}: only {', '.join(elsewhere)} span them, drawn on "
               f"other sheets than {ic}'s {comps[ic].get('sheet')} - the "
               f"rail's parts serve other ICs and none was drawn for this "

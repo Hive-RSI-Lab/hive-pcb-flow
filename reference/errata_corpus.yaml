@@ -950,10 +950,13 @@ holdout:
   source: hardware/icE1usb/ecn.md
   swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
   note: >-
-    check_mounting (#1088) flags both revisions (86x53 mm, no hole): false
-    in practice, the board slides into its case by its side tabs, so it is
-    held without holes. A rail-held board says so with
-    mechanical.mounting {by: rail, why} in constraints.json.
+    check_mounting (#1088) flagged both revisions (86x53 mm, no hole), a
+    false finding: the board slides into its case by four 4 x 1 mm tabs at
+    the ends of its long edges. check_mounting now reads mirrored edge tabs
+    as a rail mount (mounts_by rail, from edge tabs) and is quiet on all
+    four revisions; the rule was built from this board alone (no other
+    corpus or hwde board has such tabs). A rail-held board without tabs
+    still says so with mechanical.mounting {by: rail, why}.
   defects:
   - id: ice1usb-r01-1
     summary: SPI flash footprint is the wide SO8; the part is the narrow one
@@ -978,10 +981,13 @@ holdout:
   source: hardware/icE1usb/ecn.md
   swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
   note: >-
-    check_mounting (#1088) flags both revisions (86x53 mm, no hole): false
-    in practice, the board slides into its case by its side tabs, so it is
-    held without holes. A rail-held board says so with
-    mechanical.mounting {by: rail, why} in constraints.json.
+    check_mounting (#1088) flagged both revisions (86x53 mm, no hole), a
+    false finding: the board slides into its case by four 4 x 1 mm tabs at
+    the ends of its long edges. check_mounting now reads mirrored edge tabs
+    as a rail mount (mounts_by rail, from edge tabs) and is quiet on all
+    four revisions; the rule was built from this board alone (no other
+    corpus or hwde board has such tabs). A rail-held board without tabs
+    still says so with mechanical.mounting {by: rail, why}.
   defects:
   - id: ice1usb-r10-1
     summary: GPS I2C shares the extension port's lines and the GPS module drives them as a master; r1.1 adds jumpers
@@ -1265,12 +1271,27 @@ holdout:
     source_quote: "One 4.7 uF capacitor is missing between IOUT and SW"
     fault_class: SCH (missing component)
     blind: missed
-    verdict: missed
-    follow_up: "a part's required external parts from its datasheet (AD8232's IOUT to SW capacitor)"
+    verdict: caught
+    caught_by: "#1158"
+    catch: {script: netlist_audit, kind: pin_part_missing, net: Net-(IC3-IAOUT), refs: [IC3]}
+    note: >-
+      Not an independent catch: the rows were written after this defect was
+      read, from the AD8232 datasheet (Rev. A, Table 3 pin 6 and Figure 55),
+      not from this board. HM-Rev1 ties SW straight to IAOUT, which the
+      rule's `distinct` check reports as an error; HM-Rev2's C28 between
+      them is quiet.
   - id: healthmonitor-2
     summary: AD8232 resistor and capacitor between REFIN and GND wired wrongly
     source_quote: "One resistor and one capacitor are wired incorrectly between REFIN and GND"
     fault_class: SCH (wrong connectivity)
     blind: missed
-    verdict: missed
-    follow_up: "a reference pin's network against the datasheet's typical circuit (AD8232 REFIN)"
+    verdict: caught
+    caught_by: "#1158"
+    catch: {script: netlist_audit, kind: pin_part_missing, net: Net-(IC3-REFIN), refs: [IC3]}
+    note: >-
+      Not an independent catch: the rows were written after this defect was
+      read, from the AD8232 datasheet (Rev. A, Figure 47 and Application
+      Circuits). HM-Rev1 has only the upper 10 M from REFIN to +VS: the
+      missing lower resistor is an error and the missing filter capacitor a
+      warning. HM-Rev2's 10 M / 10 M / 100 n divider is quiet. A REFIN
+      driven by another part is not judged (`when: undriven`).

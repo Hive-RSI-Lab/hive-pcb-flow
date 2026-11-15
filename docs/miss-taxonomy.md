@@ -146,10 +146,22 @@ parts on an ordinary board.
    Over 83 board revisions they judged 761 parts, 17 protectors and 8 MCUs,
    with 3 hits, all three of these; every fixed revision is quiet.
 
-7. **Datasheet application circuit.**
-   - healthmonitor-1: AD8232's IOUT to SW capacitor missing.
-   - healthmonitor-2: the REFIN network.
-   - pico-if1-v13-2: SD card-detect unconnected.
+7. **Datasheet application circuit.** healthmonitor-1 and -2 are caught
+   since #1158 (rows in `reference/pin_requirements.yaml` from the AD8232
+   datasheet), scored on a holdout already read, so neither is independent:
+   - healthmonitor-1: AD8232's IOUT to SW capacitor missing; SW is tied
+     straight to IAOUT, which the row's `distinct` check reports.
+   - healthmonitor-2: the REFIN network; only the upper 10 M is drawn, so
+     the lower resistor is an error and the filter capacitor a warning.
+   - pico-if1-v13-2: SD card-detect unconnected. Still missed: a socket's
+     switch pin is a connector row, not a part's application circuit.
+
+   The same rows cover bootstrap capacitors (TPS563201, TPS561201,
+   AP64350), the TPS7A20 output capacitor and TLV62569's EN, which must not
+   float. Not covered yet: compensation networks, feedback dividers and
+   soft-start capacitors (their values come from equations, not a fixed
+   part), AMS1117 (no text layer in the PDF), and AP63203, LM5017,
+   TPS61023 and RT9080 (no datasheet on file).
 
 8. **Wiring against design intent.** smart-lcc-1, ice1usb-r01-2,
    pico-if1-v10-2, gp8b-v50-2 and zxdiag-v11-1.
