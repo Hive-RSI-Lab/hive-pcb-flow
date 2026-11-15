@@ -602,3 +602,170 @@ def test_live_route_and_corridor_drc_clean(kicad, tmp_path):
                            "--to", "P2.1", "--half-width", "0.5"])
     assert p["status"] == "pass" and p["fill_mm2"] > 10
     assert _signal_drc(kicad, pcb) == []
+# ------------------------------------------------------------ thermal spokes (#1140)
+
+_ZONE = """  (zone (net "GND") (layer "F.Cu") (uuid "00000000-0000-0000-0000-0000000005a1")
+    (hatch edge 0.5) (connect_pads (clearance 0.25)) (min_thickness 0.25)
+    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts (xy 0.5 9.2) (xy 19.5 9.2) (xy 19.5 10.8) (xy 0.5 10.8)))
+{fills})
+"""
+def _thermal(tmp_path, body=""):
+    """20 x 20, F.Cu and B.Cu: G1, a 1 mm GND pad at (10, 10), in a GND
+    pour across the board (y 9.2 to 10.8) with a 0.5 mm thermal gap and two
+    0.5 mm spokes, left and right, each into its own half of the pour; A's
+    pads at (11.4, 15) and (11.4, 5) either side. A's straight way down
+    crosses the right spoke's end. `body` adds copper."""
+    import make_fixture as mf
+    band = box(0.5, 9.2, 19.5, 10.8).difference(
+        box(9.5, 9.5, 10.5, 10.5).buffer(0.5))
+    fill = band.union(box(10.4, 9.75, 11.2, 10.25)).union(
+        box(8.8, 9.75, 9.6, 10.25))
+    polys = list(getattr(fill, "geoms", [fill]))
+    assert len(polys) == 2
+    fills = "".join(
+        '    (filled_polygon (layer "F.Cu") (pts '
+        + " ".join(f"(xy {x:.4f} {y:.4f})" for x, y in p.exterior.coords[:-1])
+        + "))\n" for p in polys)
+    body = (mf.pad("G1", 10, 10, "GND") + mf.pad("A1", 11.4, 15, "A")
+            + mf.pad("A2", 11.4, 5, "A") + _ZONE.format(fills=fills) + body)
+    pcb = mf.write(tmp_path / "thermal.kicad_pcb", body, 20, 20)
+    return geom.BoardGeom.from_file(pcb)
+
+
+def _obs(bg):
+    obs = rf.Obstacles(bg, spokes=True)
+    obs._thermal_index()
+    return obs
+
+
+def _pad(shape="rect", size=(1.0, 1.0), angle=0.0, **kw):
+    return geom.Pad(ref="P", number="1", net="GND", shape=shape, size=size,
+                    center=(0.0, 0.0), angle=angle, rratio=0.0,
+                    layers=("F.Cu",), **kw)
+
+
+def test_spoke_end_is_where_kicad_ends_the_spoke():
+    """zone_filler.cpp: a spoke runs from the pad's box centre to the box
+    grown by gap + 0.005 + min thickness / 2 (0.63 here), along the box's
+    own axes; a round pad's box is met on its axis whatever the angle."""
+    g = 0.5 + rf.SPOKE_EPS + 0.25 / 2
+    rect = _pad(size=(2.0, 1.0))
+    (x, y), u = rf.spoke_end(rect, (1.25, 0.0), 0.5, 0.25)
+    assert (x, y) == pytest.approx((1.0 + g, 0.0)) and u == pytest.approx((1, 0))
+    (x, y), _ = rf.spoke_end(rect, (0.0, -0.75), 0.5, 0.25)
+    assert (x, y) == pytest.approx((0.0, -(0.5 + g)))
+    (x, y), _ = rf.spoke_end(rect, (1.0, 1.0), 0.5, 0.25)  # meets the top
+    assert (x, y) == pytest.approx((0.5 + g, 0.5 + g))
+    # turned 90 degrees, the long side runs along y
+    (x, y), _ = rf.spoke_end(_pad(size=(2.0, 1.0), angle=90.0), (0.0, 1.25),
+                             0.5, 0.25)
+    assert (x, y) == pytest.approx((0.0, 1.0 + g))
+    (x, y), _ = rf.spoke_end(_pad("circle"), (0.5, 0.5), 0.5, 0.25)
+    assert math.hypot(x, y) == pytest.approx(0.5 + g)
+    assert rf.spoke_end(rect, (0.0, 0.0), 0.5, 0.25) is None
+
+
+def test_thermal_spokes_and_keep_outs(tmp_path, mf_path):
+    bg = _thermal(tmp_path)
+    [(p, z, layer, gap, sw, mt)] = rf.thermal_pads(bg)
+    assert (p.ref, layer, gap, sw, mt) == ("G1", "F.Cu", 0.5, 0.5, 0.25)
+    live = rf.thermal_spokes(p, z.fills["F.Cu"], gap, sw, mt)
+    assert len(live) == 2
+    want = box(10.5, 9.75, 11.13, 10.25).union(Point(11.13, 10).buffer(0.25))
+    [right] = [s for _, s in live if s.centroid.x > 10]
+    assert right.symmetric_difference(want).area < 1e-3
+    obs = rf.Obstacles(bg)
+    assert obs.spokes_near(box(0, 0, 20, 20)) == []      # off by default
+    obs = rf.Obstacles(bg, spokes=True)
+    near = obs.spokes_near(box(0, 0, 20, 20))
+    assert [(n, ly, c) for n, ly, _, c in near] == [("GND", "F.Cu", 0.25)] * 2
+
+
+def test_a_route_leaves_a_thermal_pads_spokes(tmp_path, mf_path):
+    """#1140 (C221 on the voice board): a route that crosses where a
+    spoke ends starves the pad at the refill; with spokes=True the router
+    keeps the zone's clearance off it."""
+    def worst(spokes):
+        bg = _thermal(tmp_path)
+        r = mazeroute.Router(bg, layers=["F.Cu"], spokes=spokes)
+        ops = r.route("A", "A1.1", "A2.1")
+        assert len(r.islands("A")) == 1
+        keep = [s for _, _, s, _ in _obs(bg).spokes_near(box(0, 0, 20, 20))]
+        return min(LineString([o["start"], o["end"]]).buffer(o["width"] / 2)
+                   .distance(s) for o in _tracks(ops, "A") for s in keep)
+    assert worst(False) < 0.25
+    assert worst(True) >= 0.25 - 1e-6
+
+
+def test_spoke_count_as_drc_counts_it(tmp_path, mf_path):
+    """zones/zc.cpp: spokes into fill that meets other copper of the net,
+    then manual tracks from the pad's ring to fill; only when that gives
+    none, the spokes into an island the pad alone meets."""
+    import make_fixture as mf
+    alone = _obs(_thermal(tmp_path))
+    assert alone.spoke_count(0) == 2 and alone.short_spokes(["G1"]) == []
+    via = mf.via(15, 10, "GND", "00000000-0000-0000-0000-0000000005b1")
+    one = _obs(_thermal(tmp_path, via))       # the right half is tied
+    assert one.spoke_count(0) == 1
+    assert one.short_spokes(["G1"]) == [("G1", "1", "F.Cu", 1)]
+    assert one.short_spokes(["A1"]) == []
+    hand = mf.seg(10, 10, 11.5, 9.4, 0.25, "F.Cu", "GND",
+                  "00000000-0000-0000-0000-0000000005c1")
+    two = _obs(_thermal(tmp_path, via + hand))
+    assert two.spoke_count(0) == 2 and two.short_spokes(["G1"]) == []
+    # a GND track that only passes near the pad is no spoke
+    stray = mf.seg(12, 9.5, 13, 9.5, 0.25, "F.Cu", "GND",
+                   "00000000-0000-0000-0000-0000000005c2")
+    three = _obs(_thermal(tmp_path, via + stray))
+    assert three.spoke_count(0) == 1
+
+
+def test_zone_join():
+    zc = geom
+    z = zc.Zone(net="GND", layers=("F.Cu",), fills={}, zone_id=0,
+                  connect=zc.ZONE_CONNECT_THT_THERMAL)
+    assert rf.zone_join(_pad(kind="thru_hole"), z) == zc.ZONE_CONNECT_THERMAL
+    assert rf.zone_join(_pad(kind="smd"), z) == zc.ZONE_CONNECT_SOLID
+    z.connect = zc.ZONE_CONNECT_THERMAL
+    assert rf.zone_join(_pad(zone_connect=zc.ZONE_CONNECT_SOLID), z) \
+        == zc.ZONE_CONNECT_SOLID
+    assert rf.zone_join(_pad(zone_connect=zc.ZONE_CONNECT_NONE), z) \
+        == zc.ZONE_CONNECT_NONE
+    assert rf.zone_join(_pad(), z) == zc.ZONE_CONNECT_THERMAL
+
+
+def test_geom_reads_zone_connections(tmp_path, mf_path):
+    """A pad's own (zone_connect)/(thermal_*) win over its footprint's; a
+    zone's (connect_pads yes|no|thru_hole_only) and (fill (thermal_gap)
+    (thermal_bridge_width)) and (min_thickness)."""
+    import make_fixture as mf
+    fp = ('  (footprint "t:U1" (layer "F.Cu") (at 5 5)\n'
+          '    (property "Reference" "U1" (at 0 0 0))\n'
+          '    (zone_connect 0) (thermal_gap 0.4)\n'
+          '    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")'
+          ' (net "GND"))\n'
+          '    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu")'
+          ' (net "GND") (zone_connect 2) (thermal_bridge_width 0.3)'
+          ' (thermal_bridge_angle 45)))\n')
+    zones = ""
+    for i, kw in enumerate(("", "yes ", "no ", "thru_hole_only ")):
+        zones += (f'  (zone (net "GND") (layer "F.Cu") (uuid "00000000-0000-'
+                  f'0000-0000-0000000006a{i}") (connect_pads {kw}(clearance'
+                  ' 0.2)) (min_thickness 0.2) (fill yes (thermal_gap 0.3)'
+                  ' (thermal_bridge_width 0.35)) (polygon (pts (xy 1 1)'
+                  ' (xy 9 1) (xy 9 9) (xy 1 9))))\n')
+    bg = geom.BoardGeom.from_file(mf.write(tmp_path / "zc.kicad_pcb",
+                                           fp + zones, 10, 10))
+    p1, p2 = sorted(bg.pads_of(ref="U1"), key=lambda p: p.number)
+    assert (p1.zone_connect, p1.thermal_gap, p1.spoke_width) == (0, 0.4, None)
+    assert (p2.zone_connect, p2.thermal_gap, p2.spoke_width,
+            p2.spoke_angle) == (2, 0.4, 0.3, 45)
+    assert [z.connect for z in bg.zones_of()] == [
+        geom.ZONE_CONNECT_THERMAL, geom.ZONE_CONNECT_SOLID,
+        geom.ZONE_CONNECT_NONE, geom.ZONE_CONNECT_THT_THERMAL]
+    z = bg.zones_of()[0]
+    assert (z.thermal_gap, z.spoke_width, z.min_thickness) == (0.3, 0.35, 0.2)
+    # a pad with nothing of its own and no footprint setting: the zone's
+    [g] = _thermal(tmp_path).pads_of(ref="G1")
+    assert (g.zone_connect, g.thermal_gap, g.spoke_width) == (-1, None, None)
