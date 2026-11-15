@@ -16,7 +16,13 @@ Checks (land_pattern fields drive which run):
                 pin-1 silk mark checked at that corner (info; a mark at
                 another corner is a warning). A pin1 that is prose, not a
                 pad name, goes to not_judged (#1127)
-  - pad_pitch : nearest-neighbour pad spacing vs pitch_mm          (error)
+  - pad_pitch : each row of like pads (one size, one shared x or y,  (error)
+                three or more) at pitch_mm, or at its own pitches_mm
+                entry; every gap a whole number of pitches (a gap
+                over 1.5 pitches parts two groups). Pads in no
+                row (a switch, shield or thermal pad) are not pitch, and
+                a row at another pitch the record doesn't state goes to
+                not_judged. With no row, the nearest-pad pitch (#1066)
   - row_spacing: centre-to-centre spacing of the two pad rows vs
                 row_spacing_mm, either axis of a quad              (error)
   - pad_size  : MIN and MAX pad size vs pad_size_mm (the mode hid a (warning)
@@ -198,6 +204,75 @@ def _modal_size(pads: list[fplib.Pad]) -> tuple[float, float] | None:
     return sizes.most_common(1)[0][0]
 
 
+def _pitch_rows(pads: list[fplib.Pad], min_pads: int = 3,
+                tol: float = 0.02) -> list[dict]:
+    """Rows of pads for pitch (#1066): pads of one size (either way round)
+    whose centres share an x or a y, at least `min_pads` of them. A shield
+    tab, switch contact or thermal pad has a size or a line of its own, so
+    it sits in no row and is not taken as pitch; nor is a thermal pad
+    split into a grid of one number. Each row lists its pads in
+    order along the row and the spacings between neighbours."""
+    by_size: dict[tuple, list[fplib.Pad]] = {}
+    for p in pads:
+        by_size.setdefault(tuple(round(s, 2) for s in sorted(p.size)), []).append(p)
+    rows = []
+    for group in by_size.values():
+        for axis in (0, 1):
+            line: list[list[fplib.Pad]] = []
+            for p in sorted(group, key=lambda q: q.center[axis]):
+                if line and p.center[axis] - line[-1][-1].center[axis] <= tol:
+                    line[-1].append(p)
+                else:
+                    line.append([p])
+            for run in line:
+                # a thermal pad split into a grid shares one number: no pins
+                if len({p.number for p in run}) < min_pads:
+                    continue
+                run.sort(key=lambda q: q.center[1 - axis])
+                gaps = [run[i + 1].center[1 - axis] - run[i].center[1 - axis]
+                        for i in range(len(run) - 1)]
+                if min(gaps) <= tol:  # stacked pads, not a row
+                    continue
+                mode = Counter(round(g, 2) for g in gaps).most_common()
+                top = mode[0][1]
+                rows.append({"pads": run, "gaps": gaps,
+                             "pitch": min(g for g, n in mode if n == top)})
+    rows.sort(key=lambda r: -len(r["pads"]))
+    return rows
+
+
+def _pad_set(spec) -> set[str]:
+    """A pitches_mm entry's pads: "1-8", "1-8,10", ["A1", "A2"] or a mix."""
+    items = spec if isinstance(spec, list) else str(spec).split(",")
+    out: set[str] = set()
+    for it in items:
+        it = str(it).strip()
+        m = re.fullmatch(r"(\d+)\s*-\s*(\d+)", it)
+        if m:
+            out.update(str(n) for n in range(int(m.group(1)), int(m.group(2)) + 1))
+        elif it:
+            out.add(it)
+    return out
+
+
+def _off_pitch(row: dict, pitch: float, tol: float) -> list[tuple]:
+    """Neighbours in `row` whose spacing is not a whole number of pitches
+    (a skipped pin is fine; a pad moved along the row is not). A gap over
+    1.5 pitches that is no whole number of them parts two groups on one
+    line (an RJ45's two LED pairs), so it is no finding."""
+    bad = []
+    for i, g in enumerate(row["gaps"]):
+        k = max(1, round(g / pitch))
+        if abs(g - k * pitch) > tol and g <= 1.5 * pitch:
+            bad.append((row["pads"][i], row["pads"][i + 1], g))
+    return bad
+
+
+def _row_name(row: dict) -> str:
+    nums = [p.number for p in row["pads"]]
+    return f"{nums[0]}..{nums[-1]} ({len(nums)} pads)"
+
+
 def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tuple[list[dict], dict]:
     fp = fplib.parse_footprint(footprint)
     copper = fp.copper_pads
@@ -257,15 +332,71 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               "pin1_depopulated", expected_pin1=pin1,
               site_mm=pin1_fact["at"], mark=pin1_fact["marks"])
 
-    # --- pitch
-    if land.get("pitch_mm") is not None and measured_pitch is not None:
+    # --- pitch, judged row by row (#1066): the nearest pair of pads in the
+    # whole footprint is no pitch when a switch contact, shield tab or
+    # thermal pad sits close to a pin row. Each row of like pads is judged
+    # against its pitches_mm entry, or pitch_mm; a footprint with no row of
+    # three keeps the nearest-pad pitch (a chip passive, a SOT-23)
+    rows = _pitch_rows(copper)
+    pitch_facts: list[dict] = []
+    if rows:
+        measured_pitch = rows[0]["pitch"]
+
+    def judge_row(row, exp, why):
+        bad = _off_pitch(row, exp, pitch_tol)
+        pitch_facts.append({"pads": _row_name(row), "pitch_mm": row["pitch"],
+                            "expected_mm": exp, "ok": not bad})
+        if abs(row["pitch"] - exp) > pitch_tol:
+            v("error", row["pads"][0].center,
+              f"pad row {_row_name(row)} pitch {row['pitch']:.3f} mm != "
+              f"datasheet {exp:.3f} mm{why} (tol {pitch_tol})",
+              "pad_pitch", expected_mm=exp, measured_mm=row["pitch"],
+              pads=[p.number for p in row["pads"]])
+        elif bad:
+            a, b, g = bad[0]
+            v("error", b.center,
+              f"pads {a.number} and {b.number} are {g:.3f} mm apart, not a "
+              f"whole number of the {exp:.3f} mm pitch{why} (row "
+              f"{_row_name(row)}, tol {pitch_tol}): a pad has moved along "
+              "the row",
+              "pad_pitch", expected_mm=exp, measured_mm=round(g, 4),
+              pads=[p.number for x in bad for p in x[:2]])
+
+    stated = [e for e in land.get("pitches_mm") or [] if e.get("pads")]
+    claimed: set[str] = set()
+    for e in stated:
+        want = _pad_set(e["pads"])
+        claimed |= want
+        mine = _pitch_rows([p for p in copper if p.number in want], min_pads=2)
+        if not mine:
+            not_judged.append({"check": "pitch", "why": (
+                f"pitches_mm pads {e['pads']}: the footprint's pads there "
+                "form no row to measure")})
+        for row in mine:
+            judge_row(row, float(e["pitch_mm"]), f" for pads {e['pads']}")
+    if land.get("pitch_mm") is not None:
         exp = float(land["pitch_mm"])
-        if abs(measured_pitch - exp) > pitch_tol:
-            pos = centers[0] if centers else None
-            v("error", pos,
-              f"nearest-pad pitch {measured_pitch:.3f} mm != datasheet "
-              f"{exp:.3f} mm (tol {pitch_tol})",
-              "pad_pitch", expected_mm=exp, measured_mm=round(measured_pitch, 4))
+        rest = [r for r in rows
+                if not claimed & {p.number for p in r["pads"]}]
+        if not rows and measured_pitch is not None and not stated:
+            if abs(measured_pitch - exp) > pitch_tol:
+                v("error", centers[0] if centers else None,
+                  f"nearest-pad pitch {measured_pitch:.3f} mm != datasheet "
+                  f"{exp:.3f} mm (tol {pitch_tol})",
+                  "pad_pitch", expected_mm=exp,
+                  measured_mm=round(measured_pitch, 4))
+        elif rest:
+            near = [r for r in rest if abs(r["pitch"] - exp) <= pitch_tol]
+            for row in near or rest[:1]:
+                judge_row(row, exp, "")
+            if near:
+                for row in rest:
+                    if row not in near:
+                        not_judged.append({"check": "pitch", "why": (
+                            f"pad row {_row_name(row)} is at "
+                            f"{row['pitch']:.3f} mm and the record states "
+                            f"only {exp:.3f} mm; list it in "
+                            "land_pattern.pitches_mm to judge it")})
 
     # --- row spacing (error): on a two-row leaded package it decides
     # whether the pads catch the lead feet at all, and a wrong one slides
@@ -370,6 +501,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "copper_pads": len(copper),
         "total_pads": len(fp.pads),
         "measured_pitch_mm": round(measured_pitch, 4) if measured_pitch else None,
+        "pitch_rows": pitch_facts or None,
         "measured_pad_size_mm": list(measured_size) if measured_size else None,
         "measured_row_spacing_mm": [round(m, 4) for m in measured_rows] or None,
         "has_courtyard": fp.has_courtyard,
@@ -459,8 +591,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--footprint", required=True, help=".kicad_mod file")
     ap.add_argument("--datasheet-json", required=True,
                     help="datasheet-extract JSON (uses its land_pattern block)")
-    ap.add_argument("--svg", help="write the overlay SVG here "
-                    "(default: <footprint>.overlay.svg next to the report)")
+    ap.add_argument("--svg", help="write the overlay SVG here (default: "
+                    "<report stem>.overlay.svg beside --out; none without "
+                    "--out, so nothing is written into the library)")
     ap.add_argument("--pitch-tol-mm", type=float, default=0.05)
     ap.add_argument("--size-tol-mm", type=float, default=0.1)
     ap.add_argument("--out", help="write JSON report here instead of stdout")
@@ -473,14 +606,19 @@ def main(argv: list[str] | None = None) -> int:
         ds = checklib.load_json(args.datasheet_json, "datasheet-json")
         viol, facts, fp = verify(fp_path, ds, args.pitch_tol_mm, args.size_tol_mm)
 
-        svg_path = Path(args.svg) if args.svg else fp_path.with_suffix(".overlay.svg")
-        # A pitch/size finding implicates the whole pad field; count/pin1 don't
-        # point at a specific pad, so nothing is reddened for those.
-        flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing")
-                   for v in viol)
-        bad_pads = {p.number for p in fp.copper_pads} if flag else set()
-        write_svg(svg_path, fp, bad_pads, facts["land_pattern"])
-        facts["svg"] = str(svg_path)
+        # Never beside the footprint: a .svg in a .pretty folder is a stray
+        # file in the library (#1066)
+        svg_path = (Path(args.svg) if args.svg else
+                    Path(args.out).with_suffix(".overlay.svg") if args.out
+                    else None)
+        if svg_path is not None:
+            # A pitch/size finding implicates the whole pad field; count/pin1
+            # don't point at a specific pad, so nothing is reddened for those.
+            flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing")
+                       for v in viol)
+            bad_pads = {p.number for p in fp.copper_pads} if flag else set()
+            write_svg(svg_path, fp, bad_pads, facts["land_pattern"])
+            facts["svg"] = str(svg_path)
 
         has_error = any(v["severity"] == "error" for v in viol)
         payload = checklib.report("fp_verify", fp_path, viol, **facts)

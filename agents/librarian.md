@@ -29,8 +29,11 @@ scripts with the repo venv python; JSON out, exit 0/1/2. Keep output ASCII.
    this is only for the parts an extract knows better (a regulator's
    power_out, an open-drain output).
 3. `scripts/fp_verify.py --footprint <lib.pretty/name.kicad_mod>
-   --datasheet-json parts/<lcsc>.json` - pad count/pitch/pin-1/size/drill
-   diff vs the land pattern + SVG overlay. Errors FAIL; warnings (pad_size,
+   --datasheet-json parts/<lcsc>.json --out reports/fp_verify_<ref>_<lcsc>.json`
+   - pad count/pitch/pin-1/size/drill diff vs the land pattern; the SVG
+   overlay lands beside the report, never in the library. A footprint with
+   two pitches (a card socket's contacts and its switch pads) gets
+   `land_pattern.pitches_mm` entries for each run. Errors FAIL; warnings (pad_size,
    no_courtyard, stroked_pad_primitive) pass but must be listed in your summary.
 
 ## Method

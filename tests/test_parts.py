@@ -325,6 +325,99 @@ def test_fp_verify_pin1_prose_not_judged(tmp_path, capsys):
     assert nj["check"] == "pin1" and "not a pad name" in nj["why"]
 
 
+# #1066: a footprint with two pitches. A micro-SD socket: eight contacts at
+# 1.1 mm, a card-detect pad of another size 0.95 mm past contact 8, and four
+# shield tabs. The nearest pair of pads (contact 8 to the switch) is no pitch.
+def _microsd(tmp_path, move=None, extra=()) -> Path:
+    def pad(n, x, y, w, h):
+        return (f'  (pad "{n}" smd rect (at {x:g} {y:g}) (size {w:g} {h:g}) '
+                '(layers "F.Cu" "F.Paste" "F.Mask"))')
+    pads = [pad(i, (i - 1) * 1.1 + (move[1] if move and move[0] == i else 0),
+                0, 0.7, 1.6) for i in range(1, 9)]
+    pads.append(pad("CD", 7 * 1.1 + 0.95, 0, 0.5, 1.0))
+    pads += [pad(f"S{i}", x, y, 1.2, 2.2) for i, (x, y) in
+             enumerate([(-2.5, 4), (10.2, 4), (-2.5, 9), (10.2, 9)], 1)]
+    pads += [pad(n, x, y, 0.7, 1.6) for n, x, y in extra]
+    lib = tmp_path / "lib.pretty"
+    lib.mkdir(exist_ok=True)
+    fp = lib / "microSD.kicad_mod"
+    fp.write_text('(footprint "microSD" (layer "F.Cu")\n' + "\n".join(pads)
+                  + "\n)\n", encoding="utf-8")
+    return fp
+
+
+def _microsd_ds(tmp_path, n=13, **land):
+    return write_ds(tmp_path, {"mpn": "TF-01A", "land_pattern": {
+        "pad_count": n, "pitch_mm": 1.1, "pin1": "1", **land}})
+
+
+def test_fp_verify_two_pitch_microsd_passes(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys, _microsd(tmp_path), _microsd_ds(tmp_path))
+    assert code == 0, payload["violations"]
+    assert not any(v["kind"] == "pad_pitch" for v in payload["violations"])
+    assert payload["measured_pitch_mm"] == pytest.approx(1.1, abs=1e-3)
+    row, = payload["pitch_rows"]
+    assert row["pads"] == "1..8 (8 pads)" and row["ok"]
+
+
+def test_fp_verify_contact_moved_along_row_fails(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys, _microsd(tmp_path, move=(5, 0.1)),
+                         _microsd_ds(tmp_path))
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_pitch"]
+    assert v["severity"] == "error" and "moved" in v["msg"]
+    assert set(v["pads"]) == {"4", "5", "6"}
+
+
+def test_fp_verify_pitches_mm_judges_each_run(tmp_path, capsys):
+    """A second row at 2.0 mm: unstated it is not judged; stated, it is."""
+    fp = _microsd(tmp_path, extra=[("9", 0, 6), ("10", 2, 6), ("11", 4, 6)])
+    code, payload = _fpv(tmp_path, capsys, fp, _microsd_ds(tmp_path, n=16))
+    assert code == 0, payload["violations"]
+    nj, = [n for n in payload.get("not_judged", []) if n["check"] == "pitch"]
+    assert "9..11" in nj["why"] and "pitches_mm" in nj["why"]
+    code, payload = _fpv(tmp_path, capsys, fp, _microsd_ds(
+        tmp_path, n=16, pitches_mm=[{"pads": "9-11", "pitch_mm": 2.0}]))
+    assert code == 0, payload["violations"]
+    assert not [n for n in payload.get("not_judged", []) if n["check"] == "pitch"]
+    code, payload = _fpv(tmp_path, capsys, fp, _microsd_ds(
+        tmp_path, n=16, pitches_mm=[{"pads": ["9", "10", "11"], "pitch_mm": 2.5}]))
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_pitch"]
+    assert v["expected_mm"] == 2.5 and v["pads"] == ["9", "10", "11"]
+
+
+def test_fp_verify_svg_stays_out_of_the_library(tmp_path, capsys):
+    fp = _microsd(tmp_path)
+    ds = _microsd_ds(tmp_path)
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    out = reports / "fp_verify_J1.json"
+    assert fp_verify.main(["--footprint", str(fp), "--datasheet-json",
+                           str(ds), "--out", str(out)]) == 0
+    capsys.readouterr()
+    assert [p.name for p in fp.parent.iterdir()] == ["microSD.kicad_mod"]
+    svg = reports / "fp_verify_J1.overlay.svg"
+    assert svg.read_text(encoding="utf-8").startswith("<svg")
+    assert json.loads(out.read_text(encoding="utf-8"))["svg"] == str(svg)
+    # to stdout: no report folder, so no SVG at all
+    assert fp_verify.main(["--footprint", str(fp), "--datasheet-json", str(ds)]) == 0
+    assert "svg" not in json.loads(capsys.readouterr().out)
+    assert [p.name for p in fp.parent.iterdir()] == ["microSD.kicad_mod"]
+
+
+def test_datasheet_validate_pitches_mm(tmp_path, capsys):
+    ds = {"mpn": "X", "pinout": [], "land_pattern": {"pad_count": 9, "pitches_mm": [
+        {"pads": "1-8", "pitch_mm": 1.1}, {"pads": ["CD", "SW"], "pitch_mm": 0.9}]}}
+    code, _ = run_main(datasheet_extract, ["--validate", str(write_ds(tmp_path, ds))],
+                       tmp_path, capsys)
+    assert code == 0
+    ds["land_pattern"]["pitches_mm"] = [{"pads": "1-8"}]
+    code, _ = run_main(datasheet_extract, ["--validate", str(write_ds(tmp_path, ds))],
+                       tmp_path, capsys, name="bad")
+    assert code == 1
+
+
 def test_datasheet_validate_rejects_prose_pin1(tmp_path, capsys):
     ds = {**CAP_DS, "land_pattern": {**CAP_DS["land_pattern"],
                                      "pin1": "top-left in land pattern view"}}
