@@ -371,12 +371,20 @@ def audit(cache: Path, b: dict, rev: str, script: str,
                                   .encode()).hexdigest()[:8]
     out = cache / "runs" / b["id"] / f"{rev}-{script}{tag}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
+    # a report left by an earlier run must not stand in for this one
+    out.unlink(missing_ok=True)
     empty = out.parent / f"constraints{tag}.json"
     empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
     cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b, rev), empty)
-    p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
-                        "--out", str(out)],
-                       capture_output=True, text=True, timeout=900)
+    try:
+        p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
+                            "--out", str(out)],
+                           capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired as e:
+        err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) \
+            else e.stderr
+        raise CheckCrashed(f"{b['id']} {rev}: {script} timed out after 900 s",
+                           None, err)
     if not out.is_file():
         raise CheckCrashed(f"{b['id']} {rev}: {script} wrote no report",
                            p.returncode, p.stderr, p.stdout)
@@ -436,7 +444,15 @@ def run(cache: Path, b: dict) -> dict:
             cons = (c.get("constraints") or {}).get(rev) or {}
             key = (rev, c["script"], json.dumps(cons, sort_keys=True))
             if key not in found:
-                found[key] = audit(cache, b, rev, c["script"], cons)
+                try:
+                    found[key] = audit(cache, b, rev, c["script"], cons)
+                except CheckCrashed as e:
+                    found[key] = e
+            if isinstance(found[key], CheckCrashed):
+                e = found[key]
+                hit = {"crashed": c["script"], "error": str(e).splitlines()[0][:300],
+                       "rc": e.rc, "check_error": e.check_error}
+                break
             hit[rev] = any(matches(v, c) for v in found[key])
         res[d["id"]] = {"ran": True, **hit}
     (cache / "runs" / b["id"]).mkdir(parents=True, exist_ok=True)
@@ -452,6 +468,8 @@ def outcome(d: dict, r: dict | None) -> str:
         return f"{how}, since {d['caught_by']}"
     if not r or not r.get("ran"):
         return f"{d['verdict']} (not run here)"
+    if r.get("crashed"):
+        return f"crashed: {r['crashed']}"
     if r["rev_a"] and not r["rev_b"]:
         return "caught on rev A, gone on rev B"
     if r["rev_a"]:
@@ -630,7 +648,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             fetch(cache, b)
             for script, r in sweep(cache, b).items():
-                print(b["id"], script, json.dumps(r))
+                print(b["id"], script, *([f"crashed: {script}"] if "error" in r
+                                         else []), json.dumps(r))
                 pairs += 1
                 if "error" in r:
                     errored.append(f"{b['id']} {script}")
@@ -645,8 +664,10 @@ def main(argv: list[str] | None = None) -> int:
             fetch(cache, b)
         else:
             for did, r in run(cache, b).items():
-                print(did, json.dumps(r))
-                bad += r.get("ran", False) and not (r["rev_a"] and not r["rev_b"])
+                print(did, (f"crashed: {r['crashed']} " if r.get("crashed")
+                            else "") + json.dumps(r))
+                bad += r.get("ran", False) and (
+                    bool(r.get("crashed")) or not (r["rev_a"] and not r["rev_b"]))
     return 1 if bad else 0
 
 
