@@ -44,6 +44,11 @@ SKILL = ROOT / "scripts"
 GATES = ("erc", "drc_routed", "verify", "dfm")
 CRASH = 100
 INFO = "info"   # a note below the warning bar: never charged
+# Kinds that say a check could not judge, not that it judged wrongly: the run
+# itself failed (a model fetch over the network). Each is not judged: it costs
+# nothing and is no catch. A part with no model at all (cpl_no_model) is a
+# finding and stays one.
+NOT_JUDGED = {"cpl_fetch_failed": "fetch failed"}
 
 # The pinned boards and the sha256 of each one's pin and files (digest()).
 # bin/pin.py writes this block; don't edit it by hand.
@@ -226,7 +231,7 @@ def gate_findings(gate_name: str, result: dict, waivers: list[dict] | None = Non
 def gate_charges(result: dict, waivers: list[dict] | None = None) -> Counter:
     """Every finding one gate result reports, by check (no ledger)."""
     fs, past = gate_findings("", result, waivers)
-    out = Counter(f["check"] for f in fs)
+    out = Counter(f["check"] for f in fs if f.get("kind") not in NOT_JUDGED)
     out["(warnings past the cap)"] += past
     return +out
 
@@ -275,6 +280,7 @@ class Judged:
     missed: list[dict] = field(default_factory=list)      # known defects, not reported
     false: list[dict] = field(default_factory=list)       # known false, reported
     unjudged: list[dict] = field(default_factory=list)    # reported, verdict "?" or none
+    not_judged: list[dict] = field(default_factory=list)  # the run failed (NOT_JUDGED): free
 
     @property
     def charges(self) -> int:
@@ -284,27 +290,36 @@ class Judged:
 def judge(found: list[dict], known: list[dict], ran: set[str] | None = None) -> Judged:
     """Pair each finding with at most one ledger entry (an entry is one
     finding, so two alike need two entries). A real entry of a gate that
-    didn't run (`ran` leaves it out) isn't missed: that gate charged CRASH."""
+    didn't run (`ran` leaves it out) isn't missed: that gate charged CRASH.
+    A finding whose kind is NOT_JUDGED (the check couldn't run, e.g. a
+    model fetch failed) is set aside: no charge, no catch, no ledger match."""
     j = Judged()
     left = list(known)
     for f in found:
+        if f.get("kind") in NOT_JUDGED:
+            j.not_judged.append(f)
+            continue
         e = next((e for e in left if matches(e, f)), None)
         if e is not None:
             left.remove(e)
         v = (e or {}).get("verdict", "?")
         (j.real if v == "real" else j.false if v == "false" else j.unjudged).append(f)
     j.missed = [e for e in left if e.get("verdict") == "real"
+                and e.get("kind") not in NOT_JUDGED
                 and (ran is None or e.get("gate") in ran)]
     return j
 
 
 def draft_known(pin: Pin, found: list[dict]) -> int:
     """Add each finding the ledger doesn't hold to it, verdict "?"; returns
-    how many. Entries already there keep their verdict and reason."""
+    how many. Entries already there keep their verdict and reason. A
+    NOT_JUDGED finding (a failed run) is no finding to judge: never added."""
     known = read_known(pin)
     left = list(known)
     new = []
     for f in found:
+        if f.get("kind") in NOT_JUDGED:
+            continue
         e = next((e for e in left if matches(e, f)), None)
         if e is not None:
             left.remove(e)
@@ -409,9 +424,14 @@ def measure(p: Pin, ws: Path, logs: Path, draft: bool = False) -> int:
     for name, fs in (("missed", j.missed), ("false", j.false), ("unjudged", j.unjudged)):
         if fs:
             parts.append(f"{name} {len(fs)} ({by_check(fs)})")
+    if j.not_judged:
+        parts.append(f"not judged {len(j.not_judged)} (" + ", ".join(
+            f"{f['gate']}: {NOT_JUDGED[f['kind']]} {' '.join(f['refs'])}"
+            for f in j.not_judged) + ", free)")
     parts.append(f"scripts {len(sc)}" + (f" ({', '.join(sc)})" if sc else ""))
     print(f"{p.name} ({p.project} {p.commit[:7]}): {n} charged: {'; '.join(parts)}", flush=True)
-    for name, fs in (("missed", j.missed), ("false", j.false), ("unjudged", j.unjudged)):
+    for name, fs in (("missed", j.missed), ("false", j.false), ("unjudged", j.unjudged),
+                     ("not judged", j.not_judged)):
         for f in fs:
             print(f"  {name}: {json.dumps({k: v for k, v in f.items() if k not in ('verdict', 'reason')})}")
     if draft:
