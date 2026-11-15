@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -75,9 +76,39 @@ def cache_root(arg: str | None) -> Path:
     return c
 
 
+def sealed_files(path: Path = MANIFEST) -> dict[int, Path]:
+    """Sealed holdout rounds: `holdout/round-N.yaml` beside the manifest.
+
+    A round stays in its own file while its defects are unread by rule
+    builders; builders open nothing under `holdout/` (see "A new holdout
+    round"). Unsealing a round moves its boards into the manifest."""
+    out = {}
+    for f in sorted((path.parent / "holdout").glob("round-*.yaml")):
+        m = re.fullmatch(r"round-(\d+)\.yaml", f.name)
+        if m:
+            out[int(m.group(1))] = f
+    return out
+
+
+def _raw(path: Path, section: str) -> list[dict]:
+    """A section of the manifest, plus every sealed round for `holdout`."""
+    boards = list(yaml.safe_load(path.read_text(encoding="utf-8")).get(section) or [])
+    if section != "holdout":
+        return boards
+    for n, f in sealed_files(path).items():
+        sealed = yaml.safe_load(f.read_text(encoding="utf-8")).get("holdout") or []
+        for b in sealed:
+            r = (b.get("swept") or {}).get("round")
+            if r != n:
+                raise SystemExit(f"{b.get('id')}: in {f.name} but swept round {r}")
+        boards += sealed
+    return boards
+
+
 def load(path: Path = MANIFEST, section: str = "boards") -> list[dict]:
-    """One set of the manifest: `boards` (training) or `holdout`."""
-    boards = yaml.safe_load(path.read_text(encoding="utf-8")).get(section) or []
+    """One set of the manifest: `boards` (training) or `holdout`, the
+    holdout including the sealed rounds under `holdout/`."""
+    boards = _raw(path, section)
     for b in boards:
         for r in ("rev_a", "rev_b"):
             if r in b and "commit" in b[r] and len(str(b[r]["commit"])) != 40:
@@ -440,10 +471,12 @@ round, pinned and swept before those rules are:
    revision fixes a defect the designer's own errata quote, both revisions
    pinned to a commit, and no repository an earlier round or the training
    set holds.
-2. Each goes under `holdout:` with `swept: {flow: SHA, date, round: N}`,
-   SHA being main as it stands, and its defects with the designer's quote,
+2. Each goes in the round's own sealed file, `reference/holdout/round-N.yaml`
+   (a `holdout:` list), with `swept: {flow: SHA, date, round: N}`, SHA
+   being main as it stands, and its defects with the designer's quote,
    before anyone reads the findings. `errata_corpus.py sweep ID...` runs
-   every check on both revisions.
+   every check on both revisions; `load` merges the sealed files, so
+   `run` and `table` see them too.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board
@@ -453,11 +486,43 @@ round, pinned and swept before those rules are:
    blind. Round N is known once read: the next round of rules gets round
    N+1.
 5. Add the round's misses to `docs/miss-taxonomy.md`, one class per check,
-   and re-rank it: the next rules go to the top classes.
+   and re-rank it: the next rules go to the top classes. While the round is
+   sealed, its member lines go in `docs/holdout/round-N-members.md`, and the
+   taxonomy says only how many members each class has from it.
+
+**Keeping a sealed round blind.** Until a round is unsealed, its defects
+live only under `holdout/`: `reference/holdout/round-N.yaml`,
+`docs/holdout/round-N-members.md` and `docs/holdout/round-N-errata.md`
+(written by `table`). Rule builders open none of these, nor the round's
+boards or errata upstream, and their briefs quote only the taxonomy's
+Ranked table. Only the round's scorers read them. `tests/test_holdout_sealed.py`
+fails if a sealed defect id appears in any other tracked file. Unsealing a
+round (when a newer round replaces it as the blind test) moves its boards
+into `reference/errata_corpus.yaml` and its members into the taxonomy.
 """
 
 
-def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None) -> str:
+SEALED_NOTE = (
+    "Sealed: its boards and defects are in `docs/holdout/round-{r}-errata.md`,"
+    " for the round's scorers only. Rule builders don't open it, or the"
+    " round's boards and errata; see \"A new holdout round\".")
+
+
+def sealed_table(cache: Path, holdout: list[dict], r: int) -> str:
+    """The per-board section of a sealed round, kept out of the main doc."""
+    lines = [f"# Holdout round {r} (sealed, scorers only)", "",
+             "Rule builders: stop here. This file names the round's defects, and",
+             "a rule written after reading it is no longer tested by the round.",
+             "Written by `bin/pcb-flow errata_corpus table` from",
+             f"`reference/holdout/round-{r}.yaml`.", ""]
+    for b in holdout:
+        if b["swept"]["round"] == r:
+            lines += _board_rows(cache, b, True)
+    return "\n".join(lines)
+
+
+def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None,
+          sealed: set[int] | frozenset[int] = frozenset()) -> str:
     holdout = holdout or []
     lines = ["# The real-errata corpus", "",
              "Public boards whose next revision fixed a defect the first one shipped with,",
@@ -486,6 +551,9 @@ def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None) ->
         lines += _board_rows(cache, b, False)
     for r in rounds:
         lines += [f"## Holdout round {r}", ""]
+        if r in sealed:
+            lines += [SEALED_NOTE.format(r=r), ""]
+            continue
         for b in holdout:
             if b["swept"]["round"] == r:
                 lines += _board_rows(cache, b, True)
@@ -503,13 +571,19 @@ def main(argv: list[str] | None = None) -> int:
     cache = cache_root(a.cache)
     man = Path(a.manifest)
     if a.cmd == "table":
-        Path(a.out).write_text(table(cache, load(man), load(man, "holdout")),
-                               encoding="utf-8")
+        holdout = load(man, "holdout")
+        sealed = set(sealed_files(man))
+        out = Path(a.out)
+        out.write_text(table(cache, load(man), holdout, sealed), encoding="utf-8")
+        for r in sorted(sealed):
+            f = out.parent / "holdout" / f"round-{r}-errata.md"
+            f.parent.mkdir(exist_ok=True)
+            f.write_text(sealed_table(cache, holdout, r), encoding="utf-8")
         return 0
     if a.cmd == "sweep":
         # unvalidated: a holdout board is fetched and swept before its
         # defects are judged, so before it has its blind verdicts
-        raw = yaml.safe_load(man.read_text(encoding="utf-8")).get("holdout") or []
+        raw = _raw(man, "holdout")
         for b in raw:
             if a.ids and b["id"] not in a.ids:
                 continue
