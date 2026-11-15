@@ -10,6 +10,7 @@ small fixture under tests/ can stand in for uses the fixture instead.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -72,3 +73,24 @@ def copy_board(name: str, dst: Path, *, skip: tuple[str, ...] = ()) -> Path:
                     ignore=lambda d, names: [n for n in names
                                              if Path(d) == src and n in top])
     return out
+
+
+def stock_footprints() -> Path | None:
+    """KiCad's stock footprint library, or None: the newest
+    KICAD<n>_FOOTPRINT_DIR that is a directory (a bare KICAD_FOOTPRINT_DIR
+    last), the order board_swig.resolve_default_fp_root takes, else the one
+    beside kicad-cli."""
+    hits = []
+    for key, val in os.environ.items():
+        m = re.fullmatch(r"KICAD(\d*)_FOOTPRINT_DIR", key)
+        if m and val:
+            hits.append((int(m[1]) if m[1] else -1, val))
+    for _, val in sorted(hits, key=lambda kv: -kv[0]):
+        if Path(val).is_dir():
+            return Path(val)
+    try:
+        cli = env.find_kicad_cli()
+    except env.EnvError:
+        return None
+    fp = cli and Path(cli).parents[1] / "share" / "kicad" / "footprints"
+    return fp if fp and fp.is_dir() else None

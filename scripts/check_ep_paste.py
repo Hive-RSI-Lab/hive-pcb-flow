@@ -46,8 +46,11 @@ on the footprint's own side (its `(layer "F.Cu")` or `"B.Cu"`) count, as
 exposed pads and as the other pads: a pad on the far side is never under
 the part. KiCad's stock *_ThermalVias footprints carry such a bottom copy
 of the belly for their vias to land on (hive-pcb-flow #1174). A footprint
-with no layer keeps both sides. Each one's coverage goes into the facts
-(`exposed_pads`) whether it passes or not.
+whose layer is missing or not F.Cu/B.Cu keeps both sides, and so does one
+with no SMD copper on its own side (pads left behind by a hand flip), so it
+is still checked. An exposed pad's paste is read on the footprint's side
+when its copper is there, else on its copper's side. Each one's coverage
+goes into the facts (`exposed_pads`) whether it passes or not.
 
 CLI: --pcb board.kicad_pcb [--out report.json]
      exit 0 pass / 1 violations / 2 error, per SPEC section 6.
@@ -251,11 +254,12 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
 def exposed_pads(pads: list[Ap]) -> list[Ap]:
     by_ref: dict[str, list[Ap]] = {}
     for p in pads:
-        if p.kind == "smd" and p.copper and \
-                (p.side is None or p.side in p.copper):
+        if p.kind == "smd" and p.copper:
             by_ref.setdefault(p.ref, []).append(p)
     out = []
     for ref, ps in by_ref.items():
+        # the part's own side; all of them when none is there
+        ps = [p for p in ps if p.side is None or p.side in p.copper] or ps
         for p in ps:
             if p.number.upper() == "EP":
                 out.append(p)
@@ -314,7 +318,8 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
     ep_list = exposed_pads(pads)
     ep_cu = {(ep.ref, ep.number): ep.copper_poly() for ep in ep_list}
     for ep in ep_list:
-        side = ep.side or next(iter(sorted(ep.copper)))
+        side = ep.side if ep.side in ep.copper else \
+            next(iter(sorted(ep.copper)))
         cu = ep.copper_poly()
         mine = [poly for p, poly in apertures[side]
                 if (p.ref == ep.ref or p.ref is None)

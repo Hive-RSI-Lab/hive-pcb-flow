@@ -7,7 +7,6 @@ then fixed."""
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -21,8 +20,8 @@ sys.path.insert(0, str(SCRIPTS / "lib"))
 import check_connector_fit as ccf  # noqa: E402
 import check_ep_paste as cep  # noqa: E402
 import datasheet_extract  # noqa: E402
-import env  # noqa: E402
 import verify_all  # noqa: E402
+from _boards import stock_footprints  # noqa: E402
 
 
 def _board(tmp_path, body, setup="") -> Path:
@@ -314,21 +313,8 @@ def test_copper_on_the_far_side_is_not_an_exposed_pad(tmp_path, bottom):
             [("9", side)]
 
 
-def _stock_footprints():
-    """KiCad's stock footprint library, or None (as test_check_net_tie's)."""
-    for key, val in sorted(os.environ.items()):
-        if re.fullmatch(r"KICAD\d*_FOOTPRINT_DIR", key) and Path(val).is_dir():
-            return Path(val)
-    try:
-        cli = env.find_kicad_cli()
-    except env.EnvError:
-        return None
-    fp = cli and Path(cli).parents[1] / "share" / "kicad" / "footprints"
-    return fp if fp and fp.is_dir() else None
-
-
 def test_stock_thermal_vias_qfn_passes_on_either_side(tmp_path):
-    lib = _stock_footprints()
+    lib = stock_footprints()
     mod = lib and lib / "Package_DFN_QFN.pretty" / \
         "QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
     if not (mod and mod.is_file()):
@@ -337,9 +323,43 @@ def test_stock_thermal_vias_qfn_passes_on_either_side(tmp_path):
     body = first + "\n  (at 15 10)\n" + rest.replace('"REF**"', '"U1"', 1)
     for text, side in ((body, "F"), (_flip(body), "B")):
         vs, facts = cep.check(_board(tmp_path, text + "\n"))
-        assert vs == [], side
+        # only the far-side copy is #1174's: the footprint's own thru_hole
+        # via pads under its paste windows are not modelled (no board vias)
+        assert "ep_paste_missing" not in _kinds(vs), side
         assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
             [("17", side)]
+
+
+@pytest.mark.parametrize("ep_layers,windows,cover", [
+    ('"F.Cu" "B.Cu" "F.Paste" "F.Mask"', False, 1.0),
+    ('"*.Cu" "F.Paste" "F.Mask"', False, 1.0),
+    ('"*.Cu" "F.Mask"', True, 0.64)])
+def test_a_two_sided_ep_takes_its_paste_from_the_parts_side(
+        tmp_path, ep_layers, windows, cover):
+    # copper on both sides: the paste is on the part's side, not whichever
+    # side sorts first
+    body = qfn(ep_layers, windows)
+    for text, side in ((body, "F"), (_flip(body), "B")):
+        vs, facts = cep.check(_board(tmp_path, text))
+        assert [(e["pad"], e["side"], e["coverage"])
+                for e in facts["exposed_pads"]] == [("9", side, cover)], side
+        assert "ep_paste_missing" not in _kinds(vs), side
+
+
+def _pads_to_far_side(body):
+    """Every pad's layers to the other side; the footprint's own layer
+    stays (pads a hand flip left behind)."""
+    return re.sub(r"\(layers [^)]*\)", lambda m: _flip(m[0]), body)
+
+
+def test_a_footprint_with_all_its_pads_on_the_far_side_is_still_checked(
+        tmp_path):
+    for text, layer in (
+            (_pads_to_far_side(qfn('"F.Cu" "F.Mask"')), "B.Paste"),
+            (_pads_to_far_side(_flip(qfn('"F.Cu" "F.Mask"'))), "F.Paste")):
+        vs, facts = cep.check(_board(tmp_path, text))
+        assert [(v["kind"], v["layer"]) for v in vs] == \
+            [("ep_paste_missing", layer)], layer
 
 
 def _gfx_windows(prefix="fp", layer="F.Paste", fill="yes", at=(0, 0)):
