@@ -336,6 +336,7 @@ def test_check_ratings_reads_the_library_not_the_foreign_parts(tmp_path):
     assert not (repo / "ledger.json").exists()
     rep = cache / "runs" / "ratplant" / "rev_a-check_ratings.json"
     assert rep.is_file()
+    assert isinstance(json.loads(rep.read_text())["rated_from"], dict)
 
 
 # ------------------------------------------- dfm on a revision's shipped CPL
@@ -836,3 +837,52 @@ def test_sweep_prints_blockers_and_stores_them(tmp_path, monkeypatch, capsys):
     cache2 = _planted(tmp_path / "c", monkeypatch, CRASH)
     r = ec.sweep(cache2, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
     assert r["blockers"]["board"] == "crashed"
+
+
+def test_errata_ratings_adds_only_each_rated_parts_source(tmp_path, monkeypatch):
+    """errata_ratings.py gives check_ratings' own report, unchanged, plus
+    rated_from: one source per part it rated (verified, listed or failed)."""
+    import errata_ratings
+    import check_ratings
+    monkeypatch.setenv("HWDE_LEDGER_WRITE", "0")
+    pcb = ROOT / "tests" / "fixtures" / "ratings" / "overvolt" / "kicad" / "board.kicad_pcb"
+    mine, _ = errata_ratings.run(["--pcb", str(pcb)])
+    theirs, _ = check_ratings.run(["--pcb", str(pcb)])
+    rated = mine.pop("rated_from")
+    assert json.loads(json.dumps(mine)) == json.loads(json.dumps(theirs))
+    counts = theirs["ledger_counts"]["rating"]
+    assert len(rated) == counts["verified"] + counts["listed"] + counts["failed"] > 0
+    assert set(rated.values()) <= {"datasheet", "distributor", "part_number_code",
+                                   "value", "package"}
+    assert "datasheet" in rated.values() and "distributor" in rated.values()
+    assert check_ratings.ledger_facts is not None and \
+        check_ratings.ledger_facts.__name__ == "ledger_facts"
+
+
+def test_errata_ratings_tells_a_value_field_from_a_part_number_code():
+    from errata_ratings import source_of
+    f = {"kind": "rating", "status": "listed", "rated_from": "part_code"}
+    assert source_of({**f, "source": "Value field '100n 16V' states 16V"}) == "value"
+    assert source_of({**f, "source": "part-number voltage code Q of X"}) == "part_number_code"
+    assert source_of({**f, "rated_from": "package"}) == "package"
+    assert source_of({**f, "status": "unknown"}) is None
+    assert source_of({**f, "kind": "pinout"}) is None
+    assert source_of({"kind": "rating", "status": "verified"}) is None  # held
+
+
+def test_coverage_counts_ratings_parts_by_source():
+    rep = {"pins_checked": 3, "rated_from": {"U1": "datasheet", "C1": "value",
+                                             "C2": "part_number_code",
+                                             "C3": "part_number_code"}}
+    cov = ec.coverage(rep, "check_ratings")
+    assert (cov["status"], cov["parts_judged"]) == ("judged", 4)
+    assert cov["parts_by_source"] == {"datasheet": 1, "part_number_code": 2, "value": 1}
+    assert "parts_judged" not in ec.coverage({"pins_checked": 0}, "check_ratings")
+    rows = [("a", "check_ratings", {"coverage": cov}),
+            ("b", "check_ratings", {"coverage": {
+                "status": "judged", "not_judged": 0, "parts_judged": 2,
+                "parts_by_source": {"distributor": 2}}})]
+    assert ec.coverage_line(rows) == [
+        "coverage check_ratings: judged 2, nothing_to_judge 0, judged nothing "
+        "(unsaid) 0, with not_judged items 0, crashed 0; parts judged 6 "
+        "(distributor 2, part_number_code 2, datasheet 1, value 1)"]

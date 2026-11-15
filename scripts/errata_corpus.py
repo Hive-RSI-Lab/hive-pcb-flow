@@ -59,6 +59,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 import yaml
@@ -419,10 +420,11 @@ def _check_ratings(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     repo's parts/ is not read, and check_ratings needs the folder to exist)
     and --power-tree names no file, so a rail's volts come from its net name.
     audit() runs it with HWDE_LEDGER_WRITE=0, so no ledger.json lands in the
-    cached repo."""
+    cached repo. It runs through errata_ratings.py, the same check with each
+    rated part's source added (rated_from), for the coverage count."""
     parts = empty.parent / "ratings-no-parts"
     parts.mkdir(exist_ok=True)
-    return ["check_ratings.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+    return ["errata_ratings.py", "--pcb", str(_pcb(b, rev, repo, empty)),
             "--constraints", str(empty), "--parts", str(parts),
             "--power-tree", str(empty.parent / "no-power-tree.md")]
 
@@ -638,12 +640,19 @@ def coverage(rep: dict, script: str | None = None) -> dict:
     says so; `judged_nothing` when it judged nothing and didn't say why.
     `not_judged` counts the items it named but couldn't judge (a list, or a
     dict of reason -> items or a count). For the footprint checks,
-    `parts_judged` / `parts_not_judged` count parts."""
+    `parts_judged` / `parts_not_judged` count parts; for check_ratings,
+    `parts_judged` and `parts_by_source` count the parts it rated."""
     n = _not_judged_count(rep.get("not_judged"))
     out: dict = {"not_judged": n}
     if script in ("check_fp_geometry", "check_fp_package"):
         out["parts_judged"] = EVIDENCE[script](rep)
         out["parts_not_judged"] = n
+    if script == "check_ratings" and isinstance(rep.get("rated_from"), dict):
+        # every part it compared with a known voltage, by source
+        # (errata_ratings.py): pins_checked counts datasheet pins only
+        out["parts_judged"] = len(rep["rated_from"])
+        out["parts_by_source"] = dict(sorted(Counter(
+            rep["rated_from"].values()).items()))
     if rep.get("nothing_to_judge"):
         return {"status": "nothing_to_judge",
                 "reason": str(rep["nothing_to_judge"])[:200], **out}
@@ -676,14 +685,27 @@ def coverage_line(rows: list[tuple[str, str, dict]]) -> list[str]:
         c["with_not_judged"] += bool(cov.get("not_judged"))
         if "parts_judged" in cov:
             c["parts_judged"] = c.get("parts_judged", 0) + cov["parts_judged"]
+        if "parts_not_judged" in cov:
             c["parts_not_judged"] = (c.get("parts_not_judged", 0)
                                      + cov["parts_not_judged"])
+        for src, n in (cov.get("parts_by_source") or {}).items():
+            by = c.setdefault("by_source", {})
+            by[src] = by.get(src, 0) + n
+
+    def parts(c: dict) -> str:
+        if "parts_judged" not in c:
+            return ""
+        out = f"; parts judged {c['parts_judged']}"
+        if "by_source" in c:
+            out += " (" + ", ".join(f"{k} {n}" for k, n in sorted(
+                c["by_source"].items(), key=lambda kv: (-kv[1], kv[0]))) + ")"
+        if "parts_not_judged" in c:
+            out += f", parts not_judged {c['parts_not_judged']}"
+        return out
     return [f"coverage {s}: judged {c['judged']}, nothing_to_judge "
             f"{c['nothing_to_judge']}, judged nothing (unsaid) "
             f"{c['judged_nothing']}, with not_judged items "
-            f"{c['with_not_judged']}, crashed {c['crashed']}"
-            + (f"; parts judged {c['parts_judged']}, parts not_judged "
-               f"{c['parts_not_judged']}" if "parts_judged" in c else "")
+            f"{c['with_not_judged']}, crashed {c['crashed']}" + parts(c)
             for s, c in sorted(per.items())]
 
 
