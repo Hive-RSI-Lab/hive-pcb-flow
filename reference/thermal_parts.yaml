@@ -30,6 +30,11 @@
 #       at a time). Switching and supply losses are left out, so the current
 #       reported is an upper bound.
 #   peak_a: the part's rated peak current, quoted beside it.
+# For a no-pad buck, to judge it from a stated load (check_thermal module
+# doc): r_on_ohm [high side, low side] typical at 25 C (or one figure),
+# r_on_max: true when the figures are maxima at temperature, and
+# i_limit_a, the datasheet's maximum current limit (left out when the
+# datasheet gives no maximum). A package entry may carry its own r_on_ohm.
 # source / verified / cite as in source_limits.yaml (part_rows.py --verify
 # checks each cite against its PDF; a package's cite is its theta_ja_c_w).
 #
@@ -52,6 +57,8 @@ parts:
     verified: true
   - match: ^TPS629203
     kind: switcher
+    r_on_ohm: [0.25, 0.085]
+    i_limit_a: 1.4
     tj_max_c: 125
     packages:
     - name: DRL SOT-583
@@ -76,8 +83,23 @@ parts:
       quote: TJ Junction temperature (5) –40 125 °C
       fields:
       - tj_max_c
+    - doc: tps629203.pdf
+      sha256: 6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7
+      page: 5
+      table: Electrical Characteristics
+      quote: 'High-side FET on resistance 250 mΩ Low-side FET on resistance 85'
+      fields:
+      - r_on_ohm
+    - doc: tps629203.pdf
+      sha256: 6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7
+      page: 5
+      table: Electrical Characteristics
+      quote: 'High-side FET current limit 0.8 1.1 1.4 A'
+      fields:
+      - i_limit_a
   - match: ^TLV62569
     kind: switcher
+    r_on_ohm: [0.1, 0.06]
     tj_max_c: 125
     packages:
     - name: DDC SOT-23-THIN
@@ -126,6 +148,13 @@ parts:
       quote: TJ Operating junction temperature –40 125 °C
       fields:
       - tj_max_c
+    - doc: tlv62569.pdf
+      sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+      page: 5
+      table: Electrical Characteristics
+      quote: 'High-side FET on resistance 100 mΩ Low-side FET on resistance 60'
+      fields:
+      - r_on_ohm
   - match: ^TPS62A01
     kind: switcher
     tj_max_c: 125
@@ -133,6 +162,7 @@ parts:
     - name: DRL SOT-563
       pkg: DRL|SOT-?563
       theta_ja_c_w: 157.3
+      r_on_ohm: [0.18, 0.12]
       exposed_pad: false
       cite:
       - doc: tps62a01.pdf
@@ -142,9 +172,17 @@ parts:
         quote: RθJA Junction-to-ambient thermal resistance 157.3 132.1 °C/W
         fields:
         - theta_ja_c_w
+      - doc: tps62a01.pdf
+        sha256: cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518
+        page: 5
+        table: Electrical Characteristics
+        quote: 'RDSON(HS) High-side MOSFET on-resistance TPS62A01xDRL; VIN = 5 V 180 mΩ RDSON(LS) Low-side MOSFET on-resistance TPS62A01xDRL; VIN = 5 V 120 mΩ'
+        fields:
+        - r_on_ohm
     - name: DDC SOT-23-THIN
       pkg: DDC|TSOT|SOT-?23
       theta_ja_c_w: 132.1
+      r_on_ohm: [0.1, 0.067]
       exposed_pad: false
       cite:
       - doc: tps62a01.pdf
@@ -154,6 +192,13 @@ parts:
         quote: RθJA Junction-to-ambient thermal resistance 157.3 132.1 °C/W
         fields:
         - theta_ja_c_w
+      - doc: tps62a01.pdf
+        sha256: cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518
+        page: 5
+        table: Electrical Characteristics
+        quote: 'RDSON(HS) High-side MOSFET on-resistance VIN = 5 V; TPS62A01xDDC; TPS62A02 100 mΩ RDSON(LS) Low-side MOSFET on-resistance VIN = 5 V; TPS62A01xDDC; TPS62A02 67 mΩ'
+        fields:
+        - r_on_ohm
     source: 'TI TPS62A01 datasheet: Recommended Operating Conditions, Thermal Information'
     verified: true
     cite:
@@ -166,6 +211,8 @@ parts:
       - tj_max_c
   - match: ^TPS561201
     kind: switcher
+    r_on_ohm: [0.14, 0.084]
+    i_limit_a: 2.0
     tj_max_c: 125
     packages:
     - name: DDC SOT-23-6
@@ -190,8 +237,24 @@ parts:
       quote: TJ Operating junction temperature –40 125 °C
       fields:
       - tj_max_c
+    - doc: tps561201.pdf
+      sha256: 54e5a4f272c638b385ec0d66867891cdc2f94974269a2400e80ecb4279b94e2f
+      page: 5
+      table: Electrical Characteristics
+      quote: 'RDS(on)h High-side switch resistance TA = 25°C, VBST – SW = 5.5 V 140 mΩ RDS(on)l Low-side switch resistance TA = 25°C 84 mΩ'
+      fields:
+      - r_on_ohm
+    - doc: tps561201.pdf
+      sha256: 54e5a4f272c638b385ec0d66867891cdc2f94974269a2400e80ecb4279b94e2f
+      page: 5
+      table: Electrical Characteristics
+      quote: 'Iocl Current limit DC current, VOUT = 1.05 V, L1 = 2.2 µH 1.2 1.6 2.0 A'
+      fields:
+      - i_limit_a
   - match: ^LMR54406
     kind: switcher
+    r_on_ohm: [0.45, 0.24]
+    i_limit_a: 1.3
     tj_max_c: 150
     packages:
     - name: DBV SOT-23-6
@@ -216,6 +279,20 @@ parts:
       quote: Over the recommended operating junction temperature range of –40 °C to 150°C
       fields:
       - tj_max_c
+    - doc: lmr54406.pdf
+      sha256: f0dc0ace8430cad919ef1f590d65d217362ee3d3a975406ded57b98f228ffaf7
+      page: 5
+      table: Electrical Characteristics
+      quote: 'RDS-ON-HS High-side MOSFET ON-resistance TJ=25 ℃, VIN = 12V 450 mΩ RDS-ON-LS Low-side MOSFET ON-resistance TJ=25 ℃, VIN = 12V 240 mΩ'
+      fields:
+      - r_on_ohm
+    - doc: lmr54406.pdf
+      sha256: f0dc0ace8430cad919ef1f590d65d217362ee3d3a975406ded57b98f228ffaf7
+      page: 5
+      table: Electrical Characteristics
+      quote: 'ISC High-side current limit(2) LMR54406 .85 1.1 1.3 A'
+      fields:
+      - i_limit_a
   - match: ^TLV61070
     kind: switcher
     tj_max_c: 125
@@ -476,6 +553,9 @@ parts:
       - tj_max_c
   - match: ^TPS62086
     kind: switcher
+    r_on_ohm: [0.056, 0.045]
+    r_on_max: true
+    i_limit_a: 5.5
     tj_max_c: 125
     packages:
     - name: RLT VSON-HR-7
@@ -500,6 +580,20 @@ parts:
       quote: TJ Operating junction temperature –40 125 °C
       fields:
       - tj_max_c
+    - doc: tps62086.pdf
+      sha256: 31311da69fdc42211ecf876bab403b6ce48970724766ae9ff8a76bc9754b0853
+      page: 5
+      table: Electrical Characteristics
+      quote: 'High-side FET ON-resistance ISW = 500 mA 31 56 mΩ Low-side FET ON-resistance ISW = 500 mA 23 45 mΩ'
+      fields:
+      - r_on_ohm
+    - doc: tps62086.pdf
+      sha256: 31311da69fdc42211ecf876bab403b6ce48970724766ae9ff8a76bc9754b0853
+      page: 5
+      table: Electrical Characteristics
+      quote: 'ILIM High-side FET switch current limit 3.7 4.6 5.5 A'
+      fields:
+      - i_limit_a
   - match: ^LM2596
     kind: switcher
     tj_max_c: 125
@@ -566,6 +660,8 @@ parts:
       - tj_max_c
   - match: ^SY8301
     kind: switcher
+    r_on_ohm: [0.38, 0.18]
+    i_limit_a: 2.5
     tj_max_c: 125
     packages:
     - name: TSOT23-6
@@ -590,6 +686,14 @@ parts:
       quote: Junction Temperature Range ------------------------------------------------------------------------------------  -40° C to 125° C
       fields:
       - tj_max_c
+    - doc: sy8301.pdf
+      sha256: d2a1acae6a41e7e6e62ad498280c74a0fe549e62d20f5176c8367640b77a1621
+      page: 4
+      table: Electrical Characteristics
+      quote: 'Top FET RON RDS(ON),TOP 380 mΩ Top FET Peak Current Limit ILIM,TOP 1.6 2.5 A Bottom FET RON RDS(ON),BOT 180 mΩ'
+      fields:
+      - r_on_ohm
+      - i_limit_a
   - match: ^SY7200
     kind: switcher
     tj_max_c: 125
