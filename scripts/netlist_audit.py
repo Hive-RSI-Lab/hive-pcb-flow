@@ -146,6 +146,16 @@ schematic-level structural problems BEFORE board work starts:
    source) points into the battery: with the FET off, that rail charges
    the cell through the diode (#1085; TI SLVA139, Microchip AN1149). A
    back-to-back pair's middle node is no rail and is skipped.
+ - power_switch_reversed (warning): a MOSFET off the battery nets whose
+   body diode conducts the way the switch should block: a gate-driven
+   (a transistor's drain, or an IC GPIO, on the gate) high-side switch
+   with a P-FET's drain or an N-FET's source on the sourced rail; a
+   gate-driven N-FET with its drain, not its source, on ground; a P-FET
+   with its gate tied to ground (reverse-polarity protection) and its
+   source, not its drain, on the input (#1085; TI SLVA139). A gate from
+   a controller IC's gate-drive pin (ideal-diode, hot-swap), a gate held
+   by a rail, both sides sourced or neither, and negative rails are not
+   judged and counted in power_switches_not_judged.
  - protector_orientation (warning): a single-cell protector with S-8261's
    pins (VDD, VSS, VM, DO, CO) whose VSS net (the cell's -) carries more
    other ICs' supply pins than the pack - net its VM resistor reaches:
@@ -1742,6 +1752,141 @@ def _power_path_fets(nets: dict, comps: dict,
                 and _sourced_rail(anode, nets, comp_pins, ref)):
             yield ref, ch, cathode, anode
     yield "checked", checked, "", ""
+
+
+# a controller pin that drives a FET gate (ideal-diode, hot-swap, load-
+# switch, eFuse and gate-driver ICs face their FETs either way round)
+_GATE_CTRL_RE = re.compile(r"GATE|^G\d*$|^GD|^[HL]G\d*$|^[HL]O\d*$|DRV|"
+                           r"^DG|^CG|^OUT[HL]?$")
+_NEG_NET_RE = re.compile(r"^-|NEG|VEE|^VSS|^V-")
+
+
+def _gate_drive(gate: str, nets: dict, comp_pins: dict[str, dict[str, str]],
+                own: str, rails: dict) -> str:
+    """How a FET's gate net is held, on the net or one resistor hop away
+    (a resistor to a rail or ground is a pull, not a drive): 'controller'
+    (an IC's gate-drive pin), 'driven' (another transistor's drain or
+    collector, or an IC GPIO pin), 'tied' (ground, directly or through a
+    resistor, with no IC or transistor on it), else 'other'."""
+    import signal_domains as sd  # noqa: PLC0415
+    kinds: set[str] = set()
+    seen = [gate]
+    if _is_ground_name(gate.lstrip("/")):
+        return "tied"
+    for m in nets.get(gate, []):
+        xp = comp_pins.get(m["ref"], {})
+        if m["ref"] == own or _part_kind(m["ref"]) != "R" or len(xp) != 2:
+            continue
+        far = next((n for p, n in xp.items() if p != m["pin"]), None)
+        if not far or far in seen:
+            continue
+        if _is_ground_name(far.lstrip("/")):
+            kinds.add("ground")
+        elif not _supply_net(far, nets.get(far, []), rails):
+            seen.append(far)
+    for net in seen:
+        for m in nets.get(net, []):
+            ref = m["ref"] or ""
+            if ref == own:
+                continue
+            func = _norm_pin(m.get("pinfunction"))
+            role = _transistor_role(func)
+            if ref.startswith("Q"):
+                kinds.add("driven" if role in ("D", "C") else "other")
+            elif ref.startswith(("U", "IC")):
+                if _GATE_CTRL_RE.search(func):
+                    kinds.add("controller")
+                elif sd._GPIO.match(func):
+                    kinds.add("driven")
+                else:
+                    kinds.add("other")
+    if "controller" in kinds:
+        return "controller"
+    if "other" in kinds:
+        return "other"
+    if "driven" in kinds:
+        return "driven"
+    return "tied" if kinds == {"ground"} else "other"
+
+
+def _power_switches(nets: dict, comps: dict,
+                    comp_pins: dict[str, dict[str, str]], rails: dict):
+    """Yield (ref, channel, case, supply net, other net) for each MOSFET
+    switch off the battery nets whose body diode conducts the way it
+    should block (N: source to drain, P: drain to source):
+    'high' a gate-driven high-side switch with the diode from its sourced
+    rail into the load; 'low' a gate-driven N-FET with its drain on ground
+    and its source on the load; 'reverse' a P-FET with its gate tied to
+    ground and its source, not its drain, on the input (no reverse
+    protection). The last item is ('checked', n, not_judged counts, '',
+    '')."""
+    batteries = _battery_nets(nets)
+    checked, nj = 0, {}
+
+    def skip(why):
+        nj[why] = nj.get(why, 0) + 1
+
+    for ref, pins in sorted(comp_pins.items()):
+        if not ref.startswith("Q") or comps.get(ref, {}).get("dnp"):
+            continue
+        roles: dict[str, set[str]] = {}
+        for net, members in nets.items():
+            for m in members:
+                if m["ref"] == ref:
+                    r = _transistor_role(_norm_pin(m.get("pinfunction")))
+                    if r:
+                        roles.setdefault(r, set()).add(net)
+        if any(len(roles.get(k, ())) != 1 for k in "GDS"):
+            continue
+        ch = _fet_channel(comps.get(ref, {}))
+        if not ch:
+            continue
+        (g,), (d,), (s,) = roles["G"], roles["D"], roles["S"]
+        if {d, s} & batteries:
+            continue            # rule 22's
+        if d == s or g in (d, s):
+            continue
+        drive = _gate_drive(g, nets, comp_pins, ref, rails)
+        if drive == "controller":
+            skip("gate from a controller")
+            continue
+        if drive not in ("driven", "tied"):
+            skip("gate tied to a rail or not traced")
+            continue
+        gnd = {n for n in (d, s) if _is_ground_name(n.lstrip("/"))}
+        if any(_NEG_NET_RE.search(re.split(r"/", n.upper())[-1])
+               for n in (d, s) if n not in gnd):
+            skip("negative rail")
+            continue
+        if gnd:
+            if drive == "tied" or ch == "P" or len(gnd) == 2:
+                skip("tied gate or P-FET on the low side")
+                continue
+            checked += 1
+            if d in gnd:
+                yield ref, ch, "low", d, s
+            continue
+        if not any(_supply_net(n, nets[n], rails) for n in (d, s)):
+            skip("no supply on either side")
+            continue
+        src = {n for n in (d, s) if _sourced_rail(n, nets, comp_pins, ref)}
+        if len(src) != 1:
+            skip("both sides sourced or neither")
+            continue
+        (sup,) = src
+        load = s if sup == d else d
+        if drive == "tied":
+            if ch != "P":
+                skip("tied gate or P-FET on the low side")
+                continue
+            checked += 1
+            if sup == s:
+                yield ref, ch, "reverse", sup, load
+            continue
+        checked += 1
+        if (ch == "P" and sup == d) or (ch == "N" and sup == s):
+            yield ref, ch, "high", sup, load
+    yield "checked", checked, nj, "", ""
 
 
 def _protector_orientation(nets: dict, comps: dict,
@@ -4467,6 +4612,39 @@ def audit(parsed: dict, constraints: dict,
           f"the diode, uncontrolled. Turn the FET around so the diode points "
           f"out of the battery [TI SLVA139; Microchip AN1149 Figs 5-6]",
           from_net=other)
+    # a load switch or reverse-polarity FET off the battery nets (#1085;
+    # TI SLVA139 Fig 3: a P-FET's drain on the input, its gate to ground;
+    # a high-side P-FET's source on the supply, a low-side N-FET's on
+    # ground, or the body diode carries the load with the FET off)
+    sw_checked, sw_nj = 0, {}
+    for ref, ch, case, sup, other in _power_switches(nets, comps, comp_pins,
+                                                     pl_rails):
+        if ref == "checked":
+            sw_checked, sw_nj = ch, case
+            continue
+        d_s = "source to drain" if ch == "N" else "drain to source"
+        val = comps.get(ref, {}).get("value")
+        if case == "low":
+            msg = (f"{ref} ({val}, N-channel) switches the low side with its "
+                   f"drain on ground '{sup}' and its source on '{other}': its "
+                   f"body diode ({d_s}) carries the load's current to ground "
+                   f"with the FET off. Put the source on ground and the "
+                   f"drain on the load")
+        elif case == "reverse":
+            msg = (f"{ref} ({val}, P-channel, gate to ground) has its source "
+                   f"on the input '{sup}' and its drain on '{other}': with "
+                   f"the input reversed its body diode ({d_s}) passes the "
+                   f"reversed voltage to the load. The drain goes on the "
+                   f"input, the source on the load [TI SLVA139 Fig 3]")
+        else:
+            msg = (f"{ref} ({val}, {ch}-channel) switches '{other}' from "
+                   f"'{sup}' with its body diode ({d_s}) pointing from "
+                   f"'{sup}' into the load: with the FET off, the load "
+                   f"still runs through the diode. Turn the FET around so "
+                   f"the {'source' if ch == 'P' else 'drain'} is on '{sup}'"
+                   f" [TI SLVA139]")
+        v("warning", "power_switch_reversed", sup, [ref], msg,
+          from_net=other, case=case)
     prot_checked = 0
     for ref, vss, pack, on_vss, on_pack in _protector_orientation(
             nets, comps, comp_pins):
@@ -4847,6 +5025,8 @@ def audit(parsed: dict, constraints: dict,
         "io_drive_pins_checked": iolv_checked,
         "power_good_pins_checked": pg_checked,
         "power_path_fets_checked": pp_checked,
+        "power_switches_checked": sw_checked,
+        "power_switches_not_judged": sw_nj,
         "battery_protectors_checked": prot_checked,
         "unverified_findings": len(not_judged),
         "offboard_inputs_checked": ob_checked,
