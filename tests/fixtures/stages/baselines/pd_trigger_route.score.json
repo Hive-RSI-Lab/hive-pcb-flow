@@ -9,7 +9,7 @@
   "via_count": 44
  },
  "metrics_live": {
-  "drc_errors": 4,
+  "drc_errors": 0,
   "drc_warnings": 0,
   "completion": 1.0,
   "routable_nets": 21,
@@ -20,15 +20,15 @@
   "track_mm": 410.46,
   "via_count": 44.0,
   "incompletion_pct": 0.0,
-  "drc_errors": 4.0,
+  "drc_errors": 0.0,
   "drc_warnings": 0.0
  },
- "composite": 71.5,
+ "composite": 91.5,
  "composite_inputs": "full",
  "known_answer": null,
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-05",
+  "created": "2026-11-15",
   "kicad_version": "10.0.6"
  }
 }
