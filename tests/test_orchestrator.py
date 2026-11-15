@@ -504,10 +504,24 @@ def test_dryrun_p4_p8_with_kill_and_resume(tmp_path):
     summary = state_mod.State.load(ws / "state.json").resume_summary()
     assert summary["gates_passed"] == ["erc", "place", "drc_routed", "verify"]
     # place ran before the injected mutations + their fixes, so its recorded
-    # pcb hash no longer matches - recorded evidence going stale on its own is
-    # the point of recording it
-    assert summary["gates_passed_fresh"] == ["erc", "drc_routed", "verify"]
-    assert summary["gates_stale"] == ["place"]
+    # pcb hash normally no longer matches - recorded evidence going stale on
+    # its own is the point of recording it. The fixer re-adds each segment
+    # with a fresh random uuid and KiCad saves segments ordered by uuid within
+    # a net, so about 1 run in 60 the new uuid sorts into the old slot and
+    # the fixed board is byte-identical (uuids normalized away) to the placed
+    # one; then place is honestly fresh. Derive the verdict from the hashes
+    # instead of hard-coding the common case (smoke flake, run 43757835923).
+    fr = state_mod.State.load(ws / "state.json").freshness()["gates"]["place"]
+    restored = fr["recorded_inputs"]["pcb"] == fr["current_inputs"]["pcb"]
+    if restored:
+        assert summary["gates_passed_fresh"] == ["erc", "place",
+                                                 "drc_routed", "verify"]
+        assert summary["gates_stale"] == []
+    else:
+        assert summary["gates_passed_fresh"] == ["erc", "drc_routed",
+                                                 "verify"]
+        assert summary["gates_stale"] == ["place"]
+        assert fr["changed_inputs"] == ["pcb"]
     assert summary["next_gate"] == {"phase": "P9", "gate": "dfm"}
 
     # ---- the fixes restored the golden geometry (not just gate-quiet) ----
