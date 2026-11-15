@@ -282,6 +282,73 @@ def _input_only(pages, doc, digest) -> tuple[list, list]:
     return pins, cites
 
 
+_PIN_PAGE = re.compile(r"pin\s+(?:functions|descriptions?|configuration)|"
+                       r"pinning\s+information|pin\s+assignment", re.I)
+# a pin name is upper case (a trailing n for active-low: RESETn)
+_PIN_NAME = r"([A-Z0-9_+#]*[A-Z][A-Z0-9_+#]*n?(?:/[A-Z0-9_+#]+n?)*)"
+_PIN_NUMS = r"(\d{1,3}(?:\s*,\s*\d{1,3})*)"
+_PIN_LINE = (re.compile(rf"^\s*{_PIN_NAME}\s+{_PIN_NUMS}(?![\d.\w])"),
+             re.compile(rf"^\s*{_PIN_NUMS}\s+{_PIN_NAME}(?![\w/])"))
+# a contents page names 'Pin Configuration' too: its lines end in dot leaders
+_LEADERS = re.compile(r"\.{5,}|(?:\. ){5,}")
+# a section heading ('7 Specifications') ends a table run onto a next page
+_HEADING = re.compile(r"^\s*\d+(?:\.\d+)*\s+[A-Z][a-z]")
+
+
+def _pin_run(text: str, start: int, stop_at_heading: bool):
+    """({number: name}, quote) of the pin lines of TEXT from START."""
+    pins: dict[str, str] = {}
+    first = last = None
+    pos = start
+    for line in text[start:].splitlines(keepends=True):
+        hit = None
+        for i, rx in enumerate(_PIN_LINE):
+            m = rx.match(line)
+            if m:
+                hit = (m.group(1), m.group(2)) if i == 0 else (
+                    m.group(2), m.group(1))
+                break
+        if hit and hit[0] not in ("PIN", "NO", "NAME"):
+            for n in re.split(r"\s*,\s*", hit[1]):
+                pins.setdefault(str(int(n)), hit[0])
+            first = pos if first is None else first
+            last = pos + len(line.rstrip())
+        elif stop_at_heading and _HEADING.match(line):
+            break
+        pos += len(line)
+    return pins, (text[first:last] if first is not None else "")
+
+
+def _pin_tables(pages, doc, digest, part) -> list[dict]:
+    """One part_pinouts row per pin table ('Pin Functions', 'Pin
+    Descriptions', 'Pinning information' and the like) that gives at least
+    3 pins: each line 'NAME 4' / 'NAME 7, 8' / '4 NAME' after the heading,
+    and on the next page up to its first section heading (a table that
+    runs on). Each page's run is one cite, quoted first line to last. A
+    contents page (dot leaders) is skipped."""
+    out = []
+    for pno, text in enumerate(pages, 1):
+        heads = list(_PIN_PAGE.finditer(text))
+        if not heads or len(_LEADERS.findall(text)) >= 3:
+            continue
+        pins, quote = _pin_run(text, heads[-1].start(), False)
+        if len(pins) < 3:
+            continue
+        cites = [_cite(doc, digest, pno, _table_name(text.splitlines()),
+                       quote, ["pins"])]
+        if pno < len(pages) and not _PIN_PAGE.search(pages[pno]):
+            more, q2 = _pin_run(pages[pno], 0, True)
+            if more:
+                for k, v in more.items():
+                    pins.setdefault(k, v)
+                cites.append(_cite(doc, digest, pno + 1, "", q2, ["pins"]))
+        out.append({"part": part, "match": "TODO", "footprint": "TODO",
+                    "pins": dict(sorted(pins.items(),
+                                        key=lambda kv: int(kv[0]))),
+                    "source": "TODO", "cite": cites})
+    return out
+
+
 def _addresses(pages, doc, digest, part) -> list[dict]:
     """One draft i2c_addresses row per distinct address a page states
     ("The 7-bit slave address is 0101100b", "address 0x48", "2Ch"). A
@@ -366,7 +433,8 @@ def draft(part: str, pdf: Path) -> dict:
     out: dict = {"part": part, "doc": doc, "sha256": digest,
                  "pages": len(pages), "pin_states": [], "pin_leakage": [],
                  "io_levels": [], "mcu_pins": [], "i2c_addresses": [],
-                 "pin_abs_max": [], "pin_requirements": []}
+                 "pin_abs_max": [], "pin_requirements": [],
+                 "part_pinouts": []}
     pins_seen = set()
     for pno, text in enumerate(pages, 1):
         for m in _FLOAT.finditer(text.replace("\n", " ")):
@@ -411,8 +479,10 @@ def draft(part: str, pdf: Path) -> dict:
     out["i2c_addresses"] = _addresses(pages, doc, digest, part)
     out["pin_abs_max"] = _abs_rows(pages, part, doc, digest)
     out["pin_requirements"] = _pin_parts(pages, doc, digest)
+    out["part_pinouts"] = _pin_tables(pages, doc, digest, part)
     for key in ("pin_states", "pin_leakage", "io_levels", "mcu_pins",
-                "i2c_addresses", "pin_abs_max", "pin_requirements"):
+                "i2c_addresses", "pin_abs_max", "pin_requirements",
+                "part_pinouts"):
         for r in out[key]:
             r["verified"] = False
     return out
@@ -434,7 +504,8 @@ def _rows(node, path="", verified=False):
                                  verified)
     elif isinstance(node, list):
         for i, v in enumerate(node):
-            label = v.get("mpn") or v.get("pin") if isinstance(v, dict) else ""
+            label = (v.get("mpn") or v.get("pin") or v.get("part")
+                     if isinstance(v, dict) else "")
             yield from _rows(v, f"{path}[{label or i}]", verified)
 
 
@@ -467,6 +538,35 @@ def _addr_in_quote(adr, quote: str) -> bool:
                for pat in (f"{adr:07b}b?", f"0x{adr:02x}", f"{adr:02x}h"))
 
 
+def _pin_key(name: str) -> str:
+    t = unicodedata.normalize("NFKC", str(name)).translate(_DASHES)
+    return re.sub(r"[~{}]", "", t).upper()
+
+
+def _pins_in_quote(pins: dict, quote: str) -> list[str]:
+    """The pins {number: name} the quote does not give: a pin is given
+    when its name stands next to a run of pin numbers ('GND 6', 'NC 7, 8',
+    '1, 2, 3 S') that holds its number."""
+    t = unicodedata.normalize("NFKC", quote or "").translate(_DASHES)
+    toks = re.findall(r"[^\s,;()]+", t)
+    keys = [_pin_key(x) for x in toks]
+
+    def run(i, step):
+        nums = []
+        while 0 <= i < len(toks) and toks[i].isdigit():
+            nums.append(str(int(toks[i])))
+            i += step
+        return nums
+
+    missing = []
+    for num, name in pins.items():
+        want = _pin_key(name)
+        if not any(k == want and str(num) in run(i + 1, 1) + run(i - 1, -1)
+                   for i, k in enumerate(keys)):
+            missing.append(f"{num}={name}")
+    return missing
+
+
 def check_cite(row: dict, cite: dict, pages: list[str]) -> list[str]:
     """Problems with one cite of one row; [] when it holds."""
     probs = []
@@ -492,6 +592,20 @@ def check_cite(row: dict, cite: dict, pages: list[str]) -> list[str]:
     for f in cite.get("fields") or ():
         if f not in row:
             probs.append(f"cited field {f} not in the row")
+            continue
+        if f == "pins":
+            # a long table may be quoted over several cites: a pin need
+            # only stand in one of the row's pin cites
+            pins = {str(k): v for k, v in (row[f] or {}).items()}
+            missing = _pins_in_quote(pins, cite.get("quote") or "")
+            others = " ".join(c.get("quote") or "" for c in row["cite"]
+                              if c is not cite and "pins" in
+                              (c.get("fields") or ()))
+            missing = [m for m in missing if _pins_in_quote(
+                dict([m.split("=", 1)]), others)]
+            if missing:
+                probs.append("pins not in the quote as a name beside its "
+                             "number: " + ", ".join(missing[:8]))
             continue
         if f == "address":
             if not _addr_in_quote(row[f], cite.get("quote") or ""):
@@ -557,7 +671,8 @@ def main(argv: list[str] | None = None) -> int:
             res = draft(a.part, a.pdf[0])
             code = 0 if any(res[k] for k in (
                 "pin_states", "pin_leakage", "io_levels", "mcu_pins",
-                "i2c_addresses", "pin_abs_max", "pin_requirements")) else 1
+                "i2c_addresses", "pin_abs_max", "pin_requirements",
+                "part_pinouts")) else 1
         else:
             ap.error("give PART --pdf FILE, or --verify YAML... --pdf FILE...")
     except (OSError, ValueError) as e:

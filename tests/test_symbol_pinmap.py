@@ -26,13 +26,15 @@ def _m(ref, pin, func="", ptype="passive"):
     return {"ref": ref, "pin": pin, "pintype": ptype, "pinfunction": func}
 
 
-def _audit(comps, nets, stock="", libpart_pins=None, kinds=KINDS):
+def _audit(comps, nets, stock="", libpart_pins=None, kinds=KINDS,
+           part_pinouts=()):
     parsed = {"components": {r: (v if isinstance(v, dict) else
                                  {"value": v, "libsource": ("", "")})
                              for r, v in comps.items()},
               "nets": nets, "libpart_pins": libpart_pins or {}}
     viol, facts = netlist_audit.audit(parsed, {}, None, pin_requirements=[],
-                                      pin_states=[], stock_symbols=stock)
+                                      pin_states=[], stock_symbols=stock,
+                                      part_pinouts=list(part_pinouts))
     return [x for x in viol if x["kind"] in kinds], facts
 
 
@@ -173,6 +175,148 @@ def test_package_family_reads_the_package_token():
     assert pinmaplib.same_package("SOT-223", _SOT223)
     assert not pinmaplib.same_package(_TO252, _SOT223)
     assert pinmaplib.same_package("MyLib:Custom", _SOT223)
+
+
+# ------------------------------------------------ symbol_pinmap: pin tables
+# (#1135) a part with no stock symbol in its package is judged against a
+# reference/part_pinouts.yaml row read from its datasheet's pin table
+
+_DRV = {"1": "INLA", "2": "INLB", "3": "INLC", "4": "GVDD", "5": "MODE",
+        "6": "GND", "9": "GLC", "10": "GLB", "11": "GLA", "21": "DT",
+        "22": "INHA", "23": "INHB", "24": "INHC"}
+_DRV_FP = "Package_DFN_QFN:VQFN-24-1EP_4x4mm_P0.5mm_EP2.45x2.45mm"
+
+
+def _drv_row(**kw):
+    row = {"part": "DRV8300 (24-pin VQFN, RGE)", "match": "DRV8300",
+           "footprint": "QFN-24|RGE", "pins": dict(_DRV), "verified": True,
+           "source": "TI DRV8300 datasheet, Table 6-1"}
+    row.update(kw)
+    return row
+
+
+def _drv(pins, value="DRV8300DRGER", fp=_DRV_FP):
+    """U3, a DRV8300 on the board's own symbol MyLib:DRV whose pins are
+    `pins` {number: name}."""
+    comp = {"value": value, "footprint": fp, "libsource": ("MyLib", "DRV")}
+    nets = {f"/N{num}": [_m("U3", num, name, "input")]
+            for num, name in pins.items()}
+    return {"U3": comp}, nets, {("MyLib", "DRV"): dict(pins)}
+
+
+def _swapped(pins, a, b):
+    out = dict(pins)
+    na = next(k for k, v in pins.items() if v == a)
+    nb = next(k for k, v in pins.items() if v == b)
+    out[na], out[nb] = b, a
+    return out
+
+
+def test_driver_drawn_with_inha_and_inla_swapped_is_the_planted_fault(stock):
+    comps, nets, lp = _drv(_swapped(_DRV, "INHA", "INLA"))
+    hits, facts = _audit(comps, nets, stock, lp, part_pinouts=[_drv_row()])
+    assert [(h["kind"], h["refs"]) for h in hits] == [
+        ("symbol_pinmap", ["U3"])]
+    assert hits[0]["pinout"] == "DRV8300 (24-pin VQFN, RGE)"
+    assert "the datasheet" in hits[0]["msg"] and "Table 6-1" in hits[0]["msg"]
+    assert {p["name"]: (p["placed"], p["stock"]) for p in hits[0]["pins"]} \
+        == {"INHA": (["1"], ["22"]), "INLA": (["22"], ["1"])}
+    assert facts["symbol_pinmaps_checked"] == 1
+    assert facts["symbol_pinmaps_by_table"] == 1
+
+
+def test_driver_drawn_as_its_pin_table_is_quiet(stock):
+    # the placed symbol also numbers the NC pins and the pad: only names
+    # both maps carry are compared
+    comps, nets, lp = _drv({**_DRV, "7": "NC", "8": "NC", "25": "PAD"})
+    hits, facts = _audit(comps, nets, stock, lp, part_pinouts=[_drv_row()])
+    assert hits == [] and facts["symbol_pinmaps_by_table"] == 1
+
+
+def test_a_disagreeing_unverified_row_is_not_judged(stock):
+    comps, nets, lp = _drv(_swapped(_DRV, "INHA", "INLA"))
+    hits, facts = _audit(comps, nets, stock, lp,
+                         part_pinouts=[_drv_row(verified=False)])
+    assert hits == [] and facts["unverified_findings"] == 1
+    assert facts["not_judged"][0].startswith("symbol_pinmap (warning) on U3")
+
+
+def test_another_package_or_no_footprint_gets_no_row(stock):
+    bad = _swapped(_DRV, "INHA", "INLA")
+    for fp in ("Package_SO:TSSOP-20_4.4x6.5mm_P0.65mm", ""):
+        comps, nets, lp = _drv(bad, fp=fp)
+        hits, facts = _audit(comps, nets, stock, lp,
+                             part_pinouts=[_drv_row()])
+        assert hits == [] and facts["symbol_pinmaps_checked"] == 0
+
+
+def test_a_value_the_row_does_not_match_is_not_judged(stock):
+    comps, nets, lp = _drv(_swapped(_DRV, "INHA", "INLA"), value="DRV8301")
+    hits, facts = _audit(comps, nets, stock, lp,
+                         part_pinouts=[_drv_row(match="DRV8300$")])
+    assert hits == [] and facts["symbol_pinmaps_checked"] == 0
+
+
+def test_fewer_than_three_shared_names_is_not_judged(stock):
+    # a symbol named its own way (IN_HI_A ...) shares only GND and DT
+    pins = {"6": "GND", "21": "DT", "1": "IN_LO_A", "22": "IN_HI_A",
+            "4": "VDRV"}
+    comps, nets, lp = _drv(pins)
+    hits, facts = _audit(comps, nets, stock, lp, part_pinouts=[_drv_row()])
+    assert hits == [] and facts["symbol_pinmaps_checked"] == 0
+
+
+def test_a_row_naming_a_stock_symbol_takes_its_pins(stock):
+    # a module with a stock symbol under another name (the Pico row)
+    lib = Path(stock) / "MCU_Module.kicad_symdir"
+    lib.mkdir()
+    (lib / "OtherModule.kicad_sym").write_text(_sym(
+        "OtherModule", "Module:OtherModule",
+        {"1": "GP0", "2": "GP1", "3": "GND", "4": "GP2", "5": "GP3"}))
+    pinmaplib.stock_index.cache_clear()
+    row = {"part": "Test module", "match": "TESTMOD", "footprint": "TestMod",
+           "stock": "MCU_Module:OtherModule", "verified": True}
+    good = {"1": "GP0", "2": "GP1", "3": "GND", "4": "GP2", "5": "GP3"}
+    comp = {"U9": {"value": "TESTMOD", "footprint": "MyLib:TestMod",
+                   "libsource": ("MyLib", "TM")}}
+    for pins, n in ((good, 0), (_swapped(good, "GP0", "GP3"), 1)):
+        hits, facts = _audit(comp, {}, stock, {("MyLib", "TM"): pins},
+                             part_pinouts=[row])
+        assert len(hits) == n and facts["symbol_pinmaps_by_table"] == 1
+
+
+def test_a_part_with_a_same_package_stock_symbol_ignores_the_table(stock):
+    # the stock symbol agrees: a disagreeing row is never read
+    comps, nets, lp = _ldo({"1": "GND", "2": "VO", "3": "VI"})
+    row = {"part": "wrong", "match": "XYZ1117", "footprint": "SOT-223",
+           "pins": {"1": "VI", "2": "VO", "3": "GND"}, "verified": True}
+    hits, facts = _audit(comps, nets, stock, lp, part_pinouts=[row])
+    assert hits == [] and facts["symbol_pinmaps_by_table"] == 0
+
+
+def test_pin_names_fold_unicode_minus_and_dashes():
+    assert pinmaplib.pin_names("\u2212IN") == pinmaplib.pin_names("-IN")
+    assert pinmaplib.pin_names("V\u2013") == pinmaplib.pin_names("V-")
+
+
+def test_pinout_row_matches_value_and_footprint():
+    rows = [_drv_row(match="DRV8300D?$", footprint="TSSOP"), _drv_row()]
+    assert pinmaplib.pinout_row(rows, ["DRV8300DRGER"], _DRV_FP) is rows[1]
+    assert pinmaplib.pinout_row(rows, ["DRV8300"], "X:TSSOP-20") is rows[0]
+    assert pinmaplib.pinout_row(rows, ["DRV8300"], None) is None
+    assert pinmaplib.pinout_row([{"match": "(", "footprint": "QFN"}],
+                                ["DRV8300"], _DRV_FP) is None
+
+
+def test_every_repo_pinout_row_loads_and_is_well_formed():
+    rows = netlist_audit.load_part_pinouts()
+    assert len(rows) >= 10
+    for r in rows:
+        assert r["part"] and r["match"] and r["footprint"], r
+        assert bool(r.get("pins")) != bool(r.get("stock")), r["part"]
+        assert r.get("pins") is None or len(r["pins"]) >= 3
+        assert r.get("verified") is True, r["part"]
+        assert r.get("stock") or r.get("cite"), r["part"]
 
 
 # ------------------------------------------------ bus_order_flipped

@@ -160,8 +160,12 @@ schematic-level structural problems BEFORE board work starts:
    74-series function) in the same package family, and whose own symbol
    puts a pin name both carry (IN, OUT, GND, Q0, ...) on different pin
    numbers than every such stock symbol does: a pin map from another
-   package variant or part (#1086, miss class 5). Needs the stock symbol
-   dir (lib/env.kicad_symbol_dir); not judged without it.
+   package variant or part (#1086, miss class 5). A part with no stock
+   symbol in its package is compared with its datasheet pin table in
+   reference/part_pinouts.yaml (matched on name and footprint, at least 3
+   names in common; an unverified row's finding is not judged) (#1135).
+   Needs the stock symbol dir (lib/env.kicad_symbol_dir); not judged
+   without it.
  - bus_order_flipped (warning): two units of one part with channel pins of
    one stem (1QA..1QD, 2QA..2QD) whose nets carry one varying number that
    rises along one unit and falls along the other: one unit's pins drawn
@@ -262,6 +266,7 @@ I2C_ADDRESSES = HERE.parent / "reference" / "i2c_addresses.yaml"
 BUS_LOAD = HERE.parent / "reference" / "bus_load.yaml"
 PIN_LEAKAGE = HERE.parent / "reference" / "pin_leakage.yaml"
 IO_LEVELS = HERE.parent / "reference" / "io_levels.yaml"
+PART_PINOUTS = HERE.parent / "reference" / "part_pinouts.yaml"
 
 # Strong differential suffix families (subset of check_diffpair.SUFFIX_PAIRS:
 # the bare +/- and P/N tokens are too ambiguous for unpaired-net warnings).
@@ -745,6 +750,11 @@ def _load_yaml(path: Path, what: str) -> dict:
 def load_mcu_pins(path: Path = MCU_PINS) -> dict:
     """reference/mcu_pins.yaml (its header says the form)."""
     return _load_yaml(path, "mcu pins")
+
+
+def load_part_pinouts(path: Path = PART_PINOUTS) -> list[dict]:
+    """reference/part_pinouts.yaml's parts (its header says the form)."""
+    return _load_yaml(path, "part pinouts").get("parts") or []
 
 
 def load_i2c_addresses(path: Path = I2C_ADDRESSES) -> list[dict]:
@@ -2890,15 +2900,36 @@ def _placed_pinmap(ref: str, comp: dict, parsed: dict
     return out
 
 
-def _symbol_pinmap_hits(parsed: dict, symdir) -> tuple[list, int]:
-    """[(ref, (lib, symbol), stock hit, diffs)] for each placed part whose
-    Value or MPN names a stock KiCad part, in the same package, whose pin
-    map disagrees with the placed symbol's; and how many parts were
-    compared. A part some same-package stock candidate agrees with is
-    quiet; one whose candidates are all another package is not judged."""
-    hits, checked = [], 0
-    if not symdir:
-        return hits, 0
+def _table_pinmap(row: dict, symdir) -> dict[str, str] | None:
+    """A part_pinouts.yaml row's pins {number: name}: its own `pins`, or
+    the pins of the stock symbol its `stock` names (a module whose
+    stock symbol follows the module's own pad numbers)."""
+    if row.get("pins"):
+        return {str(k): str(v) for k, v in row["pins"].items()}
+    lib, _, name = str(row.get("stock") or "").partition(":")
+    if not (symdir and name):
+        return None
+    for slib, sname, path in pinmaplib.stock_index(str(symdir))[
+            "exact"].get(name.upper(), []):
+        if slib == lib:
+            st = pinmaplib.stock_symbol(path)
+            return dict(st["pins"]) if st else None
+    return None
+
+
+def _symbol_pinmap_hits(parsed: dict, symdir, pinouts: list[dict] | None = None
+                        ) -> tuple[list, int, int]:
+    """[(ref, (lib, symbol), stock hit, diffs, table row)] for each placed
+    part whose Value or MPN names a stock KiCad part, in the same package,
+    whose pin map disagrees with the placed symbol's; how many parts were
+    compared; and how many of those were compared with a part_pinouts.yaml
+    row. A part some same-package stock candidate agrees with is quiet.
+    One with no same-package stock symbol is compared with the first
+    pinouts row whose `match` takes its Value, MPN or symbol name and
+    whose `footprint` takes its footprint (a pad numbering is a
+    footprint's), when the two maps share at least 3 pin names; the hit's
+    table row is that row (None for a stock hit)."""
+    hits, checked, by_table = [], 0, 0
     comps = parsed["components"]
     for ref in sorted(comps):
         c = comps[ref]
@@ -2909,7 +2940,8 @@ def _symbol_pinmap_hits(parsed: dict, symdir) -> tuple[list, int]:
         if len(placed) < 3:
             continue
         value = (c.get("value") or "").strip()
-        names = [value, value.split()[0] if value else "", c.get("mpn") or ""]
+        names = [value, value.split()[0] if value else "", c.get("mpn") or "",
+                 sp[1]]
         cands = [h for h in pinmaplib.stock_candidates(names, symdir)
                  if (h[0], h[1]) != sp]
         same_pkg = []
@@ -2919,13 +2951,25 @@ def _symbol_pinmap_hits(parsed: dict, symdir) -> tuple[list, int]:
                     c.get("footprint"), st["footprint"]):
                 same_pkg.append(((lib, name, st),
                                  pinmaplib.pinmap_diffs(placed, st["pins"])))
-        if not same_pkg:
+        if same_pkg:
+            checked += 1
+            if all(d for _, d in same_pkg):
+                (hit, diffs) = same_pkg[0]
+                hits.append((ref, sp, hit, diffs, None))
+            continue
+        row = pinmaplib.pinout_row(pinouts or [], names, c.get("footprint"))
+        pins = _table_pinmap(row, symdir) if row else None
+        if not pins or len(set(pinmaplib.by_name(placed))
+                           & set(pinmaplib.by_name(pins))) < 3:
             continue
         checked += 1
-        if all(d for _, d in same_pkg):
-            (hit, diffs) = same_pkg[0]
-            hits.append((ref, sp, hit, diffs))
-    return hits, checked
+        by_table += 1
+        diffs = pinmaplib.pinmap_diffs(placed, pins)
+        if diffs:
+            hits.append((ref, sp, ("part_pinouts", row["part"],
+                                   {"footprint": row.get("footprint"),
+                                    "pins": pins}), diffs, row))
+    return hits, checked, by_table
 
 
 def _mcu_i2c_swaps(nets: dict, comps: dict,
@@ -2979,10 +3023,13 @@ def audit(parsed: dict, constraints: dict,
           io_levels: dict | None = None,
           bus_load: dict | None = None,
           stock_symbols: Path | str | None = None,
-          pin_abs_max: dict | None = None
+          pin_abs_max: dict | None = None,
+          part_pinouts: list[dict] | None = None
           ) -> tuple[list[dict], dict]:
     """stock_symbols: KiCad's stock symbol dir for the pin-map rule;
-    None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off."""
+    None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off.
+    part_pinouts: the datasheet pin tables the rule falls back on
+    (reference/part_pinouts.yaml when None)."""
     nets = parsed["nets"]
     comps = parsed["components"]
     violations: list[dict] = []
@@ -3796,20 +3843,32 @@ def audit(parsed: dict, constraints: dict,
     if symdir is None:
         from lib import env  # noqa: PLC0415
         symdir = env.kicad_symbol_dir()
-    pm_hits, pm_checked = _symbol_pinmap_hits(parsed, symdir)
-    for ref, (lib, part), (slib, sname, st), diffs in pm_hits:
+    pp_rows = load_part_pinouts() if part_pinouts is None else part_pinouts
+    pm_hits, pm_checked, pm_by_table = _symbol_pinmap_hits(
+        parsed, symdir, pp_rows) if symdir else ([], 0, 0)
+    for ref, (lib, part), (slib, sname, st), diffs, row in pm_hits:
+        theirs = "the stock symbol" if row is None else "the datasheet"
         said = "; ".join(f"{n} on {'/'.join(a)} here, {'/'.join(b)} in "
-                         f"the stock symbol" for n, a, b in diffs[:6])
-        v("warning", "symbol_pinmap", None, [ref],
-          f"{ref} ('{comps[ref].get('value')}', "
-          f"{comps[ref].get('footprint')}) is drawn with {lib}:{part}, "
-          f"whose pins disagree with KiCad's stock {slib}:{sname} "
-          f"({st['footprint'] or 'no default footprint'}): {said}. A pin "
-          f"map from another package variant or another part puts these "
-          f"signals on the wrong pads; check them against the datasheet's "
-          f"pin table for this package",
-          symbol=f"{lib}:{part}", stock=f"{slib}:{sname}",
-          pins=[{"name": n, "placed": a, "stock": b} for n, a, b in diffs])
+                         f"{theirs}" for n, a, b in diffs[:6])
+        if row is None:
+            vs = (f"KiCad's stock {slib}:{sname} "
+                  f"({st['footprint'] or 'no default footprint'})")
+            extra = {"stock": f"{slib}:{sname}"}
+        else:
+            vs = (f"the {sname} pin table "
+                  f"({row.get('source') or 'reference/part_pinouts.yaml'})")
+            extra = {"pinout": sname}
+        vt(row is None or row.get("verified") is True,
+           "warning", "symbol_pinmap", None, [ref],
+           f"{ref} ('{comps[ref].get('value')}', "
+           f"{comps[ref].get('footprint')}) is drawn with {lib}:{part}, "
+           f"whose pins disagree with {vs}: {said}. A pin "
+           f"map from another package variant or another part puts these "
+           f"signals on the wrong pads; check them against the datasheet's "
+           f"pin table for this package",
+           symbol=f"{lib}:{part}",
+           pins=[{"name": n, "placed": a, "stock": b} for n, a, b in diffs],
+           **extra)
 
     # 26. sibling channels of one part whose nets count opposite ways: one
     # unit's pins drawn in reverse (errata corpus: gcm v5.0's SN74LV393A,
@@ -4074,6 +4133,7 @@ def audit(parsed: dict, constraints: dict,
         "offboard_inputs_checked": ob_checked,
         "symbol_sizes_checked": sz_checked,
         "symbol_pinmaps_checked": pm_checked,
+        "symbol_pinmaps_by_table": pm_by_table,
         "channel_parts_checked": ch_checked,
         "mcu_i2c_parts_checked": i2c_checked,
         "offboard_inputs_judged": obi_judged,

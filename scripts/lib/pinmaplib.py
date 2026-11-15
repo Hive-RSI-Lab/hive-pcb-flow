@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 # ------------------------------------------------------------ pin names
@@ -28,6 +29,8 @@ from pathlib import Path
 # names that say the same pin; folded before two maps are compared
 _PIN_ALIASES = {"VIN": "IN", "VI": "IN", "VOUT": "OUT", "VO": "OUT",
                 "VCC": "VCC", "GROUND": "GND", "PGND": "PGND"}
+# a datasheet's minus signs and dashes ('−IN', 'V–') read as '-'
+_DASHES = dict.fromkeys(map(ord, "‐‑‒–—−"), "-")
 # names that carry no function to compare
 _NO_FUNC_RE = re.compile(r"^(NC|N\.C\.|DNC|NU|RFU|~|-|\d+|PIN_?\d+|P\d+)$")
 
@@ -35,8 +38,10 @@ _NO_FUNC_RE = re.compile(r"^(NC|N\.C\.|DNC|NU|RFU|~|-|\d+|PIN_?\d+|P\d+)$")
 def pin_names(name: str | None) -> set[str]:
     """The names one pin answers to: upper case, overbars dropped, split
     on '/' alternatives (ADJ/GND is ADJ and GND), aliases folded (VIN and
-    VI are IN). NC and bare numbers name no function and give nothing."""
-    raw = re.sub(r"~\{([^}]*)\}", r"\1", name or "").replace("~", "")
+    VI are IN, a datasheet's minus sign is '-'). NC and bare numbers name
+    no function and give nothing."""
+    raw = unicodedata.normalize("NFKC", name or "").translate(_DASHES)
+    raw = re.sub(r"~\{([^}]*)\}", r"\1", raw).replace("~", "")
     out = set()
     for part in raw.upper().split("/"):
         part = part.strip()
@@ -160,23 +165,80 @@ def stock_candidates(names: list[str], symdir: str | Path | None
                      ) -> list[tuple[str, str, str]]:
     """[(lib, symbol, path)] of stock symbols the part names (its Value,
     MPN) call for: exact names first, then x-wildcard names, then the same
-    74-series function in another family. Empty with no stock dir."""
+    74-series function in another family; when no name finds one, the
+    same for each name less an ordering suffix (ordering_stems). Empty
+    with no stock dir."""
     if not symdir:
         return []
     idx = stock_index(str(symdir))
-    for name in names:
-        n = (name or "").strip().upper()
-        if not n:
-            continue
-        if n in idx["exact"]:
-            return list(idx["exact"][n])
-        wild = [h for rx, h in idx["wild"] if rx.match(n)]
-        if wild:
-            return wild
-        k = logic_key(n)
-        if k and k in idx["logic"]:
-            return list(idx["logic"][k])
+    names = [(n or "").strip().upper() for n in names]
+    for n in names:
+        if n:
+            hits = _lookup(idx, n)
+            if hits:
+                return hits
+    # no part named outright: the same names less an ordering suffix
+    # (TPD2E2U06DRLR is the reel of TPD2E2U06DRL, ESP32-S3-WROOM-1-N8 the
+    # 8 MB flash ESP32-S3-WROOM-1), longest stem first
+    for n in names:
+        for stem in ordering_stems(n):
+            hits = _lookup(idx, stem)
+            if hits:
+                return hits
     return []
+
+
+def _lookup(idx: dict, n: str) -> list:
+    if n in idx["exact"]:
+        return list(idx["exact"][n])
+    wild = [h for rx, h in idx["wild"] if rx.match(n)]
+    if wild:
+        return wild
+    k = logic_key(n)
+    if k and k in idx["logic"]:
+        return list(idx["logic"][k])
+    return []
+
+
+def ordering_stems(name: str) -> list[str]:
+    """NAME less 1 to 6 trailing characters (an ordering suffix: reel R,
+    -7, -N16R8, MRX_NOPB), longest first. A cut never falls inside a
+    number (74AHC273 is not 74AHC27, another part), never leaves a
+    separator at the end, and leaves at least 5 characters."""
+    n = (name or "").strip().upper()
+    out = []
+    for k in range(1, 7):
+        stem = n[:-k]
+        if len(stem) < 5:
+            break
+        if stem[-1].isdigit() and n[len(stem)].isdigit():
+            continue
+        if stem[-1] in "-_,./ ":
+            continue
+        out.append(stem)
+    return out
+
+
+def pinout_row(rows: list[dict], names: list[str], footprint: str | None
+               ) -> dict | None:
+    """The first reference/part_pinouts.yaml row whose `match` regex
+    takes one of NAMES (Value, MPN, symbol name; case-insensitive, from
+    the start) and whose `footprint` regex takes FOOTPRINT's name (after
+    the library colon); None when none does. A part with no footprint is
+    matched by no row: the pad numbering is the footprint's."""
+    fp = (footprint or "").split(":")[-1]
+    if not fp:
+        return None
+    for row in rows:
+        try:
+            if not re.search(row.get("footprint") or "$^", fp, re.I):
+                continue
+            rx = re.compile(row.get("match") or "$^", re.I)
+        except re.error:
+            continue
+        if any(rx.match((n or "").strip()) for n in names if n):
+            return row
+    return None
 
 
 def _sexp_symbols(path: str) -> list:
