@@ -150,6 +150,28 @@ schematic-level structural problems BEFORE board work starts:
    or gate there or one series resistor on: the line floats with the cable
    out and picks up a long wire (TI SPRACK9: 4.7k-10k on a line that may be
    disconnected; Microchip AN2587: TVS on external connector I/O) (#1079).
+ - symbol_value_mismatch (warning): a part whose symbol name carries a size
+   (0.2in, 12mm) that its Value, or failing that its footprint name,
+   contradicts with no size in common: another part's symbol placed, so
+   its pin map need not be this part's (#1086; netscore-big's 0.8in digits
+   on a '7Seg 0.2in' symbol). Connectors and 2-pin parts are skipped.
+ - symbol_pinmap (warning): a part whose Value or MPN names a KiCad stock
+   symbol (exact name, an x-wildcard name such as LM2596S-xx, or the same
+   74-series function) in the same package family, and whose own symbol
+   puts a pin name both carry (IN, OUT, GND, Q0, ...) on different pin
+   numbers than every such stock symbol does: a pin map from another
+   package variant or part (#1086, miss class 5). Needs the stock symbol
+   dir (lib/env.kicad_symbol_dir); not judged without it.
+ - bus_order_flipped (warning): two units of one part with channel pins of
+   one stem (1QA..1QD, 2QA..2QD) whose nets carry one varying number that
+   rises along one unit and falls along the other: one unit's pins drawn
+   in reverse (gcm v5.0's SN74LV393A).
+ - mcu_i2c_role (warning): an MCU whose reference/mcu_pins.yaml row maps its
+   pins to I2C blocks, with one block's SDA pin on the board's SCL net and
+   its SCL pin on the SDA net (a net's role is its name, else an SDA/SCL
+   pin of another part on it): the hardware block can't drive the bus
+   unless firmware bit-bangs it (pico-if1 v1.3's OLED). An unverified row's
+   finding is not judged (#1100).
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -188,6 +210,7 @@ sys.path.insert(0, str(HERE / "lib"))
 
 import checklib  # noqa: E402
 import engcalc  # noqa: E402
+import pinmaplib  # noqa: E402
 
 SCRIPT = "netlist_audit"
 SOURCE = "audit.netlist"
@@ -227,10 +250,15 @@ def _pin_name(pin: str | None, func: str) -> str:
     return func[:-len(suffix)] if pin and func.endswith(suffix) else func
 
 
+_MPN_FIELDS = {"MPN", "MANUFACTURERPARTNUMBER", "PARTNUMBER", "MFRPN",
+               "MFR_PN", "MANF#"}
+
+
 def parse_netlist(path: Path | str) -> dict:
     """kicadsexpr netlist -> {"components": {ref: {value, footprint,
-    libsource?, unit_pins?}}, "nets": {name: [{ref, pin, pintype}]},
-    "libparts": {(lib, part): set(pin numbers)}}. Multiline or single-line
+    libsource?, unit_pins?, mpn?}}, "nets": {name: [{ref, pin, pintype}]},
+    "libparts": {(lib, part): set(pin numbers)}, "libpart_pins": {(lib,
+    part): {pin number: pin name}}}. Multiline or single-line
     formatting both parse (sexpdata, not regex - kicad-cli 10 pretty-prints
     netlists). unit_pins (kicad 10 per-comp units block) is the placed
     instance's own pin inventory; libparts is the shared per-symbol union
@@ -267,6 +295,15 @@ def parse_netlist(path: Path | str) -> dict:
             # `(property (name "dnp"))`, present only when set
             if any(_atom(pr, "name") == "dnp" for pr in _kids(c, "property")):
                 comps[ref]["dnp"] = True
+            # the part number, from the fields any of MPN / Manufacturer
+            # Part Number / PartNumber (pin-map check looks the part up)
+            for fb in _kids(c, "fields"):
+                for fld in _kids(fb, "field"):
+                    fname = (_atom(fld, "name") or "").replace(" ", "")
+                    val = fld[-1] if len(fld) > 1 else None
+                    if fname.upper() in _MPN_FIELDS and \
+                            not isinstance(val, list) and str(val).strip():
+                        comps[ref].setdefault("mpn", str(val).strip())
             sp = _kids(c, "sheetpath")
             if sp and _atom(sp[0], "names"):
                 comps[ref]["sheet"] = _atom(sp[0], "names")
@@ -283,10 +320,17 @@ def parse_netlist(path: Path | str) -> dict:
             if unit_pins:
                 comps[ref]["unit_pins"] = sorted(unit_pins)
     libparts: dict[tuple, set] = {}
+    libpart_pins: dict[tuple, dict] = {}
     for blk in _kids(data, "libparts"):
         for lp in _kids(blk, "libpart"):
             key = (_atom(lp, "lib") or "", _atom(lp, "part") or "")
             libparts.setdefault(key, set()).update(_pin_nums(lp))
+            names = libpart_pins.setdefault(key, {})
+            for pblk in _kids(lp, "pins"):
+                for pin in _kids(pblk, "pin"):
+                    num = _atom(pin, "num")
+                    if num:
+                        names.setdefault(num, _atom(pin, "name", ""))
     nets: dict[str, list] = {}
     for blk in _kids(data, "nets"):
         for n in _kids(blk, "net"):
@@ -298,7 +342,8 @@ def parse_netlist(path: Path | str) -> dict:
                            "pinfunction": _pin_name(_atom(nd, "pin"),
                                                     _atom(nd, "pinfunction", ""))}
                           for nd in _kids(n, "node")]
-    return {"components": comps, "nets": nets, "libparts": libparts}
+    return {"components": comps, "nets": nets, "libparts": libparts,
+            "libpart_pins": libpart_pins}
 
 
 def _memberships(parsed: dict) -> dict[str, tuple]:
@@ -350,7 +395,7 @@ def _bus_token(name: str) -> str | None:
     /Audio/I2C_SCL, USB_D+), else None."""
     if not name:
         return None
-    tail = re.split(r"[/.]", name.upper())[-1]
+    tail = _strip_bus_number(re.split(r"[/.]", name.upper())[-1])
     for cand in (tail, tail.rsplit("_", 1)[-1]):
         cand = _BUS_ALIASES.get(cand, cand)
         if cand in _BUS_PARTNER:
@@ -720,8 +765,20 @@ def _line_load(net: str, skip: set[str], nets: dict, comps: dict,
 
 
 def _pin_base(func: str | None) -> str:
-    """A pin's first name: PA14-BOOT0 is PA14, RDY0/SLRD is RDY0."""
-    return re.split(r"[-/]", _norm_pin(func))[0]
+    """A pin's first name: PA14-BOOT0 is PA14, RDY0/SLRD is RDY0, and a
+    bus name with a number tacked on is the bus name: SCL_24 is SCL
+    (#1114)."""
+    base = re.split(r"[-/]", _norm_pin(func))[0]
+    return _strip_bus_number(base)
+
+
+def _strip_bus_number(name: str) -> str:
+    """SCL_24 -> SCL: a known bus signal with a _<number> suffix some
+    symbol libraries add (#1114); any other name unchanged."""
+    m = re.match(r"^(.*)_\d+$", name)
+    if m and _BUS_ALIASES.get(m.group(1), m.group(1)) in _BUS_PARTNER:
+        return m.group(1)
+    return name
 
 
 def _mcu_row(comp: dict, rows: list[dict]) -> dict | None:
@@ -2185,6 +2242,113 @@ def _board_only_refs(pcb: Path) -> set[str]:
     return out
 
 
+# refs and libraries whose symbols are generic: their Value names no part
+_GENERIC_REF_RE = re.compile(r"^(J|P|CN|X|TP|MH|H|SW|JP|BT|FID)\d")
+_GENERIC_LIB_RE = re.compile(r"^(Device|power|Connector.*|Mechanical|Jumper|"
+                             r"Switch|Graphic|Simulation_SPICE|pspice)$")
+
+
+def _symbol_part(ref: str, comp: dict) -> tuple[str, str] | None:
+    """(lib, symbol) of a placed part the symbol rules judge, else None."""
+    lib, part = comp.get("libsource") or ("", "")
+    if not part or _GENERIC_REF_RE.match(ref) or _GENERIC_LIB_RE.match(lib):
+        return None
+    return lib, part
+
+
+def _placed_pinmap(ref: str, comp: dict, parsed: dict
+                   ) -> dict[str, str]:
+    """REF's symbol pins {number: name}: its libpart's, else the names its
+    net nodes give."""
+    lp = parsed.get("libpart_pins", {}).get(comp.get("libsource") or ())
+    if lp:
+        return dict(lp)
+    out = {}
+    for members in parsed["nets"].values():
+        for m in members:
+            if m["ref"] == ref and m["pin"]:
+                out.setdefault(m["pin"], m.get("pinfunction") or "")
+    return out
+
+
+def _symbol_pinmap_hits(parsed: dict, symdir) -> tuple[list, int]:
+    """[(ref, (lib, symbol), stock hit, diffs)] for each placed part whose
+    Value or MPN names a stock KiCad part, in the same package, whose pin
+    map disagrees with the placed symbol's; and how many parts were
+    compared. A part some same-package stock candidate agrees with is
+    quiet; one whose candidates are all another package is not judged."""
+    hits, checked = [], 0
+    if not symdir:
+        return hits, 0
+    comps = parsed["components"]
+    for ref in sorted(comps):
+        c = comps[ref]
+        sp = _symbol_part(ref, c)
+        if not sp:
+            continue
+        placed = _placed_pinmap(ref, c, parsed)
+        if len(placed) < 3:
+            continue
+        value = (c.get("value") or "").strip()
+        names = [value, value.split()[0] if value else "", c.get("mpn") or ""]
+        cands = [h for h in pinmaplib.stock_candidates(names, symdir)
+                 if (h[0], h[1]) != sp]
+        same_pkg = []
+        for lib, name, path in cands:
+            st = pinmaplib.stock_symbol(path)
+            if st and len(st["pins"]) >= 3 and pinmaplib.same_package(
+                    c.get("footprint"), st["footprint"]):
+                same_pkg.append(((lib, name, st),
+                                 pinmaplib.pinmap_diffs(placed, st["pins"])))
+        if not same_pkg:
+            continue
+        checked += 1
+        if all(d for _, d in same_pkg):
+            (hit, diffs) = same_pkg[0]
+            hits.append((ref, sp, hit, diffs))
+    return hits, checked
+
+
+def _mcu_i2c_swaps(nets: dict, comps: dict,
+                   comp_pins: dict[str, dict[str, str]], table: dict
+                   ) -> tuple[list, int]:
+    """[(mcu row, ref, block, [(pin, name, function, net, role)])] for each
+    MCU I2C block whose SDA pin sits on the board's SCL net and whose SCL
+    pin on its SDA net (mcu_pins.yaml i2c tables); and how many MCUs with
+    an i2c table were placed. A net's role is its name (OLED_SDA; SCK or
+    CLK beside an SDA of the same stem), else an SDA/SCL pin of another
+    part on it."""
+    rows = [r for r in (table.get("mcus") or []) if r.get("i2c")]
+    roles = pinmaplib.i2c_net_roles(nets)
+    for name, members in nets.items():
+        if name in roles:
+            continue
+        for m in members:
+            tok = _bus_token(m.get("pinfunction") or "")
+            if tok in ("SDA", "SCL"):
+                roles[name] = tok
+                break
+    out, checked = [], 0
+    for ref in sorted(comps):
+        row = _mcu_row(comps[ref], rows) if rows else None
+        if not row:
+            continue
+        checked += 1
+        blocks: dict[str, dict[str, tuple]] = {}
+        for func, (pnum, net) in _pin_funcs(ref, nets, comp_pins).items():
+            f = pinmaplib.mcu_i2c_function(func, row["i2c"])
+            if not f or net not in roles:
+                continue
+            block, line = f.rsplit("_", 1)
+            blocks.setdefault(block, {})[line] = (pnum, func, f, net,
+                                                  roles[net])
+        for block, lines in sorted(blocks.items()):
+            sda, scl = lines.get("SDA"), lines.get("SCL")
+            if sda and scl and sda[4] == "SCL" and scl[4] == "SDA":
+                out.append((row, ref, block, [sda, scl]))
+    return out, checked
+
+
 def audit(parsed: dict, constraints: dict,
           decoupling: dict | None,
           pin_requirements: list[dict] | None = None,
@@ -2194,8 +2358,11 @@ def audit(parsed: dict, constraints: dict,
           i2c_addresses: list[dict] | None = None,
           pin_leakage: list[dict] | None = None,
           io_levels: dict | None = None,
-          bus_load: dict | None = None
+          bus_load: dict | None = None,
+          stock_symbols: Path | str | None = None
           ) -> tuple[list[dict], dict]:
+    """stock_symbols: KiCad's stock symbol dir for the pin-map rule;
+    None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off."""
     nets = parsed["nets"]
     comps = parsed["components"]
     violations: list[dict] = []
@@ -2967,6 +3134,96 @@ def audit(parsed: dict, constraints: dict,
           f"rule 8: TVS on all external connector I/O pins]",
           pull_ohm=ohm, pull_to=far, connectors=hit["connectors"])
 
+    # 24. a symbol whose name gives a size its part's Value or footprint
+    # contradicts: another part's symbol placed (#1086; errata corpus:
+    # netscore-big's 0.8in digits drawn with a '7Seg 0.2in' symbol)
+    sz_checked = 0
+    for ref in sorted(comps):
+        sp = _symbol_part(ref, comps[ref])
+        if not sp or len(comp_pins.get(ref, {})) <= 2 \
+                or not pinmaplib.dimensions(sp[1]):
+            continue
+        sz_checked += 1
+        hit = pinmaplib.size_conflict(sp[1], comps[ref].get("value"),
+                                      comps[ref].get("footprint"))
+        if hit:
+            mine, theirs, where = hit
+            v("warning", "symbol_value_mismatch", None, [ref],
+              f"{ref} is drawn with symbol {sp[0]}:{sp[1]} "
+              f"({pinmaplib.fmt_dims(mine)}) but its {where} says "
+              f"{pinmaplib.fmt_dims(theirs)} ('{comps[ref].get('value')}', "
+              f"{comps[ref].get('footprint')}): another part's symbol, "
+              f"whose pin map need not be this part's. Check every pin "
+              f"against the placed part's datasheet",
+              symbol=f"{sp[0]}:{sp[1]}", sizes=pinmaplib.fmt_dims(theirs))
+
+    # 25. a symbol whose pin map disagrees with KiCad's stock symbol for
+    # the part its Value or MPN names, in the same package (#1086 class 5;
+    # a regulator's IN and OUT swapped between package variants)
+    symdir = stock_symbols
+    if symdir is None:
+        from lib import env  # noqa: PLC0415
+        symdir = env.kicad_symbol_dir()
+    pm_hits, pm_checked = _symbol_pinmap_hits(parsed, symdir)
+    for ref, (lib, part), (slib, sname, st), diffs in pm_hits:
+        said = "; ".join(f"{n} on {'/'.join(a)} here, {'/'.join(b)} in "
+                         f"the stock symbol" for n, a, b in diffs[:6])
+        v("warning", "symbol_pinmap", None, [ref],
+          f"{ref} ('{comps[ref].get('value')}', "
+          f"{comps[ref].get('footprint')}) is drawn with {lib}:{part}, "
+          f"whose pins disagree with KiCad's stock {slib}:{sname} "
+          f"({st['footprint'] or 'no default footprint'}): {said}. A pin "
+          f"map from another package variant or another part puts these "
+          f"signals on the wrong pads; check them against the datasheet's "
+          f"pin table for this package",
+          symbol=f"{lib}:{part}", stock=f"{slib}:{sname}",
+          pins=[{"name": n, "placed": a, "stock": b} for n, a, b in diffs])
+
+    # 26. sibling channels of one part whose nets count opposite ways: one
+    # unit's pins drawn in reverse (errata corpus: gcm v5.0's SN74LV393A,
+    # 1QA..1QD on d16..d2 while 2QA..2QD run d32..d256)
+    ch_checked = 0
+    for ref in sorted(comps):
+        if not _symbol_part(ref, comps[ref]):
+            continue
+        pins = {}
+        for pnum, net in comp_pins.get(ref, {}).items():
+            func = next((m.get("pinfunction") for m in nets.get(net, [])
+                         if m["ref"] == ref and m["pin"] == pnum), "")
+            pins[pnum] = (func, net)
+        flips = pinmaplib.flipped_channels(pins)
+        if any(pinmaplib._channel(f) for f, _ in pins.values()):
+            ch_checked += 1
+        for fl in flips:
+            said = "; ".join(
+                f"unit {u} {' '.join(p[0] for p in d['pins'])} on "
+                f"{', '.join(p[2] for p in d['pins'])} ({d['direction']})"
+                for u, d in fl["units"].items())
+            v("warning", "bus_order_flipped", None, [ref],
+              f"{ref} ({comps[ref].get('value')}) has channels of one kind "
+              f"whose nets count opposite ways: {said}. One unit's outputs "
+              f"wired in reverse, as a symbol drawn with that unit's pins "
+              f"out of order does; check the order against the datasheet",
+              stem=fl["stem"])
+
+    # 27. an MCU I2C block with its SDA and SCL pins on the other's net
+    # (mcu_pins.yaml i2c; errata corpus: pico-if1 v1.3 put the OLED's SCK
+    # on GPIO4, I2C0 SDA, and its SDA on GPIO5, I2C0 SCL)
+    i2c_found, i2c_checked = _mcu_i2c_swaps(nets, comps, comp_pins,
+                                            mp_table)
+    i2c_ok = {(h[1], h[2]) for h in _mcu_i2c_swaps(
+        nets, comps, comp_pins, _verified_only(mp_table))[0]}
+    for row, ref, block, lines in i2c_found:
+        said = "; ".join(f"{func} (pin {pnum}, {f}) on '{net}', a {role} "
+                         f"line" for pnum, func, f, net, role in lines)
+        vt((ref, block) in i2c_ok, "warning", "mcu_i2c_role", None,
+           [ref],
+           f"{ref} ({comps[ref].get('value')}) meets its I2C bus with "
+           f"{block}'s lines crossed: {said}. The hardware {block} block "
+           f"cannot drive this bus unless firmware bit-bangs/PIO "
+           f"[{' '.join(row['source'].split()).split(',')[0]}]",
+           mcu=ref, block=block, part=row["mpn"])
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -2996,6 +3253,10 @@ def audit(parsed: dict, constraints: dict,
         "battery_protectors_checked": prot_checked,
         "unverified_findings": len(not_judged),
         "offboard_inputs_checked": ob_checked,
+        "symbol_sizes_checked": sz_checked,
+        "symbol_pinmaps_checked": pm_checked,
+        "channel_parts_checked": ch_checked,
+        "mcu_i2c_parts_checked": i2c_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged

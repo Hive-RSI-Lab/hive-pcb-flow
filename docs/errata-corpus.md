@@ -17,9 +17,9 @@ only for the round's first reading: each round is swept once.
 
 - Training: 38 of 44 caught (38 caught, 2 missed, 4 not_static).
 - Holdout round 1, blind: 1 of 10 caught (1 caught, 9 missed).
-- Holdout round 1, with the rules written since: 2 of 10 caught (2 caught, 8 missed).
+- Holdout round 1, with the rules written since: 3 of 10 caught (3 caught, 7 missed).
 - Holdout round 2, blind: 1 of 26 caught (1 caught, 25 missed).
-- Holdout round 2, with the rules written since: 2 of 26 caught (2 caught, 24 missed).
+- Holdout round 2, with the rules written since: 4 of 26 caught (4 caught, 22 missed).
 
 ## A new holdout round
 
@@ -204,7 +204,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| netscore-big-1: 0.8 in score digits placed with the 0.2 in digit symbol, so common anode and two segments land wrong | LIB (symbol pin map vs part) | missed | missed | a part placed with another part's symbol (#1086) |
+| netscore-big-1: 0.8 in score digits placed with the 0.2 in digit symbol, so common anode and two segments land wrong | LIB (symbol pin map vs part) | missed | caught on rev A, gone on rev B, since #PRNUM (`netlist_audit` symbol_value_mismatch) | Not an independent catch: the rule (#1086) was written after this defect was read. It reads the symbol's own size or part number against the Value, not this board. The warning names all four 0.8 in digits on v2.0 and is gone on v3.0. |
 
 ### cmm2-jlc: Rev.A -> Rev.B
 
@@ -285,7 +285,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| pico-if1-v10-1: Transistor Q1 footprint rotated 90 degrees | PCB (part rotation) | caught | caught (not run here) (`netlist_audit` sot23_pinout) | The erratum calls it a rotation; the flow names the same part's fault as pin order (an E-B-C symbol on a B-E-C SOT-23), and the finding is gone on rev B. Counted caught on the part and the fault. |
+| pico-if1-v10-1: Transistor Q1 footprint rotated 90 degrees | PCB (part rotation) | caught | caught on rev A, gone on rev B (`netlist_audit` sot23_pinout) | The erratum calls it a rotation; the flow names the same part's fault as pin order (an E-B-C symbol on a B-E-C SOT-23), and the finding is gone on rev B. Counted caught on the part and the fault. |
 | pico-if1-v10-2: Data bus level shifter direction on /RD instead of ROM_READ_INV | SCH (wrong net) | missed | missed | a level shifter's DIR pin checked against a stated direction (read strobe) net |
 | pico-if1-v10-3: GND via for U4 pin 19 (/OE) sits under the chip where it can't be reached | PCB (via placement) | missed | missed | a via under a part's body tying one of its own pins, on a hand-built board |
 
@@ -295,7 +295,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| pico-if1-v13-1: OLED CLK and SDA transposed | SCH (swapped signals) | missed | missed | a module footprint's pin labels against the module's pin order (SDA/SCK on OLED modules) |
+| pico-if1-v13-1: OLED CLK and SDA transposed | SCH (swapped signals) | missed | caught on rev A, gone on rev B, since #PRNUM (`netlist_audit` mcu_i2c_role) | Not an independent catch: the rule was written after this defect was read, from the RP2040's I2C pin functions (pico-sdk io_bank0.h), not from this board. It sees the swap on the Pico side: GPIO4 (I2C0 SDA) on OLED_SCK and GPIO5 (I2C0 SCL) on OLED_SDA. It fires on v1.0 and v1.1 too (the same wiring, before the erratum was written) and is gone on v1.4. |
 | pico-if1-v13-2: SD card reader card-detect pin not connected | SCH (missing connection) | missed | missed | a per-part list of pins that must be connected (SD socket card-detect) |
 
 ### gcm-v50: V5.0 -> V5.1
@@ -305,7 +305,7 @@ round, pinned and swept before those rules are:
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | gcm-v50-1: U12 on the BWRITE1 bus, in conflict with U40; V5.1 moves it to BWRITE2 | SCH (bus conflict) | missed | missed | bus contention: two drivers enabled by one bus strobe (U12 and U40 on BWRITE1) |
-| gcm-v50-2: A symbol's pins flipped and out of order, causing a clock problem | LIB (symbol pinout) | missed | missed | symbol pin numbers against the datasheet for logic ICs check_pinouts does not know |
+| gcm-v50-2: A symbol's pins flipped and out of order, causing a clock problem | LIB (symbol pinout) | missed | caught on rev A, gone on rev B, since #PRNUM (`netlist_audit` bus_order_flipped) | Not an independent catch: the rule was written after this defect was read. On V5.0 one unit of each SN74LV393A divider chain counts its QA..QD outputs onto the clock nets the other way round from its twin unit. The warning is gone on V5.1. |
 | gcm-v50-3: J7 on the wrong footprint | LIB (wrong footprint) | missed | missed | the footprint against the part's MPN package |
 | gcm-v50-4: J12 the wrong gender; V5.1 uses a male connector | PCB (connector gender) | missed | missed | connector gender against a stated mating side |
 
