@@ -77,7 +77,8 @@ page covers how an agent runs it inside the Hive.
   README: every number cited to a datasheet page).
 - A passive record (or a JST PH header) with no rating rows
   (rating_unrated): `pcb-flow rating_fill --parts boards/<name>/parts
-  --write` reads the voltage, power, current and
+  --write [--fetch]` (`--fetch` brings a missing datasheet first, paced and
+  cited) reads the voltage, power, current and
   temperature from its datasheet PDF, citing page and table (docs/playbook.md).
 - Every board with a netlist gets `pcb-flow sim_board --workspace boards/<name>
   --out boards/<name>/reports/sim_board.json`: ngspice over the board's own

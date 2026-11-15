@@ -719,3 +719,14 @@ def test_the_suspect_remediation_page_covers_each_case():
                     "no text layer", "never names", "ordering table",
                     "ordering_codes.yaml", "--force", "--fetch"):
         assert section in page, section
+
+
+def test_a_bracketed_packaging_code_is_cut_and_tried_again():
+    # JST's catalogue lists the part on a later page, under "Model No."
+    texts = ["PH connector", "Disconnectable Crimp style connectors",
+             "Model No. S2B-PH-SM4-TB S10B-PH-SM4-TB"]
+    assert datasheet_extract.match_mpn("S10B-PH-SM4-TB", texts)[0]
+    m, _ = datasheet_extract.match_mpn("S10B-PH-SM4-TB(LF)(SN)", texts)
+    assert m and m["cut"]
+    m, _ = datasheet_extract.match_mpn("S10B-XH-SM4-TB(LF)(SN)", texts)
+    assert m is None

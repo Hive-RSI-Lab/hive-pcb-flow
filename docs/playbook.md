@@ -154,7 +154,7 @@ weighed like any other report:
   regulator, cap or known power IC with an empty row fails verify as `rating_no_attributes`:
   verify reads the row and never fetches, so the same board gets the same
   answer offline and on any machine.
-- `scripts/rating_fill.py --parts <ws>/parts [--mpn X] [--write]`: fills
+- `scripts/rating_fill.py --parts <ws>/parts [--mpn X] [--write] [--fetch]`: fills
   a two-pin passive record's `pin_ratings` (voltage across its ends, power,
   current) and `operating_temp_c` from its own datasheet PDF, each row
   citing the page and table it came from. Readers: Yageo RC chip
@@ -166,7 +166,13 @@ weighed like any other report:
   contact, mounting pads left out). A figure that disagrees with the part
   number or the record's abs_max is reported, not written; rows written by
   hand are kept, and a rerun changes nothing. Without `--write` it only
-  reports. Then rerun check_ratings: the filled parts leave rating_unrated.
+  reports. `--fetch` first fetches a datasheet the board lacks (the
+  record's or parts.json's URL, through datasheet_extract's fetcher, paced
+  per host with 429/503 backoff), saves it as parts/datasheets/<file
+  name>.pdf with an index.json entry, and cites the URL; a suspect PDF is
+  never read. The report marks each record rated or not_judged with the
+  reason, and lists under `no_record` each parts.json line with no record
+  to fill. Then rerun check_ratings: the filled parts leave rating_unrated.
 - `scripts/sim_board.py --workspace <ws>`: ngspice on the board's own
   netlist, no testbench to write. Rails are sources, ICs open, every R, C,
   L, diode, LED, zener and recognised BJT/MOSFET in place (a dual, e.g.

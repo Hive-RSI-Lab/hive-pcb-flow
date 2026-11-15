@@ -48,8 +48,26 @@ Rows this script wrote carry a source starting "rating_fill:" and are
 replaced on a rerun, so it is idempotent; rows written by hand are kept, and
 a hand row of the same kind stops the fill of that kind.
 
+--fetch (#1263): a record with no datasheet PDF on the board has its
+datasheet fetched from its own `datasheet` URL, else the parts.json line for
+its file name (an LCSC code) or MPN, through datasheet_extract.fetch_datasheet
+(the same URL checks and verdict) to parts/datasheets/<file name>.pdf, and
+entered in that folder's index.json (url, sha256, verdict) as
+datasheet_extract --fetch does. Each host is asked at most once per
+keyless_stock.PACE seconds, and HTTP 429/503 is asked again after its
+Retry-After or a doubling backoff (keyless_stock's TRIES, BACKOFF,
+MAX_WAIT). A PDF there is cached: the next run reads it and asks nothing. A
+row read from a fetched PDF cites its URL and index.json key. No PDF that
+index.json judges suspect (a scan, another part's sheet) is read.
+
+The report gives each record a status: rated (a row was filled) or
+not_judged with the reason in `notes` (no PDF and why the fetch failed, a
+suspect PDF, no figure found, or not a part this reads: an IC's ratings come
+from its datasheet by hand).
+
 Usage:
-  rating_fill.py --parts DIR [--mpn MPN ...] [--write] [--out report.json]
+  rating_fill.py --parts DIR [--mpn MPN ...] [--write] [--fetch]
+                 [--out report.json]
 Exit: 0 (report printed; --write writes the records), 2 on bad input.
 """
 from __future__ import annotations
@@ -59,12 +77,15 @@ import json
 import math
 import re
 import sys
+import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "lib"))
 import datasheet_extract  # noqa: E402
+import keyless_stock  # noqa: E402
 
 TAG = "rating_fill:"
 DEG = r"\s*(?:℃|°\s*C|ºC|C\b)"
@@ -73,9 +94,12 @@ RANGE_RE = re.compile(r"(-\d+)\s*(?:℃|°\s*C)?\s*to\s*\+?(\d+)" + DEG)
 # --- helpers -----------------------------------------------------------------
 
 
-def pdf_for(rec: dict, parts_dir: Path) -> Path | None:
+def pdf_for(rec: dict, parts_dir: Path, stem: str | None = None
+            ) -> Path | None:
     """The record's datasheet: the first .pdf path in source_pdf (relative to
-    the board root or the parts dir), else parts/datasheets/<MPN>.pdf."""
+    the board root or the parts dir), else parts/datasheets/<MPN>.pdf, else
+    parts/datasheets/<stem>.pdf (the record's file name: where --fetch puts
+    it, and datasheet_extract --fetch puts an LCSC part's)."""
     m = re.match(r"\s*(\S+?\.pdf)\b", str(rec.get("source_pdf") or ""), re.I)
     cands = []
     if m:
@@ -85,6 +109,8 @@ def pdf_for(rec: dict, parts_dir: Path) -> Path | None:
     # the sanitized names check_ratings also looks under ("#" -> "-")
     for rx in (r"[^A-Za-z0-9._-]", r"[^A-Za-z0-9_-]"):
         cands.append(parts_dir / "datasheets" / f"{re.sub(rx, '-', mpn)}.pdf")
+    if stem:
+        cands.append(parts_dir / "datasheets" / f"{stem}.pdf")
     return next((c for c in cands if c.is_file()), None)
 
 
@@ -283,13 +309,15 @@ def read_jst_ph(mpn: str, pages: list[dict], title: str) -> dict | None:
         if "rating" not in t:
             t = _unshift(t)
         where = f"{title}, p{pg['page'] + 1} PH Specifications"
-        v = re.search(r"Voltage\s+rating:\s*(\d+(?:\.\d+)?)\s*V.{0,2}AC/DC", t)
+        v = re.search(r"Voltage\s+rating:\s*(\d+(?:\.\d+)?)\s*V.{0,2}AC"
+                      r"\s*[/,]\s*DC", t)
         if v and not any(r["kind"] == "voltage" for r in out["rows"]):
             out["rows"].append({
                 "kind": "voltage", "max": float(v.group(1)),
                 "source": f"{where}: Voltage rating {v.group(1)} V AC/DC "
                           "between contacts"})
-        c = re.search(r"Current\s+rating:\s*(\d+(?:\.\d+)?)\s*A.{0,2}AC/DC"
+        c = re.search(r"Current\s+rating:\s*(\d+(?:\.\d+)?)\s*A.{0,2}AC"
+                      r"\s*[/,]\s*DC"
                       r"\s*.?(AWG\s*#\s*\d+)?", t)
         if c and not any(r["kind"] == "current" for r in out["rows"]):
             awg = f" ({c.group(2)})" if c.group(2) else ""
@@ -343,9 +371,10 @@ def _abs_max_figure(rec: dict, kind: str) -> list[float]:
             and re.search(rx, str(r.get("param") or ""), re.I)]
 
 
-def fill(rec: dict, pages: list[dict]) -> dict:
+def fill(rec: dict, pages: list[dict], title: str | None = None) -> dict:
     """-> {"record": new record, "filled": [...], "notes": [...]}; the record
-    is unchanged when nothing reads."""
+    is unchanged when nothing reads. `title` names the datasheet in each
+    row's source (default: the record's source_pdf)."""
     mpn = str(rec.get("mpn") or "")
     pins = contacts(rec)
     rep = {"mpn": mpn, "filled": [], "notes": [], "record": rec}
@@ -353,7 +382,7 @@ def fill(rec: dict, pages: list[dict]) -> dict:
         rep["notes"].append("not a two-pin passive or a known connector: "
                             "skipped")
         return rep
-    title = _title(rec)
+    title = title or _title(rec)
     got = None
     for reader in READERS:
         got = reader(mpn, pages, title)
@@ -415,7 +444,141 @@ def fill(rec: dict, pages: list[dict]) -> dict:
     return rep
 
 
-def main(argv: list[str] | None = None) -> int:
+# --- fetching a datasheet the board lacks (--fetch, #1263) ----------------------
+
+PACE = keyless_stock.PACE          # seconds between two requests to one host
+TRIES = keyless_stock.TRIES        # asks of one URL while the host throttles
+BACKOFF = keyless_stock.BACKOFF    # first wait with no Retry-After; doubles
+MAX_WAIT = keyless_stock.MAX_WAIT  # cap on one wait, Retry-After included
+_sleep = time.sleep                # tests replace it
+_last_ask: dict[str, float] = {}   # host -> when this process last asked it
+
+
+def paced(transport=None):
+    """`transport` (researchlib.http_transport unless injected) asking each
+    host at most once per PACE seconds; an answer of HTTP 429 or 503 is asked
+    again after its Retry-After, else after BACKOFF doubling, each wait capped
+    at MAX_WAIT, TRIES times in all (keyless_stock's rules)."""
+    def get(url: str) -> dict:
+        base = transport or datasheet_extract._lib("researchlib").http_transport
+        host = urlsplit(url).hostname or ""
+        wait = BACKOFF
+        for n in range(TRIES):
+            gap = PACE - (time.monotonic() - _last_ask.get(host, -math.inf))
+            if gap > 0:
+                _sleep(gap)
+            _last_ask[host] = time.monotonic()
+            resp = base(url)
+            if int(resp.get("status") or 0) not in \
+                    keyless_stock.THROTTLE_CODES or n == TRIES - 1:
+                return resp
+            after = keyless_stock._retry_after(resp.get("retry_after"))
+            _sleep(min(MAX_WAIT, wait if after is None else after))
+            wait *= 2
+        return resp
+    return get
+
+
+def datasheet_url(rec: dict, stem: str, parts_dir: Path) -> str | None:
+    """Where the record's datasheet is: its own `datasheet`, else the
+    parts.json line for its file name (an LCSC code) or its MPN."""
+    if rec.get("datasheet"):
+        return str(rec["datasheet"])
+    try:
+        lines = json.loads((parts_dir / "parts.json").read_text(
+            encoding="utf-8")).get("parts") or []
+    except (OSError, ValueError, AttributeError):
+        return None
+    mpn = datasheet_extract._norm(rec.get("mpn"))
+    for key in (lambda ln: str(ln.get("lcsc") or "") == stem,
+                lambda ln: mpn and datasheet_extract._norm(ln.get("mpn"))
+                == mpn):
+        for ln in lines:
+            if isinstance(ln, dict) and ln.get("datasheet") and key(ln):
+                return str(ln["datasheet"])
+    return None
+
+
+def fetch_for(rec: dict, stem: str, parts_dir: Path, transport=None) -> dict:
+    """Fetch the record's datasheet to parts/datasheets/<stem>.pdf through
+    datasheet_extract.fetch_datasheet and enter it in that folder's
+    index.json as datasheet_extract --fetch does (url, sha256, verdict).
+    -> {status: fetched|suspect|missing|refused|error|no_url, url, why}."""
+    url = datasheet_url(rec, stem, parts_dir)
+    if not url:
+        return {"status": "no_url",
+                "why": "no datasheet URL in the record or parts.json"}
+    ddir = parts_dir / "datasheets"
+    mpn = rec.get("mpn") or None
+    r = datasheet_extract.fetch_datasheet(url, ddir / f"{stem}.pdf",
+                                          transport=paced(transport), mpn=mpn)
+    out = {"status": r["status"], "url": r.get("final_url") or r["url"]}
+    if r.get("file"):
+        a = r["assessment"]
+        idx = datasheet_extract._index(ddir)
+        idx[stem] = {
+            "mpn": mpn, "file": f"parts/datasheets/{stem}.pdf",
+            **{k: r.get(k) for k in ("url", "final_url", "bytes", "sha256")},
+            **{k: a[k] for k in datasheet_extract._ASSESSED if k in a},
+            **({"assessed": datasheet_extract._stamp(r["sha256"], mpn)}
+               if mpn else {})}
+        datasheet_extract._write_index(ddir, idx)
+        if a["reasons"]:
+            out["why"] = "; ".join(a["reasons"])
+    else:
+        out["why"] = r.get("error") or r["status"]
+    return out
+
+
+def suspect_pdf(pdf: Path, parts_dir: Path) -> str | None:
+    """Why index.json judged this datasheet suspect, else None: nothing is
+    read from a suspect PDF."""
+    ent = datasheet_extract._index(parts_dir / "datasheets").get(pdf.stem)
+    if not isinstance(ent, dict) or ent.get("status") != "suspect" or \
+            Path(str(ent.get("file") or "")).name != pdf.name:
+        return None
+    return "; ".join(ent.get("reasons") or []) or "judged suspect"
+
+
+def fetched_title(pdf: Path, parts_dir: Path) -> str | None:
+    """The citation of a PDF --fetch (or datasheet_extract --fetch) brought:
+    the URL it came from and its index.json key."""
+    ent = datasheet_extract._index(parts_dir / "datasheets").get(pdf.stem)
+    if not isinstance(ent, dict) or not ent.get("url") or \
+            Path(str(ent.get("file") or "")).name != pdf.name:
+        return None
+    return f"{ent.get('final_url') or ent['url']} (index.json {pdf.stem})"
+
+
+def no_record(parts_dir: Path, files: list[Path]) -> list[dict]:
+    """parts.json lines with no <MPN>.json or <LCSC>.json record beside
+    them: nothing here to fill, so each is not judged, with that reason."""
+    try:
+        lines = json.loads((parts_dir / "parts.json").read_text(
+            encoding="utf-8")).get("parts") or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    have = {datasheet_extract._norm(f.stem) for f in files}
+    for f in files:
+        try:
+            have.add(datasheet_extract._norm(
+                json.loads(f.read_text(encoding="utf-8")).get("mpn")))
+        except (OSError, ValueError, AttributeError):
+            pass
+    out = []
+    for ln in lines:
+        if not isinstance(ln, dict) or not ln.get("mpn"):
+            continue
+        keys = {datasheet_extract._norm(ln.get("mpn")),
+                datasheet_extract._norm(str(ln.get("lcsc") or ""))} - {""}
+        if not keys & have:
+            out.append({"mpn": ln["mpn"], "status": "not_judged",
+                        "notes": ["no part record (parts/<MPN>.json) to "
+                                  "fill: write it, then run this again"]})
+    return out
+
+
+def main(argv: list[str] | None = None, transport=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--parts", required=True, type=Path,
                     help="the board's parts/ directory of <MPN>.json records")
@@ -424,6 +587,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--write", action="store_true",
                     help="write the filled records back (default: report)")
     ap.add_argument("--out", type=Path, help="write the report JSON here")
+    ap.add_argument("--fetch", action="store_true",
+                    help="fetch a datasheet the board lacks (paced, cited "
+                         "in parts/datasheets/index.json)")
     a = ap.parse_args(argv)
     if not a.parts.is_dir():
         print(f"rating_fill: no directory {a.parts}", file=sys.stderr)
@@ -441,25 +607,45 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(rec, dict) or "pinout" not in rec:
             continue
         if contacts(rec) is None:
+            if not rec.get("pin_ratings"):
+                report.append({"file": f.name, "mpn": rec.get("mpn"),
+                               "status": "not_judged", "filled": [],
+                               "notes": ["not a two-pin passive or a known "
+                                         "connector: its ratings come from "
+                                         "its datasheet by hand"]})
             continue
-        pdf = pdf_for(rec, a.parts)
+        head = {"file": f.name, "mpn": rec.get("mpn")}
+        pdf = pdf_for(rec, a.parts, f.stem)
+        if pdf is None and a.fetch:
+            head["fetch"] = fetch_for(rec, f.stem, a.parts, transport)
+            pdf = pdf_for(rec, a.parts, f.stem)
         if pdf is None:
-            report.append({"file": f.name, "mpn": rec.get("mpn"),
-                           "filled": [], "notes": ["no datasheet PDF"]})
+            why = head.get("fetch", {}).get("why")
+            report.append({**head, "status": "not_judged", "filled": [],
+                           "notes": [f"no datasheet PDF{f': {why}' if why
+                                                        else ''}"]})
+            continue
+        why = suspect_pdf(pdf, a.parts)
+        if why:
+            report.append({**head, "status": "not_judged", "filled": [],
+                           "pdf": str(pdf),
+                           "notes": [f"datasheet suspect, not read: {why}"]})
             continue
         if pdf not in cache:
             cache[pdf] = datasheet_extract.extract_pdf_text(pdf)
-        rep = fill(rec, cache[pdf])
+        rep = fill(rec, cache[pdf], fetched_title(pdf, a.parts))
         new = rep.pop("record")
-        rep["file"] = f.name
-        rep["pdf"] = str(pdf)
+        rep = {**head, "status": "rated" if rep["filled"] else "not_judged",
+               **rep, "pdf": str(pdf)}
         report.append(rep)
         if a.write and new != rec:
             f.write_text(json.dumps(new, indent=1, ensure_ascii=False) + "\n",
                          encoding="utf-8")
-    text = json.dumps({"records": report,
-                       "filled": sum(1 for r in report if r["filled"])},
-                      indent=1, ensure_ascii=False)
+    out = {"records": report,
+           "filled": sum(1 for r in report if r["filled"])}
+    if not a.mpn:
+        out["no_record"] = no_record(a.parts, files)
+    text = json.dumps(out, indent=1, ensure_ascii=False)
     if a.out:
         a.out.write_text(text + "\n", encoding="utf-8")
     print(text)

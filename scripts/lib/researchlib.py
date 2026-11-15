@@ -589,7 +589,8 @@ def brief(task: dict, ws: Path, library_records: list[dict] | None = None,
 # ---------------------------------------------------------------------------
 def http_transport(url: str, timeout: float = 60.0, _mock=None) -> dict:
     """Default transport: GET with redirects, browser-ish UA. Returns
-    {status, final_url, hops[], content_type, body}. Raises on transport
+    {status, final_url, hops[], content_type, server, cf_mitigated,
+    retry_after, body}. Raises on transport
     failure (DNS/TLS/timeout) - the caller maps that to exit 2. `_mock` is
     an httpx transport for tests."""
     import httpx
@@ -611,6 +612,7 @@ def http_transport(url: str, timeout: float = 60.0, _mock=None) -> dict:
             "content_type": r.headers.get("content-type", ""),
             "server": r.headers.get("server", ""),
             "cf_mitigated": r.headers.get("cf-mitigated", ""),
+            "retry_after": r.headers.get("retry-after", ""),
             "body": r.content}
 
 
