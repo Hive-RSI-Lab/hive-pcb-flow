@@ -428,3 +428,69 @@ def test_a_pre_kicad6_board_is_upgraded_once_into_the_run_dir(tmp_path, monkeypa
     src.write_text("(kicad_pcb (version 20211014) (footprint y))")
     ec._pcb(b, "rev_a", repo, empty)
     assert len(calls) == 3
+
+
+def test_a_check_that_writes_no_report_keeps_its_stderr(tmp_path, monkeypatch):
+    # #1189: the sweep scored a crashed check as "no finding"
+    def crash(c, b, rev, s):
+        if s == "check_current":
+            raise ec.CheckCrashed(f"h {rev}: {s} wrote no report", 1,
+                                  "".join(f"line {i}\n" for i in range(30))
+                                  + "KeyError: 'value'\n")
+        return []
+    monkeypatch.setattr(ec, "audit", crash)
+    r = ec.sweep(tmp_path, {"id": "h", "rev_a": {}, "rev_b": {}})
+    e = r["check_current"]
+    assert e["error"] == "h rev_a: check_current wrote no report (rc 1)"
+    assert e["rc"] == 1 and len(e["stderr_tail"]) == 20
+    assert e["stderr_tail"][-1] == "KeyError: 'value'"
+    assert "error" not in r["check_silk"]
+
+
+def test_audit_raises_with_the_check_stderr(tmp_path, monkeypatch):
+    b = {"id": "h", "rev_a": {}, "rev_b": {}}
+    monkeypatch.setitem(ec.RUNNERS, "check_current",
+                        lambda b, rev, d, c: ["nope.py"])
+    monkeypatch.setattr(ec, "repo_dir", lambda cache, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "SCRIPTS", tmp_path)
+    (tmp_path / "nope.py").write_text("import sys; sys.exit('boom here')")
+    try:
+        ec.audit(tmp_path, b, "rev_a", "check_current")
+    except ec.CheckCrashed as e:
+        assert e.rc == 1 and e.tail == ["boom here"]
+        assert "boom here" in str(e)
+    else:
+        raise AssertionError("no CheckCrashed")
+
+
+def _fake_check(tmp_path, monkeypatch, body):
+    monkeypatch.setitem(ec.RUNNERS, "check_current",
+                        lambda b, rev, d, c: ["fake.py"])
+    monkeypatch.setattr(ec, "repo_dir", lambda cache, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "SCRIPTS", tmp_path)
+    (tmp_path / "fake.py").write_text(body)
+    try:
+        ec.audit(tmp_path, {"id": "h"}, "rev_a", "check_current")
+    except ec.CheckCrashed as e:
+        return e
+    raise AssertionError("no CheckCrashed")
+
+
+def test_an_error_json_on_stdout_is_kept(tmp_path, monkeypatch):
+    # checklib.cli_wrap's contract: error JSON on stdout, exit 2, no stderr
+    e = _fake_check(tmp_path, monkeypatch, (
+        "import json, sys\n"
+        "print(json.dumps({'script': 'check_current', 'status': 'error',"
+        " 'error': 'StaleFillError: 1 zone(s) unfilled'}))\n"
+        "sys.exit(2)\n"))
+    assert e.rc == 2 and e.check_error == "StaleFillError: 1 zone(s) unfilled"
+    assert "StaleFillError" in str(e).splitlines()[0]
+
+
+def test_a_report_with_status_error_is_a_crash_not_a_pass(tmp_path, monkeypatch):
+    e = _fake_check(tmp_path, monkeypatch, (
+        "import json, sys\n"
+        "out = sys.argv[sys.argv.index('--out') + 1]\n"
+        "open(out, 'w').write(json.dumps({'status': 'error', 'error': 'x'}))\n"
+        "sys.exit(2)\n"))
+    assert e.check_error == "x" and "reported an error" in str(e)

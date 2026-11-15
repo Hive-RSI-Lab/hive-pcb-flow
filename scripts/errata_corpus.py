@@ -336,6 +336,30 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "dfm": _dfm}
 
 
+class CheckCrashed(SystemExit):
+    """A check that wrote no report, or a report whose status is "error": its
+    return code, its error and the tail of its output ride along, so a crash
+    is never read as "no finding" (#1189). A check under checklib's contract
+    prints its error JSON on stdout with exit 2 and leaves stderr empty."""
+
+    TAIL = 20
+
+    def __init__(self, msg: str, rc: int | None, stderr: str | None,
+                 stdout: str | None = None):
+        self.rc = rc
+        self.check_error = None
+        for ln in reversed((stdout or "").splitlines()):
+            try:
+                self.check_error = json.loads(ln).get("error")
+                break
+            except (ValueError, AttributeError):
+                continue
+        self.tail = (stderr or "").rstrip("\n").splitlines()[-self.TAIL:]
+        super().__init__(f"{msg} (rc {rc})" + (
+            f": {self.check_error}" if self.check_error else "") + "".join(
+            f"\n  {ln}" for ln in self.tail))
+
+
 def audit(cache: Path, b: dict, rev: str, script: str,
           constraints: dict | None = None) -> list[dict]:
     """`script` on one revision, with `constraints` as its constraints.json
@@ -350,11 +374,18 @@ def audit(cache: Path, b: dict, rev: str, script: str,
     empty = out.parent / f"constraints{tag}.json"
     empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
     cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b, rev), empty)
-    subprocess.run([sys.executable, str(SCRIPTS / cmd), *args, "--out", str(out)],
-                   capture_output=True, text=True, timeout=900)
+    p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
+                        "--out", str(out)],
+                       capture_output=True, text=True, timeout=900)
     if not out.is_file():
-        raise SystemExit(f"{b['id']} {rev}: {script} wrote no report")
-    return json.loads(out.read_text(encoding="utf-8")).get("violations", [])
+        raise CheckCrashed(f"{b['id']} {rev}: {script} wrote no report",
+                           p.returncode, p.stderr, p.stdout)
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    if rep.get("status") == "error":
+        raise CheckCrashed(f"{b['id']} {rev}: {script} reported an error",
+                           p.returncode, p.stderr,
+                           json.dumps({"error": rep.get("error")}))
+    return rep.get("violations", [])
 
 
 def _key(v: dict) -> tuple:
@@ -373,6 +404,11 @@ def sweep(cache: Path, b: dict) -> dict:
             continue
         try:
             a, z = (audit(cache, b, rev, script) for rev in ("rev_a", "rev_b"))
+        except CheckCrashed as e:
+            res[script] = {"error": str(e).splitlines()[0][:300], "rc": e.rc,
+                           "check_error": e.check_error,
+                           "stderr_tail": e.tail}
+            continue
         except (SystemExit, subprocess.SubprocessError, OSError) as e:
             res[script] = {"error": str(e)[:300]}
             continue
@@ -588,12 +624,19 @@ def main(argv: list[str] | None = None) -> int:
         # unvalidated: a holdout board is fetched and swept before its
         # defects are judged, so before it has its blind verdicts
         raw = _raw(man, "holdout")
+        pairs, errored = 0, []
         for b in raw:
             if a.ids and b["id"] not in a.ids:
                 continue
             fetch(cache, b)
             for script, r in sweep(cache, b).items():
                 print(b["id"], script, json.dumps(r))
+                pairs += 1
+                if "error" in r:
+                    errored.append(f"{b['id']} {script}")
+        # a crashed check is a hole in the sweep, not a clean pass (#1189)
+        print(f"sweep: {pairs} (board, check) pairs, {len(errored)} errored"
+              + (": " + ", ".join(errored) if errored else ""))
         return 0
     boards = [b for b in load_all(man) if not a.ids or b["id"] in a.ids]
     bad = 0
