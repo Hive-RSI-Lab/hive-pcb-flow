@@ -2449,6 +2449,17 @@ def run(argv=None):
     # refill) as committed with findings on their nets cut to warnings
     bg, fill = geom.fresh_board(Path(args.pcb))
 
+    # a power entry naming a net this copy doesn't have is skipped and listed,
+    # not fatal: one stale net mustn't throw away the rest of the file. A file
+    # none of whose power nets are on the board belongs to another revision
+    # (a snapshot walked up to its board's file): constraints_mismatch, and
+    # the switch nodes are left unjudged rather than judged as if no file
+    # had been given.
+    missing = [e["net"] for e in entries
+               if isinstance(e, dict) and e.get("net") and e["net"] not in bg.nets]
+    entries = [e for e in entries
+               if not (isinstance(e, dict) and e.get("net") in missing)]
+    mismatch = bool(missing) and not entries
     violations: list[dict] = []
     checked: list[dict] = []
     for entry in entries:
@@ -2457,7 +2468,7 @@ def run(argv=None):
         checked.append(facts)
     inferred, unrated = inferred_switch_entries(entries, bg, switch_rows())
     no_load: list[dict] = []
-    for entry in inferred:
+    for entry in ([] if mismatch else inferred):
         vs, facts, nl = judge_switch_node(bg, entry, cons)
         violations.extend(vs)
         checked.append(facts)
@@ -2472,17 +2483,31 @@ def run(argv=None):
     extra = {"unrated_switch_nodes": unrated} if unrated else {}
     if no_load:
         extra["no_declared_load"] = no_load
+    if missing:
+        extra["constraints_missing_nets"] = missing
+    if mismatch:
+        extra["constraints_mismatch"] = [
+            {"net": e["net"], "from_part": e["from_part"], "part": e["part"]}
+            for e in inferred]
     extra_fill = checklib.zone_fill_facts(violations, fill)
     payload = checklib.report(
         SCRIPT, args.pcb, violations, checked=checked,
         stackup_assumed=bg.stackup.assumed,
-        nothing_to_judge=None if checked else
+        nothing_to_judge=None if checked or mismatch else
         "no power entries in constraints and no switcher the table knows",
         not_judged=[f"{u['ref']} ({u.get('value')}) {u['pin']} on {u['net']}: "
                     "a switch node whose part isn't in switch_nodes.yaml and "
                     "with no power entry" for u in unrated]
         + [f"no_declared_load: {n['from_part']} ({n['part']}) {n['net']}: "
            f"{n['why']}" for n in no_load]
+        + ([f"constraints_mismatch: none of the constraints file's power "
+            f"nets ({', '.join(missing)}) is on this board, so it belongs to "
+            f"another revision; switch nodes "
+            f"{', '.join(e['net'] for e in inferred) or '(none)'} not judged"]
+           if mismatch else
+           [f"constraints_missing_net: power entry {n} names a net this board "
+            f"doesn't have; skipped, the rest of the file is used"
+            for n in missing])
         + extra_fill.pop("not_judged", []), **extra, **extra_fill)
     return payload, args.out
 

@@ -569,15 +569,19 @@ def test_cli_exit_codes(tmp_path_factory, plane_fed_bg):
     assert payload["status"] == "violations"
     assert payload["counts"]["by_severity"] == {"warning": 6}
     assert payload["checked"][0]["plane_fed"] is True
-    # error: net not on board -> exit 2
+    # a file whose only net is not on the board belongs to another revision:
+    # constraints_mismatch, listed as not judged, not a crash
     cons2 = plane_fed_bg.path.parent / "ghost.json"
     cons2.write_text(json.dumps(
         {"power": [{"net": "/GHOST", "current_a": 1.0}]}), encoding="utf-8")
     proc2 = subprocess.run(
         [PYTHON, str(script), "--pcb", str(plane_fed_bg.path),
          "--constraints", str(cons2)], capture_output=True, text=True)
-    assert proc2.returncode == 2
-    assert json.loads(proc2.stdout)["status"] == "error"
+    out2 = json.loads(proc2.stdout)
+    assert proc2.returncode == 0 and out2["status"] == "pass"
+    assert out2["constraints_missing_nets"] == ["/GHOST"]
+    assert "constraints_mismatch" in out2
+    assert any(n.startswith("constraints_mismatch") for n in out2["not_judged"])
 
 
 # ---- pad-exit necks (PCB-0019-A SW_L1/SW_L2 class) -------------------------
@@ -1384,6 +1388,105 @@ def test_switch_node_small_part_without_load_is_not_judged(tmp_path_factory):
     vs, facts, nl = check_current.judge_switch_node(bg, entry, {})
     assert vs == [] and nl["kinds"] == ["undersized_track"]
     assert facts["not_judged"] == "no_declared_load"
+
+
+# ---- constraints for a state_snapshots/ copy, and a file that only partly
+# matches the board (hwde-reroute-tools, a03cb 2026-11-15) ------------------
+# usb-buck PCB-0002 keeps copies under state_snapshots/<tag>/kicad/; the
+# board's own kicad/constraints.json states +3V3 at 0.1 A.
+
+def _snapshot_tree(tmp_path_factory, name, cons):
+    root = tmp_path_factory.mktemp(name)
+    board = root / "PCB-0002-A_usb-buck"
+    snap = board / "state_snapshots" / "pre-dm-vbus-fix" / "kicad"
+    snap.mkdir(parents=True)
+    if cons is not None:
+        (board / "kicad").mkdir()
+        (board / "kicad" / "constraints.json").write_text(
+            json.dumps(cons), encoding="utf-8")
+    bg = _board(tmp_path_factory, name + "b", _buck_out(0.2))
+    pcb = snap / "usb-buck.kicad_pcb"
+    pcb.write_text(bg.path.read_text(encoding="utf-8"), encoding="utf-8")
+    return board, pcb
+
+
+def _run_found(pcb):
+    from lib import checklib
+    cf = checklib.find_constraints(pcb)
+    argv = ["--pcb", str(pcb)] + (["--constraints", str(cf)] if cf else [])
+    return cf, check_current.run(argv)[0]
+
+
+def test_snapshot_walks_up_to_its_boards_constraints(tmp_path_factory):
+    # the two usb-buck snapshot false alarms: the board states 0.1 A - quiet
+    board, pcb = _snapshot_tree(tmp_path_factory, "snapup",
+                                {"power": [{"net": "+3V3", "current_a": 0.1}]})
+    cf, p = _run_found(pcb)
+    assert cf == (board / "kicad" / "constraints.json").resolve()
+    assert p["violations"] == []
+    [c] = [c for c in p["checked"] if c.get("inferred")]
+    assert c["load_source"] == "+3V3 power entry (L1 output)"
+
+
+def test_snapshot_with_no_file_above_keeps_the_screen(tmp_path_factory):
+    # twin: the walk finds nothing, so the screen still judges the node
+    _, pcb = _snapshot_tree(tmp_path_factory, "snapnone", None)
+    cf, p = _run_found(pcb)
+    assert cf is None
+    [v] = p["violations"]
+    assert "no declared load; judged at the part's rated current" in v["msg"]
+
+
+def test_ordinary_board_does_not_walk_up(tmp_path_factory):
+    # outside a snapshot folder only the sibling file counts
+    from lib import checklib
+    root = tmp_path_factory.mktemp("nowalk")
+    (root / "constraints.json").write_text("{}", encoding="utf-8")
+    (root / "kicad").mkdir()
+    pcb = root / "kicad" / "b.kicad_pcb"
+    pcb.write_text("", encoding="utf-8")
+    assert checklib.find_constraints(pcb) is None
+
+
+def test_snapshot_file_of_another_revision_is_a_mismatch(tmp_path_factory):
+    # none of the file's power nets is on the copy: not judged, not screened
+    _, pcb = _snapshot_tree(tmp_path_factory, "snapmis",
+                            {"power": [{"net": "+5V_OLD", "current_a": 0.1}]})
+    _, p = _run_found(pcb)
+    assert p["violations"] == []
+    assert p["constraints_missing_nets"] == ["+5V_OLD"]
+    [m] = p["constraints_mismatch"]
+    assert m["net"] == "/pwr/SWN" and m["from_part"] == "U1"
+    assert any(s.startswith("constraints_mismatch:") for s in p["not_judged"])
+
+
+def test_file_naming_one_missing_net_uses_the_rest(tmp_path_factory):
+    # one stale entry no longer drops the file: +3V3 still sets the load
+    p = _sw_run(tmp_path_factory, "swpartial", _buck_out(0.2),
+                {"power": [{"net": "GHOST", "current_a": 2.0},
+                           {"net": "+3V3", "current_a": 1.0}]})
+    [v] = [v for v in p["violations"] if v["kind"] == "undersized_track"]
+    assert v["load_source"] == "+3V3 power entry (L1 output)"
+    assert p["constraints_missing_nets"] == ["GHOST"]
+    assert "constraints_mismatch" not in p
+    assert any(s.startswith("constraints_missing_net: power entry GHOST")
+               for s in p["not_judged"])
+
+
+def test_gate_passes_the_walked_up_file(tmp_path_factory, monkeypatch):
+    import gate
+    import verify_all
+    board, pcb = _snapshot_tree(tmp_path_factory, "snapgate",
+                                {"power": [{"net": "+3V3", "current_a": 0.1}]})
+    seen = {}
+
+    def fake(argv):
+        seen["argv"] = argv
+        return {"status": "pass", "checks": {}}, None
+    monkeypatch.setattr(verify_all, "run", fake)
+    gate.run_verify(pcb)
+    i = seen["argv"].index("--constraints")
+    assert Path(seen["argv"][i + 1]) == (board / "kicad" / "constraints.json").resolve()
 
 
 # ---- per-load current: branch vias of a star (#676, #650) -------------------
