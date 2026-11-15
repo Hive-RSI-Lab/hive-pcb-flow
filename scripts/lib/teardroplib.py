@@ -320,6 +320,14 @@ class Item:
             return min(self.joins.get(layer, 0), self.drops.get(layer, 0))
         return len(self._answer(layer)[1])
 
+    def answered_widths(self, layer: str) -> list[float]:
+        """The widths of the tracks on layer a drop answers, smallest
+        first; [] for an item read() did not fill."""
+        if layer not in self.cands:
+            return []
+        cs, hit = self._answer(layer)
+        return sorted(cs[i][0] for i in hit)
+
     def into(self, layer: str) -> int:
         """Tracks into the item on layer: its joins at any width, grazes
         and off-centre crossings. An item read() did not fill: its

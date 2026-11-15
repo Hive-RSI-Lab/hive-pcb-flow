@@ -917,8 +917,8 @@ def test_teardrop_loss_judges_a_smaller_via_at_the_size_it_replaced():
     assert short == [] and [(e["via"], e["layers"], e["why"])
                             for e in lost] == [
         ("n", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
-         " 1 on the via it took its teardrops from: a 0.46 mm track is too"
-         " wide for a drop on a 0.5 mm via")]
+         " 1 on the via it took its teardrops from (a 0.46 mm track): a 0.46"
+         " mm track is too wide for a drop on a 0.5 mm via")]
     # with its drop, or on a track thin enough for both, nothing is lost
     for it in (_cvia("n", 0.5, {"F.Cu": [wide]}, {"F.Cu": [Point(0, -0.8)]}),
                _cvia("n", 0.5, {"F.Cu": [thin]}, {"F.Cu": [Point(0.1, -1)]})):
@@ -945,7 +945,32 @@ def test_teardrop_loss_names_a_track_kicad_drops_on_at_no_width(why, said):
     assert short == [] and [(e["via"], e["layers"], e["why"])
                             for e in lost] == [
         ("k", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
-         f" 1 before: a 0.2 mm track {said}")]
+         f" 1 before (a 0.2 mm track): a 0.2 mm track {said}")]
+
+
+def test_teardrop_loss_names_a_graze_by_a_track_too_wide_for_the_via():
+    """C216-C224 on haos-voice: the removed 0.254 mm +2V5 via had its F.Cu
+    drop on a 0.2 mm track through it; the route ends a 0.3 mm track on
+    the centre of the new 0.254 mm via. Its chord (0.254) is short of the
+    width, a graze to KiCad, but the width alone stops the drop (0.3 >=
+    0.9 x 0.254): named too wide, with the width the old drop was on."""
+    thin = (0.2, _band(0, 0.2))
+    b0 = SimpleNamespace(items=[
+        _cvia("s", 0.254, {"F.Cu": [thin]}, {"F.Cu": [Point(0, -0.4)]})])
+    n = _cvia("n", 0.254, {})
+    n.grazes = {"F.Cu": [(0.3, "grazes")]}
+    lost, short = pr.teardrop_loss(b0, SimpleNamespace(items=[n]),
+                                   {"n": "s"}, box(-1, -1, 1, 1))
+    assert short == [] and [(e["via"], e["layers"], e["why"])
+                            for e in lost] == [
+        ("n", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
+         " 1 on the via it took its teardrops from (a 0.2 mm track): a 0.3"
+         " mm track is too wide for a drop on a 0.254 mm via")]
+    # a graze narrow enough for a drop keeps its own reason
+    n.grazes = {"F.Cu": [(0.2, "grazes")]}
+    assert pr.teardrop_loss(b0, SimpleNamespace(items=[n]), {"n": "s"},
+                            box(-1, -1, 1, 1))[0][0]["why"].endswith(
+        "(a 0.2 mm track): a 0.2 mm track grazes the copper")
 
 
 def test_teardrop_loss_names_a_via_a_new_one_landed_on_with_them_off():
@@ -986,7 +1011,7 @@ def test_teardrop_loss_counts_drops_per_track_not_per_layer():
     assert short == [] and [(e["via"], e["layers"], e["why"])
                             for e in lost] == [
         ("k", ["F.Cu"], "on F.Cu 1 of 2 tracks into it have a drop, against"
-         " 2 before: a 0.2 mm track has none")]
+         " 2 before (0.2 and 0.2 mm tracks): a 0.2 mm track has none")]
 
 
 def test_report_says_how_many_new_vias_took_teardrops():

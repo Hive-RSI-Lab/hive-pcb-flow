@@ -1013,13 +1013,27 @@ _TD_WHY = {"no drop": "has none", "grazes": "grazes the copper",
 
 def _td_reasons(it, layer: str) -> str:
     """Each track into it (a teardroplib Item) on layer that no drop
-    answers, and why it has none (Item.unanswered)."""
+    answers, and why it has none (Item.unanswered). Too wide comes first:
+    a track too wide for a drop on the via gets none whatever its line,
+    and one that ends on the centre of a via narrower than itself grazes
+    the copper only by its width."""
     out = [f"a {w:.4g} mm track " + (
-        _TD_WHY.get(why)
-        or f"is too wide for a drop on a {it.min_size_mm:g} mm via")
+        f"is too wide for a drop on a {it.min_size_mm:g} mm via"
+        if why == "too wide" or it.too_wide(w) else _TD_WHY[why])
         for w, why in sorted(it.unanswered(layer))]
     return ", ".join(out) or \
         f"{it.into(layer) - it.answered(layer)} without one"
+
+
+def _td_widths(it, layer: str) -> str:
+    """' (a 0.2 mm track)': the widths of the tracks on layer a drop
+    answers on it (Item.answered_widths); '' when unknown."""
+    ws = [f"{w:.4g}" for w in it.answered_widths(layer)]
+    if not ws:
+        return ""
+    if len(ws) == 1:
+        return f" (a {ws[0]} mm track)"
+    return f" ({', '.join(ws[:-1])} and {ws[-1]} mm tracks)"
 
 
 def _td_judge(it, ref, against: str, d0) -> tuple[list, list]:
@@ -1034,7 +1048,8 @@ def _td_judge(it, ref, against: str, d0) -> tuple[list, list]:
         a1, n1, d1 = it.answered(layer), it.into(layer), it.deficit(layer)
         a0 = ref.answered(layer) if ref is not None else None
         why = (f"on {layer} {a1} of {n1} tracks into it have a drop"
-               + (f", against {a0} {against}" if ref is not None else "")
+               + (f", against {a0} {against}{_td_widths(ref, layer)}"
+                  if ref is not None else "")
                + f": {_td_reasons(it, layer)}")
         if (a1 < min(a0, n1)) if ref is not None else d1 > 0:
             lost.append((layer, why))

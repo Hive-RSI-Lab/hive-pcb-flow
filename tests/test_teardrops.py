@@ -359,6 +359,7 @@ def test_tracks_into_an_item_answered_or_named_per_layer():
     assert tdl.too_wide(0.1, 0.6, (0.0, 1.0, 0.9))
     # F.Cu: the too-wide track and one join have a drop each
     assert (it.answered("F.Cu"), it.into("F.Cu")) == (2, 4)
+    assert it.answered_widths("F.Cu") == [0.2, 0.55]
     assert it.unanswered("F.Cu") == [(0.2, "no drop"), (0.3, "crosses")]
     assert (it.deficit("F.Cu"), it.deficit("B.Cu")) == (1, 1)
     assert (it.answered("In1.Cu"), it.into("In1.Cu")) == (0, 1)
@@ -374,7 +375,7 @@ def test_tracks_into_an_item_answered_or_named_per_layer():
                    lim=lim, cands={"F.Cu": [(0.55, band(0.1, 0.55)),
                                             (0.2, band(0, 0.2))]},
                    tips={"F.Cu": [Point(0.05, -1)]})
-    assert two.answered("F.Cu") == 1
+    assert two.answered("F.Cu") == 1 and two.answered_widths("F.Cu") == [0.2]
     assert two.unanswered("F.Cu") == [(0.55, "too wide")]
     assert two.deficit("F.Cu") == 0 and two.missing() == []
     # an item read() did not fill compares its counts
@@ -382,6 +383,7 @@ def test_tracks_into_an_item_answered_or_named_per_layer():
                     0.15, 0.6, True, joins={"F.Cu": 2}, drops={"F.Cu": 1})
     assert bare.deficit("F.Cu") == 1 and bare.deficit("B.Cu") == 0
     assert (bare.answered("F.Cu"), bare.into("F.Cu")) == (1, 2)
+    assert bare.answered_widths("F.Cu") == []
     assert bare.undropped() == []
 
 
