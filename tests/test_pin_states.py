@@ -567,3 +567,30 @@ def test_ad8226_ref_on_the_bare_divider_or_open_is_the_planted_fault(net):
 def test_ad8226_ref_driven_low_impedance_is_quiet(ref, outa_type):
     hits, facts = _audit(*_ad8226(ref=ref, outa_type=outa_type))
     assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+_STRAY_PULL = {"/VREF": [_m("R9", "1")], "GND": [_m("R9", "2")]}
+
+
+def test_ad8226_ref_on_a_pull_with_no_typed_driver_still_warns():
+    # Planted fault (#1228): a pull beside a buffer typed passive reads
+    # as a pull only, which is what the row forbids.
+    hits, _ = _audit(*_ad8226(extra_comps={"R9": "100k"},
+                              extra_nets=_STRAY_PULL))
+    assert [(h["pin"], h["net"]) for h in hits] == [("REF", "/VREF")]
+
+
+def test_ad8226_ref_driven_by_a_typed_output_beside_a_pull_is_quiet():
+    # Quiet twin (#1228): the buffer's output is typed, so it holds REF and
+    # the stray 100k pull only loads it.
+    hits, facts = _audit(*_ad8226(outa_type="output",
+                                  extra_comps={"R9": "100k"},
+                                  extra_nets=_STRAY_PULL))
+    assert hits == [] and facts["pin_state_parts_checked"] == 1
+
+
+@pytest.mark.parametrize("ptype", ["open_collector", "bidirectional"])
+def test_a_pin_that_may_let_go_does_not_override_the_pull(ptype):
+    hits, _ = _audit(*_ad8226(outa_type=ptype, extra_comps={"R9": "100k"},
+                              extra_nets=_STRAY_PULL))
+    assert [(h["pin"], h["net"]) for h in hits] == [("REF", "/VREF")]

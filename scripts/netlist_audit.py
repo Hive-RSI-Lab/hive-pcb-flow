@@ -795,6 +795,12 @@ def _pin_states(nets: dict, comps: dict,
                         name, ref, pnum, nets, comps, comp_pins, rails, own)
                     allow, forbid = (set(rule.get("allow") or ()),
                                      set(rule.get("forbid") or ()))
+                    if any(m["ref"] != ref and _base_type(m.get(
+                            "pintype")) == "output"
+                           for m in nets.get(name, [])):
+                        # a push-pull output holds the net; a pull beside
+                        # it only loads the driver (#1228)
+                        forbid -= {"pulled_up", "pulled_down"}
                     problem = None
                     if forbid & st:
                         problem = f"is {'/'.join(sorted(forbid & st))}"

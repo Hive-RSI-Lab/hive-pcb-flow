@@ -22,7 +22,11 @@
 # Each pin rule:
 #   pin       the pin
 #   allow     states the pin may be in: at least one must hold
-#   forbid    states it must not be in
+#   forbid    states it must not be in. A pull is not forbidden when
+#             another part's pin typed output (push-pull) sits on the
+#             net: the driver holds it and the pull only loads it (#1228).
+#             Open-collector, bidirectional and tri-state pins don't count,
+#             since they may let go of the net and leave it to the pull.
 #   max_v     the most the net may sit at, when its volts are known
 #   rail_pin  when the pin is on a rail, it must be the same net as this
 #             pin of the same part (an address strap read against VCCP)
@@ -476,11 +480,9 @@ parts:
   - mpn: AD8226
     match: '^AD8226'
     verified: true   # Analog Devices AD8226 data sheet Rev. C read 2026-11-14
-    # Known false warning: a buffer whose output pin is typed as an output,
-    # on a REF net that also carries a pull resistor, reads as driven plus
-    # pulled and still warns; the rule cannot tell the low-impedance driver
-    # from the pull. A buffer typed passive (PCB-0013's OPA2333) reads as
-    # neither and stays quiet.
+    # A buffer whose output pin is typed output wins over a pull on the
+    # same REF net (#1228). A buffer typed passive (PCB-0013's OPA2333)
+    # reads as neither and stays quiet; a pull with no typed driver warns.
     pins:
       - pin: REF
         forbid: [open, pulled_up, pulled_down]
