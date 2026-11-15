@@ -356,3 +356,39 @@ def test_xc6206_heat_is_not_judged_without_theta_ja():
     assert ("ldo_heat", "error") not in _hits(viol)
     nj = _nj(facts, "ldo_heat")
     assert len(nj) == 1 and "no theta_ja" in nj[0]
+
+
+# ------------------------------------------------ #1176: MCU and sensor loads
+
+def _loads3(reg, loads, vin="+5V"):
+    comps, nets = _ldo3(reg, "ESP32-C3-WROOM-02")
+    del comps["U2"]
+    nets["GND"] = [m for m in nets["GND"] if m["ref"] != "U2"]
+    nets["+3V3"] = [m for m in nets["+3V3"] if m["ref"] != "U2"]
+    for i, (val, func) in enumerate(loads):
+        ref = f"U{10 + i}"
+        comps[ref] = val
+        nets["+3V3"].append(_m(ref, "1", func, "power_in"))
+    return comps, nets
+
+
+def test_an_sht40_heater_is_over_an_ht7533():
+    # the 200 mW heater draws up to 100 mA; the HT7533 is rated 70 mA
+    viol, _ = _audit(*_loads3("HT7533-1", [("SHT40-AD1B-R2", "VDD")]))
+    hit = next(v for v in viol if v["kind"] == "rail_over")
+    assert hit["limit_a"] == 0.07 and hit["load_a"] == 0.1
+
+
+def test_stm32s_and_an_sht40_on_an_xc6206_are_judged_and_quiet():
+    viol, facts = _audit(*_loads3("XC6206P332MR", [
+        ("STM32F103C8T6", "VDD_1"), ("STM32G030F6P6", "VDD/VDDA"),
+        ("SHT40-AD1B-R2", "VDD")]))
+    assert _hits(viol) == []
+    assert _nj(facts, "rail_over") == []
+
+
+def test_an_mcu_load_counts_as_continuous_heat():
+    # F103 50.3 mA is continuous (not peak), so ldo_heat sees it
+    _, facts = _audit(*_loads3("HT7533-1", [("STM32F103C8T6", "VDD_1")]))
+    assert _nj(facts, "rail_over") == []
+    assert not any("passes 0 mA" in n for n in _nj(facts, "ldo_heat"))

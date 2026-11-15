@@ -222,6 +222,31 @@ loads:
   source: Espressif ESP32-C6-MINI-1 datasheet, Recommended Operating Conditions
   cite:
   - {doc: esp32c6mini1.pdf, sha256: 26691033f31cbebf623842c16624e61151b152533c13a850c091c8e858c510a2, page: 26, table: '', quote: 'IV DD Current delivered by external power supply 0.5 — — A', fields: [i_supply]}
+- mpn: STM32G030
+  match: ^STM32G030
+  verified: true
+  supply: ^VDD
+  i_supply: 0.0083
+  source: ST DS12991 Rev 3 (STM32G030x6/x8), Table 25 Current consumption in Run mode, 64 MHz from Flash, max at 85 C. That table is measured with all peripherals disabled, so a busy part may draw more; GPIO loads (LEDs) are summed on their own.
+  cite:
+  - {doc: stm32g030f6.pdf, sha256: bd4d70f72b2e82c5965a2b92ef3b9c96ad48c0ecdf195cf900d14cd47bff09f5, page: 44, table: 'Table 25', quote: '64 MHz Flash memory 5.7 5.9 8.0 8.3', fields: [i_supply]}
+- mpn: STM32F103
+  match: ^STM32F103
+  verified: true
+  supply: ^VDD
+  i_supply: 0.0503
+  source: ST DS5319 Rev 18 (STM32F103x8/xB), Table 13 Maximum current consumption in Run mode from Flash, 72 MHz, all peripherals enabled, TA 105 C.
+  cite:
+  - {doc: stm32f103c8.pdf, sha256: 0596dd57693c93d214c9cb69186429883c853bad8650926def57c1ed3cdf2e9f, page: 41, table: 'Table 13', quote: '72 MHz 50.0 50.3', fields: [i_supply]}
+- mpn: SHT4x
+  match: ^SHT4[0135]-
+  verified: true
+  supply: ^VDD$
+  i_supply: 0.1
+  peak: true
+  source: Sensirion SHT4x datasheet Version 7.3 (June 2026), Electrical Specifications, supply current with the 200 mW heater on (max 100 mA). It draws this only while firmware runs the heater; measuring it takes 500 uA max.
+  cite:
+  - {doc: sht4x.pdf, sha256: 8db4a43f17149b76811cfb504caaeca4ef844ddc710cb9b45905c51c7ddfe3c2, page: 9, table: '', quote: 'Nomin. heater “200 mW” - 60 100 mA', fields: [i_supply]}
 
 gpio:
 - mpn: RP2040
