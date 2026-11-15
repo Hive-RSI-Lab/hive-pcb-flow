@@ -4131,6 +4131,14 @@ def _source_limits(nets: dict, comps: dict,
                    f"be read from the net names")
             continue
         p = max(0.0, vin - vout) * ld["cont"]
+        if reg.get("theta_ja") is None or reg.get("tj_max") is None:
+            # some datasheets (Torex XC6206) give only package Pd, no
+            # junction-to-ambient figure or junction limit to judge by
+            yield ("not_judged",
+                   f"ldo_heat on {out}: {ref} ({val}) drops "
+                   f"{p:.3g} W, but its datasheet gives no theta_ja or "
+                   f"junction limit [{reg.get('source', '')}]")
+            continue
         tj = 25 + p * float(reg["theta_ja"])
         if tj > float(reg["tj_max"]):
             yield ("ldo_heat", "error", out, [ref], (
