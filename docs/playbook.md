@@ -223,7 +223,10 @@ weighed like any other report:
   capacitance at its DC (`lib/mlcc.py`: the part's curve from
   `reference/mlcc_dcbias.yaml` by MPN, else a generic class-II curve,
   typical and low) and each rail's total, against a regulator's Cout floor.
-  sim_board's DC-bias warning carries the same numbers.
+  sim_board's DC-bias warning carries the same numbers. A parts.json row
+  with no `refdes` reaches every part whose netlist MPN field is the same
+  part (case, spaces, dashes and dots aside); a refdes row wins, and a row
+  matching no part is listed under known_unknowns.
 - `scripts/eng_calc.py <divider|fb|rc|led|i2c|crystal|ldo|holdup|rpower>`:
   the same formulas (`lib/engcalc.py`) for a margin a review writes down,
   so the number cites a command anyone can re-run.

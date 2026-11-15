@@ -570,7 +570,7 @@ def run(a) -> dict:
             "no ngspice shared library found - install KiCad 10 with its "
             "simulator or set HWDE_NGSPICE_DLL")
     board = sim_board.load_board(inp["net"])
-    parts = sim_board.load_parts(inp["parts"])
+    parts = sim_board.load_parts(inp["parts"], board)
     cons = checklib.load_json(inp["constraints"], "constraints") \
         if inp["constraints"] else {}
     rails = sim_board.resolve_rails(board, parts, cons, inp["power_tree"],

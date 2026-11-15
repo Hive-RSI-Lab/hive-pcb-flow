@@ -1127,3 +1127,42 @@ def test_engine_rc_board_runs_clean(tmp_path, need_engine):
     assert rep["status"] != "error"
     assert not any("not simulated" in s for s in rep.get("not_judged", []))
     assert "node_volts" in rep
+
+
+def test_load_parts_matches_an_mpn_row_and_a_refdes_row_wins(tmp_path):
+    # #1260: a row with no refdes reaches every comp whose netlist MPN is
+    # the same part (case, spaces, dashes and dots aside); a refdes row
+    # naming the comp wins; a row matching nothing is listed
+    net = tmp_path / "m.net"
+    net.write_text("""(export (version "E") (components
+ (comp (ref "C1") (value "10uF") (footprint "C_0603")
+  (fields (field (name "MPN") "CL10A106KP8NNNC")))
+ (comp (ref "C2") (value "10uF") (footprint "C_0603")
+  (property (name "MPN") (value "CL10A106KP8NNNC")))
+ (comp (ref "C3") (value "10uF") (footprint "C_0603")
+  (property (name "MPN") (value "CL10A106KP8NNNC"))))
+ (nets (net (code "1") (name "+3V3")
+  (node (ref "C1") (pin "1")) (node (ref "C2") (pin "1"))
+  (node (ref "C3") (pin "1")))
+ (net (code "2") (name "GND")
+  (node (ref "C1") (pin "2")) (node (ref "C2") (pin "2"))
+  (node (ref "C3") (pin "2")))))
+""", encoding="utf-8")
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    (parts / "parts.json").write_text(json.dumps({"parts": [
+        {"mpn": "cl10a106kp8-nnnc", "attributes": [
+            {"name": "Voltage Rated", "value": "10V"}]},
+        {"mpn": "OTHER", "refdes": ["C3"], "attributes": [
+            {"name": "Voltage Rated", "value": "25V"}]},
+        {"mpn": "NOPE123", "attributes": []}]}))
+    board = sim_board.load_board(net)
+    assert board["comps"]["C2"]["mpn"] == "CL10A106KP8NNNC"
+    missed: list = []
+    rows = sim_board.load_parts(parts, board, missed)
+    assert rows["C1"]["matched_by"] == "mpn"
+    assert rows["C2"]["attrs"]["Voltage Rated"] == "10V"
+    assert rows["C3"]["mpn"] == "OTHER" and "matched_by" not in rows["C3"]
+    assert [m["mpn"] for m in missed] == ["NOPE123"]
+    # without the board, only refdes rows are known (old callers)
+    assert set(sim_board.load_parts(parts)) == {"C3"}
