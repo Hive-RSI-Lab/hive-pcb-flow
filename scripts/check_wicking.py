@@ -548,7 +548,9 @@ def run(argv=None):
     vios, seen = check(pcb, _gerber_dir(pcb, args.gerbers), args.dam_mm)
     return checklib.report(
         SCRIPT, pcb, vios, checked=[seen], not_judged=[TENTING_ASSUMED]
-        if seen.get("tenting_assumed") and seen.get("vias") else None), args.out
+        if seen.get("tenting_assumed") and seen.get("vias") else None,
+        nothing_to_judge=None if vios or seen["vias"] or seen["smd_pads"]
+        else "no via and no SMD pad on the board"), args.out
 
 
 def main(argv=None) -> int:

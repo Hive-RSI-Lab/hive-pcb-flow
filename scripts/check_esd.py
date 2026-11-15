@@ -698,7 +698,11 @@ def run(argv=None):
             if args.constraints else None)
     parts = Path(args.parts) if args.parts else pcb.resolve().parent.parent / "parts"
     viols, facts = check(pcb, cons, parts if parts.is_dir() else None)
-    return checklib.report(SCRIPT, pcb, viols, checked=[facts]), args.out
+    return checklib.report(
+        SCRIPT, pcb, viols, checked=[facts],
+        nothing_to_judge=None if viols or facts["connectors"] else
+        "no external connector (a J, P, CN, X or USB ref, or constraints "
+        "esd.connectors) on the board"), args.out
 
 
 def main(argv=None) -> int:
