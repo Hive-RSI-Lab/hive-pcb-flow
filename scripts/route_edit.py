@@ -12,6 +12,11 @@ Contract:
     add_track {start:[x,y], end:[x,y], width, layer, net}
     add_via   {at:[x,y], size, drill, net}          # through via
               [kind: micro|blind|buried, top, bot]  # a span (#477)
+              [teardrops: {length_ratio, max_length_mm, width_ratio,
+                           max_width_mm, filter_ratio, curved, two_tracks,
+                           prefer_zones}]   # enabled with these (#1138); a
+                     # key left out takes the default on a new via and keeps
+                     # its value on a via already there ({} only enables)
     remove    {uuid}                         # track, via or zone; absent=noop
     set_net   {uuid, net}                            # worker-level (renet)
     set_via_fill {uuid, filled}                      # filling + capping
@@ -147,11 +152,13 @@ import checklib  # noqa: E402
 import env  # noqa: E402
 import geom  # noqa: E402
 import routelib  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 OP_FIELDS = {  # op -> (required, optional)
     "add_track": ({"start", "end", "width", "layer", "net"}, set()),
-    "add_via": ({"at", "size", "drill", "net"}, {"kind", "top", "bot"}),
+    "add_via": ({"at", "size", "drill", "net"},
+                {"kind", "top", "bot", "teardrops"}),
     "remove": ({"uuid"}, set()),
     "set_net": ({"uuid", "net"}, set()),
     "set_via_fill": ({"uuid", "filled"}, set()),
@@ -227,6 +234,8 @@ def validate_ops(doc: dict) -> list[dict]:
                 raise CheckError(f"ops[{i}]: unknown via kind {op['kind']}")
             if op["kind"] != "through" and not ("top" in op and "bot" in op):
                 raise CheckError(f"ops[{i}]: a {op['kind']} via needs top and bot")
+        if kind == "add_via" and "teardrops" in op:
+            _validate_teardrops(i, op["teardrops"])
         if "uuid" in op and not (isinstance(op["uuid"], str) and op["uuid"]):
             raise CheckError(f"ops[{i}]: uuid must be a non-empty string")
         for k in ("layer", "from", "pcb") + (("to",) if not to_pt else ()) \
@@ -254,6 +263,28 @@ def validate_ops(doc: dict) -> list[dict]:
         if kind == "rename_net" and op["from"] == op["to"]:
             raise CheckError(f"ops[{i}]: from and to are the same net")
     return ops
+
+
+def _validate_teardrops(i: int, td) -> None:
+    """add_via's teardrops (#1138): teardroplib.ITEM_PARAMS names, a flag
+    true or false, a ratio or size a number of 0 or more (KiCad keeps a
+    zero: in 10.0.6 max_length 0 sets no cap and max_width 0 makes no
+    drop; the 10.0 branch reads max_width 0 as no limit)."""
+    if not isinstance(td, dict):
+        raise CheckError(f"ops[{i}]: teardrops must be an object of "
+                         f"{sorted(tdl.ITEM_PARAMS)}")
+    unknown = td.keys() - tdl.ITEM_PARAMS.keys()
+    if unknown:
+        raise CheckError(f"ops[{i}]: teardrops: unknown keys "
+                         f"{sorted(unknown)}")
+    for k, v in td.items():
+        if isinstance(tdl.ITEM_PARAMS[k], bool):
+            if not isinstance(v, bool):
+                raise CheckError(f"ops[{i}]: teardrops.{k} must be true or "
+                                 "false")
+        elif isinstance(v, bool) or not (_num(v) and v >= 0):
+            raise CheckError(f"ops[{i}]: teardrops.{k} must be a "
+                             "non-negative number")
 
 
 def _validate_route(i: int, op: dict) -> None:
@@ -442,6 +473,11 @@ def resolve_ops(bg, ops: list[dict], guards: dict | None = None
                      for a, b in zip(pts, pts[1:]) if not _close(a, b)]
         else:
             flat.append(dict(op))
+            if kind == "add_via" and "teardrops" in op:
+                # only the caller's keys (#1138): the worker merges them onto
+                # a via already there and fills the defaults for a new one,
+                # and verify checks the keys given
+                flat[-1]["teardrops"] = dict(op["teardrops"])
         spans.append(list(range(start, len(flat))))
     return flat, spans
 
@@ -650,6 +686,8 @@ def _verify(staged: Path, ops: list[dict]) -> list[str]:
     text = staged.read_text(encoding="utf-8")
     fills = _via_fills(staged) if any(op["op"] == "set_via_fill"
                                       for op in ops) else {}
+    drops = _via_teardrops(text) if any(
+        op["op"] == "add_via" and "teardrops" in op for op in ops) else {}
     problems = []
     for i, op in enumerate(ops):
         kind = op["op"]
@@ -670,17 +708,21 @@ def _verify(staged: Path, ops: list[dict]) -> list[str]:
                                 f"({op['net']}, {op['layer']}) not in saved board")
         elif kind == "add_via":
             want = tuple(op["at"])
-            found = any(
-                _close(want, v.at)
-                and abs(v.diameter - op["size"]) <= POS_TOL
-                and abs(v.drill - op["drill"]) <= POS_TOL
-                and v.kind == op.get("kind", "through")
-                and ("top" not in op or {op["top"], op["bot"]}
-                     == {v.layers[0], v.layers[-1]})
-                for v in bg.vias_of(net=op["net"]))
-            if not found:
+            hits = [v for v in bg.vias_of(net=op["net"])
+                    if _close(want, v.at)
+                    and abs(v.diameter - op["size"]) <= POS_TOL
+                    and abs(v.drill - op["drill"]) <= POS_TOL
+                    and v.kind == op.get("kind", "through")
+                    and ("top" not in op or {op["top"], op["bot"]}
+                         == {v.layers[0], v.layers[-1]})]
+            if not hits:
                 problems.append(f"ops[{i}]: via at {want} ({op['net']}) "
                                 "not in saved board")
+            elif "teardrops" in op and not any(
+                    tdl.same_params(op["teardrops"], drops.get(v.uuid))
+                    for v in hits):
+                problems.append(f"ops[{i}]: via at {want} ({op['net']}) "
+                                "saved without the teardrops asked for")
         elif kind == "remove":
             if op["uuid"] in text:
                 problems.append(f"ops[{i}]: uuid {op['uuid']} still present")
@@ -728,6 +770,12 @@ def _verify(staged: Path, ops: list[dict]) -> list[str]:
                 problems.append(f"ops[{i}]: {left} items still on "
                                 f"{op['from']}")
     return problems
+
+
+def _via_teardrops(text: str) -> dict:
+    """uuid -> teardroplib.params_of per via of the saved board."""
+    import sexpdata
+    return tdl.via_params(sexpdata.loads(text))
 
 
 def _via_fills(pcb: Path) -> dict:

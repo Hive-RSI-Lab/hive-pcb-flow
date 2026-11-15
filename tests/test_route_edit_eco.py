@@ -27,6 +27,7 @@ import env  # noqa: E402
 import geom  # noqa: E402
 import place_edit  # noqa: E402
 import route_edit  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 PD_DIR = REPO / "tests" / "fixtures" / "stages" / "pd_trigger" / "route"
@@ -521,6 +522,46 @@ def test_resolve_fill_vias_picks_vias_only(bg):
     assert [f["uuid"] for f in (flat[j] for j in spans[0])] == vias
     assert {f["filled"] for f in (flat[j] for j in spans[0])} == {True}
     assert {flat[j]["filled"] for j in spans[1]} == {False}
+
+
+# ------------------------------------------------------------ teardrops (#1138)
+
+_VIA = {"op": "add_via", "at": [1, 1], "size": 0.6, "drill": 0.3, "net": "A"}
+
+
+@pytest.mark.parametrize("td, msg", [
+    ([0.5], "must be an object"),
+    ({"length": 0.5}, "unknown keys"),
+    ({"curved": "yes"}, "must be true or"),
+    ({"two_tracks": 1}, "must be true or"),
+    ({"length_ratio": -0.1}, "non-negative"),
+    ({"max_length_mm": -1}, "non-negative"),
+    ({"width_ratio": True}, "non-negative"),
+    ({"filter_ratio": "0.9"}, "non-negative"),
+    ({"max_width_mm": float("inf")}, "non-negative"),
+])
+def test_validate_refuses_teardrops(td, msg):
+    with pytest.raises(CheckError, match=msg):
+        _v(dict(_VIA, teardrops=td))
+
+
+def test_validate_takes_a_zero_teardrop_setting():
+    """KiCad keeps a zero (max_length 0 sets no cap, max_width 0 makes no
+    drop), and part_repair copies a removed via's settings as they are."""
+    td = {"length_ratio": 0, "max_length_mm": 0.0, "max_width_mm": 0}
+    assert _v(dict(_VIA, teardrops=td))[0]["teardrops"] == td
+
+
+def test_resolve_passes_only_the_teardrop_keys_given(bg):
+    """The worker merges the keys onto a via already there and fills the
+    defaults only for a new one (#1138): a key filled in here would reset
+    that via's own setting."""
+    flat, _ = route_edit.resolve_ops(bg, _v(
+        dict(_VIA, teardrops={"length_ratio": 0.6, "curved": True}),
+        dict(_VIA, teardrops={}), _VIA))
+    assert flat[0]["teardrops"] == {"length_ratio": 0.6, "curved": True}
+    assert flat[1]["teardrops"] == {}
+    assert "teardrops" not in flat[2]
 
 
 def test_route_edit_fill_vias_apply(kicad, pd):

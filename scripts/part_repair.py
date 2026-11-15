@@ -82,8 +82,32 @@ lists the pad as a waived thermal, not a fixed one. Only a pad the run did
 not move, with no fewer spokes from that zone than it had before, gets
 one, and the tracks stay only if DRC then finds nothing new; any other
 starved pad fails the gate, and the notes say why.
-The new vias have no teardrops (route_edit's add_via sets none), so a via
-that is ripped and replaced loses its drops, and DRC does not see it.
+Teardrops (#1138): each new via takes the teardrop settings of the nearest
+via of its net the run removes (ripped, pushed, or pruned before the route
+or by a peel after a refill), when that via had them on (route_edit's
+add_via "teardrops"; the replay carries them), and the refill builds the
+drops. The joins lay a net at the widest width ripped from it, so a track
+they end on such a via can be too wide for its drop: it narrows from the
+via to NECK_PAST beyond where the drop ends, to a width the drop takes,
+the net's floor allows and the track does not graze the via at (Necks in
+the report). One that grazes at every such width stays, as does one narrow
+enough for a drop that grazes, and a via that takes its teardrops in a
+peel after the refill gets no neck. After the last refill, the check reads
+the drops round the repair area (lib/teardroplib.py, modelled on KiCad
+10.0.6) and fails the run when, on a layer, fewer tracks into a via have a
+drop than had one on the via it is judged by, as far as the tracks into it
+now allow: a new via by the via it took its teardrops from, a via on both
+boards in the area with teardrops on by itself before (a layer in its own
+net's pour counts). It names each track left without one and why: too wide
+for one, grazing the copper, or none made. A track that crosses a via's
+copper off the centre is not asked for one: KiCad makes only a sliver of a
+drop there, with no fillet. A via that took or had teardrops and has them
+off fails it too, as does a via a new one landed on (route_edit makes
+nothing there) in place of a removed via with teardrops on, when its own
+are off. A new via with a track short of a drop and no loss is a note, not
+a failure. Not checked: the vias the run removes (one with teardrops on
+that passed them to no new via is a note), and pads. DRC has no check for
+a missing drop: this is the only one.
 
 Contract: --pcb is read only, except with --apply on a pass. Exit 0 pass,
 1 violations (a net would not join, or the board got worse: --pcb untouched,
@@ -112,6 +136,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
+import sexpdata  # noqa: E402
 import shapely  # noqa: E402
 from shapely.geometry import LineString, Point, box  # noqa: E402
 
@@ -129,6 +154,7 @@ import route_edit  # noqa: E402
 import route_finish as rf  # noqa: E402
 import route_improve  # noqa: E402
 import routelib  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 MARGIN = 2.0   # mm round a part's old and new pads: the rip window
@@ -140,6 +166,9 @@ REPRUNE = 3    # peels after a refill, at most (#1140)
 CUT_MIN = 0.01  # mm: a dead end cut back leaves this much track, at least
 LOST_NEAR = 1.0  # mm: how near what cut a pour back from copper is named
 CUT_CAP = 4     # cuts of one track in one peel, at most
+TD_READ = 3.0  # mm past the repair area the teardrop check reads (#1138)
+TD_SHOWN = 8   # vias short of drops named in the gate's line
+NECK_PAST = 0.05  # mm a neck runs on past where its drop ends (#1138)
 RIP_FILE = "01-rip.route_edit.json"
 PLACE_FILE = "02-place.place_edit.json"
 ROUTE_FILE = "03-route.route_edit.json"
@@ -869,6 +898,484 @@ def _made(ops: list, results: list, first: int) -> tuple[dict, set]:
     return made, dup
 
 
+def _td_params(p: dict | None) -> dict | None:
+    """A via's teardroplib.params_of as add_via's teardrops (#1138); None
+    when its teardrops are off. A value route_edit would refuse (negative,
+    not a number) is left out, so the default stands for it; a zero is
+    copied as it is (KiCad 10.0.6: max_length 0 sets no cap, max_width 0
+    makes no drop; the 10.0 branch reads max_width 0 as no limit)."""
+    if not p or not p.get("enabled"):
+        return None
+    out = {}
+    for k, d in tdl.ITEM_PARAMS.items():
+        v = p.get(k)
+        if isinstance(d, bool):
+            if isinstance(v, bool):
+                out[k] = v
+        elif isinstance(v, (int, float)) and not isinstance(v, bool) \
+                and math.isfinite(v) and v >= 0:
+            out[k] = float(v)
+    return out
+
+
+def _lands_on(op: dict, vias) -> str | None:
+    """The uuid of the via add_via op lands on, which route_edit answers
+    "exists" without making one (same net and span, within TOL); None when
+    it lands on none."""
+    span = {op.get("top", "F.Cu"), op.get("bot", "B.Cu")}
+    x, y = op["at"]
+    for v in vias:
+        if v.net == op["net"] and abs(v.at[0] - x) <= TOL + 1e-9 \
+                and abs(v.at[1] - y) <= TOL + 1e-9 \
+                and {v.layers[0], v.layers[-1]} == span:
+            return v.uuid or ""
+    return None
+
+
+def restore_teardrops(adds: list, lost: list, params: dict, vias,
+                      landed: dict | None = None) -> list:
+    """Teardrops for the run's new vias (#1138): each add_via takes those
+    of the nearest via of its net the run takes off the board (lost; the
+    lower uuid on a tie), op "teardrops" set in place, when that via had
+    them on; one that had them off leaves the add without (route_edit's
+    default: off). Returns, per op in adds, the uuid of the via it took
+    them from, or None. params: uuid -> teardroplib.params_of on the base
+    board; vias: the work board's, less those the same op list removes (on
+    one of those route_edit makes a new via). An add that lands on a via
+    already there takes none: route_edit would set them on that via and
+    make nothing, and the replay leaves such an add out, so it would differ
+    from the work board. landed (when given) takes that via's uuid -> the
+    lost via's, for the check to see the via in its place has them on."""
+    by_net: dict = {}
+    for v in lost:
+        by_net.setdefault(v.net, []).append(v)
+    src: list = []
+    for op in adds:
+        cands = by_net.get(op.get("net")) if op["op"] == "add_via" else None
+        if not cands:
+            src.append(None)
+            continue
+        v = min(cands, key=lambda c: (math.dist(c.at, op["at"]),
+                                      c.uuid or ""))
+        p = _td_params(params.get(v.uuid))
+        on = _lands_on(op, vias) if p is not None else None
+        if p is None or on is not None:
+            if on is not None and landed is not None:
+                landed[on] = v.uuid
+            src.append(None)
+            continue
+        op["teardrops"] = dict(p)
+        src.append(v.uuid)
+    return src
+
+
+def late_teardrops(kept: list, made: dict, td_src: list, gone: list,
+                   params: dict, skip) -> list:
+    """restore_teardrops for a re-prune after the route (#1138), which takes
+    vias off the board after the new vias are made: each add_via in made
+    (the uuid it made -> its index in kept) that took no teardrops yet
+    (td_src None) and is not in skip (indices going now or gone) takes
+    them from the nearest via in gone (every via the run has taken off,
+    this pass's too), op "teardrops" and td_src set in place. Returns
+    those add_vias, to send again: route_edit sets the teardrops on the
+    via the op made ("exists"), and the replay's op has them from the
+    start. Every setting is spelled out: on a via already there route_edit
+    keeps the via's own value for a key left out, on a new via the
+    default."""
+    idx = sorted(i for i in made.values() if i not in skip
+                 and td_src[i] is None and kept[i]["op"] == "add_via")
+    again = []
+    for i, s in zip(idx, restore_teardrops([kept[i] for i in idx], gone,
+                                           params, [])):
+        if s is not None:
+            td_src[i] = s
+            kept[i]["teardrops"] = dict(tdl.ITEM_PARAMS,
+                                        **kept[i]["teardrops"])
+            again.append(dict(kept[i]))
+    return again
+
+
+def unplaced_teardrops(gone: list, params: dict, placed,
+                       on_work) -> list:
+    """The vias the run took off the board with teardrops on that passed
+    them to no via on the work board (#1138): no new via of their net
+    took them (each takes its nearest's, restore_teardrops) or the one
+    that did was pruned, and no via landed in their place. Their drops
+    went with them: a note, not a failure, as the check judges the vias
+    on the work board. gone: every via the run took off; params: uuid ->
+    teardroplib.params_of on the base board; placed: the uuids of the
+    removed vias a via on the work board took them from or stood in for;
+    on_work: the work board's via uuids. Entries of via, net, at."""
+    out, seen = [], set()
+    for v in sorted(gone, key=lambda v: (v.uuid or "")):
+        if not v.uuid or v.uuid in seen:
+            continue
+        seen.add(v.uuid)
+        if v.uuid in on_work or v.uuid in placed \
+                or _td_params(params.get(v.uuid)) is None:
+            continue
+        out.append({"via": v.uuid, "net": v.net,
+                    "at": [round(v.at[0], 4), round(v.at[1], 4)]})
+    return out
+
+
+def neck_widths(size: float, p: dict, widths, wide: float,
+                floor: float) -> list:
+    """The widths a track into a new via of size with teardrop settings p
+    may narrow to so KiCad makes its drop (#1138), best first: widths (the
+    removed via's tracks that took a drop), widest first, then wide (the
+    net's width), then floor (its narrowest DRC passes); only those at or
+    over floor that take a drop here (teardroplib takes_drop), each once.
+    Empty when none does."""
+    out: list = []
+    for w in sorted(set(widths), reverse=True) + [wide, floor]:
+        w = round(float(w), 6)
+        if w >= floor - 1e-9 and tdl.takes_drop(w, size, p) \
+                and w not in out:
+            out.append(w)
+    return out
+
+
+def _exit_at(a, b, c, r: float) -> float:
+    """The fraction along a->b where it leaves the circle (c, r) that a is
+    in: the larger root of |a + u(b - a) - c| = r, kept in [0, 1]."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    fx, fy = a[0] - c[0], a[1] - c[1]
+    qa = dx * dx + dy * dy
+    if qa <= 0:
+        return 1.0
+    qb = 2 * (fx * dx + fy * dy)
+    qc = fx * fx + fy * fy - r * r
+    disc = max(0.0, qb * qb - 4 * qa * qc)
+    return min(1.0, max(0.0, (-qb + math.sqrt(disc)) / (2 * qa)))
+
+
+def _pt(e) -> tuple:
+    return (float(e[0]), float(e[1]))
+
+
+def _far_end(t: dict, a) -> tuple:
+    """(the end of add_track t that is not a, True when a is its start)."""
+    at_start = math.dist(_pt(t["start"]), a) <= TOL
+    return (_pt(t["end"]) if at_start else _pt(t["start"])), at_start
+
+
+def _chain_next(kept, j, b, seen, shorter, board_at=None):
+    """The add_track a walk along kept[j] goes on to from its end b: the
+    one other add_track of its net and layer with an end at b (the prune's
+    shorter ones counted), when it is not in seen or shorter, no add_via
+    of the run stands at b, and no board copper of the net meets b on the
+    layer (board_at(net, layer, b)). Else None: the walk stops at a
+    branch, a via or a joint with the board."""
+    t = kept[j]
+    nxt = [k for k, o in enumerate(kept)
+           if k != j and o["op"] == "add_track" and o["net"] == t["net"]
+           and o["layer"] == t["layer"]
+           and any(math.dist(_pt(e), b) <= TOL
+                   for e in (o["start"], o["end"]))]
+    if len(nxt) != 1 or nxt[0] in seen or nxt[0] in shorter:
+        return None
+    if any(o["op"] == "add_via" and math.dist(_pt(o["at"]), b) <= TOL
+           for o in kept):
+        return None
+    if board_at is not None and board_at(t["net"], t["layer"], b):
+        return None
+    return nxt[0]
+
+
+def _leaving(kept, j, a, c, r, shorter, board_at=None):
+    """The ends (in the copper, outside it) of the track a drop on the via
+    (c, r) lies on, for kept[j] with end a in it: kept[j] when it leaves
+    the circle, else the first track the walk from its far end
+    (_chain_next) reaches that does, past stubs wholly inside. None when
+    the walk stops first."""
+    seen: set = set()
+    while j is not None and j not in seen:
+        seen.add(j)
+        b, _ = _far_end(kept[j], a)
+        if math.dist(b, c) > r:
+            return a, b
+        j, a = _chain_next(kept, j, b, seen, shorter, board_at), b
+    return None
+
+
+def neck_tracks(kept: list, td_src: list, shorter, width_of,
+                board_at=None) -> list:
+    """Tracks too wide for a drop on a new via that took teardrops (#1138).
+    The join lays a net at the widest width the run ripped from it, so it
+    can end a 0.3 mm track on a 0.254 mm via whose drops the removed via
+    had on 0.2 mm ones, and KiCad makes none for it (teardroplib
+    takes_drop). Each add_track in kept with an end in such a via's copper
+    (td_src not None), too wide for its drop, narrows from that end to
+    NECK_PAST past where the drop ends (drop_length past the via's edge),
+    walking on through the one add_track of its net and layer that goes on
+    from its far end (_chain_next); the rest keeps its width, a new
+    add_track appended to kept with None appended to td_src. width_of(i,
+    p): the widths the via at kept[i] with settings p may take
+    (neck_widths), best first; the neck takes the first one the track
+    does not graze the via at (teardroplib chord_of, grazes_on, read on
+    the track that leaves the copper, _leaving). With none, or no track
+    that leaves, the track stays and the gate names the drop it lost; a
+    track narrow enough for a drop that grazes stays too. Ops in shorter
+    (cut back by the prune) stay as they are. board_at(net, layer, pt):
+    True where board copper of the net meets pt, which ends a walk.
+    Returns one entry per via, net, layer, width and was: via (its "at"),
+    net, layer, width, was, length (mm narrowed) and ops (the kept
+    indices narrowed)."""
+    out: dict = {}
+    for i in range(len(kept)):
+        v = kept[i]
+        if v["op"] != "add_via" or td_src[i] is None \
+                or v.get("teardrops") is None:
+            continue
+        p = dict(tdl.ITEM_PARAMS, **v["teardrops"])
+        size, c = float(v["size"]), _pt(v["at"])
+        r = size / 2
+        ws = None
+        for j in range(len(kept)):
+            t = kept[j]
+            if t["op"] != "add_track" or t["net"] != v["net"] \
+                    or j in shorter \
+                    or tdl.takes_drop(float(t["width"]), size, p):
+                continue
+            near = [e for e in (_pt(t["start"]), _pt(t["end"]))
+                    if math.dist(e, c) <= r + TOL]
+            if not near:
+                continue
+            if ws is None:
+                ws = list(width_of(i, p) or [])
+            if not ws:
+                break
+            a = min(near, key=lambda e: math.dist(e, c))
+            leave = _leaving(kept, j, a, c, r, shorter, board_at)
+            if leave is None:
+                continue
+            chord = tdl.chord_of(leave[0], leave[1], c, size)
+            w = next((x for x in ws if not tdl.grazes_on(x, chord)), None)
+            if w is None:
+                continue
+            was = float(t["width"])
+            laid, ops = _neck_walk(kept, td_src, j, a, c, r,
+                                   tdl.drop_length(size, p) + NECK_PAST, w,
+                                   shorter, board_at)
+            if not ops:
+                continue
+            key = (_r(c[0]), _r(c[1]), v["net"], t["layer"], w, was)
+            e = out.setdefault(key, {
+                "via": [_r(c[0]), _r(c[1])], "net": v["net"],
+                "layer": t["layer"], "width": w, "was": was,
+                "length": 0.0, "ops": []})
+            e["length"] = _r(e["length"] + laid)
+            e["ops"] += ops
+    return list(out.values())
+
+
+def _neck_walk(kept, td_src, j, a, c, r, reach, w, shorter,
+               board_at=None) -> tuple:
+    """Narrow kept[j] (an add_track with end a in the via's copper (c, r))
+    to w from a out to reach mm past where the walk leaves the copper,
+    then on through the one add_track of its net and layer that goes on
+    from its far end (_chain_next); a track that ends past that point is
+    split there, its far piece appended to kept (td_src gets None). A
+    split point that rounds onto the track's far end narrows it whole,
+    one that rounds onto a narrows none of it. Returns (the mm of track
+    narrowed, the kept indices narrowed)."""
+    left = None      # mm still to narrow past the via's edge; None inside
+    done = 0.0
+    ops: list = []
+    seen: set = set()
+    while j is not None and j not in seen:
+        seen.add(j)
+        t = kept[j]
+        if float(t["width"]) <= w + 1e-9:
+            break
+        b, at_start = _far_end(t, a)
+        n = math.dist(a, b)
+        u0 = 0.0
+        if left is None:
+            if math.dist(b, c) <= r:
+                u0 = None          # wholly inside: narrow it all
+            else:
+                u0 = _exit_at(a, b, c, r)
+                left = reach
+        if u0 is not None and n * (1 - u0) > left + 1e-9:
+            u = u0 + left / n
+            pt = [_r(a[0] + (b[0] - a[0]) * u), _r(a[1] + (b[1] - a[1]) * u)]
+            if pt == [_r(a[0]), _r(a[1])]:
+                break              # nothing of it to narrow
+            if pt != [_r(b[0]), _r(b[1])]:
+                if at_start:
+                    kept[j] = dict(t, end=pt, width=w)
+                    kept.append(dict(t, start=pt))
+                else:
+                    kept[j] = dict(t, start=pt, width=w)
+                    kept.append(dict(t, end=pt))
+                td_src.append(None)
+                ops.append(j)
+                return done + math.dist(a, pt), ops
+            kept[j] = dict(t, width=w)   # the split is its far end
+            ops.append(j)
+            return done + n, ops
+        kept[j] = dict(t, width=w)
+        ops.append(j)
+        done += n
+        if u0 is not None:
+            left -= n * (1 - u0)
+        j, a = _chain_next(kept, j, b, seen, shorter, board_at), b
+    return done, ops
+
+
+def neck_lengths(necks: list, kept: list, gone) -> list:
+    """necks (neck_tracks) as the re-prune leaves them (#1138): each
+    length read again from its ops in kept that are not in gone (the
+    indices the prune took off or the board already had), an entry with
+    none of them left dropped, and the ops left out."""
+    out = []
+    for e in necks:
+        live = [k for k in e["ops"] if k not in gone]
+        if not live:
+            continue
+        n = sum(math.dist(_pt(kept[k]["start"]), _pt(kept[k]["end"]))
+                for k in live)
+        out.append({k: v for k, v in e.items() if k != "ops"}
+                   | {"length": _r(n)})
+    return out
+
+
+def td_read(params) -> float:
+    """mm past the repair area the teardrop check reads (#1138): TD_READ, or
+    2.5 x the longest max_length_mm of the items with teardrops on (params:
+    their params_of), so the item a drop that touches a via in the area
+    belongs to is read too; else the drop is credited to that via."""
+    longest = [p.get("max_length_mm") for p in params
+               if p and p.get("enabled")]
+    longest = [v for v in longest if isinstance(v, (int, float))
+               and not isinstance(v, bool) and math.isfinite(v)]
+    return max([TD_READ] + [2.5 * v for v in longest])
+
+
+def _td_entry(it, layers, why: str) -> dict:
+    return {"via": it.uuid, "net": it.net,
+            "at": [_r(it.at[0]), _r(it.at[1])], "layers": layers, "why": why}
+
+
+def _td_line(e: dict) -> str:
+    return (f"{e['net']} via at ({e['at'][0]:.3f}, {e['at'][1]:.3f})"
+            f" {e['why']}")
+
+
+_TD_WHY = {"no drop": "has none", "grazes": "grazes the copper"}
+
+
+def _td_reasons(it, layer: str) -> str:
+    """Each track into it (a teardroplib Item) on layer that no drop
+    answers, and why it has none (Item.unanswered). Too wide comes first:
+    a track too wide for a drop on the via gets none whatever its line,
+    and one that ends on the centre of a via narrower than itself grazes
+    the copper only by its width."""
+    out = [f"a {w:.4g} mm track " + (
+        f"is too wide for a drop on a {it.min_size_mm:g} mm via"
+        if why == "too wide" or it.too_wide(w) else _TD_WHY[why])
+        for w, why in sorted(it.unanswered(layer))]
+    return ", ".join(out) or \
+        f"{it.into(layer) - it.answered(layer)} without one"
+
+
+def _td_widths(it, layer: str) -> str:
+    """' (a 0.2 mm track)': the widths of the tracks on layer a drop
+    answers on it (Item.answered_widths); '' when unknown."""
+    ws = [f"{w:.4g}" for w in it.answered_widths(layer)]
+    if not ws:
+        return ""
+    if len(ws) == 1:
+        return f" (a {ws[0]} mm track)"
+    return f" ({', '.join(ws[:-1])} and {ws[-1]} mm tracks)"
+
+
+def _td_judge(it, ref, against: str, d0) -> tuple[list, list]:
+    """(lost, short) of the work board's it against ref, each a list of
+    (layer, why). On a layer, fewer tracks into it that a drop answers
+    (Item.answered, at any width) than on ref, or than the tracks into it
+    now (Item.into) if fewer, is lost; with ref None, a join no drop
+    answers (Item.deficit) is. More joins no drop answers than d0(layer)
+    and nothing lost is short."""
+    lost, short = [], []
+    for layer in sorted(set(it.cands) | set(it.joins) | set(it.grazes)):
+        a1, n1, d1 = it.answered(layer), it.into(layer), it.deficit(layer)
+        a0 = ref.answered(layer) if ref is not None else None
+        why = (f"on {layer} {a1} of {n1} tracks into it have a drop"
+               + (f", against {a0} {against}{_td_widths(ref, layer)}"
+                  if ref is not None else "")
+               + f": {_td_reasons(it, layer)}")
+        if (a1 < min(a0, n1)) if ref is not None else d1 > 0:
+            lost.append((layer, why))
+        elif d1 > d0(layer):
+            short.append((layer, why))
+    return lost, short
+
+
+def _td_add(out: list, it, rows: list) -> None:
+    if rows:
+        out.append(_td_entry(it, [layer for layer, _ in rows],
+                             "; ".join(why for _, why in rows)))
+
+
+def teardrop_loss(b0, b1, new_src: dict, area,
+                  landed: dict | None = None) -> tuple[list, list]:
+    """The drops the run lost (#1138), from teardroplib.read of the base
+    (b0) and work (b1) boards round the repair area: (lost, short), entries
+    of via, net, at, layers, why. Judged per layer by the tracks into a
+    via that a drop answers, at any width (a layer in the via's own net's
+    pour counts, as KiCad makes the drop there too): fewer than on the via
+    it is judged by, or than the tracks into it now if fewer, is lost, and
+    each track without a drop is named with why (too wide, grazing the
+    copper, or none made); a track crossing the copper off the centre is
+    not into the via (teardroplib Item.into). A new via that took
+    a lost via's teardrops (new_src: its uuid -> that via's) is judged by
+    that via and must have them on; a join of it with no drop and nothing
+    lost is short. A via on both boards, in the area, with teardrops on on
+    base, is judged by itself there and must keep them on; more joins with
+    no drop than before and nothing lost is short. landed: the uuid of a
+    via a new one landed on (restore_teardrops) -> the lost via it stood
+    in for, which had teardrops on; with its own off, it is lost too."""
+    v0 = {it.uuid: it for it in b0.items if it.kind == "via" and it.uuid}
+    v1 = {it.uuid: it for it in b1.items if it.kind == "via" and it.uuid}
+    lost, short = [], []
+    for u, s in sorted(new_src.items()):
+        it = v1.get(u)
+        if it is None:  # the re-prune took it
+            continue
+        if not it.enabled:
+            lost.append(_td_entry(it, [], "has its teardrops off"))
+            continue
+        gone, thin = _td_judge(it, v0.get(s), "on the via it took its"
+                               " teardrops from", lambda layer: 0)
+        _td_add(lost, it, gone)
+        _td_add(short, it, thin)
+    for u, it0 in sorted(v0.items()):
+        it1 = v1.get(u)
+        if it1 is None or not it0.enabled or u in new_src \
+                or not it0.poly.intersects(area):
+            continue
+        if not it1.enabled:
+            lost.append(_td_entry(it1, [], "had teardrops on and has them"
+                                  " off"))
+            continue
+        gone, thin = _td_judge(it1, it0, "before", it0.deficit)
+        _td_add(lost, it1, gone)
+        _td_add(short, it1, thin)
+    told = {e["via"] for e in lost}
+    for u, s in sorted((landed or {}).items()):
+        it = v1.get(u)
+        if it is None or it.enabled or u in told:
+            continue
+        lost.append(_td_entry(
+            it, [], f"has its teardrops off, and the route's via for a"
+            f" removed one with them on ({s}) landed on it: route_edit"
+            ' add_via on it with "teardrops": {} turns them on'))
+    return lost, short
+
+
 def touch_shorts(bg, refs, before=frozenset()) -> list[str]:
     """Tracks and vias of another net whose copper touches a pad of refs on
     bg (KiCad would carry them onto the pad's net when it saves), less the
@@ -1567,6 +2074,60 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
             o for u, (was, new) in moved.items()
             for o in _set_ends(u, was, new)] + kept
 
+    # a new via on a net whose removed vias had teardrops gets them back,
+    # set as on the nearest of those (#1138)
+    lost = {it.uuid: it for it in ripped
+            if not isinstance(it, geom.Track) and it.uuid}
+    for u in pushed + pruned:
+        if isinstance(by_uuid.get(u), geom.Via):
+            lost.setdefault(u, by_uuid[u])
+    root0 = sexpdata.loads(base.read_text(encoding="utf-8"))
+    td_params = tdl.via_params(root0)
+    td_reach = td_read(list(td_params.values())
+                       + list(tdl.pad_params(root0).values()))
+    del root0
+    # the route's list removes pushed and pruned: an add on one of those
+    # makes a new via (route_swig), so it lands on none of them
+    going = set(pushed + pruned)
+    td_landed: dict = {}
+    td_src = restore_teardrops(kept, list(lost.values()), td_params,
+                               [v for v in bgw.vias_of()
+                                if v.uuid not in going], td_landed)
+    td_gone = list(lost.values())
+
+    # the joins lay a net at the widest width ripped from it, so a track
+    # can end on a new via too wide for the drop the removed via had: it
+    # narrows there, to a width the drop takes (#1138)
+    def neck_w(i, p):
+        v, src = kept[i], lost.get(td_src[i])
+        sp = dict(tdl.ITEM_PARAMS, **(_td_params(
+            td_params.get(td_src[i])) or {}))
+        widths = [] if src is None else [
+            t.width for t in bg0.tracks_of(v["net"])
+            if tdl.takes_drop(t.width, src.diameter, sp)
+            and min(math.dist(t.shape.coords[0], src.at),
+                    math.dist(t.shape.coords[-1], src.at))
+            <= src.diameter / 2 + TOL]
+        return neck_widths(float(v["size"]), p, widths,
+                           router.rules.width(v["net"]),
+                           router.rules.width_floor(v["net"]))
+
+    # board copper of the net at a point ends a neck's walk there: the
+    # work board's, less what the run takes off, with the prune's cuts
+    def board_at(net, layer, pt) -> bool:
+        q = Point(pt)
+        for u, (_, s) in moved.items():
+            if s.net == net and s.layer == layer and LineString(
+                    [s.a, s.b]).distance(q) <= s.width / 2 + TOL:
+                return True
+        return any(it.poly.distance(q) <= TOL
+                   for it in bgw.tracks_of(net, layer)
+                   + bgw.vias_of(net, layer) + bgw.pads_of(net, layer)
+                   if getattr(it, "uuid", None) not in going
+                   and getattr(it, "uuid", None) not in moved)
+
+    necks = neck_tracks(kept, td_src, shorter, neck_w, board_at)
+    payload["necks"] = neck_lengths(necks, kept, set())
     route_ops = ops_now()
 
     # 7. check
@@ -1640,6 +2201,15 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                 shorter[i] = (shorter.get(i, (ends,))[0], (new.a, new.b))
             else:
                 moved[u] = (moved.get(u, (was,))[0], new)
+        # a via this peel takes off passes its teardrops on to the new vias
+        # of its net, as those removed before the route did, when it is
+        # the nearest the run took off; the refill below builds the drops
+        # (#1138)
+        td_gone += [by_uuid[u] for u in dead if u not in made
+                    and isinstance(by_uuid.get(u), geom.Via)]
+        step += late_teardrops(
+            kept, made, td_src, td_gone, td_params,
+            {made[u] for u in dead if u in made} | drop)
         route_edit.apply_ops(work, step)
         for u in dead:
             if u in made:
@@ -1706,12 +2276,15 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                         " not fix the join: the track adds no new path")
             aside.unlink()
     area = gate_area()
+    new_src = {u: td_src[i] for u, i in made.items() if td_src[i]}
     payload["trimmed"] += [kept[i] for i in sorted(drop)]
     payload["shortened"] = [
         _cut_note(u, was.net, was.layer, (was.a, was.b), (new.a, new.b))
         for u, (was, new) in moved.items()] + [
         _cut_note("", kept[i]["net"], kept[i]["layer"], *shorter[i])
         for i in sorted(shorter) if i not in drop | dup]
+    # a neck the re-prune cut back or took off reads as it is now
+    payload["necks"] = neck_lengths(necks, kept, drop | dup)
     kept = [op for i, op in enumerate(kept) if i not in drop | dup]
     payload["pruned"] = pruned
     route_ops = ops_now()
@@ -1724,6 +2297,43 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     payload["islands"] = isl
     payload["drc"] = {"before": drc0["counts"], "after": drc1["counts"]}
     worse = gates(drc0, drc1, isl, area)
+    # the drops after the refill: DRC has no check for a missing one
+    reach_td = area.buffer(td_reach)
+    td_lost, td_short = teardrop_loss(tdl.read(base, None, area=reach_td),
+                                      tdl.read(work, None, area=reach_td),
+                                      new_src, area, td_landed)
+    on_work = {it.uuid for it in bg1.vias_of()}
+    td_from = {u: s for u, s in new_src.items() if u in on_work}
+    td_in = {u: s for u, s in td_landed.items() if u in on_work}
+    td_unplaced = unplaced_teardrops(
+        td_gone, td_params, set(td_from.values()) | set(td_in.values()),
+        on_work)
+    payload["teardrops"] = {
+        "restored": len(td_from), "from": td_from, "landed": td_in,
+        "lost": td_lost, "short": td_short, "unplaced": td_unplaced}
+    if td_unplaced:
+        payload["notes"].append(
+            f"teardrops: {len(td_unplaced)} via(s) the run removed had"
+            " teardrops on and passed them to no via on the board (each"
+            " new via takes the settings of the nearest via the run"
+            " removed of its net; no new via took theirs, or the one"
+            " that did was pruned), so their drops went with them: "
+            + "; ".join(f"{e['net']} via at ({e['at'][0]:.3f},"
+                        f" {e['at'][1]:.3f})"
+                        for e in td_unplaced[:TD_SHOWN])
+            + (f"; and {len(td_unplaced) - TD_SHOWN} more in"
+               " part_repair.json" if len(td_unplaced) > TD_SHOWN else ""))
+    if td_short:
+        payload["notes"].append(
+            "teardrops: a track into a via has no drop, though the via lost"
+            " none: " + "; ".join(_td_line(e) for e in td_short))
+    if td_lost:
+        worse.append(
+            f"teardrops: {len(td_lost)} via(s) short of drops the base board"
+            " had (DRC does not see it): "
+            + "; ".join(_td_line(e) for e in td_lost[:TD_SHOWN])
+            + (f"; and {len(td_lost) - TD_SHOWN} more in part_repair.json"
+               if len(td_lost) > TD_SHOWN else ""))
     if worse:
         payload["status"] = "violations"
         payload["worse"] = worse
@@ -1817,6 +2427,22 @@ def report_md(p: dict) -> str:
             f" {w['spokes'][0]} before, {w['spokes'][1]} after; a"
             f" {w['track']['width']:.3f} mm {w['net']} track"
             for w in p["waived_thermals"]] + [""]
+    td = p.get("teardrops") or {}
+    if td.get("restored") or td.get("lost") or td.get("unplaced"):
+        lines += [f"Teardrops: {td.get('restored', 0)} new via(s) took them"
+                  " from the vias the run removed"
+                  + (f"; {len(td['lost'])} via(s) short of drops the base"
+                     " board had (below)" if td.get("lost") else "")
+                  + (f"; {len(td['unplaced'])} removed via(s) passed theirs"
+                     " to no via (notes)" if td.get("unplaced") else "")
+                  + ".", ""]
+    if p.get("necks"):
+        lines += ["Necks: a track too wide for a drop on a new via that"
+                  " took teardrops narrows there, so the drop is made:",
+                  ""] + [
+            f"- {n['net']} on {n['layer']} at ({n['via'][0]:.3f},"
+            f" {n['via'][1]:.3f}): {n['was']:.3f} mm to {n['width']:.3f} mm"
+            f" for {n['length']:.3f} mm" for n in p["necks"]] + [""]
     for key, head in (("failed", "Would not join"),
                       ("worse", "Worse than before")):
         if p.get(key):

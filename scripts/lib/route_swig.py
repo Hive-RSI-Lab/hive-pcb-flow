@@ -2,7 +2,8 @@
 
 Runs inside KiCad's bundled python (the only interpreter with pcbnew); invoked
 as `python route_swig.py job.json` by the venv drivers (route_edit.py,
-route_auto.py, planes_gen.py). stdlib + lib/safelib (itself stdlib).
+route_auto.py, planes_gen.py). stdlib + lib/safelib (itself stdlib) +
+lib/teardrop_swig (add_via's teardrops; stdlib at import).
 Every job runs under safelib.board_locks(job): an OS writer lock on the
 "board" and "out" .kicad_pcb (<pcb>.lock), held from LoadBoard to Save;
 a second worker on the same board waits, then refuses (LockBusy).
@@ -38,6 +39,11 @@ job JSON: {"verb": ..., "result": out.json, ...} with verbs:
          "layer": "F.Cu", "net": "NAME"}
         {"op": "add_via", "at": [x,y], "size": mm, "drill": mm, "net": "NAME"}
             # optional, a span (#477): "kind": micro|blind|buried, "top", "bot"
+            # optional (#1138): "teardrops": {teardroplib.ITEM_PARAMS names}
+            #   enables the via's teardrops with those settings; a key left
+            #   out takes the default on a new via and keeps its value on a
+            #   via already there, whose "exists" result says
+            #   "teardrops": "set" when anything changed
         {"op": "remove", "uuid": "..."}        # track, via or zone; absent = no-op
         {"op": "set_net", "uuid": "...", "net": "NAME"}   # renet one item
         {"op": "set_width", "uuid": "...", "width": mm}   # a track or arc
@@ -75,6 +81,7 @@ import json
 import sys
 
 import safelib  # lib/ is sys.path[0]: the worker runs as lib/route_swig.py
+import teardrop_swig  # add_via teardrops; pcbnew only inside its calls
 
 
 def _wx_quiet():
@@ -265,8 +272,18 @@ def verb_apply_ops(job):
                         and abs(vx - at.x) <= tol and abs(vy - at.y) <= tol:
                     hit = v
                     break
+            td = op.get("teardrops")
             if hit is not None:
-                results.append({"op": kind, "status": "exists"})
+                res = {"op": kind, "status": "exists"}
+                if td is not None:
+                    # merged onto the via's own settings: a key left out
+                    # keeps its value, not the default (#1138)
+                    was = teardrop_swig.get_params(hit, mm)
+                    keep = {k: x for k, x in was.items() if k != "enabled"}
+                    teardrop_swig.set_params(hit, dict(keep, **td), iu)
+                    if teardrop_swig.get_params(hit, mm) != was:
+                        res["teardrops"] = "set"
+                results.append(res)
                 continue
             v = pcbnew.PCB_VIA(board)
             v.SetPosition(at)
@@ -275,6 +292,9 @@ def verb_apply_ops(job):
             v.SetViaType(VIA_TYPES[op.get("kind", "through")](pcbnew))
             v.SetLayerPair(top, bot)
             v.SetNet(net)
+            if td is not None:
+                teardrop_swig.set_params(
+                    v, dict(teardrop_swig.ITEM_DEFAULTS, **td), iu)
             board.Add(v)
             via_index[(at.x, at.y, op["net"], top, bot)] = v
             results.append({"op": kind, "status": "added",
