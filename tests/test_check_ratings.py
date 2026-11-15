@@ -2671,6 +2671,106 @@ def test_every_voltage_code_table_cites_a_page():
         assert "v" in e["_rx"].groupindex
 
 
+# ---------------- a diode rated from its part number's family (#1323)
+
+def _diode_ws(tmp_path, mpn="", value="", pads=None, ref="D1"):
+    """One 2-pad diode with no extraction and no attribute, pad 1 the
+    cathode (KiCad's convention); the MPN as a footprint property."""
+    ws = _ws(tmp_path, [(ref, "", pads or {"1": "+48V", "2": "GND"},
+                         "Diode_SMD:D_SMA", value)], {})
+    pcb = ws / "kicad" / "board.kicad_pcb"
+    if mpn:
+        pcb.write_text(pcb.read_text().replace(
+            '(property "LCSC" "")', f'(property "LCSC" "") (property "MPN" '
+            f'"{mpn}")'))
+    viol, facts = cr.run_check(pcb, ws / "parts", None, None)
+    rev = [v for v in viol if v["kind"] == "rating_reverse_polarity"]
+    fact = next(f for f in facts["ledger_facts"]
+                if f["subject"] == ref and f["kind"] == "rating")
+    return rev, fact
+
+
+def test_diode_rated_from_family_table_planted(tmp_path):
+    # SS14 is a 40 V Schottky: on a 48 V rail, cathode up, it is over
+    rev, fact = _diode_ws(tmp_path, "SS14")
+    assert len(rev) == 1 and rev[0]["limit_v"] == 40
+    assert rev[0]["severity"] == "error" and rev[0]["pin"] == "D1.1"
+    assert "SS14" in rev[0]["msg"] and "vishay.com" in rev[0]["msg"]
+    assert fact["status"] == "failed"
+
+
+def test_diode_rated_from_family_table_quiet_twin(tmp_path):
+    # SS16 (60 V) holds the same 48 V: listed, from the part number
+    rev, fact = _diode_ws(tmp_path, "SS16")
+    assert rev == []
+    assert (fact["status"], fact["rated_from"]) == ("listed", "part_code")
+    assert "SS12, SS13, SS14, SS15, SS16" in fact["source"]
+    # the Value field names the part when there is no MPN
+    rev, fact = _diode_ws(tmp_path / "v", value="1N4007")
+    assert rev == [] and fact["rated_from"] == "part_code"
+
+
+def test_tvs_rated_by_its_standoff_not_its_clamp(tmp_path):
+    # SMAJ16A: 16 V standoff (17.8 V breakdown, 26 V clamp); an 18 V rail
+    # is over the standoff, a 15 V one is not
+    rev, _ = _diode_ws(tmp_path, "SMAJ16A", pads={"1": "+18V", "2": "GND"})
+    assert len(rev) == 1 and rev[0]["limit_v"] == 16
+    assert "standoff VRWM" in rev[0]["msg"]
+    rev, fact = _diode_ws(tmp_path / "q", "SMAJ16A",
+                          pads={"1": "+15V", "2": "GND"})
+    assert rev == [] and fact["rated_from"] == "part_code"
+
+
+def test_bidirectional_tvs_is_checked_either_way_round(tmp_path):
+    # SMBJ24CA blocks both ways: 48 V on its anode pad is still over 24 V
+    rev, _ = _diode_ws(tmp_path, "SMBJ24CA", pads={"1": "GND", "2": "+48V"})
+    assert len(rev) == 1 and rev[0]["limit_v"] == 24
+    assert "bidirectional" in rev[0]["msg"]
+    # the unidirectional part the same way round is forward, not reversed
+    rev, _ = _diode_ws(tmp_path / "u", "SMBJ24A",
+                       pads={"1": "GND", "2": "+48V"})
+    assert rev == []
+
+
+@pytest.mark.parametrize("ref, mpn, value", [
+    ("D1", "XYZ54", ""),            # a family with no row
+    ("D1", "SMF16CA", ""),          # onsemi SMF has no bidirectional row
+    ("D1", "BZT52C8V2T", ""),       # a Zener: 8.2 V is its clamp
+    ("D1", "", "BZT52C5V1"),
+    ("LED1", "NCD0603R1", "red"),   # an LED
+])
+def test_diode_with_no_family_row_stays_unrated(tmp_path, ref, mpn, value):
+    rev, fact = _diode_ws(tmp_path, mpn, value, ref=ref)
+    assert rev == [] and fact["status"] == "unknown"
+
+
+@pytest.mark.parametrize("mpn, volts, bi", [
+    ("1N4148", 75, False), ("1N4001", 50, False), ("1N4007-T", 1000, False),
+    ("1N5819", 40, False), ("1N5819HW-7-F", 40, False),
+    ("SS14-E3/61T", 40, False), ("SS34", 40, False), ("B5819W", 40, False),
+    ("BAT54LT1G", 30, False), ("MBRS140T3G", 40, False),
+    ("MBR0520LT1G", 20, False), ("B240A-13-F", 40, False),
+    ("B2100-13-F", 100, False), ("SMAJ16A", 16, False),
+    ("SMAJ33CA", 33, True), ("SMBJ5.0A", 5.0, False), ("SMBJ24CA", 24, True),
+    ("SMCJ48A", 48, False), ("SMF16A", 16, False), ("SMF70A", 70, False),
+    ("ESD5Z3.3T1G", 3.3, False), ("PESD5V0S1BL", 5, True),
+    ("ESD441DPYR", 5.5, False), ("TPD1E04U04DPYR", 3.6, False),
+])
+def test_diode_family_codes(mpn, volts, bi):
+    import diode_vr
+    r = diode_vr.mpn_reverse(mpn)
+    assert (r["v"], r["bi"]) == (volts, bi) and "http" in r["cite"]
+
+
+def test_every_diode_family_cites_a_sheet_and_no_clamp_is_a_rating():
+    import diode_vr
+    for e in diode_vr.load_families():
+        assert e["codes"] and "http" in e["cite"]
+        assert "k" in e["_rx"].groupindex
+        assert e["rating"] in ("VR", "VDC", "VRWM")
+        assert (e["rating"] == "VRWM") == (e["kind"] in ("tvs", "esd"))
+
+
 def test_extracted_rating_stays_verified_and_says_datasheet(tmp_path):
     ws = _suspect_ws(tmp_path, None)
     f = _fact(ws, "U1")

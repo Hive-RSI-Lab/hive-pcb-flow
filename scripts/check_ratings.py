@@ -65,7 +65,14 @@ Findings (kind = violation `kind`, remediations under reference/remediations/):
    #1307). A diode's Value voltage is a clamp voltage, so it is not read.
  - rating_reverse_polarity (error): net below an absolute minimum (a
    negative single figure, as P-channel parts print, is that minimum), or
-   a ground pin sitting on a positive rail.
+   a ground pin sitting on a positive rail. A 2-terminal diode with no
+   datasheet read and no reverse-voltage attribute is rated from its part
+   number's family (reference/diode_vr.yaml: 1N4148, 1N400x, 1N581x, SS1x,
+   SS3x, B2xx, B581xW, BAT54L, MBRS140, MBR0520, SMAJ/SMBJ/SMCJ, SMF, ESD5Z,
+   PESD5V0S1B and TI ESD parts; each family cited to a maker's datasheet;
+   a TVS or ESD diode by its standoff VRWM, never its clamp, and a
+   bidirectional one either way round; diode_code_rating, #1323). Zeners,
+   LEDs and families with no row stay unrated.
    Either is a warning, not an error, when the net's volts came through a
    pull-up: that resistor may be a deliberate series limit into a clamped
    pin. A supply pin fed through a resistor is not given the rail's volts.
@@ -169,12 +176,13 @@ supply pin on one is named in not_judged by rail, since nothing compared it
 rating_unrated. A board where nothing could be compared with known volts
 reports nothing_to_judge. Facts `parts_rated_unextracted` names each part
 compared with no extraction behind it (a distributor's listing, a part-number
-voltage code, a package table), which pins_checked does not count (#1307).
+voltage code or diode family, a package table), which pins_checked does not count (#1307).
 
 The fact ledger (lib/ledgerlib.py): each refdes gets a `rating` fact (verified
 when a datasheet's rating was compared with known volts and held, listed when
 the number was the distributor's, a capacitor's part-number voltage code or
-Value field's (part_code), or a package table's, `rated_from` says which;
+Value field's or a diode's part-number family (part_code), or a package
+table's, `rated_from` says which;
 failed on an error finding, unknown when unrated or nothing could be compared)
 and a
 `pinout` fact (pinout_fact: the board's pad numbers and names against the
@@ -201,6 +209,7 @@ sys.path.insert(0, str(HERE / "lib"))
 import checklib  # noqa: E402
 import engcalc  # noqa: E402
 import mlcc  # noqa: E402
+import diode_vr  # noqa: E402
 from checklib import CheckError, violation  # noqa: E402
 
 SCRIPT = "check_ratings"
@@ -1377,15 +1386,17 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         if ext is None and dio:
             vk, va = volts.get(pads[dio["k"]]), volts.get(pads[dio["a"]])
             if vk is not None and va is not None:
-                compared(ref, "distributor")
-                if vk - va > dio["vr"] + EPS:
+                compared(ref, "distributor" if dio["tier"] == "datasheet"
+                         else dio["tier"])
+                vrev = _diode_reverse_v(dio, vk, va)
+                if vrev > dio["vr"] + EPS:
                     emit("rating_reverse_polarity", "error", ref,
                          pads[dio["k"]],
-                         f"{ref} is reversed by {_fmt(vk - va)} V (cathode "
+                         f"{ref} is reversed by {_fmt(vrev)} V (cathode "
                          f"{pads[dio['k']]}, anode {pads[dio['a']]}), over "
                          f"its {_fmt(dio['vr'])} V reverse rating "
                          f"[{dio['src']}; {dio['how']}]",
-                         pin=f"{ref}.{dio['k']}", net_v=vk - va,
+                         pin=f"{ref}.{dio['k']}", net_v=vrev,
                          limit_v=dio["vr"], rating=dio["src"])
             continue
         if ext is None:
@@ -1712,15 +1723,18 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         for ref, dio in sorted(diodes.items()):
             pads = next(b["pads"] for b in board if b["ref"] == ref)
             vk, va = rev.get(pads[dio["k"]]), rev.get(pads[dio["a"]])
-            if vk is None or va is None or vk - va <= dio["vr"] + EPS:
+            if vk is None or va is None:
+                continue
+            vrev = _diode_reverse_v(dio, vk, va)
+            if vrev <= dio["vr"] + EPS:
                 continue
             emit("rating_reverse_polarity", "warning", ref, rail,
-                 f"{conn['ref']} plugged in reversed puts {_fmt(vk - va)} V "
+                 f"{conn['ref']} plugged in reversed puts {_fmt(vrev)} V "
                  f"across {ref} the wrong way (cathode {pads[dio['k']]}, "
                  f"anode {pads[dio['a']]}; {rail} = {_fmt(volts[rail])} V, "
                  "no drop in the series parts while it blocks), over its "
                  f"{_fmt(dio['vr'])} V reverse rating [{dio['src']}; "
-                 f"{dio['how']}]", pin=f"{ref}.{dio['k']}", net_v=vk - va,
+                 f"{dio['how']}]", pin=f"{ref}.{dio['k']}", net_v=vrev,
                  limit_v=dio["vr"], rating=dio["src"],
                  scenario=f"{conn['ref']} reversed")
     diode_forward_findings(board, bom_by_lcsc, exts, netfns, volts, vsrc,
@@ -1786,8 +1800,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     if unread:
         emit("rating_no_datasheet_read", "warning", unread[0], None,
              f"{len(unread)} part(s) were rated from a distributor's attribute,"
-             f" a part-number voltage code or a package table, with no "
-             f"datasheet read ({', '.join(unread[:8])}"
+             f" a part number's voltage code or family or a package table,"
+             f" with no datasheet read ({', '.join(unread[:8])}"
              f"{', ...' if len(unread) > 8 else ''}). This doesn't block "
              "release. To make them verified: run `datasheet_extract --fetch "
              "<ws>` and extract each PDF. A part with no number at all: "
@@ -2765,15 +2779,19 @@ def net_pinfunctions(pcb: Path) -> dict[str, dict[str, str]]:
 def diode_reverse(b: dict, ext: dict | None, bom: dict | None,
                   netfns: dict) -> dict | None:
     """A 2-terminal diode's reverse-voltage rating and its pads:
-    {k, a, vr, src, how}. The rating is the extraction's reverse row (rated
-    K against A) or a parts.json reverse-voltage attribute; the cathode is
-    the extraction's K pin, else the pad named K/cathode, else pad 1 (the
-    KiCad diode and LED convention, said in `how`). None for anything else."""
+    {k, a, vr, src, how, tier, bi}. The rating is the extraction's reverse
+    row (rated K against A), else a parts.json reverse-voltage attribute,
+    else the family table its part number belongs to (diode_vr: SS14 = 40 V,
+    a TVS's standoff; tier part_code, bi for a part that blocks both ways);
+    the cathode is the extraction's K pin, else the pad named K/cathode,
+    else pad 1 (the KiCad diode and LED convention, said in `how`). None for
+    anything else."""
     if not re.match(r"^(?:D|LED)\d", b["ref"]) or len(b["pads"]) != 2:
         return None
     vr = src = None
     k = a = None
     how = "pinout"
+    tier, bi = "datasheet", False
     if ext:
         idx = pin_index(ext.get("pinout") or [])
         ks, as_ = idx.get("K") or [], idx.get("A") or []
@@ -2791,13 +2809,42 @@ def diode_reverse(b: dict, ext: dict | None, bom: dict | None,
                 if m:
                     vr = float(m.group(1)) * (1000 if m.group(2) else 1)
                     src = f"parts.json {att.get('name')} = {att.get('value')}"
+                    tier = "distributor"
+    if vr is None and (code := diode_code_rating(b, bom)):
+        vr, src, bi = code["v"], code["src"], code["bi"]
+        tier = "part_code"
     if vr is None:
         return None
     if k is None:
         k, a, how = _cathode_by_pads(b, netfns)
     if k not in b["pads"] or a not in b["pads"]:
         return None
-    return {"k": k, "a": a, "vr": vr, "src": src, "how": how}
+    return {"k": k, "a": a, "vr": vr, "src": src, "how": how, "tier": tier,
+            "bi": bi}
+
+
+def diode_code_rating(b: dict, bom: dict | None) -> dict | None:
+    """{v, bi, src} for a D*/LED* part whose part number (the board's MPN,
+    else parts.json's, else its Value) belongs to a family in
+    reference/diode_vr.yaml; None for a family or code with no row."""
+    if not re.match(r"^(?:D|LED)\d", b["ref"]):
+        return None
+    for pn in (b.get("mpn"), (bom or {}).get("mpn"), b.get("value")):
+        if code := diode_vr.mpn_reverse(pn or ""):
+            what = "standoff VRWM" if code["rating"] == "VRWM" else \
+                f"reverse rating {code['rating']}"
+            return {"v": code["v"], "bi": code["bi"],
+                    "src": f"part number {pn}: {code['family']} {what} "
+                           f"{_fmt(code['v'])} V"
+                           + (", bidirectional" if code["bi"] else "")
+                           + f" ({code['cite']})"}
+    return None
+
+
+def _diode_reverse_v(dio: dict, vk: float, va: float) -> float:
+    """The volts a diode is asked to block: cathode over anode, or either
+    way round for a bidirectional part."""
+    return abs(vk - va) if dio.get("bi") else vk - va
 
 
 def _cathode_by_pads(b: dict, netfns: dict) -> tuple[str, str, str]:
@@ -3196,7 +3243,9 @@ def _rating_source(tiers: set[str], b: dict, src: str,
     if "package" in tiers:
         return _package_src(b.get("footprint"))
     if "part_code" in tiers:
-        return (cap_code_rating(b, bom) or (0.0, listing))[1]
+        code = cap_code_rating(b, bom) or (
+            (0.0, d["src"]) if (d := diode_code_rating(b, bom)) else None)
+        return (code or (0.0, listing))[1]
     if "distributor" not in tiers:
         return src
     return f"{src}; {listing}" if "datasheet" in tiers else listing
