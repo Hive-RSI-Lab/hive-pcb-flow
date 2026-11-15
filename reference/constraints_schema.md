@@ -376,6 +376,14 @@ Consumers per key (script -> phase):
   // io_high drives the IC's I/O at its highest supply.
   // `--io-supply U101=VDDD` does the same.
   "io_supply": {"U101": "VDDD"},
+  // interface_levels (check_ratings, #1006): the signal level an
+  // off-board connector's pins carry, where the net has no stated
+  // voltage. Each listed pin (all its pins without `pins`) drives its
+  // net between min (default 0) and max, so a part on the net rated
+  // below the level is flagged. USB D+/D- (3.6 V) and CC (5.5 V) pins on
+  // a USB connector are bounded without an entry.
+  "interface_levels": [{"ref": "J3", "max": 5.0, "pins": ["2", "3"],
+                        "why": "RS-232 receiver side clamps to 5 V"}],
   // voltage_pairs (T2): explicit net-PAIR differential that node voltages
   // cannot express (bridge/AC inputs - two 57 V taps carry 114 V between
   // them). Overrides the derived difference for that pair; a pair declared

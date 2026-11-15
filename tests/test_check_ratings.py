@@ -3458,3 +3458,131 @@ def test_a_soft_hull_does_not_judge_the_driver_or_lift_a_push_pull_pin():
         assert "U1" in bounds["/D"][3]
         want = (0.0, 48.0) if drv is OC_DRIVER else (0.0, 3.3)
         assert bounds["/D"][:2] == want
+
+
+# --- #1006: clamp power on driven nets, connector levels, negative grounds -
+
+def _drv_amps(ma):
+    return {**DRIVER, "pin_ratings": [
+        {"pins": ["OUT"], "kind": "current", "level": "abs_max",
+         "min": -ma / 1000, "max": ma / 1000, "source": "test p.2 IOUT"}]}
+
+
+def _clamped_gpio(tmp_path, supply="+5V", ma=25.0, pd="200mW", vz=3.3):
+    # U1 drives /D from its rail; D1 (K on /D, A on GND) clamps it at Vz
+    fps = [("U1", "C40", {"1": supply, "2": "GND", "3": "/D"}),
+           ("D1", "C21", {"1": "/D", "2": "GND"}),
+           ("J1", "C31", {"1": "+5V", "2": "GND"})]
+    bom = [{"lcsc": "C21", "mpn": "TESTZ", "attributes": [
+        {"name": "Pd - Power Dissipation", "value": pd}]}]
+    parts = {"C40": DRIVER if ma is None else _drv_amps(ma),
+             "C21": _zener(vz)}
+    return _run(_ws(tmp_path, fps, parts, bom=bom))
+
+
+def _d1_power(p):
+    return [v for v in p["violations"] if v["refs"] == ["D1"]
+            and v["kind"] == "rating_over_current"]
+
+
+def test_a_clamp_a_driver_pushes_past_is_judged_on_the_pins_current(tmp_path):
+    # 5 V rail into a 3.3 V zener: 25 mA x 3.3 V = 83 mW, over a 50 mW Pd
+    hit = _d1_power(_clamped_gpio(tmp_path, pd="50mW"))
+    assert hit and "U1.3 at its rated 25 mA" in hit[0]["msg"]
+    assert not _d1_power(_clamped_gpio(tmp_path / "b", pd="200mW"))
+
+
+def test_a_drivers_rail_inside_the_clamp_puts_nothing_through_it(tmp_path):
+    # a 3.3 V rail into a 5.1 V zener never conducts, whatever the Pd
+    p = _clamped_gpio(tmp_path, supply="+3V3", pd="0.1mW", vz=5.1)
+    assert not _d1_power(p)
+    assert not any("D1" in n for n in p.get("not_judged") or [])
+
+
+def test_a_clamp_with_no_driver_current_row_is_not_judged(tmp_path):
+    p = _clamped_gpio(tmp_path, ma=None, pd="0.1mW")
+    assert not _d1_power(p)
+    assert any(n.startswith("D1: a clamp on /D") and "not judged" in n
+               for n in p["not_judged"])
+
+
+def _usb(tmp_path, vmax, value="USB_C_Receptacle", pin_name="D+"):
+    fp = "USB_C" if "USB" in value else "Conn"
+    fps = [("J2", "C50", {"A6": "/DP", "A1": "GND"}, fp, value),
+           ("U9", "C30", {"1": "/DP", "2": "GND"}),
+           ("J1", "C31", {"1": "+5V", "2": "GND"})]
+    conn = {"mpn": "TESTCONN", "pinout": [
+        {"pin": "A6", "name": pin_name, "type": "passive"},
+        {"pin": "A1", "name": "GND", "type": "ground"}]}
+    return _run(_ws(tmp_path, fps, {"C30": _sink(vmax), "C50": conn}))
+
+
+def test_a_usb_data_pin_bounds_its_net_at_the_signal_level(tmp_path):
+    hit = _over(_usb(tmp_path, 3.3))
+    assert hit and hit[0]["bound_v"] == [0.0, 3.6]
+    assert "USB 2.0 D+/D- signal level" in hit[0]["msg"]
+    assert not _over(_usb(tmp_path / "b", 5))
+    # the same pin on a connector that is not USB says nothing
+    assert not _over(_usb(tmp_path / "c", 3.3, value="Conn_02"))
+    assert not _over(_usb(tmp_path / "d", 3.3, pin_name="SBU1"))
+
+
+def test_a_declared_interface_level_bounds_the_connectors_net(tmp_path):
+    fps = [("J2", "C31", {"1": "/RX", "2": "GND"}),
+           ("U9", "C30", {"1": "/RX", "2": "GND"}),
+           ("J1", "C31", {"1": "+5V", "2": "GND"})]
+    for sub, vmax, want in (("a", 3.6, True), ("b", 6, False)):
+        ws = _ws(tmp_path / sub, fps, {"C30": _sink(vmax)})
+        c = ws / "constraints.json"
+        c.write_text(json.dumps({"interface_levels": [
+            {"ref": "J2", "max": 5.0, "pins": ["1"]}]}))
+        hit = _over(_run(ws, c))
+        assert bool(hit) is want
+        if want:
+            assert hit[0]["bound_v"] == [0.0, 5.0]
+            assert "constraints interface_levels J2" in hit[0]["msg"]
+    # no entry: J2's far side is off the board, so /RX stays unknown
+    assert not _over(_run(_ws(tmp_path / "c", fps, {"C30": _sink(3.6)})))
+
+
+def _neg_gnd(tmp_path, gnd="-5V", vin="-3V"):
+    # U9's only ground pin sits on -5V: its no-ref -0.3 V minimum is
+    # measured from there, not from 0 V
+    fps = [("U9", "C32", {"1": vin, "2": gnd}),
+           ("J1", "C31", {"1": "+5V", "2": "-5V", "3": "GND"})]
+    return _run(_ws(tmp_path, fps, {"C32": {**SINK_MIN, "pin_ratings": [
+        {**SINK_MIN["pin_ratings"][0], "ref": None}]}}))
+
+
+def test_a_rating_with_no_reference_is_measured_from_a_negative_ground(
+        tmp_path):
+    assert not _rev(_neg_gnd(tmp_path))          # -3 V is +2 V over -5V
+    hit = _rev(_neg_gnd(tmp_path / "b", gnd="GND"))   # -3 V under GND
+    assert hit
+    # +3V3 over -5V is 8.3 V, past the 6 V maximum
+    assert _over(_neg_gnd(tmp_path / "c", vin="+3V3"))
+    assert not _over(_neg_gnd(tmp_path / "d", gnd="GND", vin="+3V3"))
+
+
+def test_a_driver_on_a_rail_past_the_usb_level_leaves_the_net_unbounded(
+        tmp_path):
+    # a PD controller's CC pin on a VBUS-fed supply: its rail is what it is
+    # fed from, not what it drives CC to, so neither bound is taken
+    def run(sub, rail):
+        fps = [("J2", "C50", {"A6": "/DP", "A1": "GND"}, "USB_C",
+                "USB_C_Receptacle"),
+               ("U9", "C30", {"1": "/DP", "2": "GND"}),
+               ("U1", "C40", {"1": rail, "2": "GND", "3": "/DP"}),
+               ("J1", "C31", {"1": "+5V", "2": "GND"})]
+        conn = {"mpn": "TESTCONN", "pinout": [
+            {"pin": "A6", "name": "D+", "type": "passive"},
+            {"pin": "A1", "name": "GND", "type": "ground"}]}
+        return _run(_ws(tmp_path / sub, fps, {"C30": _sink(3.3),
+                                              "C40": DRIVER, "C50": conn}))
+    p = run("a", "+5V")
+    assert not _over(p)
+    assert any(n.startswith("/DP: U1.3 sits on a rail past J2.A6")
+               for n in p["not_judged"])
+    # a 3.3 V rail stays inside the level: the net is bounded at 3.6 V
+    hit = _over(run("b", "+3V3"))
+    assert hit and hit[0]["bound_v"] == [0.0, 3.6]
