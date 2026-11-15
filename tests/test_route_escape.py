@@ -71,7 +71,8 @@ def _grid(n, pitch, pad, prefix="S", skip=()):
 
 
 def board(tmp_path, *, n=6, pitch=0.8, pad=0.35, rot=0, extra="",
-          name="b", zone_layer=None, pro=True, connector=True) -> Path:
+          name="b", zone_layer=None, pro=True, connector=True,
+          layers=4) -> Path:
     balls = _grid(n, pitch, pad)
     u1 = "".join(_pad(num, x, y, net, pad) for num, x, y, net in balls)
     half = (n - 1) / 2 * pitch + 0.8
@@ -86,10 +87,12 @@ def board(tmp_path, *, n=6, pitch=0.8, pad=0.35, rot=0, extra="",
                  '    (polygon (pts (xy 1 1) (xy 39 1) (xy 39 39) (xy 1 39)))\n'
                  '  )\n')
     body += extra
+    inner = " ".join(f'({2 * i + 2} "In{i}.Cu" signal)'
+                     for i in range(1, layers - 1))
     text = f"""(kicad_pcb
   (version 20260206) (generator "test")
   (general (thickness 1.6))
-  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal)
+  (layers (0 "F.Cu" signal) {inner}
     (2 "B.Cu" signal) (13 "F.Paste" user) (1 "F.Mask" user)
     (5 "F.SilkS" user "F.Silkscreen") (31 "F.CrtYd" user "F.Courtyard")
     (25 "Edge.Cuts" user))
@@ -743,3 +746,154 @@ def test_via_in_pad_choice(n, allow, forbid, keep):
 def test_via_in_pad_choice_flags_conflict():
     with pytest.raises(re_.CheckError):
         re_.via_in_pad_choice(6, True, True, {6})
+
+
+# ---- #1252: a fine field on a stack that fills vias free gets the fab's
+# smallest via, filled, in the pad; a 4-layer board never does
+
+JLC_ROW = {"abs_min_via_diameter_mm": 0.25, "abs_min_via_drill_mm": 0.15,
+           "abs_min_via_hole_to_hole_mm": 0.2}
+
+
+def test_fine_via_only_for_fine_fields_on_free_fill_stacks():
+    fv = bgalib.fine_via(_bga(0.5, 0.25), 6, JLC_ROW, {6, 8})
+    assert fv == {"via_diameter": 0.25, "via_drill": 0.15, "annular": 0.05,
+                  "hole_to_hole": 0.2, "hole_clearance": 0.2}
+    assert bgalib.fine_via(_bga(0.5, 0.25), 8, JLC_ROW, {6, 8})
+    # never on 4 layers, even if the table ever priced its fill at 0
+    assert bgalib.fine_via(_bga(0.5, 0.25), 4, JLC_ROW, {4, 6}) is None
+    assert bgalib.fine_via(_bga(0.5, 0.25), 6, JLC_ROW, {8}) is None
+    assert bgalib.fine_via(_bga(0.65, 0.3), 6, JLC_ROW, {6}) is None
+    assert bgalib.fine_via(_bga(0.5, 0.25), 6, {}, {6}) is None
+    assert bgalib.fine_via(_bga(0.5, 0.25), 6, None, {6}) is None
+
+
+def test_fine_via_budget_clearance_is_hole_clearance_less_ring():
+    fv = bgalib.fine_via(_bga(0.5, 0.25), 6, JLC_ROW, {6})
+    ep = bgalib.escape_params(_bga(0.5, 0.25), {**JLC6, **fv})
+    assert ep["via_size"] == pytest.approx(0.25)
+    assert ep["via_drill"] == pytest.approx(0.15)
+    assert ep["clearance"] == pytest.approx(0.15)
+
+
+def test_the_real_jlc_rows_give_0_25_0_15_from_6_layers():
+    assert bgalib.free_fill_layers({"options": {"via_fill_epoxy": {
+        4: 30.0, 6: 0, 8: 0.0}}}) == {6, 8}
+    assert bgalib.free_fill_layers({}) == set()
+    for n in (6, 8):
+        fv = bgalib.fine_via(_bga(0.5, 0.25), n, re_.fine_cap_row(n),
+                             re_.free_filled_via_layers())
+        assert (fv["via_diameter"], fv["via_drill"]) == (0.25, 0.15)
+    assert bgalib.fine_via(_bga(0.5, 0.25), 4, re_.fine_cap_row(4),
+                           re_.free_filled_via_layers()) is None
+
+
+def test_fine_rule_text_and_ensure_rules():
+    fv = bgalib.fine_via(_bga(0.5, 0.25), 6, JLC_ROW, {6})
+    r = bgalib.fine_rule("U2", fv)
+    assert r.startswith('(rule "aiee_bga_fine_via_U2"\n')
+    for c, v in (("via_diameter", "0.2500"), ("hole_size", "0.1500"),
+                 ("annular_width", "0.0500"), ("hole_to_hole", "0.2000"),
+                 ("hole_clearance", "0.2000")):
+        assert f"(constraint {c} (min {v}mm))" in r
+    assert bgalib.rule_condition("U2") in r
+    t, ch = bgalib.ensure_rules("", [("U2", 0.15, fv)])
+    assert ch == ["aiee_bga_escape_U2", "aiee_bga_fine_via_U2"]
+    assert bgalib.ensure_rules(t, [("U2", 0.15, fv)]) == (t, [])
+    # no fine via: only the clearance rule, as before
+    t0, ch0 = bgalib.ensure_rules("", [("U2", 0.15, None)])
+    assert ch0 == ["aiee_bga_escape_U2"] and "fine_via" not in t0
+
+
+@pytest.mark.parametrize("layers,fine", [(6, True), (4, False)])
+def test_rules_gen_writes_the_fine_via_rule_on_6_layers_only(tmp_path,
+                                                             layers, fine):
+    bg = geom.BoardGeom.from_file(board(tmp_path, pitch=0.5, pad=0.25,
+                                        layers=layers))
+    cap = {"min_trace_width_mm": 0.0889, "min_clearance_mm": 0.0889,
+           "min_via_diameter_mm": 0.45, "min_via_drill_mm": 0.2,
+           "min_annular_ring_mm": 0.15, **JLC_ROW}
+    rules, facts = rules_gen.bga_rules(bg, cap)
+    names = [r.name for r in rules]
+    assert ("aiee_bga_fine_via_U1" in names) is fine
+    assert (facts[0]["method"] == "underpad") is fine
+    if fine:
+        fv = bgalib.fine_via(bgalib.find_bgas(bg)[0], 6, cap, {6})
+        text = "(version 1)\n" + "\n".join(r.render() for r in rules) + "\n"
+        # route_escape's writer sees rules_gen's rules as its own
+        assert bgalib.ensure_rules(text, [("U1", 0.15, fv)])[1] == []
+
+
+@pytest.mark.parametrize("layers,fine", [(6, True), (4, False)])
+def test_plan_picks_the_fine_via_from_layers_and_pitch(tmp_path, capsys,
+                                                       layers, fine):
+    pcb = board(tmp_path, pitch=0.5, pad=0.25, layers=layers)
+    assert re_.main(["--pcb", str(pcb), "--plan"]) == 0
+    (b,) = json.loads(capsys.readouterr().out)["facts"]["bgas"]
+    assert ("fine_via" in b) is fine
+    if fine:
+        assert b["method"] == "underpad"
+        assert (b["via_size"], b["via_drill"]) == (0.25, 0.15)
+        assert b["fine_via"]["rule"] == "aiee_bga_fine_via_U1"
+    else:       # the 4-layer plan is what main made of it
+        assert b["method"] != "underpad" and b["via_size"] >= 0.45
+    # a coarse field on 6 layers keeps its dog-bone
+    pcb8 = board(tmp_path, name="c", layers=6)
+    assert re_.main(["--pcb", str(pcb8), "--plan"]) == 0
+    (b8,) = json.loads(capsys.readouterr().out)["facts"]["bgas"]
+    assert b8["method"] == "dogbone" and "fine_via" not in b8
+
+
+def _fine_run(tmp_path, monkeypatch=None, text=None):
+    if env.find_kicad_cli() is None or env.find_krt() is None:
+        pytest.skip("needs kicad-cli and KiCadRoutingTools")
+    pcb = board(tmp_path, pitch=0.5, pad=0.25, layers=6)
+    if text:
+        _plant_after_fanout(monkeypatch, text)
+    out = tmp_path / "r.json"
+    rc = re_.main(["--pcb", str(pcb), "--out-report", str(out)])
+    rep = json.loads(out.read_text())
+    assert rc in (0, 1), rep
+    (b,) = rep["facts"]["bgas"]
+    return pcb, rep["facts"], b
+
+
+def test_live_fine_via_escape_6_layer_quiet(tmp_path):
+    """The quiet twin: a 0.5 mm field on 6 layers escapes through filled
+    0.25/0.15 vias in its pads, DRC-clean against the board's own 0.45 mm
+    via floor (the courtyard rule lets the fine via pass there only)."""
+    pcb, f, b = _fine_run(tmp_path)
+    assert b["method"] == "underpad" and "fine_via" in b
+    assert f["drc_delta"]["new"] == {}
+    assert not b.get("ripped_by_drc")
+    assert b["kept_nets"] >= 30
+    dru = pcb.with_suffix(".kicad_dru").read_text()
+    assert "aiee_bga_fine_via_U1" in dru
+    # the courtyard copper rule keeps the field's own clearance: a wider one
+    # (hole clearance minus the thin ring) is one Freerouting can't see and
+    # its netclass-clearance wires broke it (#1252 6-layer bench)
+    assert b["fine_via"]["rule_clearance"] < b["clearance"]
+    assert bgalib.dru_rule("U1", b["fine_via"]["rule_clearance"]) in dru
+    bg = geom.BoardGeom.from_file(pcb)
+    (g,) = bgalib.find_bgas(bg)
+    new = {v.uuid for v in bg.vias_of()}
+    assert sum(re_.via_in_pad_nets(bg, g, new).values()) >= 4
+    assert {(round(v.diameter, 3), round(v.drill, 3))
+            for v in bg.vias_of()} == {(0.25, 0.15)}
+
+
+def test_live_fault_fine_via_outside_the_courtyard_is_ripped(tmp_path,
+                                                             monkeypatch):
+    """The planted fault: a 0.25/0.15 via of /S5_5 dropped outside U1's
+    courtyard, where the board's 0.45 mm via floor holds. The fine rule
+    must not reach it: DRC names /S5_5, it is ripped, the field kept."""
+    uid = UID % 904
+    pcb, f, b = _fine_run(tmp_path, monkeypatch,
+                          _via(28, 15, "/S5_5", uid, 0.25, 0.15))
+    (rd, *_) = f["drc_delta"]["rip_rounds"]
+    assert "/S5_5" in rd["nets"] and len(rd["nets"]) <= 3
+    assert f["drc_delta"]["new"] == {}
+    assert "/S5_5" in b["ripped_by_drc"]
+    bg = geom.BoardGeom.from_file(pcb)
+    assert uid not in {v.uuid for v in bg.vias_of()}
+    assert b["kept_nets"] >= 29
