@@ -3219,3 +3219,27 @@ def test_pour_geometry_is_built_once(tmp_path_factory):
     if t is not None:
         first = check_current.covered_by_own_copper(bg, "+3V3", t)
         assert check_current.covered_by_own_copper(bg, "+3V3", t) == first
+
+
+def test_copper_without_matches_the_whole_union(tmp_path_factory):
+    """_track_split's part-local rebuild gives the same copper as unioning
+    the layer again without the track, for every track of the net."""
+    for name, body in (("cwo1", PLANE_FED_BODY), ("cwo2", _GND_RETURN_BODY)):
+        bg = _board(tmp_path_factory, name, body)
+        seen = 0
+        for net in sorted(bg.nets):
+            for t in bg.tracks_of(net):
+                l = t.layer
+                fast = check_current._copper_without(bg, net, l, t)
+                slow = geom._union(
+                    [x.poly for x in bg.tracks_of(net, l) if x is not t]
+                    + [p.poly for p in bg.pads_of(net, l)]
+                    + [v.poly for v in bg.vias_of(net, l)]
+                    + [z.fill_on(l) for z in bg.zones_of(net, l)])
+                assert fast.symmetric_difference(slow).area < 1e-9
+                def parts(c):
+                    return [x for x in getattr(c, "geoms", [c])
+                            if x.geom_type == "Polygon" and not x.is_empty]
+                assert len(parts(fast)) == len(parts(slow))
+                seen += 1
+        assert seen
