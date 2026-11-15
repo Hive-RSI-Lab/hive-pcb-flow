@@ -969,6 +969,40 @@ def test_live_a_join_that_must_push_other_nets_aside(kicad, tmp_path,
     assert _copper(fresh) == _copper(out / "work" / pcb.name)
 
 
+def test_live_a_net_that_fails_joins_again_first(kicad, tmp_path,
+                                                 monkeypatch):
+    """A net that won't join in the parts' order (as when a join before it
+    took its room) gets a second pass from the board after the rips, with
+    it first. The first pass's joins are undone, not kept: the replay of
+    the second makes the same copper."""
+    real = pr.join_net
+    calls = []
+
+    def second_fails(router, net, *a, **k):
+        calls.append(net)
+        if len(calls) == 2:
+            raise CheckError(f"{net}: no room (test)")
+        return real(router, net, *a, **k)
+    monkeypatch.setattr(pr, "join_net", second_fails)
+    pcb = _copy(tmp_path, "kicad")
+    out = tmp_path / "out"
+    assert pr.main(["--pcb", str(pcb), "--op", json.dumps(RENUMBER),
+                    "--out", str(out)]) == 0
+    p = _report(out)
+    assert p["status"] == "pass", p.get("worse") or p.get("failed")
+    a, b = calls[:2]
+    again = calls[calls.index(b, 2):]       # the second pass, b first
+    assert a in again, calls                # a's first join was undone
+    assert p["join_passes"] == [{"first": [], "failed": [b]},
+                                {"first": [b], "failed": []}]
+    assert any("joins ran again" in n for n in p["notes"])
+    assert "failed" not in {j["how"] for j in p["joins"].values()}
+    assert all(y <= x for x, y in p["islands"].values()), p["islands"]
+    fresh = _copy(tmp_path, "fresh")
+    _replay_cmds(p, fresh)
+    assert _copper(fresh) == _copper(out / "work" / pcb.name)
+
+
 def test_live_a_board_changed_during_the_run_is_not_replaced(
         kicad, tmp_path, monkeypatch):
     pcb = _copy(tmp_path, "kicad")

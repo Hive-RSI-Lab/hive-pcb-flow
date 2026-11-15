@@ -344,6 +344,10 @@ def join_net(router, net: str, want: int, near, width, keep, boxes=()):
     raise CheckError(f"{net}: " + "; ".join(why))
 
 
+def _failed_nets(joins: dict) -> list:
+    return [n for n, j in joins.items() if j.get("how") == "failed"]
+
+
 def _via_layers(op: dict, cu: list) -> list:
     if "top" in op and "bot" in op and op["top"] in cu and op["bot"] in cu:
         i, j = sorted((cu.index(op["top"]), cu.index(op["bot"])))
@@ -1047,44 +1051,77 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     for it in ripped:
         if isinstance(it, geom.Track):
             widest[it.net] = max(widest.get(it.net, 0.0), it.width)
-    adds: list = []
-    pushed: list = []
-    joins: dict = {}
-    failed: list = []
     near_of = {}
     for r, w in wins.items():
         for p in old[r] + new[r]:
             near_of[p.net] = near_of[p.net].union(w) if p.net in near_of \
                 else w
-    queue = list(nets)
-    for net in queue:
-        # a fill scrap the moves cut off is the refill's (Router.islands)
-        want, have = base_count(net), len(router.islands(net,
-                                                         scraps=False))
-        joins[net] = {"islands_before": want, "after_rip": have}
-        if have <= want:
-            joins[net]["how"] = "still joined"
-            continue
-        near = near_of.get(net) or win
-        own = [r for r in refs if any(p.net == net for p in old[r] + new[r])]
-        boxes = [wins[r] for r in own] + [w for r, w in wins.items()
-                                          if r not in own]
-        try:
-            jops, gone, how, maxes = join_net(
-                router, net, want, near, widest.get(net), keep, boxes)
-        except CheckError as e:
-            joins[net]["how"] = "failed"
-            failed.append(str(e))
-            continue
-        joins[net].update(how=how, tracks=sum(
-            o["op"] == "add_track" for o in jops), vias=sum(
-            o["op"] == "add_via" for o in jops))
-        adds += jops
-        pushed += gone
-        for v in maxes:
-            if v not in queue:
-                queue.append(v)
-                base_count(v)
+
+    def join_pass(order):
+        """Join each net of order back to its base count, in turn, and the
+        nets a push re-routed: (joins, adds, pushed, failed reasons,
+        queue)."""
+        adds: list = []
+        pushed: list = []
+        joins: dict = {}
+        failed: list = []
+        queue = list(order)
+        for net in queue:
+            # a fill scrap the moves cut off is the refill's (Router.islands)
+            want, have = base_count(net), len(router.islands(net,
+                                                             scraps=False))
+            joins[net] = {"islands_before": want, "after_rip": have}
+            if have <= want:
+                joins[net]["how"] = "still joined"
+                continue
+            near = near_of.get(net) or win
+            own = [r for r in refs
+                   if any(p.net == net for p in old[r] + new[r])]
+            boxes = [wins[r] for r in own] + [w for r, w in wins.items()
+                                              if r not in own]
+            try:
+                jops, gone, how, maxes = join_net(
+                    router, net, want, near, widest.get(net), keep, boxes)
+            except CheckError as e:
+                joins[net]["how"] = "failed"
+                failed.append(str(e))
+                continue
+            joins[net].update(how=how, tracks=sum(
+                o["op"] == "add_track" for o in jops), vias=sum(
+                o["op"] == "add_via" for o in jops))
+            adds += jops
+            pushed += gone
+            for v in maxes:
+                if v not in queue:
+                    queue.append(v)
+                    base_count(v)
+        return joins, adds, pushed, failed, queue
+
+    # one net's join can take the room another needs, and no push moves a
+    # power net's copper (Router.rippable): on the C216-C224 job +3V3's
+    # push left /soc/VDDA_1P8_USB_F no path (#1140). So when nets fail,
+    # the joins start again, once, from the board after the rips, with
+    # the nets that failed first; if that fails too, both passes report.
+    held = _held(router)
+    joins, adds, pushed, failed, queue = join_pass(nets)
+    if failed:
+        first = _failed_nets(joins)
+        _restore(router, held)
+        joins, adds, pushed, failed2, queue = join_pass(
+            first + [n for n in nets if n not in first])
+        payload["join_passes"] = [
+            {"first": [], "failed": first},
+            {"first": first, "failed": _failed_nets(joins)}]
+        if failed2:
+            failed = [f"pass 1: {f}" for f in failed] + [
+                f"pass 2, {', '.join(first)} first: {f}" for f in failed2]
+        else:
+            failed = []
+            payload["notes"].append(
+                f"{', '.join(first)} would not join in the parts' order, so"
+                " the joins ran again from the rips with "
+                + ("it" if len(first) == 1 else "them") + " first: every"
+                " net joined")
     payload["joins"] = joins
     payload["pushed"] = pushed
     if failed:
