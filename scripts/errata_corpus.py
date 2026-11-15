@@ -254,9 +254,30 @@ def _check_mate_pins(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--constraints", str(empty)]
 
 
+def board_constraints(b: dict, rev: str, repo: Path) -> Path | None:
+    """The revision's own constraints.json, if its project ships one: next to
+    the board file, else at the checkout's root. The same lookup on every
+    board, with nothing written per board; none found, none used."""
+    pcb = repo / b[rev]["pcb"]
+    for d in (pcb.parent, repo):
+        f = d / "constraints.json"
+        if f.is_file():
+            return f
+    return None
+
+
 def _check_current(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    # a catch's own constraints (a non-empty file) win; otherwise the
+    # board's shipped constraints.json, where one exists
+    cons = empty
+    try:
+        stated = json.loads(empty.read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError):
+        stated = None
+    if not stated:
+        cons = board_constraints(b, rev, repo) or empty
     return ["check_current.py", "--pcb", str(_pcb(b, rev, repo, empty)),
-            "--constraints", str(empty)]
+            "--constraints", str(cons)]
 
 
 def _check_pinouts(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
@@ -461,6 +482,48 @@ COVERAGE_KINDS = {"check_ratings": {
     "rating_regulator_output_unjudged", "rating_no_attributes"}}
 
 
+def coverage(rep: dict) -> dict:
+    """What a check's report says it could judge on a board: `nothing_to_judge`
+    (its reason) when it found nothing of its kind to look at, else `judged`;
+    `not_judged` counts the items it named but couldn't judge (a list, or a
+    dict of reason -> items or a count)."""
+    nj = rep.get("not_judged")
+    if isinstance(nj, dict):
+        n = sum(len(v) if isinstance(v, (list, tuple)) else
+                int(v) if isinstance(v, int) else 1 for v in nj.values())
+    elif isinstance(nj, (list, tuple)):
+        n = len(nj)
+    else:
+        n = 1 if nj else 0
+    if rep.get("nothing_to_judge"):
+        return {"status": "nothing_to_judge",
+                "reason": str(rep["nothing_to_judge"])[:200], "not_judged": n}
+    return {"status": "judged", "not_judged": n}
+
+
+def coverage_line(rows: list[tuple[str, str, dict]]) -> list[str]:
+    """Per check, over the swept boards (rev A): how many it judged, how many
+    gave it nothing to judge, how many had items it couldn't judge, and how
+    many it crashed on. Shows where a score can't move: a check that judges
+    nothing on a set can't catch anything on it."""
+    per: dict[str, dict[str, int]] = {}
+    for _bid, script, r in rows:
+        c = per.setdefault(script, {"judged": 0, "nothing_to_judge": 0,
+                                    "with_not_judged": 0, "crashed": 0})
+        if "error" in r:
+            c["crashed"] += 1
+            continue
+        cov = r.get("coverage")
+        if not cov:
+            continue
+        c[cov["status"]] += 1
+        c["with_not_judged"] += bool(cov.get("not_judged"))
+    return [f"coverage {s}: judged {c['judged']}, nothing_to_judge "
+            f"{c['nothing_to_judge']}, with not_judged items "
+            f"{c['with_not_judged']}, crashed {c['crashed']}"
+            for s, c in sorted(per.items())]
+
+
 def sweep(cache: Path, b: dict) -> dict:
     """Every check the corpus runs, on both revisions, with nothing said about
     the defects: the blind run a holdout board gets before its errata are read
@@ -491,6 +554,12 @@ def sweep(cache: Path, b: dict) -> dict:
         if cov:
             res[script]["coverage_gone_on_rev_b"] = [
                 v for v in gone if v.get("kind") in cov]
+        rep = cache / "runs" / b["id"] / f"rev_a-{script}.json"
+        try:
+            res[script]["coverage"] = coverage(
+                json.loads(rep.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
     out = cache / "runs" / b["id"] / "sweep.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res, indent=1))
@@ -742,12 +811,13 @@ def main(argv: list[str] | None = None) -> int:
         # unvalidated: a holdout board is fetched and swept before its
         # defects are judged, so before it has its blind verdicts
         raw = _raw(man, "holdout")
-        pairs, errored = 0, []
+        pairs, errored, rows = 0, [], []
         for b in raw:
             if not wanted(b):
                 continue
             fetch(where(b), b)
             for script, r in sweep(where(b), b).items():
+                rows.append((b["id"], script, r))
                 print(b["id"], script, *([f"crashed: {script}"] if "error" in r
                                          else []), json.dumps(r))
                 pairs += 1
@@ -756,6 +826,9 @@ def main(argv: list[str] | None = None) -> int:
         # a crashed check is a hole in the sweep, not a clean pass (#1189)
         print(f"sweep: {pairs} (board, check) pairs, {len(errored)} errored"
               + (": " + ", ".join(errored) if errored else ""))
+        # counts per check, no board names: this reaches builders' logs too
+        for line in coverage_line(rows):
+            print(line)
         note_left_out()
         return 0
     boards = [b for b in load_all(man) if wanted(b)]

@@ -597,3 +597,64 @@ def test_run_cli_counts_a_crash_as_bad(tmp_path, monkeypatch):
     monkeypatch.setattr(ec, "load_all", lambda m: [{"id": "p", "rev_a": {}, "rev_b": {},
                                                     "defects": [d]}])
     assert ec.main(["run", "p", "--cache", str(cache)]) == 1
+
+
+def test_check_current_reads_a_shipped_constraints_json(tmp_path):
+    """check_current takes the board's own constraints.json where the project
+    ships one, the same lookup on every board; with none, the empty file."""
+    repo = tmp_path / "repo"
+    (repo / "hw").mkdir(parents=True)
+    pcb = repo / "hw" / "b.kicad_pcb"
+    pcb.write_text("(kicad_pcb (version 20240108))")
+    b = {"id": "x", "rev_a": {"pcb": "hw/b.kicad_pcb"}}
+    empty = tmp_path / "constraints.json"
+    empty.write_text("{}")
+    args = ec._check_current(b, "rev_a", repo, empty)
+    assert args[args.index("--constraints") + 1] == str(empty)
+    (repo / "constraints.json").write_text('{"power": []}')
+    args = ec._check_current(b, "rev_a", repo, empty)
+    assert args[args.index("--constraints") + 1] == str(repo / "constraints.json")
+    (repo / "hw" / "constraints.json").write_text('{"power": []}')
+    args = ec._check_current(b, "rev_a", repo, empty)
+    assert args[args.index("--constraints") + 1] == str(repo / "hw" / "constraints.json")
+    # a catch's own constraints win over the board's
+    stated = tmp_path / "constraints-c1.json"
+    stated.write_text('{"power": [{"net": "/5V"}]}')
+    args = ec._check_current(b, "rev_a", repo, stated)
+    assert args[args.index("--constraints") + 1] == str(stated)
+
+
+def test_coverage_reads_judged_nothing_and_not_judged():
+    assert ec.coverage({"status": "pass", "nothing_to_judge": "no MCU"}) == {
+        "status": "nothing_to_judge", "reason": "no MCU", "not_judged": 0}
+    assert ec.coverage({"status": "pass", "not_judged": ["a", "b"]}) == {
+        "status": "judged", "not_judged": 2}
+    assert ec.coverage({"not_judged": {"r1": ["C1", "C2"], "r2": 3}}) == {
+        "status": "judged", "not_judged": 5}
+    assert ec.coverage({"status": "pass"}) == {"status": "judged", "not_judged": 0}
+
+
+NOTHING = ("import json, sys\n"
+           "out = sys.argv[sys.argv.index('--out') + 1]\n"
+           "json.dump({'status': 'pass', 'violations': [],"
+           " 'nothing_to_judge': 'no part of its kind'}, open(out, 'w'))\n")
+
+
+def test_sweep_prints_a_coverage_line_per_check(tmp_path, monkeypatch, capsys):
+    cache = _planted(tmp_path, monkeypatch, NOTHING)
+    monkeypatch.setattr(ec, "fetch", lambda c, b: None)
+    monkeypatch.setattr(ec, "_raw", lambda m, w: [
+        {"id": "p", "rev_a": {}, "rev_b": {}}, {"id": "q", "rev_a": {}, "rev_b": {}}])
+    ec.main(["sweep", "p", "q", "--cache", str(cache)])
+    out = capsys.readouterr().out
+    assert ("coverage planted: judged 0, nothing_to_judge 2, "
+            "with not_judged items 0, crashed 0") in out
+    r = ec.sweep(cache, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
+    assert r["coverage"]["status"] == "nothing_to_judge"
+
+
+def test_coverage_line_counts_a_crash():
+    rows = [("a", "c", {"error": "boom"}),
+            ("b", "c", {"coverage": {"status": "judged", "not_judged": 1}})]
+    assert ec.coverage_line(rows) == [
+        "coverage c: judged 1, nothing_to_judge 0, with not_judged items 1, crashed 1"]
