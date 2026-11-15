@@ -41,13 +41,21 @@ Checks (land_pattern fields drive which run):
                 its hole and every locating post has one
                 (check_connector_fit's tht_pin_tight, post_holes_missing ...)
 
-Not checked: which pad carries which pin. pin1 only asks that a pad numbered
-'1' exists, and the geometry checks don't read numbers, so a footprint that
-numbers its pads round the wrong side passes. Example: on SiTime's 3.2 x 2.5 mm
-PQFN-4 oscillator, pins 1 and 2 share a LONG side (2.1 mm apart, SiT1602B
-drawing POD-PQFN-004-X03225-002); numbering round the short side puts VDD on
-OE and OUT on the supply, and the clock never starts. Check numbering against
-the datasheet's top view or KiCad's stock footprint.
+  - pad_numbering: which pad carries which pin (#1102). With the     (error)
+                record's land_pattern.pads (top-view places from the land
+                drawing) the numbered pads must fit them under a quarter
+                turn, no mirror, within the size tolerance; else each pad
+                on another pin's place is named, with hint
+                bottom_view_numbering (the mirror fits) or numbering_rotated
+                (a one-step shift fits). A letter/number ball grid must be
+                numbered as its top view (A1 top left, numbers rising
+                rightwards, letters downwards, under any turn). With
+                land_pattern.numbering "ccw_top" the numeric pads must run
+                counter-clockwise from the top. With none of these the
+                check goes to not_judged. Example: SiTime's 3.2 x 2.5 mm
+                PQFN-4 oscillator has pins 1 and 2 on a LONG side (SiT1602B
+                POD-PQFN-004-X03225-002); numbering round the short side
+                puts VDD on OE and the clock never starts
 
 Exit (SPEC section 6): 0 = no error-severity findings (warnings allowed),
 1 = one or more errors, 2 = unreadable footprint/JSON.
@@ -68,6 +76,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import check_fp_geometry as fpg  # noqa: E402  (its frames and fit, #1102)
 import checklib  # noqa: E402
 import fplib  # noqa: E402
 
@@ -273,6 +282,105 @@ def _row_name(row: dict) -> str:
     return f"{nums[0]}..{nums[-1]} ({len(nums)} pads)"
 
 
+TURNS = (0, 90, 180, 270)
+
+
+def _number_centres(copper: list[fplib.Pad]) -> dict[str, tuple[float, float]]:
+    """Pad number -> centre; a pad split in parts is its parts' mean."""
+    acc: dict[str, list] = {}
+    for p in copper:
+        if p.number:
+            acc.setdefault(p.number, []).append(p.center)
+    return {k: (sum(x for x, _ in v) / len(v), sum(y for _, y in v) / len(v))
+            for k, v in acc.items()}
+
+
+def _fit_turn(ref: dict, got: dict, tol: float) -> int | None:
+    """The quarter turn that puts every numbered pad of `got` on its pin
+    in `ref` (no mirror; centroids aligned), else None."""
+    for f in fpg._frames("top", TURNS):
+        if fpg._err(ref, got, f)[0] <= tol:
+            return f[1]
+    return None
+
+
+def _shifted(got: dict, s: int) -> dict:
+    """`got` with its numeric pads renumbered s steps round (pad k named
+    k - s); other names (EP, MP) stay."""
+    order = sorted((k for k in got if k.isdigit()), key=int)
+    out = {k: v for k, v in got.items() if not k.isdigit()}
+    for i, k in enumerate(order):
+        out[order[(i - s) % len(order)]] = got[k]
+    return out
+
+
+def _misplaced(ref: dict, got: dict, tol: float) -> list[tuple[str, str]]:
+    """(pad, the drawing's pin at that place) for each pad on another pin's
+    place, in the frame where the most pads land on their own pin; [] when
+    the pads as a set don't fit the drawing (the shape differs)."""
+    best = None
+    rc = (sum(x for x, _ in ref.values()) / len(ref),
+          sum(y for _, y in ref.values()) / len(ref))
+    for f in fpg._frames("top", TURNS):
+        if not fpg._set_fits(ref, got, f, tol):
+            continue
+        g = {k: fpg._turn(*f[0](*xy), f[1]) for k, xy in got.items()}
+        gc = (sum(x for x, _ in g.values()) / len(g),
+              sum(y for _, y in g.values()) / len(g))
+        pairs = []
+        for k, (x, y) in g.items():
+            near = min(ref, key=lambda r: math.hypot(
+                x - gc[0] - ref[r][0] + rc[0], y - gc[1] - ref[r][1] + rc[1]))
+            if near != k:
+                pairs.append((k, near))
+        if best is None or len(pairs) < len(best):
+            best = pairs
+    return sorted(best or [], key=lambda kv: (not kv[0].isdigit(),
+                                             int(kv[0]) if kv[0].isdigit() else 0, kv[0]))
+
+
+def _grid_handedness(copper: list[fplib.Pad]) -> float | None:
+    """For a letter-row / number-column ball grid: the cross product of the
+    column step (1 -> 2) and the row step (A -> B). JEDEC's top view has A1
+    top left, numbers rising rightwards and letters downwards, which is
+    positive in KiCad's y-down frame under any turn; a grid numbered from
+    the bottom view is its mirror, negative. None if not a grid."""
+    balls = [(m.group(1), int(m.group(2)), p) for p in copper
+             if (m := BALL.match(p.number or ""))]
+    rows = sorted({b[0] for b in balls}, key=lambda r: (len(r), r))
+    cols = {b[1] for b in balls}
+    if (len(balls) < 6 or len(rows) < 3 or len(cols) < 3
+            or len(balls) < 0.8 * len(copper)):
+        return None
+    rank = {r: i for i, r in enumerate(rows)}
+    by_row: dict = {}
+    by_col: dict = {}
+    for r, c, p in balls:
+        by_row.setdefault(r, []).append((c, p.center[0], p.center[1]))
+        by_col.setdefault(c, []).append((rank[r], p.center[0], p.center[1]))
+    across, down = _median_step(by_row), _median_step(by_col)
+    if not across or not down:
+        return None
+    return across[0] * down[1] - across[1] * down[0]
+
+
+def _ccw_turn(got: dict) -> float | None:
+    """Sum of the turn from pad k to pad k+1 about the pads' centroid over
+    the numeric pads in order: negative is counter-clockwise seen from the
+    top in KiCad's y-down frame. None with fewer than three numeric pads."""
+    order = sorted((k for k in got if k.isdigit()), key=int)
+    if len(order) < 3:
+        return None
+    cx = sum(got[k][0] for k in order) / len(order)
+    cy = sum(got[k][1] for k in order) / len(order)
+    tot = 0.0
+    for a, b in zip(order, order[1:]):
+        ax, ay = got[a][0] - cx, got[a][1] - cy
+        bx, by = got[b][0] - cx, got[b][1] - cy
+        tot += math.atan2(ax * by - ay * bx, ax * bx + ay * by)
+    return tot
+
+
 def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tuple[list[dict], dict]:
     fp = fplib.parse_footprint(footprint)
     copper = fp.copper_pads
@@ -331,6 +439,79 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               f"{pin1_fact['at']}, and {mark}",
               "pin1_depopulated", expected_pin1=pin1,
               site_mm=pin1_fact["at"], mark=pin1_fact["marks"])
+
+    # --- pad numbering (#1102): which pad carries which pin. Judged from
+    # the record's land_pattern.pads (top-view positions from the land
+    # drawing), else from a ball grid's names (the pin map is the
+    # position), else from land_pattern.numbering; with none, not_judged
+    numbering_fact: dict | None = None
+    got = _number_centres(copper)
+    stated_pads = land.get("pads") or []
+    if stated_pads:
+        ref_all = {str(q["number"]): (float(q["at_mm"][0]), float(q["at_mm"][1]))
+                   for q in stated_pads}
+        common = sorted(set(ref_all) & set(got))
+        ref = {k: ref_all[k] for k in common}
+        mine = {k: got[k] for k in common}
+        if len(common) < 2:
+            not_judged.append({"check": "pad_numbering", "why": (
+                "land_pattern.pads shares fewer than two pad numbers with "
+                "the footprint, so there is nothing to place")})
+        elif (turn := _fit_turn(ref, mine, size_tol)) is not None:
+            numbering_fact = {"from": "pads", "fit": True, "turn_deg": turn,
+                              "pads": len(common)}
+        else:
+            mirror = {k: (-x, y) for k, (x, y) in ref.items()}
+            hint = ("bottom_view_numbering"
+                    if _fit_turn(mirror, mine, size_tol) is not None else
+                    "numbering_rotated" if any(
+                        _fit_turn(ref, _shifted(mine, s), size_tol) is not None
+                        for s in (1, -1)) else None)
+            moved = _misplaced(ref, mine, size_tol)
+            if moved:
+                where = "; ".join(f"pad {a} sits where the drawing has pin {b}"
+                                  for a, b in moved[:6])
+            else:
+                worst, at = fpg._err(ref, mine, fpg._frames("top")[0])
+                where = (f"the pads don't match the drawing's places under "
+                         f"any quarter turn (pad {at} is {worst:.2f} mm off)")
+            why = {"bottom_view_numbering": (
+                       ": the mirror image of the drawing fits, so the "
+                       "pads were numbered from a bottom view"),
+                   "numbering_rotated": (
+                       ": the numbers are shifted one step round the body")
+                   }.get(hint, "")
+            numbering_fact = {"from": "pads", "fit": False, "hint": hint,
+                              "pads": len(common)}
+            v("error", got.get(moved[0][0]) if moved else None,
+              f"pad numbering differs from the record's land pattern{why}. "
+              f"{where} (tol {size_tol} mm)",
+              "pad_numbering", hint=hint,
+              misplaced=[{"pad": a, "drawing_pin": b} for a, b in moved])
+    elif (hand := _grid_handedness(copper)) is not None:
+        numbering_fact = {"from": "ball_names", "fit": hand > 0}
+        if hand < 0:
+            numbering_fact["hint"] = "bottom_view_numbering"
+            v("error", None,
+              "ball grid numbered as its mirror image: seen from the top, "
+              "with A1 at the top left, numbers must rise to the right and "
+              "letters downwards. Here they run the other way round, so the "
+              "balls were numbered from the bottom view",
+              "pad_numbering", hint="bottom_view_numbering")
+    elif land.get("numbering") == "ccw_top" and (t := _ccw_turn(got)) is not None:
+        numbering_fact = {"from": "numbering", "fit": t < 0}
+        if t > 0:
+            numbering_fact["hint"] = "bottom_view_numbering"
+            v("error", None,
+              "pads are numbered clockwise seen from the top; the record "
+              "says counter-clockwise (ccw_top), so the footprint is the "
+              "part's mirror image, numbered from the bottom view",
+              "pad_numbering", hint="bottom_view_numbering")
+    elif len(got) >= 2:
+        not_judged.append({"check": "pad_numbering", "why": (
+            "the record states no pad positions (land_pattern.pads) and no "
+            "numbering direction, so which pad carries which pin is "
+            "unchecked")})
 
     # --- pitch, judged row by row (#1066): the nearest pair of pads in the
     # whole footprint is no pitch when a switch contact, shield tab or
@@ -509,6 +690,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "land_pattern": land,
         "mechanical": mech_fact or None,
         "pin1": pin1_fact,
+        "pad_numbering": numbering_fact,
         "not_judged": not_judged,
     }
     return viol, facts, fp
