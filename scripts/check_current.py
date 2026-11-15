@@ -471,14 +471,16 @@ def _chain_end(t, xy, near, blocked) -> tuple:
     and layer whose copper comes within r of point p; `blocked(p, r)` says
     whether a same-net pad, via or fill on that layer does. A bare bend is
     a point where exactly one other track meets the current one end to
-    end, and no other track, pad, via or fill touches either track's
-    copper there. Anything else ends the walk at that point, as does a
-    track already walked."""
+    end, and no other track, pad, via or fill comes within netconn.TOL of
+    either track's copper there: netconn joins copper that close, so no
+    joint it sees passes for a bare bend. Anything else ends the walk at
+    that point, as does a track already walked."""
     seen = {id(t)}
     cur = t
     while True:
         p = Point(xy)
-        others = [o for o in near(p, cur.width / 2 + TOUCH_MM) if o is not cur]
+        others = [o for o in near(p, cur.width / 2 + netconn.TOL)
+                  if o is not cur]
         if len(others) != 1 or id(others[0]) in seen:
             return xy
         nxt = others[0]
@@ -489,7 +491,7 @@ def _chain_end(t, xy, near, blocked) -> tuple:
             far = a
         else:
             return xy                           # a tee, not a bend
-        reach = max(cur.width, nxt.width) / 2 + TOUCH_MM
+        reach = max(cur.width, nxt.width) / 2 + netconn.TOL
         if any(o is not cur and o is not nxt for o in near(p, reach)) \
                 or blocked(p, reach):
             return xy
@@ -502,7 +504,8 @@ def pour_shunted(bg: geom.BoardGeom, net: str, t) -> bool:
     fill on t's layer, or on a same-net pad or via whose copper touches a
     same-net fill on any layer (module docstring, pour taps). An end that
     meets the next track at a bare bend is followed to where that chain
-    of tracks ends (_chain_end, #1298)."""
+    of tracks ends (_chain_end, #1298). check_net asks this only of a
+    track that is no bridge: a bridge is never dropped as a pour tap."""
     fills = {l: bg.zone_fill(net, l) for l in bg.layers_with_zone(net)}
     if not fills:
         return False
