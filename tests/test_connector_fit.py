@@ -284,6 +284,43 @@ def test_no_paste_on_the_ep_and_a_plugged_via(tmp_path):
     assert _kinds(vs) == ["ep_paste_high"] and facts["vias_under_paste"] == 1
 
 
+# KiCad 10.0.6's stock footprint, copied unchanged: its belly pad 17 is on
+# F.Cu + F.Mask with four F.Paste windows, and again on B.Cu alone (tented)
+THERMALVIAS = (REPO / "tests" / "fixtures" / "parts"
+               / "QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod")
+
+
+def _stock_qfn(flip=False, windows=True):
+    """The stock footprint placed at (15, 10) as U1; `flip` puts it on the
+    bottom as KiCad does (every F. layer becomes B. and back)."""
+    fp = THERMALVIAS.read_text(encoding="utf-8").strip()
+    fp = fp.replace('(footprint "', '(footprint "Package_DFN_QFN:', 1)
+    fp = fp.replace('"REF**"', '"U1"', 1)[:-1] + "\n  (at 15 10)\n)\n"
+    if not windows:
+        fp = fp.replace('(layers "F.Paste")', '(layers "F.Fab")')
+    if flip:
+        fp = fp.replace('"F.', '"@.').replace('"B.', '"F.') \
+            .replace('"@.', '"B.')
+    return fp
+
+
+@pytest.mark.parametrize("flip", [False, True])
+def test_stock_thermalvias_far_side_copy_is_no_exposed_pad(tmp_path, flip):
+    # hive-pcb-flow #1174: the B.Cu copy of pad 17 was an exposed pad with
+    # no paste, ep_paste_missing on B.Paste for 417 of 482 *_ThermalVias
+    vs, facts = cep.check(_board(tmp_path, _stock_qfn(flip)))
+    assert vs == []
+    side = "B" if flip else "F"
+    assert [(e["pad"], e["side"], e["apertures"])
+            for e in facts["exposed_pads"]] == [("17", side, 4)]
+
+
+def test_stock_thermalvias_top_pad_with_no_paste_still_fails(tmp_path):
+    vs, _ = cep.check(_board(tmp_path, _stock_qfn(windows=False)))
+    assert [(v["kind"], v["layer"]) for v in vs] == \
+        [("ep_paste_missing", "F.Paste")]
+
+
 def _gfx_windows(prefix="fp", layer="F.Paste", fill="yes", at=(0, 0)):
     out = ""
     for x, y in ((-0.8, -0.8), (0.8, -0.8), (0.8, 0.8), (-0.8, 0.8)):

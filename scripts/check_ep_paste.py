@@ -41,7 +41,11 @@ graphic counts for its own exposed pad; a board graphic for any it covers.
 An exposed pad is a footprint's SMD copper pad numbered "EP", or one at
 least EP_AREA_RATIO times the median of the footprint's other pads (four or
 more of them) whose centre lies inside their hull: a QFN/DFN/SOIC-EP's
-belly, never a SOT-223 tab at the edge of the pads. Each one's coverage goes
+belly, never a SOT-223 tab at the edge of the pads. It lies on its
+footprint's own side: KiCad's stock *_ThermalVias footprints repeat the belly
+on the far copper layer (B.Cu alone, or B.Cu and B.Mask) to spread heat into
+that side's pour; no part sits there and no stencil prints it, so it is no
+exposed pad (hive-pcb-flow #1174). Each one's coverage goes
 into the facts (`exposed_pads`) whether it passes or not.
 
 CLI: --pcb board.kicad_pcb [--out report.json]
@@ -91,12 +95,13 @@ class Ap:
     """A pad as the paste check sees it, in the board frame."""
 
     def __init__(self, ref, number, kind, shape, size, center, angle,
-                 rratio, copper, paste, margin, prims):
+                 rratio, copper, paste, margin, prims, side=None):
         self.ref, self.number, self.kind = ref, number, kind
         self.shape, self.size, self.center = shape, size, center
         self.angle, self.rratio = angle, rratio
         self.copper, self.paste = copper, paste    # sides: {"F", "B"}
         self.margin, self.prims = margin, prims
+        self.side = side    # the footprint's side, "F"/"B"; None: unread
 
     def poly(self, grow=(0.0, 0.0)) -> Polygon:
         w, h = self.size[0] + 2 * grow[0], self.size[1] + 2 * grow[1]
@@ -182,6 +187,7 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
         at = _nums(_kid(fp, "at"))
         fx, fy = at[0], at[1]
         fa = at[2] if len(at) > 2 else 0.0
+        fside = "B" if "B.Cu" in _strs(_kid(fp, "layer") or []) else "F"
         fpm = _margin(fp, ("solder_paste_margin", "solder_paste_ratio",
                            "solder_paste_margin_ratio"))
         for pad in _kids(fp, "pad"):
@@ -213,7 +219,8 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
                            str(_tok(pad[3])), (sz[0], sz[-1]),
                            (fx + dx, fy + dy), rest[0] if rest else 0.0,
                            _nums(rr)[0] if rr is not None else 0.0,
-                           sides("Cu"), sides("Paste"), (m, r), prims))
+                           sides("Cu"), sides("Paste"), (m, r), prims,
+                           fside))
         for g in fp[1:]:
             if not (isinstance(g, list) and g) or \
                     str(_tok(g[0])) not in tuple("fp_" + k for k in _GFX):
@@ -241,7 +248,10 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
 def exposed_pads(pads: list[Ap]) -> list[Ap]:
     by_ref: dict[str, list[Ap]] = {}
     for p in pads:
-        if p.kind == "smd" and p.copper:
+        # a pad off the footprint's own side is no part's pad: KiCad's
+        # *_ThermalVias footprints repeat the belly on B.Cu (#1174)
+        if p.kind == "smd" and p.copper and \
+                (p.side is None or p.side in p.copper):
             by_ref.setdefault(p.ref, []).append(p)
     out = []
     for ref, ps in by_ref.items():
