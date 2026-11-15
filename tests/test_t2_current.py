@@ -350,6 +350,155 @@ def test_zone_parallel_path_not_bridge(tmp_path_factory):
     assert facts["bridge_labeled"] is True
 
 
+# the same tap drawn with one bend (#1298), and the pour and vias it joins
+_BENT = (
+    '  (segment (start 2 5) (end 8 8) (width 0.2) (layer "F.Cu") (net "PWR"))\n'
+    '  (segment (start 8 8) (end 14 5) (width 0.2) (layer "F.Cu") (net "PWR"))\n')
+_VIA_2 = ('  (via (at 2 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") '
+          '(net "PWR"))\n')
+_VIA_14 = _VIA_2.replace("(at 2 5)", "(at 14 5)")
+_PWR_POUR = """  (zone (net "PWR") (layer "B.Cu")
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10)))
+    (filled_polygon (layer "B.Cu")
+      (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10))))
+"""
+
+
+def test_bent_zone_tap_dropped(tmp_path_factory):
+    """A tap that bends once between two vias on the pour is in parallel
+    with the pour just as the straight one is: both its segments are
+    dropped, though each has one end at the bend, off the pour (#1298)."""
+    bg = _board(tmp_path_factory, "bentpar",
+                _BENT + _VIA_2 + _VIA_14 + _PWR_POUR)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    assert _kinds(vs, "undersized_track") == []
+    assert sorted(facts["pour_taps"]) == [[5.0, 6.5], [11.0, 6.5]]
+
+
+@pytest.mark.parametrize("start", ["8 8", "8 8.22"])
+def test_bent_tap_with_branch_at_bend_kept(tmp_path_factory, start):
+    """A third track at the bend, out to a pad off the pour, draws its
+    current through the bent tap: the bend is not bare, so both segments
+    keep their errors. So does one whose end stops 0.02 mm short of the
+    bend's copper, as netconn joins copper within its TOL (0.05 mm)."""
+    branch = (
+        f'  (segment (start {start}) (end 8 9.2) (width 0.2) (layer "F.Cu") '
+        '(net "PWR"))\n'
+        """  (footprint "t:U" (at 8 9.2)
+    (layer "F.Cu")
+    (property "Reference" "U3" (at 0 0 0))
+    (pad "1" smd rect (at 0 0) (size 0.6 0.6) (layers "F.Cu") (net "PWR")))
+""")
+    bg = _board(tmp_path_factory, "bentbranch",
+                _BENT + branch + _VIA_2 + _VIA_14 + _PWR_POUR)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    legs = [v for v in _kinds(vs, "undersized_track")
+            if v["pos"] in ([5.0, 6.5], [11.0, 6.5])]
+    assert len(legs) == 2
+    assert all(v["bridge"] is False and v["severity"] == "error"
+               for v in legs)
+    assert [5.0, 6.5] not in facts.get("pour_taps", [])
+    assert [11.0, 6.5] not in facts.get("pour_taps", [])
+
+
+def test_bent_tap_one_end_off_pour_still_fails(tmp_path_factory):
+    """A bent tap from a via on the pour to a pad off it (paralleled by a
+    straight track, so neither is a bridge) is not shunted by the pour:
+    the walk stops at the pad and every segment keeps its error."""
+    bg = _board(tmp_path_factory, "bentoff",
+                _PADS_PWR + _DIRECT + _BENT + _VIA_2 + _PWR_POUR)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    thin = _kinds(vs, "undersized_track")
+    assert sorted(v["pos"] for v in thin) == [[5.0, 6.5], [8.0, 5.0],
+                                              [11.0, 6.5]]
+    assert all(v["bridge"] is False and v["severity"] == "error"
+               for v in thin)
+    assert "pour_taps" not in facts
+
+
+def test_bent_tap_branch_on_wide_cap_kept(tmp_path_factory):
+    """A branch that meets the bend only on the wider leg's end cap is a
+    third track there all the same: the walk from the thin leg looks as
+    far as the wider cap reaches, so both legs keep their errors."""
+    body = (
+        '  (segment (start 2 5) (end 8 8) (width 0.2) (layer "F.Cu") '
+        '(net "PWR"))\n'
+        '  (segment (start 8 8) (end 14 5) (width 0.6) (layer "F.Cu") '
+        '(net "PWR"))\n'
+        '  (segment (start 8 8.3) (end 8 9.6) (width 0.2) (layer "F.Cu") '
+        '(net "PWR"))\n'
+        """  (footprint "t:U" (at 8 9.6)
+    (layer "F.Cu")
+    (property "Reference" "U3" (at 0 0 0))
+    (pad "1" smd rect (at 0 0) (size 0.6 0.6) (layers "F.Cu") (net "PWR")))
+""")
+    bg = _board(tmp_path_factory, "bentwidecap",
+                body + _VIA_2 + _VIA_14 + _PWR_POUR)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    legs = [v for v in _kinds(vs, "undersized_track")
+            if v["pos"] in ([5.0, 6.5], [11.0, 6.5])]
+    assert len(legs) == 2
+    assert all(v["bridge"] is False and v["severity"] == "error"
+               for v in legs)
+    assert [5.0, 6.5] not in facts.get("pour_taps", [])
+    assert [11.0, 6.5] not in facts.get("pour_taps", [])
+
+
+def test_two_bend_tap_dropped(tmp_path_factory):
+    """The walk goes on through every bare bend: a tap drawn with two
+    bends between two vias on the pour drops all three segments, the
+    middle one too, though neither of its ends is on the pour."""
+    body = "".join(
+        f'  (segment (start {a}) (end {b}) (width 0.2) (layer "F.Cu") '
+        '(net "PWR"))\n'
+        for a, b in (("2 5", "5 8"), ("5 8", "11 8"), ("11 8", "14 5")))
+    bg = _board(tmp_path_factory, "bent3",
+                body + _VIA_2 + _VIA_14 + _PWR_POUR)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    assert _kinds(vs, "undersized_track") == []
+    assert sorted(facts["pour_taps"]) == [[3.5, 6.5], [8.0, 8.0],
+                                          [12.5, 6.5]]
+
+
+def test_via_at_bend_off_pour_ends_walk(tmp_path_factory):
+    """A via at the bend can take the tap's current to another layer, so
+    the walk stops there. With the pour cut back clear of the bend, that
+    via is not on it, and both segments keep their errors; the same tap
+    with no via at the bend is dropped."""
+    cut = _PWR_POUR.replace("(xy 20 10) (xy 0 10)", "(xy 20 7) (xy 0 7)")
+    bg = _board(tmp_path_factory, "bentcut", _BENT + _VIA_2 + _VIA_14 + cut)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    assert _kinds(vs, "undersized_track") == []
+    assert sorted(facts["pour_taps"]) == [[5.0, 6.5], [11.0, 6.5]]
+    via_8 = _VIA_2.replace("(at 2 5)", "(at 8 8)")
+    bg = _board(tmp_path_factory, "bentvia",
+                _BENT + _VIA_2 + _VIA_14 + via_8 + cut)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    thin = _kinds(vs, "undersized_track")
+    assert sorted(v["pos"] for v in thin) == [[5.0, 6.5], [11.0, 6.5]]
+    assert all(v["bridge"] is False and v["severity"] == "error"
+               for v in thin)
+    assert "pour_taps" not in facts
+
+
+def test_ring_of_bare_bends_ends_walk(tmp_path_factory):
+    """A ring of tracks whose every corner is a bare bend brings the walk
+    back to the track it started from. It stops there, off the pour, and
+    the ring keeps its errors."""
+    ring = "".join(
+        f'  (segment (start {a}) (end {b}) (width 0.2) (layer "F.Cu") '
+        '(net "PWR"))\n'
+        for a, b in (("16 2", "18 2"), ("18 2", "18 4"), ("18 4", "16 4"),
+                     ("16 4", "16 2")))
+    bg = _board(tmp_path_factory, "bentring",
+                _BENT + _VIA_2 + _VIA_14 + _PWR_POUR + ring)
+    vs, facts = check_current.check_net(bg, {"net": "PWR", "current_a": 2.0})
+    thin = _kinds(vs, "undersized_track")
+    assert sorted(v["pos"] for v in thin) == [[16.0, 3.0], [17.0, 2.0],
+                                              [17.0, 4.0], [18.0, 3.0]]
+    assert sorted(facts["pour_taps"]) == [[5.0, 6.5], [11.0, 6.5]]
+
+
 # ---- pour taps (PCB-0018-A PHASE/LS_SRC class) -----------------------------
 # A 10 A pour on F.Cu holds the FET pad Q1.1; a 0.25 mm signal tap leaves it.
 

@@ -138,7 +138,13 @@ current), and listed by position in facts["pour_taps"]:
  - pour-shunted: both ends sit on the net's pour - inside its fill on the
    track's layer, or on a same-net pad or via whose copper touches a
    same-net fill on any layer. The track is in parallel with that pour, so
-   the pour carries the current, and the pour-neck pass judges the pour;
+   the pour carries the current, and the pour-neck pass judges the pour.
+   A tap drawn with bends counts by where its chain ends (#1298): an end
+   that meets exactly one other same-net track on its layer end to end,
+   with no pad, via, fill or third track there, is followed on to the
+   next end, so every segment of a bent tap between two pour points is
+   dropped like a straight one. A bend with anything else there ends the
+   walk, and that end must sit on the pour itself;
  - inside pad copper: the track lies wholly inside same-net pad and via
    copper on its layer (a stub drawn over a pad adds no section).
 A bridge is never dropped: when it is the sole path, the whole judged
@@ -459,25 +465,82 @@ def pad_exit_necks(bg: geom.BoardGeom, net: str, thin: list) -> dict:
     return accepted
 
 
+def _chain_end(t, xy, near, blocked) -> tuple:
+    """Follow track `t` from its end `xy` through bare bends and return
+    where the chain really ends. `near(p, r)` lists the tracks of t's net
+    and layer whose copper comes within r of point p; `blocked(p, r)` says
+    whether a same-net pad, via or fill on that layer does. A bare bend is
+    a point where exactly one other track meets the current one end to
+    end, and no other track, pad, via or fill comes within netconn.TOL of
+    either track's copper there: netconn joins copper that close, so no
+    joint it sees passes for a bare bend. Anything else ends the walk at
+    that point, as does a track already walked."""
+    seen = {id(t)}
+    cur = t
+    while True:
+        p = Point(xy)
+        others = [o for o in near(p, cur.width / 2 + netconn.TOL)
+                  if o is not cur]
+        if len(others) != 1 or id(others[0]) in seen:
+            return xy
+        nxt = others[0]
+        a, b = nxt.shape.coords[0], nxt.shape.coords[-1]
+        if p.distance(Point(a)) <= TOUCH_MM:
+            far = b
+        elif p.distance(Point(b)) <= TOUCH_MM:
+            far = a
+        else:
+            return xy                           # a tee, not a bend
+        reach = max(cur.width, nxt.width) / 2 + netconn.TOL
+        if any(o is not cur and o is not nxt for o in near(p, reach)) \
+                or blocked(p, reach):
+            return xy
+        seen.add(id(nxt))
+        cur, xy = nxt, tuple(far)
+
+
 def pour_shunted(bg: geom.BoardGeom, net: str, t) -> bool:
     """True when both ends of track `t` sit on the net's pour: inside its
     fill on t's layer, or on a same-net pad or via whose copper touches a
-    same-net fill on any layer (module docstring, pour taps)."""
+    same-net fill on any layer (module docstring, pour taps). An end that
+    meets the next track at a bare bend is followed to where that chain
+    of tracks ends (_chain_end, #1298). check_net asks this only of a
+    track that is no bridge: a bridge is never dropped as a pour tap."""
     fills = {l: bg.zone_fill(net, l) for l in bg.layers_with_zone(net)}
     if not fills:
         return False
     own = fills.get(t.layer)
+    own_near = own.buffer(TOUCH_MM) if own is not None else None
     items = bg.pads_of(net, t.layer) + bg.vias_of(net, t.layer)
 
     def anchored(xy) -> bool:
         p = Point(xy)
-        if own is not None and own.buffer(TOUCH_MM).contains(p):
+        if own_near is not None and own_near.contains(p):
             return True
         return any(it.poly.buffer(TOUCH_MM).contains(p)
                    and any(fills[l].intersects(it.poly)
                            for l in it.layers if l in fills)
                    for it in items)
-    return anchored(t.shape.coords[0]) and anchored(t.shape.coords[-1])
+    if anchored(t.shape.coords[0]) and anchored(t.shape.coords[-1]):
+        return True
+    tracks = bg.tracks_of(net, t.layer)
+    tree = STRtree([o.shape for o in tracks])
+    half = max((o.width for o in tracks), default=t.width) / 2
+    walls = [it.poly for it in items] + ([own] if own is not None else [])
+    wall_tree = STRtree(walls) if walls else None
+
+    def near(p, r) -> list:
+        return [tracks[i] for i in tree.query(p, predicate="dwithin",
+                                              distance=r + half)
+                if tracks[i].shape.distance(p) <= tracks[i].width / 2 + r]
+
+    def blocked(p, r) -> bool:
+        return wall_tree is not None and len(
+            wall_tree.query(p, predicate="dwithin", distance=r)) > 0
+
+    def on_pour(xy) -> bool:
+        return anchored(xy) or anchored(_chain_end(t, xy, near, blocked))
+    return on_pour(t.shape.coords[0]) and on_pour(t.shape.coords[-1])
 
 
 def inside_pad_copper(bg: geom.BoardGeom, net: str, t) -> bool:
