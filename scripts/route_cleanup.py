@@ -284,7 +284,8 @@ def _fill_touches(fillfn, net, layer, p, tol) -> bool:
 
 # ============================================================ pass 1: dangling
 
-def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol) -> bool:
+def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol,
+              bridges: bool = True) -> bool:
     """True if `seg` dangles: one of its ends touches no other same-net item.
 
     This is KiCad 10's rule (CONNECTIVITY_DATA::TestTrackEndpointDangling,
@@ -302,7 +303,8 @@ def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol) -> bool:
     It is then the only local link between, say, the track it lies across
     and a pad or track at its other end, and dropping it could split the
     net. DRC may still flag it; route_cleanup leaves it rather than raise
-    an island count.
+    an island count. bridges=False skips that exception, for a caller
+    that checks the net's connectivity itself (part_repair).
 
     "Touches" is COPPER overlap, not centerline proximity (T6/V13 fix): the
     end's round cap (radius seg.width/2) overlapping another item's body
@@ -357,7 +359,8 @@ def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol) -> bool:
             hit_b = hit_b or pd.poly.distance(pb) <= half + tol
     if hit_a and hit_b:
         return False
-    return not (both and _bridges(seg, segs, vias, pads, fillfn, arcs, tol))
+    return not (both and bridges
+                and _bridges(seg, segs, vias, pads, fillfn, arcs, tol))
 
 
 def _body(a, b):

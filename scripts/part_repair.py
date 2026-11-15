@@ -31,10 +31,15 @@ net back together, and keep the result only if the board got no worse.
      widest width ripped from it, then at its rule width, then letting the
      maze router push other signal nets' copper aside and put it back
      (Router.reroute), one window at a time: each window its islands meet.
-     Dead stubs left in the windows, or within --margin of the copper
-     pushed aside, are pruned (route_cleanup's dangling pass): none the new
-     routes meet, except a spur off a junction they make with copper that
-     holds without it.
+     Then what the run left dangling goes, as KiCad's DRC would find it
+     (track_dangling, via_dangling): from 1 mm round the copper the run
+     added and removed, and the windows and --margin round the copper
+     pushed aside, out along each dead chain to its end, wherever that
+     is. A track with an end that meets nothing of its net, a via that
+     nothing meets on two of its layers; pours count, teardrops do not.
+     The router's own dead tails are trimmed from its routes the same way.
+     What dangled on the base board stays, and so does a dead end that is
+     the only link between copper of its net: no removal splits a net.
   7. check: the routes go in, the board is refilled and DRC'd. The repair
      area is the windows, --margin round the copper pushed aside, and 1 mm
      round the copper the run added or removed. The run passes when no net
@@ -87,7 +92,7 @@ import os
 import shlex
 import shutil
 import sys
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -116,6 +121,8 @@ from checklib import CheckError  # noqa: E402
 MARGIN = 2.0   # mm round a part's old and new pads: the rip window
 TOL = 1e-3     # mm
 SHOWN = 40     # new violations listed in REPORT.md (all in part_repair.json)
+TOUCH = 1e-3   # mm: copper this close is one piece (as net_islands has it)
+NEAR = 0.05    # mm: a neighbour query's reach, past every rule's tol
 RIP_FILE = "01-rip.route_edit.json"
 PLACE_FILE = "02-place.place_edit.json"
 ROUTE_FILE = "03-route.route_edit.json"
@@ -339,159 +346,261 @@ def _via_layers(op: dict, cu: list) -> list:
     return list(cu)
 
 
-def _spur_end(s, poly, added, segs, vias, pads, arcs, fill):
-    """For an existing track s (copper `poly`) that meets the `added`
-    copper of its net and layer: the uuids of the existing tracks and vias
-    at its end E (a set, maybe empty) when s may still be pruned, else
-    None. It may when every added piece that meets s lies at E and none at
-    its other end, and the copper at E without s (the added pieces and the
-    existing tracks, arcs, vias, pads and pour that reach E) has some that
-    was there before and holds together by itself, so pruning s cannot cut
-    the added copper off: s is a spur the join left behind a junction."""
-    tol = route_cleanup.TOL
-    half = s.width / 2
-    reach = half + tol
-    pa, pb = Point(s.a), Point(s.b)
-    ends = set()
-    for p in added:
-        if not p.intersects(poly):
-            continue
-        at_a, at_b = p.distance(pa) <= reach, p.distance(pb) <= reach
-        if at_a == at_b:
-            return None
-        ends.add(at_a)
-    if len(ends) != 1:
-        return None
-    e = s.a if ends.pop() else s.b
-    pe = Point(e)
-    have = [p for p in added if p.distance(pe) <= reach]
-    old: list = []
-    partners = set()
-    for o in segs:
-        if o is not s and o.net == s.net and o.layer == s.layer \
-                and route_cleanup._pt_seg_dist(e, o.a, o.b) \
-                <= half + o.width / 2 + tol:
-            old.append(LineString([o.a, o.b]).buffer(o.width / 2))
-            partners.add(o.uuid)
+@dataclasses.dataclass(eq=False)
+class _Cu:
+    """One piece of a net's copper in _dangling's graph: a track, arc, via,
+    pad or piece of pour, its centre line, point or polygon (`core`) and
+    how far its copper reaches past that (`r`)."""
+    uid: str        # the uuid, "+i" for add i, "" for copper that stays
+    kind: str       # "seg", "arc", "via", "pad" or "fill"
+    item: object    # route_cleanup's Seg, ViaItem or PadItem, the arc's
+                    # (net, layer, line, width) or the fill polygon
+    layers: frozenset
+    core: object
+    r: float
+    free: bool = False   # may be removed
+    alive: bool = True
+    near: list = None    # copper within NEAR, on a shared layer (cached)
+    touch: list = None   # copper within TOUCH of it (cached)
+    _grown: object = None
+
+    @property
+    def bounds(self):
+        x0, y0, x1, y1 = self.core.bounds
+        return x0 - self.r, y0 - self.r, x1 + self.r, y1 + self.r
+
+    def grown(self):
+        if self._grown is None:
+            self._grown = self.core.buffer(self.r + TOUCH)
+        return self._grown
+
+
+def _cu_touch(n: _Cu, m: _Cu) -> bool:
+    """Copper of n and m within TOUCH of each other (they share a layer).
+    Two pieces of one pour never touch: they are pieces of its union."""
+    if n.kind == "fill" and m.kind == "fill":
+        return False
+    if n.kind == "fill":
+        return n.core.intersects(m.grown())
+    if m.kind == "fill":
+        return m.core.intersects(n.grown())
+    return n.core.distance(m.core) <= n.r + m.r + TOUCH
+
+
+def _via_free(v, segs, arcs, pads, vias, fills, tol) -> bool:
+    """KiCad 10's via rule (CONNECTIVITY_DATA::TestTrackEndpointDangling,
+    DRC's via_dangling): a via dangles when nothing of its net meets it,
+    or all that does meets it on one layer. Tracks and arcs on a layer it
+    spans, pads, other vias and `fills` ((layer, polygon) of its net's
+    pour, teardrops left out) count for the layers they meet it on, each
+    with `tol` more. A pad or via that meets it on two or more of its
+    layers keeps it: KiCad counts such an item for its first layer only,
+    and this side never drops a via KiCad keeps."""
+    pt = Point(v.at)
+    r = v.size / 2.0 + tol
+    span = set(v.layers)
+    hit = set()
+    for layer, poly in fills:
+        if layer in span and layer not in hit and poly.distance(pt) <= r:
+            hit.add(layer)
+    for s in segs:
+        if s.net == v.net and s.layer in span and route_cleanup._pt_seg_dist(
+                v.at, s.a, s.b) <= r + s.width / 2.0:
+            hit.add(s.layer)
     for net, layer, line, w in arcs:
-        if net == s.net and layer == s.layer \
-                and line.distance(pe) <= half + w / 2 + tol:
-            old.append(line.buffer(w / 2))
-    for v in vias:
-        if v.net == s.net and s.layer in v.layers \
-                and math.dist(e, v.at) <= v.size / 2 + reach:
-            old.append(Point(v.at).buffer(v.size / 2))
-            partners.add(v.uuid)
+        if net == v.net and layer in span and line.distance(pt) <= r + w / 2.0:
+            hit.add(layer)
     for pd in pads:
-        if pd.net == s.net and s.layer in pd.layers \
-                and pd.poly.distance(pe) <= reach:
-            old.append(pd.poly)
-    if fill is not None and not fill.is_empty and fill.distance(pe) <= reach:
-        old.append(fill)
-    if not old:
-        return None
-    polys = have + old
-    group = list(range(len(polys)))
-
-    def root(i):
-        while group[i] != i:
-            group[i] = group[group[i]]
-            i = group[i]
-        return i
-
-    for i in range(len(polys)):
-        for j in range(i + 1, len(polys)):
-            if polys[i].intersects(polys[j]):
-                group[root(i)] = root(j)
-    if len({root(i) for i in range(len(polys))}) != 1:
-        return None
-    return partners
+        both = span & set(pd.layers)
+        if pd.net == v.net and both and pd.poly.distance(pt) <= r:
+            if len(both) > 1:
+                return False
+            hit |= both
+    for o in vias:
+        both = span & set(o.layers)
+        if o is not v and o.net == v.net and both \
+                and math.dist(o.at, v.at) <= r + o.size / 2.0:
+            if len(both) > 1:
+                return False
+            hit |= both
+    return len(hit) <= 1
 
 
-def _dangling(pcb: Path, bg, nets: set, *, gone=(), adds=(), win=None,
-              anchors=()) -> list:
-    """route_cleanup's dangling pass over `nets` on pcb, less `gone`, plus
-    the `adds` (route_edit ops, never removed); `anchors` never go. With
-    win, only copper fully inside it may go, and only if it meets no added
-    copper or is a spur behind a junction of it (_spur_end). If such a
-    spur goes and so does an existing track or via at its junction, the
-    junction is checked again without what went; if it no longer holds,
-    the spur is kept and the pass runs again (each run keeps more, so it
-    ends)."""
+def _net_copper(net, segs, vias, arcs, pads, fills, fixed) -> list:
+    """_Cu pieces of one net: segs and vias (free unless their uid is in
+    `fixed` or empty), and the arcs, pads and pour pieces, which stay."""
+    out = []
+    for s in segs:
+        out.append(_Cu(s.uuid, "seg", s, frozenset([s.layer]),
+                       route_cleanup._body(s.a, s.b), s.width / 2.0,
+                       free=bool(s.uuid) and s.uuid not in fixed))
+    for v in vias:
+        out.append(_Cu(v.uuid, "via", v, frozenset(v.layers), Point(v.at),
+                       v.size / 2.0,
+                       free=bool(v.uuid) and v.uuid not in fixed))
+    for a in arcs:
+        out.append(_Cu("", "arc", a, frozenset([a[1]]), a[2], a[3] / 2.0))
+    for pd in pads:
+        out.append(_Cu("", "pad", pd, frozenset(pd.layers), pd.poly, 0.0))
+    for layer, poly in fills:
+        shapely.prepare(poly)
+        out.append(_Cu("", "fill", poly, frozenset([layer]), poly, 0.0))
+    return out
+
+
+def _dangling(pcb: Path, bg, nets, *, gone=(), adds=(), seed=None,
+              anchors=()) -> tuple[list, list]:
+    """The dead ends in `nets` on pcb, less `gone`, plus the `adds`
+    (route_edit add ops), peeled off one by one as KiCad's DRC finds them:
+    a track with an end that meets nothing of its net (route_cleanup
+    _seg_free, without its bridge exception), a via that nothing meets on
+    two layers (_via_free). Pours count, teardrops do not (a refill makes
+    them again from what is left). Arcs, pads and the `anchors` (uuids)
+    stay. The peel starts from the tracks and vias whose copper meets
+    `seed` (all of them when it is None) and follows each removal to the
+    copper next to it, inside `seed` or not, so a dead chain goes to its
+    end. A dead end that is the only link between copper it meets (no
+    other way joins it across the net) stays: no removal splits a net.
+    Returns (the removed uuids in order, the indices of the adds removed,
+    sorted)."""
     cu = list(bg.copper_layers)
+    nets = set(nets)
+    gone, fixed = set(gone), set(anchors)
     segs, vias = route_cleanup.parse_items(pcb, cu)
-    gone = set(gone)
-    segs = [s for s in segs if s.net in nets and s.uuid not in gone]
-    vias = [v for v in vias if v.net in nets and v.uuid not in gone]
-    addcu: dict = {}
-    new_s, new_v = [], []
-    for op in adds:
+    per: dict = {}
+    for s in segs:
+        if s.net in nets and s.uuid not in gone:
+            per.setdefault(s.net, ([], []))[0].append(s)
+    for v in vias:
+        if v.net in nets and v.uuid not in gone:
+            per.setdefault(v.net, ([], []))[1].append(v)
+    for i, op in enumerate(adds):
+        if op.get("net") not in nets:
+            continue
         if op["op"] == "add_track":
-            addcu.setdefault((op["net"], op["layer"]), []).append(
-                LineString([op["start"], op["end"]]).buffer(op["width"] / 2))
-            new_s.append(route_cleanup.Seg(
-                "", op["net"], op["layer"], float(op["width"]),
+            per.setdefault(op["net"], ([], []))[0].append(route_cleanup.Seg(
+                f"+{i}", op["net"], op["layer"], float(op["width"]),
                 tuple(op["start"]), tuple(op["end"])))
         elif op["op"] == "add_via":
-            for ly in _via_layers(op, cu):
-                addcu.setdefault((op["net"], ly), []).append(
-                    Point(op["at"]).buffer(op["size"] / 2))
-            new_v.append(route_cleanup.ViaItem(
-                "", op["net"], tuple(op["at"]), float(op["size"]),
-                float(op["drill"]), tuple(_via_layers(op, cu))))
-    pads = [route_cleanup.PadItem(p.net, tuple(p.layers), p.center, p.poly)
-            for p in bg.pads_of() if p.net in nets]
-    arcs = tuple((t.net, t.layer, t.shape, t.width) for t in bg.tracks_of()
-                 if t.net in nets and t.uuid not in gone
-                 and len(t.shape.coords) > 2)
-    cache: dict = {}
+            per.setdefault(op["net"], ([], []))[1].append(
+                route_cleanup.ViaItem(
+                    f"+{i}", op["net"], tuple(op["at"]), float(op["size"]),
+                    float(op.get("drill", 0.0)),
+                    tuple(_via_layers(op, cu))))
+    arcs: dict = {}
+    for t in bg.tracks_of():
+        if t.net in per and t.uuid not in gone and len(t.shape.coords) > 2:
+            arcs.setdefault(t.net, []).append(
+                (t.net, t.layer, t.shape, t.width))
+    pads: dict = {}
+    for p in bg.pads_of():
+        if p.net in per:
+            pads.setdefault(p.net, []).append(route_cleanup.PadItem(
+                p.net, tuple(p.layers), p.center, p.poly))
+    if seed is not None:
+        shapely.prepare(seed)
+    tol = route_cleanup.TOL
+    removed: list = []
+    for net in sorted(per):
+        fills = []
+        for layer in cu:
+            u = shapely.union_all([z.fill_on(layer)
+                                   for z in bg.zones_of(net, layer)
+                                   if not z.teardrop])
+            fills += [(layer, g) for g in getattr(u, "geoms", [u])
+                      if not g.is_empty]
+        ns = _net_copper(net, *per[net], arcs.get(net, []),
+                         pads.get(net, []), fills, fixed)
+        tree = shapely.STRtree([box(*n.bounds) for n in ns])
 
-    def fillfn(net, layer):
-        if (net, layer) not in cache:
-            cache[(net, layer)] = bg.zone_fill(net, layer)
-        return cache[(net, layer)]
+        def near(n):
+            if n.near is None:
+                x0, y0, x1, y1 = n.bounds
+                n.near = [ns[i] for i in sorted(tree.query(box(
+                    x0 - NEAR, y0 - NEAR, x1 + NEAR, y1 + NEAR)))
+                    if ns[i] is not n and ns[i].layers & n.layers]
+            return n.near
 
-    hold = set(anchors)
-    spurs: dict = {}    # uuid -> (track, copper, added copper, partners)
-    if win is not None:
-        for s in segs:
-            if s.uuid in hold:
+        def touching(n):
+            if n.touch is None:
+                n.touch = [m for m in near(n) if _cu_touch(n, m)]
+            return n.touch
+
+        def free(x):
+            nb = [m for m in near(x) if m.alive]
+            ss = [m.item for m in nb if m.kind == "seg"]
+            vs = [m.item for m in nb if m.kind == "via"]
+            ac = [m.item for m in nb if m.kind == "arc"]
+            pd = [m.item for m in nb if m.kind == "pad"]
+            fl = [(next(iter(m.layers)), m.core) for m in nb
+                  if m.kind == "fill"]
+            if x.kind == "via":
+                return _via_free(x.item, ss, ac, pd, vs, fl, tol)
+            here = [g for ly, g in fl if ly == x.item.layer]
+            pour = shapely.MultiPolygon(
+                [q for g in here for q in getattr(g, "geoms", [g])]) \
+                if here else None
+            return route_cleanup._seg_free(
+                x.item, ss, vs, pd, lambda _n, _l: pour, ac, tol,
+                bridges=False)
+
+        def splits(x):
+            """Removing x leaves two pieces of the copper it touches with
+            no other way between them across the net."""
+            nb = [m for m in touching(x) if m.alive]
+            if len(nb) < 2:
+                return False
+            idx = {id(m): i for i, m in enumerate(nb)}
+            parent = list(range(len(nb)))
+
+            def find(i):
+                while parent[i] != i:
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                return i
+
+            for i, m in enumerate(nb):
+                for o in touching(m):
+                    j = idx.get(id(o))
+                    if j is not None and find(i) != find(j):
+                        parent[max(find(i), find(j))] = min(find(i), find(j))
+            part = [find(i) for i in range(len(nb))]
+            want = set(part) - {part[0]}
+            if not want:
+                return False
+            todo = deque(m for i, m in enumerate(nb) if part[i] == part[0])
+            seen = {id(m) for m in todo}
+            x.alive = False
+            try:
+                while todo and want:
+                    for m in touching(todo.popleft()):
+                        if m.alive and id(m) not in seen:
+                            seen.add(id(m))
+                            if id(m) in idx:
+                                want.discard(part[idx[id(m)]])
+                            todo.append(m)
+                return bool(want)
+            finally:
+                x.alive = True
+
+        start = [n for n in ns if n.free and (
+            seed is None or shapely.dwithin(seed, n.core, n.r))]
+        todo = deque(sorted(start, key=lambda n: n.uid))
+        queued = {id(n) for n in todo}
+        while todo:
+            x = todo.popleft()
+            queued.discard(id(x))
+            if not x.alive or not free(x) or splits(x):
                 continue
-            poly = LineString([s.a, s.b]).buffer(s.width / 2)
-            if not win.contains(poly):
-                hold.add(s.uuid)
-                continue
-            added = addcu.get((s.net, s.layer), [])
-            if not any(p.intersects(poly) for p in added):
-                continue
-            got = _spur_end(s, poly, added, segs, vias, pads, arcs,
-                            fillfn(s.net, s.layer))
-            if got is None:
-                hold.add(s.uuid)
-            else:
-                spurs[s.uuid] = (s, poly, added, got)
-        for v in vias:
-            poly = Point(v.at).buffer(v.size / 2)
-            if not win.contains(poly) or any(
-                    p.intersects(poly) for ly in v.layers
-                    for p in addcu.get((v.net, ly), [])):
-                hold.add(v.uuid)
-    while True:
-        gs, gv = route_cleanup.find_dangling(
-            [dataclasses.replace(s, uuid="") if s.uuid in hold else s
-             for s in segs] + new_s,
-            [dataclasses.replace(v, uuid="") if v.uuid in hold else v
-             for v in vias] + new_v, pads, fillfn, arcs)
-        out = set(gs + gv)
-        left_s = [s for s in segs if s.uuid not in out]
-        left_v = [v for v in vias if v.uuid not in out]
-        bad = {u for u in gs if u in spurs and spurs[u][3] & out
-               and _spur_end(*spurs[u][:3], left_s, left_v, pads, arcs,
-                             fillfn(spurs[u][0].net, spurs[u][0].layer))
-               is None}
-        if not bad:
-            return gs + gv
-        hold |= bad
+            x.alive = False
+            removed.append(x.uid)
+            for m in sorted(near(x), key=lambda n: n.uid):
+                if m.alive and m.free and id(m) not in queued:
+                    todo.append(m)
+                    queued.add(id(m))
+    old = [u for u in removed if not u.startswith("+")]
+    trimmed = sorted(int(u[1:]) for u in removed if u.startswith("+"))
+    return old, trimmed
 
 
 def touch_shorts(bg, refs, before=frozenset()) -> list[str]:
@@ -868,15 +977,22 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                if it.uuid}
     reach = shapely.union_all([win] + [by_uuid[u].poly.buffer(margin)
                                        for u in pushed if u in by_uuid])
-    anchors = set(_dangling(base, bg0, nets))
-    pruned = _dangling(work, bgw, nets, gone=pushed, adds=adds, win=reach,
-                       anchors=anchors)
+    # (#1140): from 1 mm round what the run added and removed, out along
+    # each dead chain; what was dead on the base board stays
+    seed = repair_area(reach, adds, ripped + [by_uuid[u] for u in pushed
+                                              if u in by_uuid])
+    anchors = set(_dangling(base, bg0, nets)[0])
+    pruned, cut = _dangling(work, bgw, nets, gone=pushed, adds=adds,
+                            seed=seed, anchors=anchors)
     payload["pruned"] = pruned
+    payload["trimmed"] = [adds[i] for i in cut]
+    kept = [op for i, op in enumerate(adds) if i not in set(cut)] \
+        if cut else adds
     route_ops = [{"op": "remove", "uuid": u}
-                 for u in dict.fromkeys(pushed + pruned)] + adds
+                 for u in dict.fromkeys(pushed + pruned)] + kept
     payload["added"] = {
-        "tracks": sum(o["op"] == "add_track" for o in adds),
-        "vias": sum(o["op"] == "add_via" for o in adds)}
+        "tracks": sum(o["op"] == "add_track" for o in kept),
+        "vias": sum(o["op"] == "add_via" for o in kept)}
 
     # 7. check
     if route_ops:
@@ -964,6 +1080,11 @@ def report_md(p: dict) -> str:
                          f" | {j.get('how', '')} | {j.get('tracks', '')}"
                          f" | {j.get('vias', '')} |")
         lines.append("")
+    if p.get("pruned") or p.get("trimmed"):
+        lines += [f"Pruned {len(p.get('pruned') or [])} dead ends the run"
+                  f" left (tracks and vias) and {len(p.get('trimmed') or [])}"
+                  " the router added; what dangled on the board before"
+                  " stays.", ""]
     for key, head in (("failed", "Would not join"),
                       ("worse", "Worse than before")):
         if p.get(key):

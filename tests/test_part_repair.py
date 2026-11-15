@@ -217,53 +217,124 @@ def test_new_violations_name_what_the_gate_counts():
         " C221 on B.Cu at (34.025, 51.500)" in pr.report_md(p)
 
 
-def test_dangling_prunes_only_free_copper_in_the_window(u1):
-    pcb, bg = u1
-    nets = {"B", "C"}
-    assert set(pr._dangling(pcb, bg, nets, win=WIN)) == {"b0", "b1", "b2"}
-    # with no window, c1 (outside it) may go, and c0 behind it
-    assert set(pr._dangling(pcb, bg, nets)) \
-        == {"b0", "b1", "b2", "c0", "c1"}
-    # an anchor stays and holds what leads to it
-    assert set(pr._dangling(pcb, bg, nets, win=WIN, anchors={"b2"})) == {"b1"}
-    # so does copper that meets a new route
-    add = {"op": "add_track", "net": "B", "layer": "F.Cu", "width": 0.25,
-           "start": [-0.3, 1.5], "end": [-0.3, 2.5]}
-    assert set(pr._dangling(pcb, bg, nets, win=WIN, adds=[add])) == {"b1"}
-    # copper that is gone leaves what it held free
-    assert set(pr._dangling(pcb, bg, nets, win=WIN, gone={"c1"})) \
-        == {"b0", "b1", "b2", "c0"}
-
-
 def _add(net, a, b):
     return {"op": "add_track", "net": net, "layer": "F.Cu", "width": 0.25,
             "start": list(a), "end": list(b)}
 
 
-def test_dangling_prunes_the_stubs_behind_a_new_junction(u1):
-    """A route that lands where b0 forks meets b1 and b2 at that end only,
-    and b0 holds it there to pad 2: the two stubs go, b0 stays."""
+def _fp(ref, x, y, net, size=0.4):
+    """A one-pad part: copper a route can end on that holds."""
+    return (f'(footprint "T:P" (layer "F.Cu") (at {x} {y}) (uuid "f{ref}")'
+            f' (property "Reference" "{ref}")\n (pad "1" smd rect (at 0 0)'
+            f' (size {size} {size}) (layers "F.Cu") (net "{net}")))\n')
+
+
+def _pour(net, x0, y0, x1, y1, uid, teardrop=False):
+    pts = f"(xy {x0} {y0}) (xy {x1} {y0}) (xy {x1} {y1}) (xy {x0} {y1})"
+    attr = " (attr (teardrop (type padvia)))" if teardrop else ""
+    return (f'(zone (net "{net}") (net_name "{net}") (layer "F.Cu")'
+            f' (uuid "{uid}"){attr}\n (polygon (pts {pts}))\n'
+            f' (filled_polygon (layer "F.Cu") (pts {pts})))\n')
+
+
+def _u1(tmp_path, extra, name):
+    pcb = _board(tmp_path, U1 + COPPER + extra, name=name)
+    return pcb, geom.BoardGeom.from_file(pcb)
+
+
+def test_dangling_peels_dead_chains_from_the_seed(u1):
+    """#1140: what KiCad's DRC calls dangling goes, one piece at a time as
+    each removal leaves the next end free: from the copper that meets the
+    seed out along its chain, wherever that leads."""
     pcb, bg = u1
+    nets = {"B", "C"}
+    gone, cut = pr._dangling(pcb, bg, nets, seed=WIN)
+    assert set(gone) == {"b0", "b1", "b2", "c0", "c1"} and cut == []
+    # the stubs at the fork go before the track they leave free
+    assert gone.index("b0") > max(gone.index("b1"), gone.index("b2"))
+    assert set(pr._dangling(pcb, bg, nets)[0]) == set(gone)
+    # c1's free end alone in the seed takes c0 behind it, out of the seed
+    assert pr._dangling(pcb, bg, nets, seed=box(1.5, 3.5, 2.5, 4.5)) \
+        == (["c1", "c0"], [])
+    # a seed with nothing dead in it takes nothing, though a3 dangles
+    assert pr._dangling(pcb, bg, {"A"}, seed=box(-3.5, -2.5, -2.5, -1.5)) \
+        == ([], [])
+    # an anchor stays and holds what leads to it
+    assert set(pr._dangling(pcb, bg, nets, seed=WIN, anchors={"b2"})[0]) \
+        == {"b1", "c0", "c1"}
+    # copper that is gone leaves what it held free
+    assert pr._dangling(pcb, bg, {"C"}, seed=WIN, gone={"c1"}) == (["c0"], [])
+
+
+def test_dangling_takes_a_via_met_on_one_layer(u1):
+    """KiCad's via_dangling: a via that its net meets on one layer only
+    dangles. With a2 and a3 gone, vA has a1 on F.Cu alone: it goes, then a1
+    and a0. All of A dangles (a3 runs off to nothing): out from a3's end."""
+    pcb, bg = u1
+    assert pr._dangling(pcb, bg, {"A"}, seed=WIN, gone={"a2", "a3"}) \
+        == (["vA", "a1", "a0"], [])
+    assert pr._dangling(pcb, bg, {"A"}, seed=WIN) \
+        == (["a3", "a2", "vA", "a1", "a0"], [])
+
+
+U2D = _fp("U2", 4.6, -4, "D") + _seg((4.6, -2), (4.6, -4), "D", "d4")
+AROUND = (_seg((4.4, 0), (6, 0), "D", "d8a") + _seg((6, 0), (6, -4), "D", "d8b")
+          + _seg((6, -4), (4.6, -4), "D", "d8c"))
+
+
+def test_dangling_keeps_a_dead_end_that_is_a_nets_only_link(tmp_path):
+    """d1's two ends meet nothing, but d0 (from pad 4) and d4 (to U2's pad)
+    meet its middle: without d1, D falls in two, so it stays. With another
+    way round from pad 4 to U2, d1 goes, and d4 and d0 after it."""
+    pcb, bg = _u1(tmp_path, U2D, "link")
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN) == ([], [])
+    pcb, bg = _u1(tmp_path, U2D + AROUND, "loop")
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN) == (["d1", "d4", "d0"], [])
+
+
+def test_dangling_trims_the_routers_dead_tails(u1):
+    """An add is copper like any other: one with an end on nothing is
+    trimmed (its index comes back), and what it alone held goes after it."""
+    pcb, bg = u1
+    tail = _add("B", (0, 1), (1, 1))      # off b0's middle to nothing
+    gone, cut = pr._dangling(pcb, bg, {"B"}, seed=WIN, adds=[tail])
+    assert set(gone) == {"b0", "b1", "b2"} and cut == [0]
+
+
+def test_dangling_prunes_the_stubs_behind_a_new_junction(tmp_path):
+    """A route from a pad that lands where b0 forks meets b1 and b2 at that
+    end only, and b0 holds it there to pad 2: the two stubs go, b0 stays."""
+    pcb, bg = _u1(tmp_path, _fp("P1", 0, 2.8, "B"), "fork")
     add = _add("B", (0, 2), (0, 2.8))
-    assert set(pr._dangling(pcb, bg, {"B"}, win=WIN, adds=[add])) \
-        == {"b1", "b2"}
+    gone, cut = pr._dangling(pcb, bg, {"B"}, seed=WIN, adds=[add])
+    assert set(gone) == {"b1", "b2"} and cut == []
 
 
-def test_dangling_keeps_the_copper_a_new_route_hangs_on(u1, tmp_path):
-    """A route that lands on b1's free end alone hangs on b1, so b1 and b0
-    stay. One that lands where d1 ends at a dead stub d2 hangs on d1 (d0's
-    T onto it leads to pad 4): once d2 would go too, nothing at that end
-    holds the route, so d1 and d0 stay (and d2 with them)."""
-    pcb, bg = u1
+def test_dangling_keeps_the_copper_a_new_route_hangs_on(tmp_path):
+    """A route that lands on b1's free end hangs on b1, so b1 and b0 stay.
+    A dead stub d2 off d1's end goes with d1 and d0 (d1's other end is
+    free); with a route from a pad onto that end, d2 goes and d1 stays: it
+    is all that joins the route to d0 and pad 4."""
+    pcb, bg = _u1(tmp_path, _fp("P1", 0.6, 2.8, "B"), "b1")
     add = _add("B", (0.6, 2), (0.6, 2.8))
-    assert set(pr._dangling(pcb, bg, {"B"}, win=WIN, adds=[add])) == {"b2"}
-    pcb2 = _board(tmp_path, U1 + COPPER
-                  + _seg((5, -2), (5.5, -2.5), "D", "d2"), name="d2")
-    bg2 = geom.BoardGeom.from_file(pcb2)
-    assert set(pr._dangling(pcb2, bg2, {"D"}, win=WIN)) \
-        == {"d0", "d1", "d2"}
+    assert pr._dangling(pcb, bg, {"B"}, seed=WIN, adds=[add]) == (["b2"], [])
+    d2 = _seg((5, -2), (5.5, -2.5), "D", "d2")
+    pcb, bg = _u1(tmp_path, d2, "d2")
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN) == (["d2", "d1", "d0"], [])
+    pcb, bg = _u1(tmp_path, d2 + _fp("P2", 5, -2.8, "D"), "d2p")
     add = _add("D", (5, -2), (5, -2.8))
-    assert pr._dangling(pcb2, bg2, {"D"}, win=WIN, adds=[add]) == []
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, adds=[add]) == (["d2"], [])
+
+
+def test_dangling_counts_pours_not_teardrops(tmp_path):
+    """A B pour under b1's free end holds b1, and b0 behind it; a teardrop
+    there does not: the refill makes teardrops again from what is left."""
+    pcb, bg = _u1(tmp_path, _pour("B", 0.4, 1.8, 1.0, 2.2, "zB"), "pour")
+    assert pr._dangling(pcb, bg, {"B"}, seed=WIN) == (["b2"], [])
+    pcb, bg = _u1(tmp_path, _pour("B", 0.4, 1.8, 1.0, 2.2, "tB", True), "td")
+    assert [z.teardrop for z in bg.zones_of()] == [True]
+    assert set(pr._dangling(pcb, bg, {"B"}, seed=WIN)[0]) \
+        == {"b0", "b1", "b2"}
 
 
 PATCH_A = ('(zone (net "A") (net_name "A") (layer "F.Cu") (uuid "zA")'
