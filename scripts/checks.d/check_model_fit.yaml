@@ -4,3 +4,5 @@
 name: check_model_fit
 needs: []
 args: []
+optional:
+  constraints: [--constraints, "{constraints}"]
