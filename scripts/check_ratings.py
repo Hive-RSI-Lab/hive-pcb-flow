@@ -14,7 +14,9 @@ Inputs (pure Python, no KiCad run):
  - the parts directory (--parts, default <ws>/parts beside <ws>/kicad):
    parts.json (the P3 BOM, per-part `attributes`) and the per-part
    extraction <LCSC>.json that datasheet_extract.py validates (pinout +
-   abs_max, optional pin_ratings);
+   abs_max, optional pin_ratings); then hwde's library
+   (reference/extractions), then --extractions DIR, a batch reading of
+   absolute-maximum ratings that abs_max_batch.py writes (#1339);
  - rail voltages, first source wins per net: constraints.json `voltages`
    (--constraints; worst-case volts), the power tree's rail table
    (--power-tree, default <ws>/architecture/power_tree.md: a markdown table
@@ -203,7 +205,7 @@ whose pads sit on other pins rates by the copper. Facts `pins_by_position`
 that could not settle it, so pins kept their numbers).
 
 CLI: --pcb board.kicad_pcb [--parts DIR] [--constraints c.json]
-     [--power-tree power_tree.md] [--out report.json]
+     [--power-tree power_tree.md] [--extractions DIR] [--out report.json]
 Exit 0 pass / 1 findings / 2 error (SPEC 6 contract).
 """
 from __future__ import annotations
@@ -390,7 +392,8 @@ def _safe_name(key: str) -> bool:
 
 
 def key_by_mpn(board: list[dict], bom: list[dict], parts_dir: Path,
-               bom_by_lcsc: dict) -> dict[str, str]:
+               bom_by_lcsc: dict,
+               extractions: Path | None = None) -> dict[str, str]:
     """#1119: give a footprint with no LCSC code its MPN as the part key
     when a record is found under it - parts/<MPN>.json (or the library's),
     or a parts.json line with that mpn and no lcsc, which then joins
@@ -419,7 +422,8 @@ def key_by_mpn(board: list[dict], bom: list[dict], parts_dir: Path,
                  if _safe_name(x)]
         if not stems:
             continue
-        on_disk = next((s for s in stems for d in (parts_dir, LIBRARY_DIR)
+        on_disk = next((s for s in stems
+                        for d in _ext_dirs(parts_dir, extractions)
                         if (d / f"{s}.json").is_file()), None)
         if not (on_disk or line):
             continue
@@ -1355,10 +1359,12 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
 def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
               power_tree: Path | None,
               cons_dir: Path | None = None,
-              trusted: set[str] | None = None) -> tuple[list[dict], dict]:
+              trusted: set[str] | None = None,
+              extractions: Path | None = None) -> tuple[list[dict], dict]:
     """trusted: refdes whose rating a person checked and recorded verified in
     the ledger (#429) - their 'unrated' warnings are dropped (a real
-    over-rating error still fires)."""
+    over-rating error still fires). extractions: a further folder of
+    extractions, read after the board's parts/ and the library (#1339)."""
     pj = parts_dir / "parts.json"
     bom = checklib.load_json(pj, "parts.json").get("parts", []) \
         if pj.is_file() else []
@@ -1371,10 +1377,10 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     trusted = set(trusted or ())
     bom_by_lcsc = {str(p.get("lcsc") or "").strip(): p for p in bom
                    if p.get("lcsc")}
-    by_mpn = key_by_mpn(board, bom, parts_dir, bom_by_lcsc)
+    by_mpn = key_by_mpn(board, bom, parts_dir, bom_by_lcsc, extractions)
     exts: dict[str, dict] = {}
     for lcsc in {b["lcsc"] for b in board if b["lcsc"]}:
-        if (ext := load_extraction(parts_dir, lcsc)) is not None:
+        if (ext := load_extraction(parts_dir, lcsc, extractions)) is not None:
             exts[lcsc] = ext
     # pins as the copper maps them (#843), before any pin is read
     by_position, position_not_used = {}, {}
@@ -1944,13 +1950,20 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
 LIBRARY_DIR = HERE.parent / "reference" / "extractions"
 
 
-def load_extraction(parts_dir: Path, lcsc: str) -> dict | None:
+def _ext_dirs(parts_dir: Path, extractions: Path | None) -> list[Path]:
+    return [parts_dir, LIBRARY_DIR, *([extractions] if extractions else [])]
+
+
+def load_extraction(parts_dir: Path, lcsc: str,
+                    extractions: Path | None = None) -> dict | None:
     """The part's extraction: the board's own parts/<lcsc>.json, else hwde's
     library entry reference/extractions/<lcsc>.json (read from the maker's
     datasheet, every rating row citing its page - see that folder's
-    README.md), else None. The board's own wins: it may be a later
-    revision of the part."""
-    for f in (parts_dir / f"{lcsc}.json", LIBRARY_DIR / f"{lcsc}.json"):
+    README.md), else <extractions>/<lcsc>.json (--extractions: a batch
+    reading, abs_max_batch.py, #1339), else None. The board's own wins: it
+    may be a later revision of the part."""
+    for d in _ext_dirs(parts_dir, extractions):
+        f = d / f"{lcsc}.json"
         if f.is_file():
             return checklib.load_json(f, f"extraction {f.name}")
     return None
@@ -3484,6 +3497,9 @@ def run(argv=None):
     ap.add_argument("--constraints", help="constraints.json (voltages, power)")
     ap.add_argument("--power-tree", help="power_tree.md "
                     "(default <ws>/architecture/power_tree.md)")
+    ap.add_argument("--extractions", help="a further folder of <part>.json "
+                    "extractions, read after --parts and the library "
+                    "(abs_max_batch.py's output)")
     ap.add_argument("--out", help="write the report here")
     args = ap.parse_args(argv)
     pcb = Path(args.pcb)
@@ -3508,7 +3524,9 @@ def run(argv=None):
     trusted = {f["subject"] for f in held.values() if f["kind"] == "rating"}
     viol, facts = run_check(pcb, parts, cons, tree,
                             Path(args.constraints).resolve().parent
-                            if args.constraints else None, trusted=trusted)
+                            if args.constraints else None, trusted=trusted,
+                            extractions=Path(args.extractions)
+                            if args.extractions else None)
     lf = facts.pop("ledger_facts")
     for f in lf:
         h = held.get(ledgerlib.key(f["subject"], f["kind"]))

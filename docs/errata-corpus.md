@@ -45,7 +45,10 @@ round, pinned and swept before those rules are:
    files, so `run` and `table` see them too. A sealed round's boards are
    left out of `fetch`, `run` and `sweep` unless `--sealed N` asks for them,
    and they live in their own cache (`--sealed-cache`, default
-   ~/.cache/hwde-holdout), apart from the training cache.
+   ~/.cache/hwde-holdout), apart from the training cache. To have
+   check_ratings read the round's ICs' absolute-maximum ratings, run
+   `abs_max_batch.py --round N` (`--sealed N` for a sealed round) before
+   the sweep: it prints counts only, and the sweep reads its folder.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board

@@ -31,7 +31,8 @@ netlist_audit on the schematic, check_mate_pins and check_current on the
 board, check_straps on the board with the netlist kicad-cli exports from the
 schematic, check_connector_fit, check_silk and check_esd on the board (no
 parts/, so check_esd reads no victim's abs max), check_ratings on the board
-(each pin rated from hwde's library extractions by its LCSC number, rails
+(each pin rated from hwde's library extractions by its LCSC number, then
+from the set's batch readings when abs_max_batch.py has made them, rails
 from net names: no parts/ and no power tree), check_pinouts on the
 schematic, check_bom_sync on the board with --live (the package of each LCSC part
 comes from JLC's record, as nothing in the foreign tree holds it),
@@ -518,12 +519,29 @@ def _check_ratings(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     and --power-tree names no file, so a rail's volts come from its net name.
     audit() runs it with HWDE_LEDGER_WRITE=0, so no ledger.json lands in the
     cached repo. It runs through errata_ratings.py, the same check with each
-    rated part's source added (rated_from), for the coverage count."""
+    rated part's source added (rated_from), for the coverage count.
+    When abs_max_batch.py has read the board's set (#1339), its folder
+    (abs_max_dir) is passed as --extractions: hwde's library still wins."""
     parts = empty.parent / "ratings-no-parts"
     parts.mkdir(exist_ok=True)
+    ext = abs_max_dir(repo.parent.parent, b)
     return ["errata_ratings.py", "--pcb", str(_pcb(b, rev, repo, empty)),
             "--constraints", str(empty), "--parts", str(parts),
-            "--power-tree", str(empty.parent / "no-power-tree.md")]
+            "--power-tree", str(empty.parent / "no-power-tree.md"),
+            *(["--extractions", str(ext)] if ext.is_dir() else [])]
+
+
+def set_label(b: dict) -> str:
+    """The board's set: `training`, or `round-N` for a holdout board swept
+    in round N (sealed or not)."""
+    r = (b.get("swept") or {}).get("round")
+    return f"round-{r}" if r else "training"
+
+
+def abs_max_dir(cache: Path, b: dict) -> Path:
+    """Where abs_max_batch.py writes the extractions read for the board's
+    set, in the cache that holds the board's checkout."""
+    return cache / "abs-max" / set_label(b) / "ext"
 
 
 def _check_bom_sync(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
@@ -1090,7 +1108,10 @@ round, pinned and swept before those rules are:
    files, so `run` and `table` see them too. A sealed round's boards are
    left out of `fetch`, `run` and `sweep` unless `--sealed N` asks for them,
    and they live in their own cache (`--sealed-cache`, default
-   ~/.cache/hwde-holdout), apart from the training cache.
+   ~/.cache/hwde-holdout), apart from the training cache. To have
+   check_ratings read the round's ICs' absolute-maximum ratings, run
+   `abs_max_batch.py --round N` (`--sealed N` for a sealed round) before
+   the sweep: it prints counts only, and the sweep reads its folder.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board
