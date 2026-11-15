@@ -893,7 +893,11 @@ def run(argv=None):
         raise checklib.CheckError(f"board not found: {pcb}")
     viols, judged, nj = check(pcb, args.live,
                               Path(args.easyeda_cache) if args.easyeda_cache else None)
-    return checklib.report(SCRIPT, pcb, viols, judged=judged, not_judged=nj), args.out
+    return checklib.report(
+        SCRIPT, pcb, viols, judged=judged, not_judged=nj,
+        nothing_to_judge=None if viols or sum(judged.values()) else
+        "no footprint could be compared with a stock KiCad or LCSC model "
+        "footprint"), args.out
 
 
 def main(argv=None) -> int:

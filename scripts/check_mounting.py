@@ -363,7 +363,11 @@ def run(argv=None):
     cons = checklib.load_json(args.constraints, "constraints") \
         if args.constraints else None
     vios, seen = check(pcb, cons)
-    return checklib.report(SCRIPT, pcb, vios, checked=[seen]), args.out
+    return checklib.report(
+        SCRIPT, pcb, vios, checked=[seen],
+        nothing_to_judge=None if vios or seen["judged"] else
+        f"the board is under {MIN_AREA_MM2:g} mm2 and {MIN_SIDE_MM:g} mm a "
+        "side, too small to need mounting holes"), args.out
 
 
 def main(argv=None) -> int:

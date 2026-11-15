@@ -5833,6 +5833,13 @@ def run_audit(netlist: Path, constraints_path: Path | None,
     if constraints_path is None:
         violations = [x for x in violations
                       if x.get("kind") != "power_undeclared"]
+    counted = facts.get("pins_connected", 0) + sum(
+        v for k, v in facts.items() if k.endswith(("_checked", "_judged"))
+        and isinstance(v, int) and not isinstance(v, bool))
+    if not violations and not counted and not facts.get("nothing_to_judge"):
+        facts["nothing_to_judge"] = (
+            f"{Path(netlist).name}: no pin connected and no part any audit "
+            "topic checks")
     payload = checklib.report(SCRIPT, str(netlist), violations,
                               mode="audit", **facts)
     # warnings alone do not fail the audit (fp_verify precedent)

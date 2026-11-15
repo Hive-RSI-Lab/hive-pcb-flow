@@ -551,3 +551,52 @@ def test_value_cut_short_of_its_ordering_code_is_not_judged(tmp_path):
                                     {"MPN": "SN74HC595D"}, pads=16))
     viols, facts = run(pcb)
     assert viols == [] and facts["judged"] == 1
+
+
+@pytest.mark.parametrize("ref,fpid,value,props,pads,hit", [
+    # the case a passive's Value names against its footprint: a planted
+    # 0402 Value on an 0603 footprint, and its quiet twin
+    ("C1", CAP.format("0603", "1608"), "C_0.1u_0402_10V_10%", {}, SMD, True),
+    ("C1", CAP.format("0402", "1005"), "C_0.1u_0402_10V_10%", {}, SMD, False),
+    ("R1", RES.format("0805", "2012"), "10k 0603", {}, SMD, True),
+    ("R1", "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder",
+     "10k 0805", {}, SMD, False),
+    # a Package field, and a chip case named on a through-hole footprint
+    ("C2", CAP.format("1206", "3216"), "10uF", {"Package": "0805"}, SMD,
+     True),
+    ("R2", "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+     "R_1k_0603", {}, THT, True),
+])
+def test_value_case_against_footprint(tmp_path, ref, fpid, value, props,
+                                      pads, hit):
+    viols, facts = run(board(tmp_path, footprint(
+        ref, fpid, value, props, kind=pads,
+        attr="smd" if pads is SMD else "through_hole")))
+    got = [v for v in viols if v["kind"] == "footprint_package_mismatch"]
+    assert facts["judged"] == 1 and not facts["not_judged"], facts
+    assert len(got) == (1 if hit else 0), viols
+    if hit:
+        assert got[0]["severity"] == "warning"
+        assert got[0]["part_from"] in ("Value", "Package field")
+
+
+@pytest.mark.parametrize("ref,fpid,value", [
+    ("R1", RES.format("1206", "3216"), "1206"),      # a bare number: ohms
+    ("R1", RES.format("0603", "1608"), "10k"),       # no case named
+    ("C1", "Capacitor_SMD:CP_Elec_6.3x5.4", "C_10u_0805"),  # no case read
+    ("L1", "Inductor_SMD:L_0805_2012Metric", "L_1u_0603"),  # not a C or R
+])
+def test_value_case_not_judged(tmp_path, ref, fpid, value):
+    viols, facts = run(board(tmp_path, footprint(ref, fpid, value)))
+    assert viols == [] and facts["judged"] == 0, (viols, facts)
+    assert facts["not_judged"] == {"no part number on the footprint": 1}
+
+
+def test_case_limit_counts_as_judged(tmp_path):
+    # no part number, no case in the Value: the value held to its case is
+    # a judgment of the part's package all the same
+    viols, facts = run(board(tmp_path, footprint(
+        "C1", CAP.format("0402", "1005"), "100uF")))
+    assert facts["judged"] == 1 and facts["case_limits_judged"] == 1
+    assert [v["kind"] for v in viols] == ["passive_case_limit"]
+    assert facts["parts"][0]["from"] == "case limits"

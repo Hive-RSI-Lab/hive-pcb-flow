@@ -880,7 +880,8 @@ def run(argv=None):
                   "refdes_checked": len(refdes_texts(root)),
                   "refdes_off_silk": len(off_silk)}],
         refdes_off_silk=off_silk,
-        nothing_to_judge=None if silks else "the board has no silk")
+        nothing_to_judge=None if violations or silks or refdes_texts(root)
+        else "the board has no silk and no reference text")
     return payload, args.out
 
 

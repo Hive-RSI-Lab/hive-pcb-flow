@@ -56,10 +56,18 @@ value held to its case (reference/case_limits.yaml, the makers' lineup
 charts): a 22 uF 0402 or a 1 W 0603 cannot be bought. Its `case_limits_judged`
 counts them.
 
+A C or R with no part number is judged against its case: a chip case its
+Value names ("C_0.1u_0402_10V", "100nF 0603"; else a Package, Case or Size
+field) must be the footprint's (a 0402 named on an 0603 or a through-hole
+footprint is a hit), and one whose value was held to its case above counts
+as judged too. A bare "1206" Value may be an ohm value and is not read.
+
 Kinds:
   footprint_package_mismatch  the footprint and the named part's package
                               disagree on mount, family, pins, pitch or
-                              body width
+                              body width; or a passive's Value names
+                              another chip case than its footprint's
+                              (a warning)
   lcsc_value_mismatch         the Value and the LCSC/JLC record's value
                               disagree
   passive_case_limit          a C or R states more than its chip case holds:
@@ -445,6 +453,30 @@ def record_value(kind: str, description: str) -> float | None:
 
 # ------------------------------------------------------------------ check
 
+# a chip case named in a passive's Value or a Package/Case/Size field
+# ("C_0.1u_0402_10V", "100nF 0603"): one of the codes engcalc reads from a
+# footprint, standing apart from the digits round it
+_CASE_IN_TEXT = re.compile(
+    r"(?:^|[\s_,;/(\-])(01005|0201|0402|0603|0805|1206|1210|2010|2512)"
+    r"(?=$|[\s_,;/)\-])")
+_CASE_FIELD = re.compile(r"^(?:package|case|size|case[\s_]*size)$", re.I)
+
+
+def stated_case(fp: dict) -> tuple[str | None, str]:
+    """(chip case, where) a C or R names apart from its footprint: its
+    Value, when the Value holds more than the code alone (a bare "1206" may
+    be an ohm value), else a Package, Case or Size field."""
+    val = fp["value"].strip()
+    m = _CASE_IN_TEXT.search(val)
+    if m and val != m.group(1):
+        return m.group(1), "Value"
+    for k, v in fp["props"].items():
+        m = _CASE_IN_TEXT.search(str(v).strip())
+        if _CASE_FIELD.match(k.strip()) and m:
+            return m.group(1), f"{k.strip()} field"
+    return None, ""
+
+
 def _reads(package: str) -> bool:
     d = pkgname.describe(package or "")
     return bool(d["family"] or d["chip"])
@@ -469,6 +501,7 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
         if ref in recs.refs:  # parts.json says what this ref buys
             code, mpn, where = recs.refs[ref][0], None, "parts.json row"
         kind = (re.match(r"[A-Z]+", ref.upper()) or [""])[0]
+        cl = None
         if kind in ("C", "R"):
             cl = case_limits.judge(kind, fp["value"], fp["fpid"], fp["props"])
             if cl:
@@ -489,6 +522,38 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
                         SCRIPT, kind="passive_case_limit", case=cl["case"],
                         value=fp["value"], stated=cl["stated"],
                         limit=cl["limit"], unit=unit))
+        if not code and not mpn and kind in ("C", "R"):
+            # a passive with no part number is judged against its case:
+            # the case its Value names, and the value the case can hold
+            stated, src = stated_case(fp)
+            case = engcalc.package_code(fp["fpid"])
+            if stated and (case or fp["pad_mount"] == "tht"):
+                ok = stated == case
+                judged.append({"ref": ref, "named": fp["value"], "from": src,
+                               "package": stated, "footprint": fp["fpid"],
+                               "ok": ok})
+                if not ok:
+                    viols.append(checklib.violation(
+                        SCRIPT, "warning", fp["at"], fp["layer"], None,
+                        [ref],
+                        f"{ref}'s {src} names a {stated} chip "
+                        f"({fp['value']!r}), but its footprint is "
+                        f"{fp['fpid']}, "
+                        + (f"a {case} pad pattern" if case else
+                           "a through-hole one")
+                        + ". Fix: the footprint of the case bought, or a "
+                          "Value that names it",
+                        SCRIPT, kind="footprint_package_mismatch",
+                        footprint=fp["fpid"], package=stated,
+                        part=fp["value"], part_from=src,
+                        reasons=[f"case {stated} named, footprint "
+                                 f"{case or 'through hole'}"]))
+                continue
+            if cl:
+                judged.append({"ref": ref, "named": fp["value"],
+                               "from": "case limits", "package": cl["case"],
+                               "footprint": fp["fpid"], "ok": cl["ok"]})
+                continue
         if not code and not mpn:
             skip("no part number on the footprint")
             continue
@@ -606,7 +671,12 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             SCRIPT, kind="footprint_package_mismatch", footprint=fp["fpid"],
             package=pkg["package"], part=code or mpn, part_from=where,
             reasons=why_not))
+    nothing = None if viols or judged else (
+        "no part whose footprint and package could both be read"
+        + (f" (most: {max(not_judged, key=not_judged.get)})"
+           if not_judged else ": no footprint with pads"))
     return viols, {"judged": len(judged), "not_judged": not_judged,
+                   "nothing_to_judge": nothing,
                    "values_judged": values, "case_limits_judged": limits,
                    "parts": judged,
                    "lookup_errors": recs.errors[:20]}
