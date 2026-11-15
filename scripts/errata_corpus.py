@@ -453,7 +453,12 @@ def _key(v: dict) -> tuple:
 # The sweep lists them under `coverage_gone_on_rev_b`, apart from the triage
 # rows in `gone_on_rev_b`; a part list that changed between revisions is
 # enough to make one disappear on rev B.
-COVERAGE_KINDS = {"check_ratings": {"rating_unrated", "rating_no_datasheet_read"}}
+# Kinds that only say what a check couldn't judge, never that the board is
+# wrong: rating_no_attributes is an error because it blocks verify until the
+# parts row is filled, but it judges nothing about the part.
+COVERAGE_KINDS = {"check_ratings": {
+    "rating_unrated", "rating_no_datasheet_read", "rating_datasheet_unassessed",
+    "rating_regulator_output_unjudged", "rating_no_attributes"}}
 
 
 def sweep(cache: Path, b: dict) -> dict:
