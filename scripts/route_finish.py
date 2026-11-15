@@ -1521,12 +1521,17 @@ def finish_staged(cli: Path, staged: Path, drc: dict, *, nets=None,
                   deadline: float | None = None, on_try=None,
                   max_nodes: int = 3_000_000,
                   search_weight: float = 1.0,
-                  via_in_pad_refs=None) -> dict:
+                  via_in_pad_refs=None, protect_uuids=None) -> dict:
     """Route the staged board's unconnected pairs in place, in passes: a
     route can split another net's pour, and the next pass joins the piece.
     A pass is kept only when the unconnected count drops and no error type
     grows against the start of the pass. Returns facts with "kept" and,
-    when kept, "drc" (the report after)."""
+    when kept, "drc" (the report after).
+
+    rip_errors takes out the tracks and vias DRC names in a copper error,
+    but never one in protect_uuids (the caller's copper from before
+    routing, #655); facts "ripped_items" and "protected_kept" list both by
+    net and position."""
     import shutil
 
     opts = dict(nets=set(nets) if nets else None, layers=layers, grid=grid,
@@ -1574,7 +1579,13 @@ def finish_staged(cli: Path, staged: Path, drc: dict, *, nets=None,
     if rip_errors:
         # an autorouter's shorts and clearance misses: take out the tracks
         # and vias DRC names, and route those connections again
-        ripped = _error_copper(staged, drc)
+        kept_uuids: list[str] = []
+        ripped = _error_copper(staged, drc, protect=protect_uuids,
+                               kept=kept_uuids)
+        if ripped or kept_uuids:
+            bg0 = geom.BoardGeom.from_file(staged)
+            facts["ripped_items"] = describe_copper(bg0, ripped)
+            facts["protected_kept"] = describe_copper(bg0, kept_uuids)
         rip_nets = {v.get("net") for v in drc["violations"]
                     if v.get("check") in RIP_CHECKS and v.get("net")}
         if ripped:
@@ -1591,6 +1602,7 @@ def finish_staged(cli: Path, staged: Path, drc: dict, *, nets=None,
                 shutil.copy2(origin, staged)
                 origin.unlink(missing_ok=True)
                 facts["rip_error"] = str(exc)[:300]
+                facts.pop("ripped_items", None)
                 ripped, cur = [], drc
         facts["ripped"] = len(ripped)
     try:
@@ -1783,10 +1795,14 @@ RIP_CHECKS = {"shorting_items", "clearance", "tracks_crossing",
               "hole_clearance", "hole_to_hole", "track_width"}
 
 
-def _error_copper(staged: Path, drc: dict) -> list[str]:
-    """uuids of the tracks and vias DRC names in a copper error."""
+def _error_copper(staged: Path, drc: dict, protect=None,
+                  kept: list | None = None) -> list[str]:
+    """uuids of the tracks and vias DRC names in a copper error. A uuid in
+    `protect` (copper placed on purpose before routing, #655) is never
+    taken: it goes to `kept` instead, and the error stays for the report."""
     bg = geom.BoardGeom.from_file(staged)
     mine = {t.uuid for t in bg.tracks_of()} | {v.uuid for v in bg.vias_of()}
+    protect = set(protect or ())
     out: list[str] = []
     for v in drc["violations"]:
         if v.get("severity") != "error" or v.get("check") not in RIP_CHECKS:
@@ -1795,7 +1811,31 @@ def _error_copper(staged: Path, drc: dict) -> list[str]:
             u = it.get("uuid")
             if u in mine and u not in out and (
                     it.get("msg", "").startswith(("Track", "Via"))):
+                if u in protect:
+                    if kept is not None and u not in kept:
+                        kept.append(u)
+                    continue
                 out.append(u)
+    return out
+
+
+def describe_copper(bg, uuids) -> list[dict]:
+    """Each named track or via by net and position, so a report says what
+    a rip took (#655): {kind, net, layer|layers, at|start+end}."""
+    want = set(uuids)
+    out = []
+    for v in bg.vias_of():
+        if v.uuid in want:
+            out.append({"kind": "via", "net": v.net,
+                        "at": [round(v.at[0], 4), round(v.at[1], 4)],
+                        "layers": list(v.layers), "uuid": v.uuid})
+    for t in bg.tracks_of():
+        if t.uuid in want:
+            (x1, y1), (x2, y2) = t.shape.coords[0], t.shape.coords[-1]
+            out.append({"kind": "track", "net": t.net, "layer": t.layer,
+                        "start": [round(x1, 4), round(y1, 4)],
+                        "end": [round(x2, 4), round(y2, 4)],
+                        "uuid": t.uuid})
     return out
 
 
