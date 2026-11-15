@@ -68,8 +68,9 @@ class Pad:
     # drill both rotate with the pad, so axis i of one pairs with axis i of the other
     drill_xy: tuple[float, float] | None = None
     # custom-pad primitives that are closed shapes drawn stroked, not filled:
-    # "gr_circle (width 0.3)". The Gerber and lib/geom.py see the ring the stroke
-    # draws; KiCad 10.0.6's DRC and connectivity see only its centre line (#1133)
+    # "gr_circle (width 0.3)". The Gerber plots the ring the stroke draws;
+    # KiCad 10.0.6's DRC and connectivity saw only a stroked gr_circle's centre
+    # line (#1133), and gr_poly / gr_rect are likely the same
     stroked_prims: list[str] = field(default_factory=list)
 
     @property
@@ -109,8 +110,10 @@ _CLOSED_PRIMS = ("gr_circle", "gr_poly", "gr_rect")
 
 def _stroked_prims(node) -> list[str]:
     """Closed primitives of a custom pad drawn with a stroke and no fill, as
-    "gr_circle (width 0.3)". Filled means (fill yes|solid|true), the rule
-    lib/geom.py's _copper_prim uses to build the same copper."""
+    "gr_circle (width 0.3)": width > 0 and (fill no|none), or a gr_circle with
+    no fill token (a ring in the KiCad 5 format too). A gr_poly or gr_rect with
+    no fill token is filled: KiCad fills those in old-format files, which is
+    what easyeda2kicad writes ("(gr_poly (pts ...) (width 0.1))")."""
     prims = _kid(node, "primitives")
     out = []
     for n in (prims[1:] if prims is not None else []):
@@ -121,9 +124,11 @@ def _stroked_prims(node) -> list[str]:
             wn = _kid(_kid(n, "stroke"), "width")
         w = (_nums(wn) or [0.0])[0] if wn is not None else 0.0
         fill = _kid(n, "fill")
-        filled = fill is not None and any(
-            str(_tok(x)) in ("yes", "solid", "true") for x in fill[1:])
-        if w > 0 and not filled:
+        if fill is None:
+            unfilled = _head(n) == "gr_circle"
+        else:
+            unfilled = not any(str(_tok(x)) in ("yes", "solid", "true") for x in fill[1:])
+        if w > 0 and unfilled:
             out.append(f"{_head(n)} (width {w:g})")
     return out
 

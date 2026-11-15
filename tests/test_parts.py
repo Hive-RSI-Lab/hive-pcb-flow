@@ -260,11 +260,13 @@ def test_fp_verify_warns_stroked_pad_ring(tmp_path, capsys):
                           "(gr_circle (center 0 0) (end 0.6625 0) (width 0.3) (fill no))")
     assert code == 0 and len(w) == 1 and w[0]["severity"] == "warning"
     assert w[0]["primitives"] == ["gr_circle (width 0.3)"]
-    # the new stroke form, and a poly and a rect with no fill token, warn too
+    # the new stroke form, an explicit (fill none), and a circle with no fill token
     _, w = _custom_pad(tmp_path, capsys,
-                       "(gr_rect (start -0.5 -0.5) (end 0.5 0.5) (stroke (width 0.2)))"
-                       " (gr_poly (pts (xy 0 0) (xy 1 0) (xy 0 1)) (width 0.1))")
-    assert w[0]["primitives"] == ["gr_rect (width 0.2)", "gr_poly (width 0.1)"]
+                       "(gr_rect (start -0.5 -0.5) (end 0.5 0.5) (stroke (width 0.2)) (fill no))"
+                       " (gr_poly (pts (xy 0 0) (xy 1 0) (xy 0 1)) (width 0.1) (fill none))"
+                       " (gr_circle (center 0 0) (end 0.5 0) (width 0.2))")
+    assert w[0]["primitives"] == ["gr_rect (width 0.2)", "gr_poly (width 0.1)",
+                                  "gr_circle (width 0.2)"]
 
 
 def test_fp_verify_filled_or_open_pad_primitives_pass(tmp_path, capsys):
@@ -272,7 +274,10 @@ def test_fp_verify_filled_or_open_pad_primitives_pass(tmp_path, capsys):
     for prims in ("(gr_poly (pts (xy 0 0) (xy 1 0) (xy 0 1)) (width 0) (fill yes))",
                   "(gr_circle (center 0 0) (end 0.5 0) (width 0.2) (fill solid))",
                   "(gr_circle (center 0 0) (end 0.5 0) (width 0) (fill no))",
-                  "(gr_line (start 0 0) (end 1 0) (width 0.2))"):
+                  "(gr_line (start 0 0) (end 1 0) (width 0.2))",
+                  # KiCad 5 / easyeda2kicad: no fill token, and KiCad fills it
+                  "(gr_poly (pts (xy 0 0) (xy 1 0) (xy 0 1)) (width 0.1))",
+                  "(gr_rect (start -0.5 -0.5) (end 0.5 0.5) (width 0.1))"):
         assert _custom_pad(tmp_path, capsys, prims) == (0, [])
 
 
