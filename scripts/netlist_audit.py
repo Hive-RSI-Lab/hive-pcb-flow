@@ -154,7 +154,8 @@ schematic-level structural problems BEFORE board work starts:
    with its gate tied to ground (reverse-polarity protection) and its
    source, not its drain, on the input (#1085; TI SLVA139). A gate from
    a controller IC's gate-drive pin (ideal-diode, hot-swap), a gate held
-   by a rail, both sides sourced or neither, and negative rails are not
+   by a rail, both sides sourced or neither, negative rails, and a FET
+   whose value, symbol and description name no channel are not
    judged and counted in power_switches_not_judged.
  - protector_orientation (warning): a single-cell protector with S-8261's
    pins (VDD, VSS, VM, DO, CO) whose VSS net (the cell's -) carries more
@@ -1637,8 +1638,21 @@ def _pg_unused(nets: dict, comps: dict,
 
 # power-path orientation (#1085). Seeded from TI SLVA139 and ABLIC S-8261
 # Rev.5.5_00, not from any corpus board.
-_PMOS_RE = re.compile(r"PMOS|P[-_ ]?CH|PFET|P-?CHANNEL|Q_P(MOS)?_", re.I)
-_NMOS_RE = re.compile(r"NMOS|N[-_ ]?CH|NFET|N-?CHANNEL|Q_N(MOS)?_", re.I)
+_PMOS_RE = re.compile(r"PMOS|P[-_ ]?CH|P-?FET|P-MOSFET|P-?CHANNEL|Q_P(MOS)?_",
+                      re.I)
+_NMOS_RE = re.compile(r"NMOS|N[-_ ]?CH|N-?FET|N-MOSFET|N-?CHANNEL|Q_N(MOS)?_",
+                      re.I)
+# MOSFETs whose part number names no channel, from their datasheets'
+# titles: exact parts (an A / E / L suffix or a reel code may follow)
+# and the families whose naming carries it (Diodes Inc DMN / DMP,
+# Toshiba SSM3K / SSM6K N and SSM3J / SSM6J P, IR's IRF9 P). GaN parts
+# (EPC) have no body diode and stay unknown.
+_FET_MPN_CHANNEL = (
+    (re.compile(r"^(2N700[02]|BSS138|BSS123|AO340[024]|AO3416|AO4406"
+                r"|AON7264|CJ2310|NTMFS5C628N|DMN\d|SSM[36]K\d)"), "N"),
+    (re.compile(r"^(BSS84|AO340[179]|AO3415|AO440[79]|AO4435|AO4485"
+                r"|DMP\d|SSM[36]J\d|IRF9)"), "P"),
+)
 # a single-cell battery's positive net: BAT, VBAT, BATT, +BATT, BAT+,
 # VBAT_IN; not BAT- / BATN / BAT_NEG
 _BATTERY_NET_RE = re.compile(
@@ -1655,7 +1669,8 @@ _PROTECTOR_PINS = {"VDD", "VSS", "VM", "DO", "CO"}
 
 def _fet_channel(comp: dict) -> str | None:
     """'P' or 'N' from the part's value, symbol name or the symbol's
-    description ("P-Channel MOSFET"), else None."""
+    description ("P-Channel MOSFET"), or a part number whose datasheet
+    names it (_FET_MPN_CHANNEL), else None."""
     for text in (comp.get("value") or "",
                  (comp.get("libsource") or ("", ""))[1],
                  comp.get("libdesc") or ""):
@@ -1664,6 +1679,11 @@ def _fet_channel(comp: dict) -> str | None:
             return "P"
         if n and not p:
             return "N"
+    for text in (comp.get("value") or "",
+                 (comp.get("libsource") or ("", ""))[1]):
+        for rx, ch in _FET_MPN_CHANNEL:
+            if rx.match(text.strip().upper()):
+                return ch
     return None
 
 
@@ -1838,12 +1858,13 @@ def _power_switches(nets: dict, comps: dict,
                         roles.setdefault(r, set()).add(net)
         if any(len(roles.get(k, ())) != 1 for k in "GDS"):
             continue
-        ch = _fet_channel(comps.get(ref, {}))
-        if not ch:
-            continue
         (g,), (d,), (s,) = roles["G"], roles["D"], roles["S"]
         if {d, s} & batteries:
             continue            # rule 22's
+        ch = _fet_channel(comps.get(ref, {}))
+        if not ch:
+            skip("channel not stated")
+            continue
         if d == s or g in (d, s):
             continue
         drive = _gate_drive(g, nets, comp_pins, ref, rails)

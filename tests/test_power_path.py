@@ -268,3 +268,35 @@ def test_gate_held_by_a_rail_or_both_sides_sourced_is_not_judged():
     hits, facts = _audit(comps, nets, "power_switch_reversed")
     assert hits == [] and facts["power_switches_not_judged"].get(
         "both sides sourced or neither") == 1
+
+
+def test_fet_whose_channel_is_not_stated_is_not_judged():
+    # a vendor-library symbol with an empty description and a part
+    # number that names no channel: the body diode's direction is
+    # unknown, so the switch is counted, not guessed at
+    comps, nets = _reverse(swapped=True)
+    comps["Q1"] = {"value": "XM4407", "libsource": ("aiee", "XM4407_C1")}
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 0
+    assert facts["power_switches_not_judged"] == {"channel not stated": 1}
+
+
+def test_channel_from_a_part_number_or_a_value_note():
+    ch = netlist_audit._fet_channel
+    assert ch({"value": "AO4407A", "libsource": ("aiee", "AO4407A_C2841482")}) == "P"
+    assert ch({"value": "2N7002", "libsource": ("", "2N7002")}) == "N"
+    assert ch({"value": "x", "libsource": ("", "DMP3099L-7")}) == "P"
+    assert ch({"value": "SSM3K2615R 60V 2A N-FET"}) == "N"
+    assert ch({"value": "NCE01P13K -100V P-MOSFET TO-252"}) == "P"
+    # GaN has no body diode; a BJT is no FET
+    assert ch({"value": "EPC2019 200V eGaN"}) is None
+    assert ch({"value": "MMBT3904"}) is None
+    # the vendor-library swap of the reverse-protection case is now judged
+    comps, nets = _reverse(swapped=True)
+    comps["Q1"] = {"value": "AO4407A", "libsource": ("aiee", "AO4407A_C1")}
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert [h["case"] for h in hits] == ["reverse"]
+    comps, nets = _reverse()
+    comps["Q1"] = {"value": "AO4407A", "libsource": ("aiee", "AO4407A_C1")}
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 1
