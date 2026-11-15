@@ -27,6 +27,10 @@
 #               frequency and aligned edges
 #   when        the rule holds only with this pin in one of these states
 #               (pin_states.yaml's state words)
+#   pwm_pairs   [high, low] input pairs of a gate driver; each pair, fed
+#               from one MCU, must come from one channel's CHx and CHxN
+#               (either way round) and all pairs from distinct channels
+#               of a single timer (#1115)
 #   aliases     other names a symbol uses for those pins
 #
 # chip_select: a memory or peripheral chip-select input (~CS, nCS, CS#,
@@ -38,6 +42,10 @@
 # the FX2's input-only RDY0). glasgow-8 and bedlift-3 are firmware choices
 # no datasheet fixes (every STM32G0 GPIO takes an EXTI line; the DRV8434S
 # accepts steps over SPI), so the corpus marks them not_static.
+#
+# The DRV8300 pairs row (#1115) is seeded from PCB-0018's bldc board, which
+# feeds INHx/INLx from the G431's TIM1 CH1-3/CH1N-3N; its tests plant a
+# leg moved off its channel's complement.
 
 mcus:
   - mpn: STM32C031
@@ -156,6 +164,48 @@ mcus:
     debug: {SWDIO: PA13, SWCLK: PA14}
     shared: {PA14: BOOT0}
 
+  - mpn: STM32G431 (LQFP-48)
+    match: '^STM32G431C'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32G431C(6-8-B)Tx.xml; CHxN with dead time per ST's
+      stm32g4xx-hal-driver (commit a6001282dfac) stm32g4xx_hal_tim_ex.c
+      ("Complementary outputs with programmable dead-time")
+    timers:
+      PA0: [TIM2_CH1]
+      PA1: [TIM15_CH1N, TIM2_CH2]
+      PA2: [TIM15_CH1, TIM2_CH3]
+      PA3: [TIM15_CH2, TIM2_CH4]
+      PA4: [TIM3_CH2]
+      PA5: [TIM2_CH1]
+      PA6: [TIM16_CH1, TIM3_CH1]
+      PA7: [TIM17_CH1, TIM1_CH1N, TIM3_CH2, TIM8_CH1N]
+      PA8: [TIM1_CH1]
+      PA9: [TIM1_CH2, TIM2_CH3]
+      PA10: [TIM1_CH3, TIM2_CH4]
+      PA11: [TIM1_CH1N, TIM1_CH4, TIM4_CH1]
+      PA12: [TIM16_CH1, TIM1_CH2N, TIM4_CH2]
+      PA13: [TIM16_CH1N, TIM4_CH3]
+      PA14: [TIM8_CH2]
+      PA15: [TIM2_CH1, TIM8_CH1]
+      PB0: [TIM1_CH2N, TIM3_CH3, TIM8_CH2N]
+      PB1: [TIM1_CH3N, TIM3_CH4, TIM8_CH3N]
+      PB3: [TIM2_CH2, TIM8_CH1N]
+      PB4: [TIM16_CH1, TIM3_CH1, TIM8_CH2N]
+      PB5: [TIM17_CH1, TIM3_CH2, TIM8_CH3N]
+      PB6: [TIM16_CH1N, TIM4_CH1, TIM8_CH1]
+      PB7: [TIM17_CH1N, TIM3_CH4, TIM4_CH2]
+      PB8: [TIM16_CH1, TIM4_CH3, TIM8_CH2]
+      PB9: [TIM17_CH1, TIM1_CH3N, TIM4_CH4, TIM8_CH3]
+      PB10: [TIM2_CH3]
+      PB11: [TIM2_CH4]
+      PB13: [TIM1_CH1N]
+      PB14: [TIM15_CH1, TIM1_CH2N]
+      PB15: [TIM15_CH1N, TIM15_CH2, TIM1_CH3N]
+      PC13: [TIM1_CH1N, TIM8_CH4N]
+      PF0: [TIM1_CH3N]
+
   - mpn: CY7C68013A / CY7C68014A (FX2LP)
     match: '^CY7C6801[3-6]A'
     verified: true   # Cypress 38-08032 Rev. *K read 2026-11-14
@@ -225,3 +275,21 @@ loads:
       TI DRV8874 SLVSF66A, section 5 pin table (PMODE: "H-bridge control
       input mode"), 7.3.2 Table 2 PMODE Functions ("PMODE = Logic High:
       PWM") and 7.3.2.2 Table 4 PWM Control Mode (IN1/IN2 truth table)
+
+  - mpn: DRV8300
+    match: '^DRV8300'
+    verified: true   # TI SLVSFG5D (revised March 2022) read 2026-11-14
+    pwm_pairs: [[INHA, INLA], [INHB, INLB], [INHC, INLC]]
+    severity: warning
+    why: >-
+      the DRV8300's high-side and low-side inputs operate independently
+      (it only turns both gates off when both inputs are high, and adds a
+      200-2000 ns dead time), so each half-bridge's two inputs want one
+      timer channel's complementary CHx/CHxN outputs, where the MCU's
+      dead-time generator and break input keep the two switches apart,
+      and all three legs want one counter
+    source: >-
+      TI DRV8300 SLVSFG5D, Table 6-1 pin functions (INHx high-side, INLx
+      low-side gate driver inputs) and 8.3.1.1.2 Deadtime and
+      Cross-Conduction Prevention ("high-side and low-side inputs operate
+      independently")

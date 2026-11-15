@@ -87,6 +87,12 @@ schematic-level structural problems BEFORE board work starts:
  - mcu_pwm_timer (warning): the PWM inputs of reference/mcu_pins.yaml
    loads (a DRV8874 in PWM mode) driven from one MCU whose pins can't all
    take distinct channels of a single timer (#1032, bedlift-5).
+ - mcu_pwm_pair (warning): a gate driver's high-side/low-side input pairs
+   (reference/mcu_pins.yaml loads with pwm_pairs: a DRV8300's INHx/INLx)
+   fed from one MCU on pins that can't give each pair one channel's CHx
+   and CHxN of a single timer: the timer's dead-time generator and break
+   input can't keep that leg's two switches apart, and the legs don't share
+   one counter (#1115).
  - mcu_input_only_drive (warning): a chip-select input (~CS, nCS, CS#)
    joined, directly or over 0 ohm, to an MCU pin mcu_pins.yaml lists as
    input-only (#1032, glasgow-10: flash select on the FX2's RDY0).
@@ -963,6 +969,105 @@ def _mcu_pwm_groups(nets: dict, comps: dict,
                 continue
             if _one_timer([(i[2], i[3]) for i in inputs]) is None:
                 found.append((row, mref, mrow, inputs))
+    return found, checked
+
+
+_PAIR_RE = re.compile(r"^(TIM\d+)_CH(\d)(N?)$")
+
+
+def _pair_slots(hi: list[str], lo: list[str]) -> set[tuple[str, int]]:
+    """{(TIMn, x)}: the timer channels whose CHx and CHxN outputs a
+    high-side pin with functions HI and a low-side pin with LO bring out,
+    either way round (CHxN's polarity is set in the timer)."""
+    def sides(funcs):
+        out: dict[tuple[str, int], set[str]] = {}
+        for f in funcs:
+            m = _PAIR_RE.match(f.upper())
+            if m:
+                out.setdefault((m.group(1), int(m.group(2))), set()).add(
+                    m.group(3))
+        return out
+    h, lo_ = sides(hi), sides(lo)
+    return {k for k in set(h) & set(lo_)
+            if ("" in h[k] and "N" in lo_[k]) or ("N" in h[k] and ""
+                                                   in lo_[k])}
+
+
+def _pairs_one_timer(slots: list[set[tuple[str, int]]]) -> str | None:
+    """A timer with a distinct channel pair for every leg, or None."""
+    timers = (set.intersection(*({t for t, _ in s} for s in slots))
+              if slots else set())
+    for tim in sorted(timers, key=lambda t: int(t[3:])):
+        opts = [{c for t, c in s if t == tim} for s in slots]
+        match: dict[int, int] = {}
+
+        def place(i, seen, opts=opts, match=match):
+            for ch in opts[i]:
+                if ch in seen:
+                    continue
+                seen.add(ch)
+                if ch not in match or place(match[ch], seen):
+                    match[ch] = i
+                    return True
+            return False
+        if all(place(i, set()) for i in range(len(opts))):
+            return tim
+    return None
+
+
+def _mcu_pwm_pairs(nets: dict, comps: dict,
+                   comp_pins: dict[str, dict[str, str]], rails: dict,
+                   table: dict) -> tuple[list[tuple], int]:
+    """([(row, load_ref, mcu_ref, mcu_row, legs)], parts checked): each
+    gate driver (a load row with pwm_pairs) whose high-side/low-side input
+    pairs, all fed from one MCU, can't each take one channel's CHx and CHxN
+    on a single timer. A leg is (hi_pin, lo_pin, hi_mcu_pin, lo_mcu_pin,
+    hi_funcs, lo_funcs). A pair with an input that reaches no MCU pin (tied
+    to a rail or ground, or driven by logic) is left out; a part with none
+    left is not checked."""
+    mcus = table.get("mcus") or []
+    found: list[tuple] = []
+    checked = 0
+
+    def mcu_pin(net, ref):
+        for reach in _zero_ohm_reach(net, nets, comps, comp_pins):
+            if _supply_net(reach, nets.get(reach, []), rails):
+                continue
+            for m in nets.get(reach, []):
+                mrow = (_mcu_row(comps.get(m["ref"], {}), mcus)
+                        if m["ref"] != ref else None)
+                if mrow and "timers" in mrow:
+                    return m["ref"], mrow, _pin_base(m.get("pinfunction"))
+        return None
+
+    for row in table.get("loads") or []:
+        if not row.get("pwm_pairs"):
+            continue
+        aliases = {_norm_pin(k): v.upper()
+                   for k, v in (row.get("aliases") or {}).items()}
+        for ref in sorted(comps):
+            if not _spec_matches(row, comps[ref]):
+                continue
+            funcs = {aliases.get(_norm_pin(f), _norm_pin(f)): pn
+                     for f, pn in _pin_funcs(ref, nets, comp_pins).items()}
+            per_mcu: dict[str, list] = {}
+            for hi, lo in row["pwm_pairs"]:
+                hi, lo = hi.upper(), lo.upper()
+                if hi not in funcs or lo not in funcs:
+                    continue
+                a = mcu_pin(funcs[hi][1], ref)
+                b = mcu_pin(funcs[lo][1], ref)
+                if not a or not b or a[0] != b[0]:
+                    continue
+                tims = a[1]["timers"] or {}
+                per_mcu.setdefault(a[0], [a[1], []])[1].append(
+                    (hi, lo, a[2], b[2], list(tims.get(a[2]) or []),
+                     list(tims.get(b[2]) or [])))
+            for mref, (mrow, legs) in sorted(per_mcu.items()):
+                checked += 1
+                slots = [_pair_slots(lg[4], lg[5]) for lg in legs]
+                if _pairs_one_timer(slots) is None:
+                    found.append((row, ref, mref, mrow, legs))
     return found, checked
 
 
@@ -3553,6 +3658,32 @@ def audit(parsed: dict, constraints: dict,
           mcu=mref, part=row["mpn"],
           inputs=[{"ref": lr, "pin": lp, "mcu_pin": mp, "timers": fs}
                   for lr, lp, mp, fs in inputs])
+    pair_found, pair_checked = _mcu_pwm_pairs(nets, comps, comp_pins,
+                                              ps_rails, mp_table)
+    pair_ok = {(h[1], h[2]) for h in _mcu_pwm_pairs(
+        nets, comps, comp_pins, ps_rails, _verified_only(mp_table))[0]}
+    for row, lref, mref, mrow, legs in pair_found:
+        pins = "; ".join(
+            f"{hi}/{lo} on {hp}/{lp} "
+            f"({'/'.join(hf) if hf else 'no timer'} | "
+            f"{'/'.join(lf) if lf else 'no timer'})"
+            for hi, lo, hp, lp, hf, lf in legs)
+        vt((lref, mref) in pair_ok,
+           row.get("severity", "warning"), "mcu_pwm_pair", None,
+           [lref, mref],
+           f"{lref} ({comps[lref].get('value')}) takes its high-side/"
+           f"low-side inputs from {mref} ({comps[mref].get('value')}) "
+           f"pins that no single timer gives each leg one channel's CHx "
+           f"and CHxN: {pins}. "
+           f"{' '.join(row['why'].split())} "
+           f"[{' '.join(row['source'].split()).split(',')[0]}; "
+           f"{' '.join(mrow['source'].split()).split('(')[0].strip()}]"
+           + ("" if row.get("verified") and mrow.get("verified")
+              else " (not yet re-read)"),
+           mcu=mref, part=row["mpn"],
+           legs=[{"high": hi, "low": lo, "mcu_high": hp, "mcu_low": lp,
+                  "timers_high": hf, "timers_low": lf}
+                 for hi, lo, hp, lp, hf, lf in legs])
     io_checked = 0
     for row in mp_table.get("mcus") or []:
         if row.get("input_only"):
@@ -4119,6 +4250,7 @@ def audit(parsed: dict, constraints: dict,
         "min_gain_loops_checked": loops_checked,
         "pin_state_parts_checked": pin_states_checked,
         "mcu_pwm_groups_checked": pwm_checked,
+        "mcu_pwm_pairs_checked": pair_checked,
         "mcu_input_only_parts_checked": io_checked,
         "i2c_buses_checked": len(buses),
         "i2c_devices_placed": sum(len(d) for d in buses.values()),
