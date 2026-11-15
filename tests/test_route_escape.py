@@ -649,3 +649,97 @@ def test_live_escape_toward_partner(tmp_path):
     # stripped without --allow-via-in-pad, and are left for the routers
     assert b["kept_nets"] >= 12
     assert b["kept_nets"] + len(b["left_for_routers"]) == 36
+
+
+# ---- #325 fault tests: a planted bad escape is ripped, the board stays clean
+
+def _plant_after_fanout(monkeypatch, text):
+    """Run the real KRT fan-out, then add `text` (a via or a track the
+    escape must not keep) to the staged board once, as if KRT had laid it."""
+    real = re_.fan_one
+    done = []
+
+    def fan(ctx, *a, **kw):
+        out = real(ctx, *a, **kw)
+        if not done:
+            staged = ctx["staged"]
+            body = staged.read_text(encoding="utf-8").rstrip()
+            assert body.endswith(")")
+            staged.write_text(body[:-1] + text + ")\n", encoding="utf-8")
+            done.append(1)
+        return out
+    monkeypatch.setattr(re_, "fan_one", fan)
+
+
+def _faulted_run(tmp_path, monkeypatch, text, uid):
+    if env.find_kicad_cli() is None or env.find_krt() is None:
+        pytest.skip("needs kicad-cli and KiCadRoutingTools")
+    pcb = board(tmp_path)
+    _plant_after_fanout(monkeypatch, text)
+    out = tmp_path / "r.json"
+    rc = re_.main(["--pcb", str(pcb), "--out-report", str(out)])
+    rep = json.loads(out.read_text())
+    assert rc in (0, 1), rep
+    f = rep["facts"]
+    (b,) = f["bgas"]
+    # caught: a new DRC error, ripped, nothing new left on the board
+    (rd, *_) = f["drc_delta"]["rip_rounds"]
+    assert rd["new_errors"]
+    assert f["drc_delta"]["new"] == {}
+    bg = geom.BoardGeom.from_file(pcb)
+    assert uid not in {x.uuid for x in list(bg.tracks_of())
+                       + list(bg.vias_of())}
+    return b, rd
+
+
+def test_live_fault_via_on_a_neighbours_pad_is_ripped(tmp_path, monkeypatch):
+    """A2's dog-bone (/S0_1) run the wrong way: its stub from A2 (18.8, 13)
+    to a via dropped on A1's pad (/S0_0, at 18, 13). DRC's short names the
+    via's and the stub's net; that net is ripped and left for the routers,
+    and the rest of the field keeps its escape. (A lone via on a pad is
+    not this fault: KiCad gives it the pad's net on load.)"""
+    uid, sid = UID % 901, UID % 903
+    stub = ('  (segment (start 18.8 13) (end 18 13) (width 0.1) '
+            f'(layer "F.Cu") (net "/S0_1") (uuid "{sid}"))\n')
+    b, rd = _faulted_run(tmp_path, monkeypatch,
+                         _via(18, 13, "/S0_1", uid, 0.5) + stub, uid)
+    assert "/S0_1" in rd["nets"] and len(rd["nets"]) <= 3
+    assert "/S0_1" in b["ripped_by_drc"] and "/S0_1" in b["left_for_routers"]
+    assert b["kept_nets"] >= 33
+
+
+def test_live_fault_track_between_two_pads_is_ripped(tmp_path, monkeypatch):
+    """A 0.3 mm /S5_5 track run down between A1 and A2 (0.45 mm apart edge
+    to edge): 0.075 mm a side, under the field's 0.0889 floor. DRC names
+    the track's net; it is ripped and the rest of the field kept."""
+    uid = UID % 902
+    seg = ('  (segment (start 18.4 11.8) (end 18.4 13.0) (width 0.3) '
+           f'(layer "F.Cu") (net "/S5_5") (uuid "{uid}"))\n')
+    b, rd = _faulted_run(tmp_path, monkeypatch, seg, uid)
+    assert "/S5_5" in rd["nets"] and len(rd["nets"]) <= 3
+    assert "/S5_5" in b["ripped_by_drc"]
+    assert b["kept_nets"] >= 33
+
+
+# ---- #325: via-in-pad follows the fab's price for filled, capped vias
+
+def test_free_filled_via_layers_reads_the_price_table():
+    free = re_.free_filled_via_layers()
+    assert 6 in free and 4 not in free
+    assert free <= re_.filled_via_layers()
+
+
+@pytest.mark.parametrize("n,allow,forbid,keep", [
+    (6, False, False, True),     # POFV free on 6+ layers: kept
+    (4, False, False, False),    # priced on 4 layers: stripped
+    (4, True, False, True),      # paid for on purpose
+    (6, False, True, False),     # refused on purpose
+])
+def test_via_in_pad_choice(n, allow, forbid, keep):
+    got, why = re_.via_in_pad_choice(n, allow, forbid, {6, 8})
+    assert got is keep and why
+
+
+def test_via_in_pad_choice_flags_conflict():
+    with pytest.raises(re_.CheckError):
+        re_.via_in_pad_choice(6, True, True, {6})
