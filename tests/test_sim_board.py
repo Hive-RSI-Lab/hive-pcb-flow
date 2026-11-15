@@ -1028,3 +1028,102 @@ def test_run_takes_the_floor_from_constraints(tmp_path, monkeypatch):
     sim_board.main(["--net", str(net), "--constraints", str(cons),
                     "--out", str(tmp_path / "r.json")])
     assert seen["cap_floors"]["+5V"]["min_c"] == 4.7e-6
+
+
+# #1261: an error turns into not_judged with a reason, never a crash.
+# RC1/C11 is a series RC with a 0 F cap (the planted shape: lofence's "0nF"),
+# RC2/C12 the quiet twin with a real cap; Y1 sits on two 0 F load caps.
+RC_BOARD = [
+    ("U1", "MCU", "QFN-32", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                             "3": ("/A", "IO3"), "4": ("/B", "IO4"),
+                             "5": ("/XI", "XI"), "6": ("/XO", "XO")}),
+    ("R21", "10k", "R_0402_1005Metric", {"1": ("/A", ""), "2": ("/AF", "")}),
+    ("C11", "0nF", "C_0402_1005Metric", {"1": ("/AF", ""), "2": ("GND", "")}),
+    ("R22", "10k", "R_0402_1005Metric", {"1": ("/B", ""), "2": ("/BF", "")}),
+    ("C12", "100nF", "C_0402_1005Metric", {"1": ("/BF", ""),
+                                           "2": ("GND", "")}),
+    ("Y1", "16MHz", "Crystal_SMD_3225-4Pin_3.2x2.5mm",
+     {"1": ("/XI", ""), "3": ("/XO", "")}),
+    ("C13", "0nF", "C_0402_1005Metric", {"1": ("/XI", ""), "2": ("GND", "")}),
+    ("C14", "0nF", "C_0402_1005Metric", {"1": ("/XO", ""), "2": ("GND", "")}),
+]
+
+
+def _rc_facts(tmp_path):
+    board = sim_board.load_board(str(write_net(tmp_path / "rc.net",
+                                               RC_BOARD)))
+    rails = {"+3V3": (3.3, "name")}
+    model = sim_board.build_model(board, {}, rails)
+    facts, not_judged = {}, []
+    sim_board.passive_facts(board, rails, model, facts, {}, not_judged)
+    return facts, not_judged
+
+
+def test_passive_facts_zero_cap_is_no_rc_network(tmp_path):
+    facts, _ = _rc_facts(tmp_path)
+    rs = {r["r"] for r in facts["rc_networks"]}
+    assert "R21" not in rs          # planted: 0 F, no corner, no crash
+    assert "R22" in rs              # quiet twin: 10k/100n still a low-pass
+    row = next(r for r in facts["rc_networks"] if r["r"] == "R22")
+    assert row["fc_hz"] == pytest.approx(159.15, rel=1e-3)
+
+
+def test_passive_facts_zero_load_cap_crystal_not_judged(tmp_path):
+    facts, not_judged = _rc_facts(tmp_path)
+    assert facts["crystals"] == []
+    assert any(s.startswith("Y1:") and "0 F" in s for s in not_judged)
+
+
+def _fake_dll(monkeypatch, tmp_path):
+    monkeypatch.setattr(sim_board.env, "find_ngspice_dll",
+                        lambda: tmp_path / "libngspice.so")
+
+
+def test_engine_failure_is_not_judged_not_a_crash(tmp_path, monkeypatch,
+                                                   capsys):
+    # identidem's shape: ngspice leaves no vectors. The run completes, the
+    # passes that need no operating point keep their facts.
+    def no_vectors(decks, dll, timeout):
+        raise sim_board.checklib.CheckError(
+            "engine: circuit 0: NgSpiceCommandError: Error: There are no "
+            "vectors currently active.")
+
+    _fake_dll(monkeypatch, tmp_path)
+    monkeypatch.setattr(sim_board, "run_engine", no_vectors)
+    net = write_net(tmp_path / "rc.net", RC_BOARD)
+    out = tmp_path / "r.json"
+    rc = sim_board.main(["--net", str(net), "--out", str(out)])
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert rc == 0 and rep["status"] == "pass"
+    assert any("no vectors" in s and "not judged" in s
+               for s in rep["not_judged"])
+    assert {r["r"] for r in rep["rc_networks"]} == {"R22"}
+
+
+def test_nothing_to_simulate_skips_the_engine(tmp_path, monkeypatch):
+    # a connector-only board: no deck goes to ngspice at all
+    def boom(*_a):
+        raise AssertionError("engine run on an empty deck")
+
+    _fake_dll(monkeypatch, tmp_path)
+    monkeypatch.setattr(sim_board, "run_engine", boom)
+    net = write_net(tmp_path / "j.net", [
+        ("J1", "Conn_01x02", "PinHeader_1x02_P2.54mm_Vertical",
+         {"1": ("+3V3", ""), "2": ("GND", "")})])
+    out = tmp_path / "r.json"
+    assert sim_board.main(["--net", str(net), "--out", str(out)]) == 0
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert "nothing_to_simulate" not in rep
+    assert "no passive or modelled device" in rep["nothing_to_judge"]
+    assert "not_judged" not in rep
+
+
+def test_engine_rc_board_runs_clean(tmp_path, need_engine):
+    # the quiet twin of the engine failure: the same board through ngspice
+    net = write_net(tmp_path / "rc.net", RC_BOARD)
+    out = tmp_path / "r.json"
+    sim_board.main(["--net", str(net), "--out", str(out)])
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert rep["status"] != "error"
+    assert not any("not simulated" in s for s in rep.get("not_judged", []))
+    assert "node_volts" in rep
