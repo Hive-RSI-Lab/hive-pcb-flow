@@ -1,0 +1,104 @@
+# Land patterns read off makers' package drawings (Example Board Layout /
+# recommended land pattern), for check_fp_geometry. Top view, mm, origin at
+# the package centre, +y down (KiCad's convention); pads by number, centres
+# only. A row is matched by regex on the MPN/Value/LCSC field. Add a row only
+# with the drawing in hand and its cite in source; no row means not_judged.
+parts:
+  - part: DRV8434S HTSSOP-28 (PWP0028M)
+    source: "TI DRV8434S datasheet SLOSE70 (Dec 2020), Mechanical: Example Board Layout PWP0028M: 28X (1.5)x(0.45), 26X 0.65 pitch, (5.8) between row centres; exposed pad 29 not checked"
+    match: '^DRV8434S\w*PWP'
+    pads:
+      1: [-2.9, -4.225]
+      2: [-2.9, -3.575]
+      3: [-2.9, -2.925]
+      4: [-2.9, -2.275]
+      5: [-2.9, -1.625]
+      6: [-2.9, -0.975]
+      7: [-2.9, -0.325]
+      8: [-2.9, 0.325]
+      9: [-2.9, 0.975]
+      10: [-2.9, 1.625]
+      11: [-2.9, 2.275]
+      12: [-2.9, 2.925]
+      13: [-2.9, 3.575]
+      14: [-2.9, 4.225]
+      15: [2.9, 4.225]
+      16: [2.9, 3.575]
+      17: [2.9, 2.925]
+      18: [2.9, 2.275]
+      19: [2.9, 1.625]
+      20: [2.9, 0.975]
+      21: [2.9, 0.325]
+      22: [2.9, -0.325]
+      23: [2.9, -0.975]
+      24: [2.9, -1.625]
+      25: [2.9, -2.275]
+      26: [2.9, -2.925]
+      27: [2.9, -3.575]
+      28: [2.9, -4.225]
+  - part: DRV8874 HTSSOP-16 (PWP0016J)
+    source: "TI DRV8874 datasheet SLVSF66A (Dec 2019), Mechanical: Example Board Layout PWP0016J: 16X (1.5)x(0.45), 14X 0.65 pitch, (5.8) between row centres; exposed pad 17 not checked"
+    match: '^DRV8874\w*PWP'
+    pads:
+      1: [-2.9, -2.275]
+      2: [-2.9, -1.625]
+      3: [-2.9, -0.975]
+      4: [-2.9, -0.325]
+      5: [-2.9, 0.325]
+      6: [-2.9, 0.975]
+      7: [-2.9, 1.625]
+      8: [-2.9, 2.275]
+      9: [2.9, 2.275]
+      10: [2.9, 1.625]
+      11: [2.9, 0.975]
+      12: [2.9, 0.325]
+      13: [2.9, -0.325]
+      14: [2.9, -0.975]
+      15: [2.9, -1.625]
+      16: [2.9, -2.275]
+  - part: SN74LVC8T245 TSSOP-24 (PW0024A)
+    source: "TI SN74LVC8T245 datasheet, Mechanical: Example Board Layout PW0024A: 24X (1.5)x(0.45), 22X 0.65 pitch, (5.8) between row centres"
+    match: '^SN74LVC8T245\w*PW(R|T)?\b'
+    pads:
+      1: [-2.9, -3.575]
+      2: [-2.9, -2.925]
+      3: [-2.9, -2.275]
+      4: [-2.9, -1.625]
+      5: [-2.9, -0.975]
+      6: [-2.9, -0.325]
+      7: [-2.9, 0.325]
+      8: [-2.9, 0.975]
+      9: [-2.9, 1.625]
+      10: [-2.9, 2.275]
+      11: [-2.9, 2.925]
+      12: [-2.9, 3.575]
+      13: [2.9, 3.575]
+      14: [2.9, 2.925]
+      15: [2.9, 2.275]
+      16: [2.9, 1.625]
+      17: [2.9, 0.975]
+      18: [2.9, 0.325]
+      19: [2.9, -0.325]
+      20: [2.9, -0.975]
+      21: [2.9, -1.625]
+      22: [2.9, -2.275]
+      23: [2.9, -2.925]
+      24: [2.9, -3.575]
+  - part: TPS7A20 SOT-23-5 (DBV0005A)
+    source: "TI TPS7A20 datasheet SBVS338H (Jul 2024), Mechanical: Example Board Layout DBV0005A: 5X (1.1)x(0.6), 0.95 pitch, (2.6) between row centres; pins 1-3 left, 4-5 right"
+    match: '^TPS7A20\w*DBV'
+    pads:
+      1: [-1.3, -0.95]
+      2: [-1.3, 0.0]
+      3: [-1.3, 0.95]
+      4: [1.3, 0.95]
+      5: [1.3, -0.95]
+  - part: SN74LVC1G04 SOT-23-5 (DBV0005A)
+    source: "TI SN74LVC1G04 datasheet SCES214AF (Oct 2025), Mechanical: Example Board Layout DBV0005A: 5X (1.1)x(0.6), 0.95 pitch, (2.6) between row centres"
+    match: '^SN74LVC1G04\w*DBV'
+    pads:
+      1: [-1.3, -0.95]
+      2: [-1.3, 0.0]
+      3: [-1.3, 0.95]
+      4: [1.3, 0.95]
+      5: [1.3, -0.95]

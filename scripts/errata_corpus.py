@@ -273,6 +273,11 @@ def _check_fp_package(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--live"]
 
 
+def _check_fp_geometry(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    return ["check_fp_geometry.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--live"]
+
+
 def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board alone: with no thermal entry it screens the power ICs
     reference/thermal_parts.yaml knows (#884)."""
@@ -328,6 +333,7 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_current": _check_current, "check_straps": _check_straps,
            "check_bom_sync": _check_bom_sync,
            "check_fp_package": _check_fp_package,
+           "check_fp_geometry": _check_fp_geometry,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
            "check_pinouts": _check_pinouts, "check_esd": _check_esd,
