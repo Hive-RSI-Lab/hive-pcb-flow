@@ -31,7 +31,7 @@ scripts with the repo venv python; JSON out, exit 0/1/2. Keep output ASCII.
 3. `scripts/fp_verify.py --footprint <lib.pretty/name.kicad_mod>
    --datasheet-json parts/<lcsc>.json` - pad count/pitch/pin-1/size/drill
    diff vs the land pattern + SVG overlay. Errors FAIL; warnings (pad_size,
-   no_courtyard) pass but must be listed in your summary.
+   no_courtyard, stroked_pad_primitive) pass but must be listed in your summary.
 
 ## Method
 1. fp_verify every IC and connector against its datasheet JSON; passives
