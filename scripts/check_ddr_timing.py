@@ -271,7 +271,7 @@ class Flight:
 def validate(ddr, lgroups: dict) -> None:
     if not isinstance(ddr, dict):
         raise CheckError("constraints ddr is not an object")
-    bad = sorted(set(ddr) - DDR_KEYS)
+    bad = sorted(checklib.data_keys(ddr) - DDR_KEYS)
     if bad:
         raise CheckError(f"ddr: unknown key(s) {bad}")
     if not isinstance(ddr.get("rate_mts"), (int, float)) or ddr["rate_mts"] <= 0:
@@ -295,8 +295,9 @@ def validate(ddr, lgroups: dict) -> None:
         where = f"ddr.groups[{i}]"
         if not isinstance(g, dict):
             raise CheckError(f"{where} is not an object")
-        if set(g) - GROUP_KEYS:
-            raise CheckError(f"{where}: unknown {sorted(set(g) - GROUP_KEYS)}")
+        if checklib.data_keys(g) - GROUP_KEYS:
+            raise CheckError(
+                f"{where}: unknown {sorted(checklib.data_keys(g) - GROUP_KEYS)}")
         if g.get("kind") not in KINDS:
             raise CheckError(f"{where}: kind must be one of {KINDS}")
         name = g.get("name")

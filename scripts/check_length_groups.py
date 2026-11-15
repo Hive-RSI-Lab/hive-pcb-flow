@@ -259,7 +259,7 @@ def validate_group(i: int, g) -> None:
     if not isinstance(g, dict):
         raise CheckError(f"{where} is not an object")
     where = f"length_groups[{i}] ({g.get('name', '?')})"
-    unknown = sorted(set(g) - GROUP_KEYS)
+    unknown = sorted(checklib.data_keys(g) - GROUP_KEYS)
     if unknown:
         raise CheckError(f"{where}: unknown key(s) {unknown}")
     if not g.get("nets"):

@@ -127,6 +127,19 @@ def test_bad_constraints_raise():
             check_rf_match.check(GOLD, {"rf_match": bad})
 
 
+def test_comment_keys_pass_and_typos_still_stop():
+    """#1097: a `_why` on an entry, or a `_note` beside the loads in the
+    keyed form, passes as constraints_lint passes it; a typo still stops."""
+    import checklib
+    want = _run(GOLD, ENTRY)[0]
+    assert _run(GOLD, dict(ENTRY, _why="868 MHz chip antenna"))[0] == want
+    keyed = {"_note": "measured on the VNA", "J1": {
+        k: v for k, v in ENTRY.items() if k != "load"}}
+    assert check_rf_match.check(GOLD, {"rf_match": keyed})[0] == want
+    with pytest.raises(checklib.CheckError, match="unknown keys"):
+        _run(GOLD, dict(ENTRY, band_hzz=[1, 2]))
+
+
 def test_constraints_lint_knows_rf_match(tmp_path):
     p = tmp_path / "constraints.json"
     p.write_text(json.dumps({"rf_match": [ENTRY], "rf_matchx": 1}))

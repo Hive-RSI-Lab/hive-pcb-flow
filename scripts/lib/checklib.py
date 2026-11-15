@@ -106,6 +106,13 @@ def utf8_stdout() -> None:
         pass
 
 
+def data_keys(d: dict) -> set:
+    """The keys of a constraints object that carry data: a key starting
+    with "_" is a comment (`_why`, `_note`), which constraints_lint passes,
+    so a consumer's unknown-key check must pass it too (#1097)."""
+    return {k for k in d if not (isinstance(k, str) and k.startswith("_"))}
+
+
 def rnd(v: float, nd: int = 4) -> float:
     return round(float(v), nd)
 
