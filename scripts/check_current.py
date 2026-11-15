@@ -325,7 +325,7 @@ import numpy as np
 import yaml
 
 from shapely import STRtree
-from shapely.geometry import Point
+from shapely.geometry import MultiPolygon, Point
 from shapely.ops import unary_union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -921,6 +921,68 @@ def _loads(bg: geom.BoardGeom, refs) -> float | None:
     return total
 
 
+def _layer_pieces(bg: geom.BoardGeom, net: str, layer: str):
+    """(parts of the net's copper on `layer`; per part, the (track id() or
+    id(None), polygon) items it is the union of; per track id(), its parts):
+    the index _copper_without rebuilds one part from. An item lies wholly
+    in the part that holds its representative point."""
+    def build():
+        cop = bg.net_copper(net, layer)
+        parts = [g for g in getattr(cop, "geoms", [cop])
+                 if g.geom_type == "Polygon" and not g.is_empty]
+        tree = STRtree(parts) if parts else None
+        members = [[] for _ in parts]
+        of_track = {}
+
+        def place(poly, track=None):
+            for g in getattr(poly, "geoms", [poly]):
+                if g.is_empty:
+                    continue
+                pt = g.representative_point()
+                got = ([int(i) for i in tree.query(pt, predicate="intersects")]
+                       if tree is not None else [])
+                if len(got) != 1:
+                    return False
+                members[got[0]].append((id(track), g))
+                if track is not None:
+                    of_track.setdefault(id(track), set()).add(got[0])
+            return True
+        ok = all(place(t.poly, t) for t in bg.tracks_of(net, layer))
+        ok = ok and all(place(x.poly) for x in
+                        list(bg.pads_of(net, layer)) + list(bg.vias_of(net, layer)))
+        ok = ok and all(place(z.fill_on(layer)) for z in bg.zones_of(net, layer))
+        return (parts, members, of_track) if ok else None
+    return _memo(bg, ("layer_pieces", net, layer), build)
+
+
+def _copper_without(bg: geom.BoardGeom, net: str, layer: str, drop):
+    """The net's copper on `layer` without the track `drop`. Only the part
+    `drop` lies in changes, so only that part is rebuilt from its own items
+    (#timeouts: rebuilding the whole layer per bridge track tried was a big
+    share of the time on large pours). Falls back to the whole union when
+    an item can't be placed in exactly one part."""
+    idx = _layer_pieces(bg, net, layer)
+    if idx is not None:
+        parts, members, of_track = idx
+        mine = of_track.get(id(drop))
+        if mine is not None and len(mine) == 1:
+            c = next(iter(mine))
+            rest = geom._union([g for who, g in members[c] if who != id(drop)])
+            out = [g for i, g in enumerate(parts) if i != c]
+            out += [g for g in getattr(rest, "geoms", [rest])
+                    if g.geom_type == "Polygon" and not g.is_empty]
+            return _multi(out)
+    return geom._union(
+        [t.poly for t in bg.tracks_of(net, layer) if t is not drop]
+        + [p.poly for p in bg.pads_of(net, layer)]
+        + [v.poly for v in bg.vias_of(net, layer)]
+        + [z.fill_on(layer) for z in bg.zones_of(net, layer)])
+
+
+def _multi(polys):
+    return MultiPolygon(polys) if polys else MultiPolygon()
+
+
 def _copper_graph(bg: geom.BoardGeom, net: str, walls: dict | None = None,
                   skip: frozenset = frozenset(), drop=None):
     """The net's raw copper as parts per layer (minus `walls[layer]`, and
@@ -933,11 +995,7 @@ def _copper_graph(bg: geom.BoardGeom, net: str, walls: dict | None = None,
     for l in bg.copper_layers:
         cop = bg.net_copper(net, l)
         if drop is not None and l == drop.layer:
-            cop = geom._union(
-                [t.poly for t in bg.tracks_of(net, l) if t is not drop]
-                + [p.poly for p in bg.pads_of(net, l)]
-                + [v.poly for v in bg.vias_of(net, l)]
-                + [z.fill_on(l) for z in bg.zones_of(net, l)])
+            cop = _copper_without(bg, net, l, drop)
         if walls and l in walls and not cop.is_empty:
             cop = cop.difference(walls[l])
         if cop.is_empty:
