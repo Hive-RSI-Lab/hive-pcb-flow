@@ -27,6 +27,7 @@ import necklib  # noqa: E402
 import padfanout  # noqa: E402
 import route_auto  # noqa: E402
 import route_escape as re_  # noqa: E402
+from checklib import CheckError  # noqa: E402
 from test_route_finish import (  # noqa: E402
     NECK_DRU, _board, _fine_pitch, _pad, _seg)
 
@@ -59,6 +60,83 @@ def test_read_necks_cuts_the_courtyard_to_the_pads_reach(tmp_path):
         is None
     assert _necks(_board(_sub(tmp_path, "n"), _fine_pitch("U1", 10, 15),
                          dru=NO_NECK)) == {}
+
+
+# U1's courtyard below (crtyd 0.5) ends at y 15.5; a neck track's centre line
+# may end GROW past it, its copper still NECK_OVERLAP_MM on the courtyard.
+GROW = 0.25 / 2 - necklib.NECK_OVERLAP_MM
+
+
+def test_neck_zone_reaches_where_the_tracks_copper_meets_the_courtyard(
+        tmp_path, monkeypatch):
+    """intersectsCourtyard reads a track's copper, not its centre line, so
+    the zone runs half the neck width (less the overlap) past the courtyard
+    (#1140: C216's way to its via ended 0.02 mm past the edge)."""
+    pcb = _board(tmp_path, _fine_pitch("U1", 10, 15, crtyd=0.5), dru=NECK_DRU)
+    ((zone, w),) = _necks(pcb)["+3V3"]["F.Cu"]
+    assert w == 0.25
+    assert zone.bounds[1] == pytest.approx(14.5 - GROW, abs=1e-3)
+    assert zone.bounds[3] == pytest.approx(15.5 + GROW, abs=1e-3)
+    necks = {"+3V3": {"F.Cu": [(zone, w)]}}
+    assert necklib.neck_width(necks, "+3V3", "F.Cu",
+                              Point(10, 15.5 + GROW - 0.01)) == 0.25
+    assert necklib.neck_width(necks, "+3V3", "F.Cu",
+                              Point(10, 15.5 + GROW + 0.01)) is None
+    # the planted fault: the bare courtyard shuts the band out
+    monkeypatch.setattr(necklib, "NECK_OVERLAP_MM", 1.0)
+    ((bare, _),) = _necks(pcb)["+3V3"]["F.Cu"]
+    assert bare.bounds[3] == pytest.approx(15.5, abs=1e-3)
+    assert necklib.neck_width({"+3V3": {"F.Cu": [(bare, w)]}}, "+3V3",
+                              "F.Cu", Point(10, 15.5 + GROW - 0.01)) is None
+
+
+def test_live_drc_holds_a_neck_track_to_the_neck_rule_up_to_the_zone_edge(
+        tmp_path):
+    """KiCad's own reading of the edge: a 0.25 mm +3V3 track whose centre
+    line ends on the grown edge passes the neck rule, one 0.04 mm further
+    out is held to the net's 1 mm (track_width)."""
+    import env
+    import kc
+    cli = env.find_kicad_cli()
+    if cli is None:
+        pytest.skip("needs kicad-cli")
+    on, off = ("00000000-0000-0000-0000-0000000011a1",
+               "00000000-0000-0000-0000-0000000011a2")
+    edge = 15.5 + GROW
+    body = (_fine_pitch("U1", 10, 15, crtyd=0.5)
+            + _seg(10, edge, 10, 17, 0.25, "F.Cu", "+3V3", on)
+            + _seg(11.4, edge + 0.04, 11.4, 17, 0.25, "F.Cu", "+3V3", off))
+    pcb = _board(tmp_path, body, dru=NECK_DRU)
+    thin = {it["uuid"] for v in kc.run_drc(cli, pcb)["violations"]
+            if v["check"] == "track_width" for it in v["items"]}
+    assert off in thin and on not in thin, thin
+
+
+def test_join_reaches_a_via_in_the_band_past_the_courtyard(tmp_path,
+                                                         monkeypatch):
+    """A +3V3 via whose disc stops 0.02 mm short of U1's courtyard: the 1 mm
+    net can't reach it between the 0.5 mm-pitch pads; the neck can, from
+    the band past the courtyard edge (#1140, C216)."""
+    import mazeroute
+    via = ('  (via (at 10 14.38) (size 0.3) (drill 0.15)'
+           ' (layers "F.Cu" "B.Cu") (net "+3V3")'
+           ' (uuid "00000000-0000-0000-0000-0000000011b1"))\n')
+
+    def join(d):
+        pcb = _board(d, _fine_pitch("U1", 10, 15, crtyd=0.45) + via,
+                     dru=NECK_DRU)
+        r = mazeroute.Router(geom.BoardGeom.from_file(pcb), grid=0.05)
+        assert len(r.islands("+3V3")) == 2
+        return r.join_islands("+3V3", 1), r
+
+    ops, r = join(_sub(tmp_path, "g"))
+    assert len(r.islands("+3V3")) == 1
+    trk = [o for o in ops if o["op"] == "add_track"]
+    assert trk and {o["width"] for o in trk} == {0.25}, ops
+    # the planted fault: the bare courtyard, no way out at the neck width
+    monkeypatch.setattr(necklib, "NECK_OVERLAP_MM", 1.0)
+    with pytest.raises(CheckError, match="no path joins"):
+        join(_sub(tmp_path, "b"))
 
 
 # ------------------------------------------------------- route_escape (KRT)
