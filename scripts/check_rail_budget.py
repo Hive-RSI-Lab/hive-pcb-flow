@@ -36,6 +36,10 @@ Findings:
   rail_budget_short    error: the load pin gets less than its minimum
   rail_budget_unknown  warning: the margin is positive but rests on a
                        missing current, DCR, copper or source limit
+  A positive margin on a rail whose copper isn't routed yet (no copper, or
+  loads not joined to the source) is not a fault: it goes to not_judged as
+  "rail_unrouted: ...", budget status not_judged, reason rail_unrouted. A
+  shortfall stays an error, since the drop is still a lower bound.
   A finding that rests on a `verified: false` row of rail_budget.yaml or
   source_limits.yaml goes to not_judged instead.
 
@@ -299,6 +303,8 @@ def check(pcb: Path, cons: dict | None, table: dict | None = None,
                               for ch in node["children"]})
                 node["drops"], node["copper_why"] = copper.drops(
                     node["net"], node["up"], sinks)
+                node["unrouted"] = (node["drops"] is None
+                                    and unrouted(node["copper_why"]))
 
             for node in nodes:
                 for ld in node["loads"]:
@@ -310,6 +316,16 @@ def check(pcb: Path, cons: dict | None, table: dict | None = None,
     seen = {"sources": sources_seen, "loads": loads_seen,
             "budgets": budgets}
     return viols, seen, not_judged
+
+
+_UNROUTED = re.compile(r"has no copper|disconnected from the source|"
+                       r"not connected to \S+ on the solver grid")
+
+
+def unrouted(why: str | None) -> bool:
+    """A copper miss that means the rail isn't routed yet (no copper, or the
+    loads not joined to the source), not a solver failure."""
+    return bool(why) and bool(_UNROUTED.search(why))
 
 
 def viols_for_load(viols, not_judged, budgets, src, root_net, low, why_low,
@@ -389,6 +405,11 @@ def viols_for_load(viols, not_judged, budgets, src, root_net, low, why_low,
     elif missing:
         rec["status"] = "unknown"
         msg = body + "; not judged, it leaves out: " + "; ".join(missing)
+        if any(n.get("unrouted") for n in chain):
+            rec["status"] = "not_judged"
+            rec["reason"] = "rail_unrouted"
+            not_judged.append("rail_unrouted: " + msg)
+            return
         if unverified:
             not_judged.append(msg + f" [unverified: {', '.join(unverified)}]")
             return

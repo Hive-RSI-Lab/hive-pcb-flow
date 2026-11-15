@@ -102,3 +102,60 @@ def test_a_source_on_a_board_without_pin_names_says_so():
     assert viols == [], viols
     assert any("U2" in n and "no pin names" in n
                and "rail_budget.sources.U2.pins" in n for n in nj), nj
+
+
+# ---- an unrouted rail is not a fault: not_judged, reason rail_unrouted ------
+
+def _unrouted_blinky(tmp_path, net='"+3V3"'):
+    """blinky2 with every segment and via of `net` taken out."""
+    out, blk = [], None
+    for line in BLINKY2.read_text(encoding="utf-8").splitlines(keepends=True):
+        if blk is None and line.startswith(("\t(segment", "\t(via")):
+            blk = [line]
+            continue
+        if blk is not None:
+            blk.append(line)
+            if line.startswith("\t)"):
+                if not any(f"(net {net})" in b for b in blk):
+                    out += blk
+                blk = None
+            continue
+        out.append(line)
+    pcb = tmp_path / "blinky2.kicad_pcb"
+    pcb.write_text("".join(out), encoding="utf-8")
+    return pcb
+
+
+OK_BUDGET = {"sources": {"U2": {"pins": "2"}},
+             "loads": {"U1": {"vmin_v": 3.0, "current_a": 0.05}}}
+
+
+def test_an_unrouted_rail_is_not_judged_not_a_warning(tmp_path):
+    # planted: the rail's copper taken out, positive margin -> no finding
+    viols, seen, nj = crb.check(_unrouted_blinky(tmp_path), _cons(OK_BUDGET))
+    assert viols == [], viols
+    assert any(n.startswith("rail_unrouted: U1") for n in nj), nj
+    [rec] = [b for b in seen["budgets"] if b["load"] == "U1"]
+    assert rec["status"] == "not_judged" and rec["reason"] == "rail_unrouted"
+
+
+def test_the_routed_twin_is_judged_ok():
+    viols, seen, nj = crb.check(BLINKY2, _cons(OK_BUDGET))
+    assert viols == [], viols
+    assert not any(n.startswith("rail_unrouted") for n in nj), nj
+    [rec] = [b for b in seen["budgets"] if b["load"] == "U1"]
+    assert rec["status"] == "ok"
+
+
+def test_a_short_on_an_unrouted_rail_stays_an_error(tmp_path):
+    viols, _, _ = crb.check(_unrouted_blinky(tmp_path), _cons(BLINKY_BUDGET))
+    assert [v["kind"] for v in viols] == ["rail_budget_short"], viols
+
+
+def test_unrouted_reasons():
+    assert crb.unrouted("+3V3: all sink pads on '+3V3' are disconnected "
+                        "from the source copper on the solver grid")
+    assert crb.unrouted("+3V3 has no copper")
+    assert crb.unrouted("+3V3: U1 not connected to U2 on the solver grid")
+    assert not crb.unrouted("zones not filled (x)")
+    assert not crb.unrouted(None)
