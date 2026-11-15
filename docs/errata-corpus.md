@@ -19,7 +19,7 @@ only for the round's first reading: each round is swept once.
 - Holdout round 1, blind: 1 of 6 caught (1 caught, 5 missed).
 - Holdout round 1, with the rules written since: 3 of 6 caught (3 caught, 3 missed).
 - Holdout round 2, blind: 1 of 23 caught (1 caught, 22 missed).
-- Holdout round 2, with the rules written since: 4 of 23 caught (4 caught, 19 missed).
+- Holdout round 2, with the rules written since: 5 of 23 caught (5 caught, 18 missed).
 
 ## A new holdout round
 
@@ -194,7 +194,7 @@ round, pinned and swept before those rules are:
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | smart-lcc-1: auxiliary UART RX and TX crossed the wrong way | SCH (signal direction) | missed | off-board and standard connector pinouts, with the mate stated (#1027) |
-| smart-lcc-2: no zener/diode protection on the RX and TX ports | SCH (port protection) | caught (not run here) (`netlist_audit` offboard_input_unprotected) | check_esd counting a bare zener to ground as a port clamp, seeded from a training board |
+| smart-lcc-2: no zener/diode protection on the RX and TX ports | SCH (port protection) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_unprotected) | check_esd counting a bare zener to ground as a port clamp, seeded from a training board |
 
 ### fc980c: rev1 -> rev2
 
@@ -203,7 +203,7 @@ round, pinned and swept before those rules are:
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | fc980c-1: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13 | SCH (pin function vs datasheet) | missed | SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070) |
-| fc980c-2: KEY_STATE open-collector line has no 5V pull-up | SCH (missing pull-up) | caught (not run here) (`netlist_audit` offboard_input_floating) | an off-board control input left floating needs a stiff pull (#1079) |
+| fc980c-2: KEY_STATE open-collector line has no 5V pull-up | SCH (missing pull-up) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_floating) | an off-board control input left floating needs a stiff pull (#1079) |
 
 ### zxdiag-v11: v1.1 -> v1.2
 
@@ -212,8 +212,8 @@ round, pinned and swept before those rules are:
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | missed | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137) |
-| zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | caught (not run here) (`netlist_audit` offboard_input_clamp) | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
-| zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | caught (not run here) (`netlist_audit` offboard_input_rail_absent) | a measurement divider whose reference comes from an off-board rail |
+| zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_clamp) | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
+| zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_rail_absent) | a measurement divider whose reference comes from an off-board rail |
 
 ## Holdout round 1
 
@@ -333,7 +333,7 @@ round, pinned and swept before those rules are:
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | missed | missed | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
-| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | missed | missed | via-in-pad on SMD pads without fill or tent (dfm) |
+| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | missed | caught (not run here), since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
 
 ### flexgrid-v3: V3 -> V4
 

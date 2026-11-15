@@ -180,7 +180,8 @@
   "mechanical": {
     "allow_body_overlap": [{"refs": ["J1", "U1"], "why": "nested by design",
                             "up_to_mm": 0.5}],
-    "allow_off_board": [{"refs": ["J1"], "why": "overhangs the edge"}]
+    "allow_off_board": [{"refs": ["J1"], "why": "overhangs the edge"}],
+    "mounting": {"by": "clip", "why": "snaps into the case's clips"}
   },
   "pinouts": [{"ref": "J4", "standard": "audio-trs"}],
   "testpoints": {

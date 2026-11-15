@@ -11,3 +11,26 @@ mutants:
     expect:
       kind: wick_via_mask_web
       pos: [130.5, 105.05]
+  via-under-crystal:
+    board: blinky2
+    script: mutations/via_under_crystal.py
+    check: check_wicking
+    defect: >-
+      ASSEMBLY fault: an open GND via (tenting off on both sides) at the
+      centre of the Y1 crystal can, clear of its pads; flux and solder
+      balls trap under the can and the can can short to the ring (KiCad's
+      DRC passes it; #1088)
+    expect:
+      kind: via_under_body
+      pos: [114.0, 128.0]
+  via-in-pad-open:
+    board: blinky2
+    script: mutations/via_in_pad_open.py
+    check: check_wicking
+    defect: >-
+      ASSEMBLY fault: an open GND via (not filled or capped) in the middle
+      of C5 pad 2; the joint's solder drains down the barrel (KiCad's DRC
+      passes it; #1088)
+    expect:
+      kind: wick_via_in_pad
+      pos: [117.6, 105.05]

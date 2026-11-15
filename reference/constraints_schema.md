@@ -243,7 +243,11 @@ Consumers per key (script -> phase):
     // datasheet body (an overlong ear): a deeper overlap still fails.
     // body_off_board: a part that overhangs the edge on purpose. IR receivers
     // and ESP32 modules are exempt by class already; anything else needs this.
-    "allow_off_board": [{"refs": ["U3"], "why": "the sensor lens faces out"}]},
+    "allow_off_board": [{"refs": ["U3"], "why": "the sensor lens faces out"}],
+    // check_mounting (#1088): a board over 2500 mm^2 (or 80 mm long) with no
+    // mounting hole says how it is held instead. by: clip | adhesive |
+    // stack | rail | edge_card | castellated | cable | none; why is required.
+    "mounting": {"by": "rail", "why": "slides into the case by its side tabs"}},
 
   // check_surge (P8, #492): IEC 61000-4-5 surge / 61000-4-4 EFT on cable
   // ports. Only declared ports are judged. kind picks the assumed level from

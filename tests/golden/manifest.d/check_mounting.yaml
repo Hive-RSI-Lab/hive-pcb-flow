@@ -1,0 +1,14 @@
+# Seeded fault for check_mounting (no mounting holes, issue #1088).
+mutants:
+  board-no-mounting-holes:
+    board: blinky2
+    script: mutations/board_no_mounting_holes.py
+    check: check_mounting
+    defect: >-
+      MECHANICAL fault: the outline stretched to 90 x 40 mm with no
+      mounting hole, no lone M2-M5 hole and no Edge.Cuts window; nothing
+      holds the board in its case (CMM2-JLC Rev.A shipped this way; KiCad's
+      DRC passes it)
+    expect:
+      kind: no_mounting_holes
+      pos: [145.0, 120.0]

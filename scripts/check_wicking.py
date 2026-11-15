@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """check_wicking.py - open vias that steal solder from SMD pads (P8 verify;
-board only; hive-hwde #475).
+board only; hive-hwde #475), and open vias under low-standoff bodies (#1088).
 
 An open via (not filled, not capped) whose barrel is exposed to a pad's
 solder pulls the molten solder down the hole: the joint starves, a QFN's
@@ -25,12 +25,27 @@ check_ep_paste's (paste_on_via); here they are only counted
                     the sliver), so nothing dams the solder. Fix: tent the
                     via on that side, or move it out to a full dam.
 
+  via_under_body    an open via (untented and not plugged, filled or capped
+                    on the part's side) whose copper reaches under the body
+                    of a part that sits on or near the board: a QFN, DFN,
+                    SON or LGA belly outside its pads (its exposed pad's
+                    own vias are check_ep_paste's), a crystal or oscillator
+                    can, a molded or shielded power inductor, a USB, card
+                    or U.FL connector shell (#1088). Flux and solder balls
+                    trap under the body and a metal can or shell can short
+                    to the ring. The body is the hull of the part's Fab
+                    drawing (KLC F5.2), else its courtyard less KLC's
+                    0.25 mm margin. Gull-wing and J-lead parts (SOIC, QFP,
+                    SOT, chip inductors) stand off and are not judged. Fix:
+                    tent or plug the via on that side, or move it out.
+
 Mask openings are modelled the way KiCad plots them: a pad on X.Mask grows
 by its `solder_mask_margin` (pad, else footprint, else the board's
 `pad_to_mask_clearance`); an untented via opens at its diameter plus the
 board margin. Tenting, plugging, filling and capping are the via's own
 `(tenting|plugging (front ..) (back ..))`, `(filling ..)`, `(capping ..)`,
-else the board setup's (KiCad 9+), else KiCad's default (tented, open).
+else the board setup's (KiCad 9+), else a KiCad 5-8 board's plot option
+`(viasonmask true)` (every via opened), else KiCad's default (tented, open).
 The dam minimum is the larger of the board's `solder_mask_min_width` and
 `--dam-mm` (default 0.1, JLC's `min_solder_mask_dam_mm` in
 reference/jlc_capabilities.yaml).
@@ -48,6 +63,7 @@ CLI: --pcb board.kicad_pcb [--gerbers DIR] [--dam-mm D] [--out report.json]
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -75,6 +91,18 @@ AGREE_MM = 0.01     # board model vs gerber web
 # inside the mask's registration (JLC: +-0.05 mm), not a via in the pad
 INTRUDE_MM = 0.05
 SIDES = ("F", "B")
+
+
+def _fp_ref(fp) -> str:
+    """A footprint's reference: KiCad 8's `(property "Reference" ..)` or
+    KiCad 5-7's `(fp_text reference ..)`."""
+    for prop in _kids(fp, "property"):
+        if len(pv := _strs(prop)) >= 2 and pv[0] == "Reference":
+            return pv[1]
+    for txt in _kids(fp, "fp_text"):
+        if len(txt) > 2 and _tok(txt[1]) == "reference":
+            return str(_tok(txt[2]))
+    return "?"
 
 
 def _num(node, name: str, default=None):
@@ -122,17 +150,88 @@ TENTING_ASSUMED = ("vias: the board's setup has no tenting setting, so every "
 def board_defaults(root) -> dict:
     setup = _kid(root, "setup")
     tent = {"F": True, "B": True}
+    # KiCad 5-8 kept tenting as a plot option: `(viasonmask true)` plots
+    # every via's mask opening (untented on both sides)
+    pp = _kid(setup, "pcbplotparams") if setup is not None else None
+    vm = _kid(pp, "viasonmask") if pp is not None else None
+    if vm is not None and len(vm) > 1 and str(_tok(vm[1])) in ("true", "yes"):
+        tent = {"F": False, "B": False}
     tent.update(_yn(setup, "tenting"))
     plug = {"F": False, "B": False}
     plug.update(_yn(setup, "plugging"))
     return {
         "tenting": tent, "plugging": plug,
-        "tenting_assumed": not _yn(setup, "tenting"),
+        "tenting_assumed": not _yn(setup, "tenting") and all(tent.values()),
         "filling": bool(_flag(setup, "filling")),
         "capping": bool(_flag(setup, "capping")),
         "mask_margin": _num(setup, "pad_to_mask_clearance", 0.0) or 0.0,
         "mask_min_width": _num(setup, "solder_mask_min_width", 0.0) or 0.0,
     }
+
+
+# Parts whose body sits on or within a few tenths of a millimetre of the
+# board, so an open via under it can short to the body or trap flux and
+# solder balls under it (IPC-7351 / IPC-7093 bottom-terminated components;
+# TI SLUA271; connector vendors' "no exposed copper under the shell").
+# Gull-wing and J-lead packages (SOIC, QFP, SOT) stand off and are not here.
+_BELLY = re.compile(r"(^|[^A-Za-z])(V|W|U|X|T|LL|S)?(QFN|DFN|SON|MLF|MLP|LGA|LFCSP|QFN)"
+                    r"(?![A-Za-z])", re.I)
+_CHIP_L = re.compile(r"^L_(\d{4}_\d{4}Metric|0201|0402|0603|0805|1008|1206|1210|"
+                     r"1806|1812|2010|2512)", re.I)
+
+
+def body_class(lib: str) -> str | None:
+    """'belly' (bottom-terminated package), 'crystal', 'inductor' (a molded
+    or shielded power inductor) or 'shell' (a connector whose metal shell
+    or body sits on the board); None for a part that stands off."""
+    libname, _, name = lib.rpartition(":")
+    if libname in ("Package_DFN_QFN", "Package_SON", "Package_LGA") \
+            or _BELLY.search(name):
+        return "belly"
+    if libname in ("Crystal", "Oscillator") \
+            or re.search(r"crystal|xtal|oscillator", name, re.I):
+        return "crystal"
+    if libname == "Inductor_SMD" and not _CHIP_L.match(name):
+        return "inductor"
+    if libname in ("Connector_USB", "Connector_Card") \
+            or re.search(r"USB_(C|Micro|Mini)|U\.FL|microSD|SD_?Card",
+                         name, re.I):
+        return "shell"
+    return None
+
+
+def read_bodies(root) -> list[dict]:
+    """Each low-standoff part's body outline: the convex hull of its Fab
+    drawing (the package body by KLC F5.2), else of its courtyard shrunk by
+    KLC's 0.25 mm courtyard margin; and the side it sits on."""
+    out = []
+    for fp in _kids(root, "footprint"):
+        lib = _strs(fp)[0] if _strs(fp) else ""
+        cls = body_class(lib)
+        if cls is None:
+            continue
+        side_n = _kid(fp, "layer")
+        side = "B" if side_n is not None and _strs(side_n) \
+            and _strs(side_n)[0].startswith("B.") else "F"
+        at = _kid(fp, "at")
+        fn = _nums(at) if at is not None else [0, 0, 0]
+        fx, fy, fa = fn[0], fn[1], (fn[2] if len(fn) > 2 else 0.0)
+        ref = _fp_ref(fp)
+        body, src = None, None
+        for layer, shrink in ((f"{side}.Fab", 0.0), (f"{side}.CrtYd", 0.25)):
+            shapes = [g for _ln, g in geom.BoardGeom._fp_graphics(
+                None, fp, fx, fy, fa, {layer})]
+            if shapes:
+                hull = unary_union(shapes).convex_hull
+                if hull.area > 0.5:
+                    body = hull.buffer(-shrink) if shrink else hull
+                    src = layer
+                    break
+        if body is None or body.is_empty:
+            continue
+        out.append({"ref": ref, "lib": lib, "class": cls, "side": side,
+                    "body": body, "source": src})
+    return out
 
 
 def read_vias(root, dflt: dict, cu: list[str]) -> list[dict]:
@@ -192,9 +291,7 @@ def read_pads(root, dflt: dict) -> dict[str, list[dict]]:
         at = _kid(fp, "at")
         fn = _nums(at) if at is not None else [0, 0, 0]
         fx, fy, fa = fn[0], fn[1], (fn[2] if len(fn) > 2 else 0.0)
-        ref = next((pv[1] for prop in _kids(fp, "property")
-                    if len(pv := _strs(prop)) >= 2 and pv[0] == "Reference"),
-                   "?")
+        ref = _fp_ref(fp)
         f_mm = _margin(fp)
         for pad in _kids(fp, "pad"):
             if len(pad) < 4:
@@ -301,6 +398,7 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
     cross = {"agree": 0, "disagree": []}
     vios: list[dict] = []
     pad_hits: dict[tuple, list] = {}
+    handled: set[tuple] = set()      # (via index, side) another rule took
     for s in SIDES:
         pads = [p for ps in fps.values() for p in ps
                 if p["kind"] == "smd" and p["cu_side"] == s and s in p["mask"]]
@@ -308,7 +406,7 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
         if not pads:
             continue
         tree = STRtree([p["mask"][s] for p in pads])
-        for v in vias:
+        for vi, v in enumerate(vias):
             if s not in v["sides"]:
                 continue
             if v["filled"] or v["capped"]:
@@ -323,6 +421,7 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
                       if _intrusion(v, p["mask"][s]) >= INTRUDE_MM - 1e-9]
             if inside:
                 p = inside[0]
+                handled.add((vi, s))
                 if eps.get(p["ref"]) is p:
                     seen["ep_vias_skipped"] += 1
                     continue
@@ -353,6 +452,7 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
                 if web < dam - 1e-6 and (best is None or web < best[0]):
                     best = (web, p)
             if best is not None:
+                handled.add((vi, s))
                 web, p = best
                 merged = web <= 1e-6
                 vios.append(checklib.violation(
@@ -368,6 +468,7 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
                     f"full mask dam", SOURCE, kind="wick_via_mask_web",
                     pad=p["number"], web_mm=checklib.rnd(web), dam_mm=dam,
                     merged=merged, via=v["uuid"]))
+    vios += _under_bodies(read_bodies(root), vias, handled, seen)
     for (ref, num, s), vs in sorted(pad_hits.items()):
         vios.append(checklib.violation(
             SCRIPT, "warning", vs[0]["at"], f"{s}.Cu", vs[0]["net"], [ref],
@@ -382,6 +483,48 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
     if gm:
         seen["mask_crosscheck"] = cross
     return vios, seen
+
+
+BODY_WHAT = {"belly": "bottom-terminated package's belly",
+             "crystal": "crystal/oscillator body",
+             "inductor": "power inductor body",
+             "shell": "connector shell"}
+
+
+def _under_bodies(bodies: list[dict], vias: list[dict], handled: set,
+                  seen: dict) -> list[dict]:
+    """via_under_body: an open via (untented, not plugged, filled or capped
+    on the part's side) whose copper reaches under a low-standoff body."""
+    seen["low_standoff_bodies"] = len(bodies)
+    out = []
+    if not bodies:
+        return out
+    tree = STRtree([b["body"] for b in bodies])
+    for vi, v in enumerate(vias):
+        if v["filled"] or v["capped"]:
+            continue
+        c = Point(v["at"])
+        for i in tree.query(c.buffer(v["diameter"] / 2.0)):
+            b = bodies[int(i)]
+            s = b["side"]
+            if s not in v["sides"] or (vi, s) in handled \
+                    or v["tent"][s] or v["plug"][s]:
+                continue
+            reach = v["diameter"] / 2.0 - b["body"].distance(c)
+            if reach <= 1e-6:
+                continue
+            out.append(checklib.violation(
+                SCRIPT, "warning", v["at"], f"{s}.Mask", v["net"], [b["ref"]],
+                f"{b['ref']}: untented via under the "
+                f"{BODY_WHAT[b['class']]} ({b['lib'].rpartition(':')[2]}, "
+                f"body from {b['source']}); the open barrel and ring sit "
+                f"against a body that rests on the board, so solder and flux "
+                f"trap under it and a metal body can short to it. Tent the "
+                f"via on {'top' if s == 'F' else 'bottom'}, plug it, or move "
+                f"it out from under the part", SOURCE, kind="via_under_body",
+                body=b["class"], via=v["uuid"]))
+            break
+    return out
 
 
 def run(argv=None):

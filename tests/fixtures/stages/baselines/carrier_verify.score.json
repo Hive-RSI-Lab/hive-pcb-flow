@@ -34,6 +34,7 @@
    "check_mate_pins": 0,
    "check_model_fit": 0,
    "check_model_paths": 23,
+   "check_mounting": 0,
    "check_net_tie": 0,
    "check_pinouts": 0,
    "check_power_path": 1,

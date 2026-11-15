@@ -843,6 +843,16 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "a board with no mounting holes (#1088)"
+    note: >-
+      check_mounting's no_mounting_holes (#1088) was written knowing this
+      defect and fires on this 130x102 mm board, but on Rev.B too: no later
+      revision in the repository adds holes, so there is no fixed revision to
+      tell a catch from a rule that fires on every board. Left missed. The
+      board stays in the holdout because the rule's finding is not counted;
+      a revision that adds holes would make it a training catch. Both
+      revisions also carry the same 8 wick_via_in_pad warnings (C22, C34,
+      U2, U3 x4, U6): real (small pads on a JLC-assembled board, vias open),
+      not an erratum.
   - id: cmm2-2
     summary: SDRAM address line A12 not connected
     source_quote: "SDRAM pinout is missing A12 line"
@@ -875,6 +885,10 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "check_silk reading a header's labels against its pins' nets (#1028)"
+    note: >-
+      check_mounting (#1088) flags rev_a, a 100x50 mm board with no
+      mounting hole, and rev_b adds MH2-MH6. Real, but the errata does not
+      name it, so it is not a defect here.
 - id: ice1usb-r01
   url: https://github.com/osmocom/osmo-e1-hardware
   commit: 85acea8b6d656add7c098d51f816f4ac34084fa2
@@ -883,6 +897,11 @@ holdout:
   rev_b: {name: icE1usb r1.0, sch: hardware/icE1usb/r1.0/icE1usb.sch, pcb: hardware/icE1usb/r1.0/icE1usb.kicad_pcb}
   source: hardware/icE1usb/ecn.md
   swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  note: >-
+    check_mounting (#1088) flags both revisions (86x53 mm, no hole): false
+    in practice, the board slides into its case by its side tabs, so it is
+    held without holes. A rail-held board says so with
+    mechanical.mounting {by: rail, why} in constraints.json.
   defects:
   - id: ice1usb-r01-1
     summary: SPI flash footprint is the wide SO8; the part is the narrow one
@@ -906,6 +925,11 @@ holdout:
   rev_b: {name: icE1usb r1.1, sch: hardware/icE1usb/r1.1/icE1usb.kicad_sch, pcb: hardware/icE1usb/r1.1/icE1usb.kicad_pcb}
   source: hardware/icE1usb/ecn.md
   swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  note: >-
+    check_mounting (#1088) flags both revisions (86x53 mm, no hole): false
+    in practice, the board slides into its case by its side tabs, so it is
+    held without holes. A rail-held board says so with
+    mechanical.mounting {by: rail, why} in constraints.json.
   defects:
   - id: ice1usb-r10-1
     summary: GPS I2C shares the extension port's lines and the GPS module drives them as a master; r1.1 adds jumpers
@@ -971,6 +995,15 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "a via under a part's body tying one of its own pins, on a hand-built board"
+    note: >-
+      Not caught, by design: U4 is an SO-20, and check_wicking's
+      via_under_body (#1088) judges only bodies that sit on the board (QFN
+      and SON bellies, crystals, shielded inductors, connector shells); a
+      via under a gull-wing SOIC drains nothing. The erratum is about reach
+      for hand rework. The same board's wick_via_in_pad warnings (U2 19,
+      U4 20, U201 18, U5 42, U301 9-11; rev B keeps U201, U5 and U301) are
+      real geometry but harmless on a hand-soldered board, and U301 is a
+      Pico module's plated castellations.
 - id: pico-if1-v13
   url: https://github.com/derekfountain/zx-spectrum-pico-interface-one
   commit: 7d1be0cb53fe19f4c43f2c90e31ed24b3ee89d19
@@ -1105,8 +1138,14 @@ holdout:
     source_quote: "The June layout had 29 vias sitting inside SMD pads (ESP32 module pads, mux, LDO, charger, buttons, microSD socket, several resistors). An unplugged via inside a pad wicks solder away from the joint during reflow."
     fault_class: DFM (via in pad)
     blind: missed
-    verdict: missed
-    follow_up: "via-in-pad on SMD pads without fill or tent (dfm)"
+    verdict: caught
+    caught_by: "#1088"
+    catch: {script: check_wicking, kind: wick_via_in_pad, refs: [U1, U2, U3, U4, U5, IC1, J9, Q3]}
+    note: >-
+      Not an independent catch: check_wicking's via-in-pad rule (#475) is
+      older than this round, but it joined the corpus runners (#1088) after
+      this defect was read. 29 open vias in SMD pads on V4 as ordered (the
+      erratum's 29), across 18 parts, and none on V4-2.
 - id: flexgrid-v3
   url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
   commit: d3529287a8998dba79bdf6f593d1d67532386edc

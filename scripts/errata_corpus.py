@@ -206,6 +206,16 @@ def _check_silk(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_silk.py", "--pcb", str(_pcb(b, rev, repo, empty))]
 
 
+def _check_wicking(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """Vias in or beside SMD pads, and untented vias under part bodies."""
+    return ["check_wicking.py", "--pcb", str(_pcb(b, rev, repo, empty))]
+
+
+def _check_mounting(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """A board big enough to need screws with no mounting hole (#1088)."""
+    return ["check_mounting.py", "--pcb", str(_pcb(b, rev, repo, empty))]
+
+
 def _check_esd(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board alone: clamps at its external connectors. --parts names
     a folder that does not exist, so the victims' abs max is not read from
@@ -281,6 +291,8 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
            "check_pinouts": _check_pinouts, "check_esd": _check_esd,
+           "check_wicking": _check_wicking,
+           "check_mounting": _check_mounting,
            "dfm": _dfm}
 
 
