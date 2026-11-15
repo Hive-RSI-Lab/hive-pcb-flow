@@ -26,6 +26,16 @@ Exempt, and said in the report's facts (`mounts_by`):
                side whose pads run to the board edge (a card that plugs into
                an edge connector: PCIe, M.2, a cartridge), or an edge-card
                footprint (Connector_PCBEdge, a "CardEdge" name).
+  rail         tabs on two opposite edges that stand out of the outline,
+               short and shallow and mirrored across the board (the board
+               slides into a case's slots or a rail by them; icE1usb's
+               four 4 mm x 1 mm corner tabs): on each of the two edges, two
+               or more runs touch the outline's bounding line, each at most
+               TAB_MAX_FRAC of the edge, the edge between them recessed by
+               TAB_MIN_DEPTH_MM-TAB_MAX_DEPTH_MM, and the runs of one edge
+               the other's within TAB_MIRROR_MM. Seen on one corpus board
+               only: a board with mirrored edge tabs that is screwed down
+               should declare it.
   declared     constraints `mechanical.mounting`: {by: "clip" | "adhesive" |
                "stack" | "rail" | "edge_card" | "castellated" | "cable" |
                "none", why: "..."} says it mounts another way.
@@ -69,6 +79,10 @@ _HOLE_REF = re.compile(r"^(H|MH|MTG|HOLE)\d+$", re.I)
 _EDGE_FP = re.compile(r"Connector_PCBEdge|CardEdge|Card_Edge|EdgeConn|Edge_Conn|"
                       r"_Bus_Edge|_EDGE$|PCIe_x|M\.2_Key|BUS_PCIe|MiniPCIe|"
                       r"_Bus_(Pin_)?Header", re.I)
+TAB_MAX_FRAC = 0.15      # a tab's run along its edge, of the edge's length
+TAB_MIN_DEPTH_MM = 0.3   # how far the edge between tabs sits back
+TAB_MAX_DEPTH_MM = 3.0
+TAB_MIRROR_MM = 0.5      # one edge's tab runs against the other edge's
 EDGE_CONNECT_MM = 1.0   # a KiCad "connect" (edge connector) pad this near
 
 
@@ -221,6 +235,67 @@ def edge_fingers(bg, pcb: Path) -> dict | None:
     return best
 
 
+def _runs(outline, band, along_x: bool) -> list[tuple[float, float]]:
+    """The runs (lo, hi) along an edge where OUTLINE fills BAND."""
+    hit = outline.intersection(band)
+    out = []
+    for g in getattr(hit, "geoms", [hit]):
+        if g.is_empty or g.area <= 0:
+            continue
+        x0, y0, x1, y1 = g.bounds
+        out.append((x0, x1) if along_x else (y0, y1))
+    out.sort()
+    merged: list[list[float]] = []
+    for lo, hi in out:
+        if merged and lo <= merged[-1][1] + 0.05:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    return [(lo, hi) for lo, hi in merged]
+
+
+def rail_tabs(outline) -> dict | None:
+    """Mirrored tabs on two opposite edges (the docstring's `rail`), or
+    None."""
+    from shapely.geometry import box  # noqa: PLC0415
+    if outline.is_empty:
+        return None
+    minx, miny, maxx, maxy = outline.bounds
+    e = 0.05
+    for along_x, lo_band, hi_band, length, edge_lo, edge_hi in (
+            (True, lambda d: box(minx, miny + d, maxx, miny + d + e),
+             lambda d: box(minx, maxy - d - e, maxx, maxy - d), maxx - minx,
+             "bottom", "top"),
+            (False, lambda d: box(minx + d, miny, minx + d + e, maxy),
+             lambda d: box(maxx - d - e, miny, maxx - d, maxy), maxy - miny,
+             "left", "right")):
+        sides = []
+        for band in (lo_band, hi_band):
+            runs = _runs(outline, band(0.0), along_x)
+            if len(runs) < 2 or any(hi - lo > TAB_MAX_FRAC * length
+                                    for lo, hi in runs):
+                break
+            # the edge between the outer runs sits back by a tab's depth:
+            # gone at TAB_MIN_DEPTH_MM, whole by TAB_MAX_DEPTH_MM
+            span = (runs[0][1], runs[-1][0])
+            def covered(d, band=band):
+                return any(lo <= span[0] + 0.05 and hi >= span[1] - 0.05
+                           for lo, hi in _runs(outline, band(d), along_x))
+            if covered(TAB_MIN_DEPTH_MM) or not covered(TAB_MAX_DEPTH_MM):
+                break
+            sides.append(runs)
+        else:
+            a, b = sides
+            if len(a) == len(b) and all(
+                    abs(p[0] - q[0]) <= TAB_MIRROR_MM
+                    and abs(p[1] - q[1]) <= TAB_MIRROR_MM
+                    for p, q in zip(a, b)):
+                return {"edges": [edge_lo, edge_hi], "tabs": len(a) * 2,
+                        "runs_mm": [[checklib.rnd(lo), checklib.rnd(hi)]
+                                    for lo, hi in a]}
+    return None
+
+
 def check(pcb: Path, constraints: dict | None = None
           ) -> tuple[list[dict], dict]:
     bg = geom.BoardGeom.from_file(pcb)
@@ -255,6 +330,11 @@ def check(pcb: Path, constraints: dict | None = None
         seen["mounts_by"] = {"by": "castellated", "pads": n_cast,
                              "refs": castellation.refs(pcb)}
         return [], seen
+    if not estimated:
+        tabs = rail_tabs(bg.outline)
+        if tabs is not None:
+            seen["mounts_by"] = {"by": "rail", "from": "edge tabs", **tabs}
+            return [], seen
     edge = edge_fingers(bg, pcb)
     if edge is not None:
         seen["mounts_by"] = {"by": "edge_card", **edge}
