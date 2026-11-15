@@ -82,6 +82,18 @@ Checks (all thresholds from reference/jlc_capabilities.yaml, keyed
            beside it: a part the two disagree on, or one the image pass left
            out, is an ERROR (cpl_visual_disagree); no image pass at all is a
            coverage hole (family placement_visual) that --strict refuses.
+           All of that is JLC's convention. Under --vendor (the gate passes
+           the chosen one) the vendor profile's assembly.rotation decides
+           (#1068, cpl_verify.convention): `kicad` (PCBWay, Aisler, Seeed,
+           Eurocircuits) checks the vendor's own <vendor>/CPL.csv (vendor.py
+           package; beside the CPL or in the fab dir) row by row against the
+           board footprint: another side or position is an ERROR
+           (cpl_position), another rotation one too (cpl_rotation), with no
+           LCSC model or image pass; a `zero_orientation` (Eurocircuits' IEC
+           zero) leaves the parts of three or more pads unjudged, one warning
+           for the run (cpl_not_judged). No <vendor>/CPL.csv, or a fab with
+           no assembly table (OSH Park), is placement status not_judged,
+           never JLC's CPL judged the JLC way for another assembler.
            A CPL with rows on both sides at JLC only goes as Standard PCBA:
            under its rails, fiducials or 70 x 70 mm is a warning
            (both_sides_needs_panel, castellated_needs_panel for a castellated
@@ -1528,17 +1540,44 @@ def _placement_cache(cpl: Path, parts: Path | None, shipped: bool) -> Path:
     return cpl_verify.default_cache(parts)
 
 
+def vendor_cpl(vid: str, cpl: Path | None,
+               fab_dir: Path | None) -> Path | None:
+    """The CPL `vendor.py package` wrote for this vendor: <dir>/<vid>/CPL.csv
+    beside the shipped (JLC) CPL or in the fab dir (or its parent), or the
+    --cpl itself when it sits in a <vid>/ dir. Never JLC's own CPL: its
+    rotations are JLC's, not this vendor's (#1068)."""
+    if cpl is not None and Path(cpl).parent.name == vid:
+        return Path(cpl)
+    dirs = [Path(cpl).parent] if cpl is not None else []
+    if fab_dir is not None:
+        dirs += [fab_dir, fab_dir.parent]
+    for d in dirs:
+        if (d / vid / "CPL.csv").is_file():
+            return d / vid / "CPL.csv"
+    return None
+
+
 def check_placement(pcb: Path, cpl: Path, parts: Path | None,
                     visual: Path | None, cache: Path | None, fetch: bool,
-                    vios: list, shipped: bool = False) -> dict:
+                    vios: list, shipped: bool = False,
+                    conv: dict | None = None) -> dict:
     """shipped: the CPL is the one a foreign board sent its assembler (no
     parts.json): its models are kept beside it (fab/easyeda) and a row the
-    board gives no LCSC number is a part JLC did not place."""
+    board gives no LCSC number is a part JLC did not place. conv: the
+    assembler's rotation convention (cpl_verify.convention); not JLC's, the
+    CPL is judged by it (verify_vendor) and the image pass, drawn the JLC
+    way, is not read."""
     import cpl_verify
-    rep = cpl_verify.verify(
-        pcb, cpl_verify.read_cpl(cpl), cpl_verify.lcsc_map(pcb, parts),
-        cache or _placement_cache(cpl, parts, shipped),
-        fetch=fetch, unsourced_placed=not shipped)
+    if conv is not None and conv["rotation"] != "jlc":
+        rep = cpl_verify.verify_vendor(
+            pcb, cpl_verify.read_vendor_cpl(cpl) if conv["rotation"]
+            else cpl_verify.read_placement(cpl)[1], conv)
+        visual = None
+    else:
+        rep = cpl_verify.verify(
+            pcb, cpl_verify.read_cpl(cpl), cpl_verify.lcsc_map(pcb, parts),
+            cache or _placement_cache(cpl, parts, shipped),
+            fetch=fetch, unsourced_placed=not shipped)
     vis = (json.loads(visual.read_text(encoding="utf-8"))
            if visual is not None else None)
     rows = cpl_verify.merge_visual(rep["parts"], vis)
@@ -1570,6 +1609,12 @@ def check_placement(pcb: Path, cpl: Path, parts: Path | None,
             CHECK, "warning", None, None, None, refs,
             f"{len(refs)} ball grid part(s): {rep['footprint_basis']['note']}",
             SOURCE, kind="cpl_footprint_basis"))
+    if rep.get("not_judged") and conv and conv["rotation"]:
+        refs = rep["not_judged"]["refs"]
+        vios.append(checklib.violation(
+            CHECK, "warning", None, None, None, refs,
+            f"{len(refs)} part(s): {rep['not_judged']['note']}",
+            SOURCE, kind="cpl_not_judged", vendor=conv["vendor"]))
     if rep.get("pin_numbers_differ"):
         refs = rep["pin_numbers_differ"]["refs"]
         vios.append(checklib.violation(
@@ -1600,6 +1645,8 @@ def check_placement(pcb: Path, cpl: Path, parts: Path | None,
         elif r["verdict"] in cpl_verify.FAIL_VERDICTS:
             kind = ("cpl_no_model" if r["verdict"] in ("no_model", "no_fit")
                     else "cpl_offset" if r["verdict"] == "wrong_offset"
+                    else "cpl_position" if r["verdict"] in ("wrong_side",
+                                                            "wrong_position")
                     else "cpl_rotation")
             vios.append(checklib.violation(
                 CHECK, "error", where, None, None, [r["ref"]],
@@ -1620,6 +1667,10 @@ def check_placement(pcb: Path, cpl: Path, parts: Path | None,
                 f"{r['visual'] or 'nothing'} ({r['agreement']})", SOURCE,
                 kind="cpl_visual_disagree", agreement=r["agreement"]))
     return {"cpl": str(cpl), "visual": str(visual) if visual else None,
+            "vendor": rep.get("vendor") or "jlcpcb",
+            "basis": rep.get("basis") or "jlc",
+            "status": rep["status"],
+            "not_judged": (rep.get("not_judged") or {}).get("refs", []),
             "n_checked": rep["n_checked"], "failed": rep["failed"],
             "fetch_failed": [r["ref"] for r in unfetched],
             "rate_limited": rep.get("rate_limited"),
@@ -2170,9 +2221,22 @@ def run(pcb: Path, fab_dir: Path | None = None, copper_oz: float | None = None,
         # on whatever models this machine happens to have cached.
         foreign = (parts_report is None and shipped_cpl is not None
                    and (shipped_cpl.parent / "easyeda").is_dir())
-        if (parts_report is not None or foreign) \
+        import cpl_verify
+        conv = cpl_verify.convention(vendor)
+        if conv["rotation"] != "jlc" and "placement" not in skip:
+            # not JLC: its own CPL, judged by its own convention (#1068)
+            vcpl = vendor_cpl(conv["vendor"], cpl, fd)
+            if vcpl is None:
+                facts["placement"] = {
+                    "status": cpl_verify.NOT_JUDGED, "vendor": conv["vendor"],
+                    "reason": f"no {conv['vendor']}/CPL.csv (hwde vendor "
+                              f"package writes it): JLC's CPL carries JLC's "
+                              f"rotations, not {conv['name']}'s"}
+            else:
+                facts["placement"] = check_placement(
+                    pcb, vcpl, parts, None, None, False, vios, conv=conv)
+        elif (parts_report is not None or foreign) \
                 and "placement" not in skip:
-            import cpl_verify
             cpl_path = shipped_cpl or Path(parts_report["cpl"])
             vis = visual or _shipped_file(fd, "cpl_visual.json")
             facts["placement"] = check_placement(
