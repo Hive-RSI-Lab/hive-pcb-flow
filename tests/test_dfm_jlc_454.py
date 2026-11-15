@@ -122,10 +122,12 @@ def test_a_track_near_a_non_plated_hole_fails_at_its_own_figure():
 
 
 def _board(*pads):
-    """A stand-in board: pads as (kind, x, y, drill)."""
+    """A stand-in board: pads as (kind, x, y, drill). geom keeps every
+    np_thru_hole pad in npth, copper or not; the rest are pads_of() only."""
     ps = [SimpleNamespace(kind=k, center=(x, y), drill=(d, d))
           for k, x, y, d in pads]
-    return SimpleNamespace(pads_of=lambda: ps)
+    return SimpleNamespace(pads_of=lambda: ps,
+                           npth=[p for p in ps if p.kind == "np_thru_hole"])
 
 
 def test_a_non_plated_pad_the_drill_file_reads_as_plated_gets_npth_figure():
@@ -274,3 +276,22 @@ def test_a_rotated_square_pad_keeps_its_area_at_every_angle(tmp_path, rot):
     assert len(comps) == 1
     assert comps[0].area == pytest.approx(1.7 * 1.7, rel=1e-3)
     assert comps[0].contains(Point(10.0, 10.0).buffer(0.5))
+
+
+def test_a_mask_only_non_plated_pad_on_a_parsed_board_gets_npth_figure(tmp_path):
+    """megabuzz's 0.4 mm pegs: np_thru_hole with layers "*.Mask" only, no
+    copper, so they are not in pads_of(); the matcher reads geom's npth."""
+    import geom
+    pad = ('(footprint "t:P" (at 10 10) (layer "F.Cu") (property "Reference" "P1") '
+           f'(pad "" np_thru_hole circle (at 0 0) (size 0.42 0.42) (drill {HOLE_D}) '
+           '(layers "*.Mask")))\n')
+    p = tmp_path / "b.kicad_pcb"
+    p.write_text('(kicad_pcb (version 20260206) (generator "test")\n'
+                 '(general (thickness 1.6))\n'
+                 '(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))\n'
+                 f'(setup)\n(net 0 "")\n{pad})\n', encoding="utf-8")
+    bg = geom.load_board(p)
+    assert not [q for q in bg.pads_of() if q.kind == "np_thru_hole"]
+    is_npth = dfm_check._npth_matcher(bg)
+    assert is_npth(SimpleNamespace(x=10.0, y=10.0, diameter=HOLE_D))
+    assert not is_npth(SimpleNamespace(x=12.0, y=10.0, diameter=HOLE_D))

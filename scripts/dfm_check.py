@@ -1138,13 +1138,14 @@ def _via_matcher(bg):
 
 def _npth_matcher(bg):
     """-> is_npth(hole): a drill hit on a board np_thru_hole pad's hole,
-    same centre and size (None with no board or no such pad)."""
-    pads_of = getattr(bg, "pads_of", None)
-    if pads_of is None:
+    same centre and size (None with no board or no such pad). bg.npth,
+    not pads_of(): a non-plated pad with no copper layers (a mask-only
+    0.4 mm peg) is only there."""
+    npth = getattr(bg, "npth", None)
+    if npth is None:
         return None
-    pads = [(p.center[0], p.center[1], p.drill[0]) for p in pads_of()
-            if p.kind == "np_thru_hole" and p.drill
-            and abs(p.drill[0] - p.drill[1]) < 1e-3]
+    pads = [(p.center[0], p.center[1], p.drill[0]) for p in npth
+            if p.drill and abs(p.drill[0] - p.drill[1]) < 1e-3]
     if not pads:
         return None
     tree = STRtree([Point(x, y) for x, y, _ in pads])
