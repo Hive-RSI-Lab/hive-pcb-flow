@@ -259,7 +259,7 @@ parts:
          cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 5, table: 'Pin Functions', quote: 'quality 1-µF capacitor from this pin to GND.', fields: [value]},
                 {doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'requires a 1-µF, 16-V ceramic capacitor connected from VCC to GND for proper operation.', fields: [value]}]}
       - {id: CIN, pin: VIN, to: PGND, kinds: [C], min: 10.0e-6,
-         source: "SNVSAN3F 9.2.2.6: a minimum of 10 uF of ceramic capacitance is required at the input (held per part, nominal: the sum across parts is not judged)",
+         source: "SNVSAN3F 9.2.2.6: a minimum of 10 uF of ceramic capacitance is required at the input (nominal, summed across the parallel caps on VIN's net)",
          cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'A minimum of 10 µF of ceramic capacitance is required', fields: [min]}]}
       - {id: CHF, pin: VIN, to: PGND, kinds: [C], value: 220n,
          source: "SNVSAN3F 9.2.2.6: a small 220 nF ceramic capacitor must be used at the input as a high-frequency bypass",

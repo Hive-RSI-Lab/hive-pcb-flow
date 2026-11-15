@@ -331,9 +331,11 @@ def test_pcb0021_as_wired_is_quiet():
     ({"R2": "680"}, (), [("error", "U1", "RILIM")]),
     ({"R3": "10k"}, (), [("error", "U1", "RISET")]),
     ({}, ("R1",), [("warning", "U1", "RTS")]),
-    ({"C2": "470nF", "C10": "470nF"}, (),
+    # per net: 2 x 330 nF + 100 nF = 0.76 uF, under U2's 1 uF CIN
+    ({"C2": "330nF", "C10": "330nF"}, (),
      [("error", "U1", "COUT"), ("error", "U2", "CIN")]),
-    ({"C11": "2.2uF", "C12": "2.2uF"}, (), [("error", "U2", "COUT")]),
+    # 2 x 1.5 uF = 3 uF, under U2's 4 uF COUT
+    ({"C11": "1.5uF", "C12": "1.5uF"}, (), [("error", "U2", "COUT")]),
 ])
 def test_lipo_part_rows_catch_each_planted_fault(values, drop, want):
     viol, _ = _audit(*_lipo(values, drop))
@@ -448,10 +450,91 @@ def test_pcb0010_as_wired_is_quiet():
     ({}, ("C6",), [("error", "U1", "CBOOT")]),
     ({}, ("C7",), [("error", "U1", "CVCC")]),
     ({}, ("C2", "C3", "C10"), [("error", "U1", "CIN")]),
-    ({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"}, (),
+    ({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"}, ("C10",),
+     [("error", "U1", "CIN")]),
+    ({"C2": "1uF", "C3": "1uF", "C10": "1uF"}, (),
      [("error", "U1", "CIN")]),
     ({}, ("C1",), [("error", "U1", "CHF")]),
 ])
 def test_lmr33630_rows_catch_each_planted_fault(values, drop, want):
     viol, _ = _audit(*_bb(values, drop))
     assert _parts(viol) == want
+
+
+# ------------------------- capacitance minimums judged per net, not per part
+
+def test_cin_floor_is_summed_across_parallel_caps():
+    """Quiet twin: three 4.7 uF on the LMR33630's VIN net give 14.1 uF,
+    past its 10 uF minimum (SNVSAN3F 9.2.2.6 "a minimum of 10 uF of
+    ceramic capacitance"), though no one part reaches it."""
+    viol, _ = _audit(*_bb({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"}))
+    assert _parts(viol) == []
+
+
+def test_cin_floor_fires_when_one_of_three_is_dropped():
+    viol, _ = _audit(*_bb({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"},
+                          ("C3",)))
+    assert _parts(viol) == [("error", "U1", "CIN")]
+    msg = next(v["msg"] for v in viol if v.get("part") == "CIN")
+    assert ("C1 + C10 + C2 across those pins together give 9.62 uF, below "
+            "its 10 uF minimum") in msg
+
+
+def _linked(link="0R", ref="R5"):
+    """PCB-0010 with C10 moved behind REF (a 0R link, a net tie or a real
+    resistor) on its own /VIN_C net, C2 and C3 4.7 uF."""
+    comps, nets = _bb({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"})
+    nets["+VIN"] = [m for m in nets["+VIN"] if m["ref"] != "C10"]
+    nets["+VIN"].append(_m(ref, "1"))
+    nets["/VIN_C"] = [_m(ref, "2"), _m("C10", "1")]
+    comps[ref] = link
+    return comps, nets
+
+
+def test_cap_behind_a_zero_ohm_link_counts():
+    viol, _ = _audit(*_linked())
+    assert _parts(viol) == []
+
+
+def test_cap_behind_a_net_tie_counts():
+    viol, _ = _audit(*_linked("Net-Tie", "NT1"))
+    assert _parts(viol) == []
+
+
+def test_cap_behind_a_real_resistor_does_not_count():
+    viol, _ = _audit(*_linked("10R"))
+    assert _parts(viol) == [("error", "U1", "CIN")]
+
+
+def test_dnp_link_and_dnp_cap_add_nothing():
+    comps, nets = _linked()
+    parsed = {"components": {r: {"value": v, "libsource": ("", "")}
+                             for r, v in comps.items()}, "nets": nets}
+    parsed["components"]["R5"]["dnp"] = True
+    viol, _ = netlist_audit.audit(parsed, {}, None)
+    assert _parts(viol) == [("error", "U1", "CIN")]
+    comps, nets = _bb({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"})
+    parsed = {"components": {r: {"value": v, "libsource": ("", "")}
+                             for r, v in comps.items()}, "nets": nets}
+    parsed["components"]["C3"]["dnp"] = True
+    viol, _ = netlist_audit.audit(parsed, {}, None)
+    assert _parts(viol) == [("error", "U1", "CIN")]
+
+
+def test_nominal_value_rows_stay_per_part():
+    """A row with a nominal value (CBOOT 100 nF) is a part, not a floor:
+    two 22 nF in parallel don't make it."""
+    comps, nets = _bb({"C6": "22nF", "C8": "22nF"})
+    nets["/BST"].append(_m("C8", "1"))
+    nets["/SW"].append(_m("C8", "2"))
+    viol, _ = _audit(comps, nets)
+    assert ("error", "U1", "CBOOT") in _parts(viol)
+
+
+def test_summed_floor_with_a_max_still_flags_parts_per_part():
+    """TPS61023 COUT is 4 to 1000 uF: 2 x 2.2 uF on +5V make 4.4 uF and
+    pass the floor; a single 2.2 uF alone doesn't."""
+    viol, _ = _audit(*_lipo({"C11": "2.2uF", "C12": "2.2uF"}))
+    assert _parts(viol) == []
+    viol, _ = _audit(*_lipo({"C11": "2.2uF"}, ("C12",)))
+    assert _parts(viol) == [("error", "U2", "COUT")]

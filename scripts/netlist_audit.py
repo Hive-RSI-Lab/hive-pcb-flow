@@ -576,6 +576,44 @@ def _driven(nets: dict, names: set[str], ref: str) -> bool:
                for n in names for m in nets.get(n, []))
 
 
+def _linked_nets(names: set[str], nets: dict, comps: dict,
+                 comp_pins: dict[str, dict[str, str]],
+                 hops: int = 2) -> set[str]:
+    """names plus the nets a fitted 0-ohm resistor or a net tie joins to
+    them, up to `hops` links away: a cap behind a 0R link sits on the same
+    copper as far as the pin is concerned."""
+    seen, edge = set(names), set(names)
+    for _ in range(hops):
+        nxt = set()
+        for n in edge:
+            for m in nets.get(n, []):
+                r = m["ref"]
+                pins = comp_pins.get(r, {})
+                if len(pins) != 2 or (comps.get(r) or {}).get("dnp"):
+                    continue
+                if not (re.match(r"^NT\d", r) or (
+                        _part_kind(r) == "R" and r.startswith("R")
+                        and engcalc.parse_value(
+                            (comps.get(r) or {}).get("value")) == 0)):
+                    continue
+                nxt |= {f for f in pins.values()
+                        if f not in seen and not f.startswith("unconnected-")}
+        seen |= nxt
+        edge = nxt
+        if not edge:
+            break
+    return seen
+
+
+def _summed(req: dict) -> bool:
+    """A capacitance floor (a min, capacitors only, no nominal value) is the
+    pin's total: parallel parts on its net add up (LMR33630 9.2.2.6 "a
+    minimum of 10 uF of ceramic capacitance"), so it is judged per net, not
+    per part. A max stays per part: a cap over it is still off-value."""
+    return (req.get("min") is not None and req.get("value") is None
+            and list(req["kinds"]) == ["C"])
+
+
 def _pin_requirements(nets: dict, comps: dict,
                       comp_pins: dict[str, dict[str, str]],
                       specs: list[dict]):
@@ -617,22 +655,39 @@ def _pin_requirements(nets: dict, comps: dict,
                     continue  # the two pins are one net: nothing to span
                 lo, hi = _req_window(req)
                 found, off, unread = [], [], []
+                # a part behind a 0R link or net tie spans the pins too
+                la = _linked_nets(a, nets, comps, comp_pins)
+                lb = _linked_nets(b, nets, comps, comp_pins)
+                if la & lb:
+                    la, lb = a, b  # a link joins the two pins: none followed
+                vals: dict[str, float] = {}
                 for other, pins in sorted(comp_pins.items()):
                     if other == ref or _part_kind(other) not in req["kinds"]:
                         continue
-                    if not (any(n in a for n in pins.values())
-                            and any(n in b for n in pins.values())):
+                    if (comps.get(other) or {}).get("dnp"):
+                        continue  # not fitted: adds nothing
+                    if not (any(n in la for n in pins.values())
+                            and any(n in lb for n in pins.values())):
                         continue
                     val = engcalc.part_value(comps.get(other, {}).get("value"),
                                              _part_kind(other))
                     if (lo is not None or hi is not None) and val is None:
                         unread.append(other)  # no value to judge it by
                         continue
+                    if val is not None and (hi is None or val <= hi * 1.001):
+                        vals[other] = val  # over a max: off, adds nothing
                     if (lo is not None and val < lo * 0.999) or (
                             hi is not None and val > hi * 1.001):
                         off.append(other)
                         continue
                     found.append(other)
+                if _summed(req) and not found and len(vals) > 1:
+                    # parallel caps add: the floor is the net's total
+                    if sum(vals.values()) >= lo * 0.999:
+                        found, off = sorted(vals), []
+                    else:
+                        req = {**req, "_sum": sum(vals.values()),
+                               "_sum_of": sorted(vals)}
                 net = sorted(a)[0] if a else None
                 if not found:
                     yield (req.get("severity", "error"), net, ref, req, [],
@@ -4785,10 +4840,17 @@ def audit(parsed: dict, constraints: dict,
                 f"pin_part_missing ({sev}) on {net or ic}: {what}: "
                 f"{names} spans those pins, but its value can't be read")
         elif not elsewhere:
-            extra = (f"; off-value parts across it: {', '.join(off)}"
-                     if off else "")
+            why = "no part spans those pins" + (
+                f"; off-value parts across it: {', '.join(off)}"
+                if off else "")
+            if req.get("_sum") is not None:
+                why = (f"{' + '.join(req['_sum_of'])} across those pins "
+                       f"together give {req['_sum'] * 1e6:.3g} uF, below "
+                       f"its {float(req['min']) * 1e6:.3g} uF minimum"
+                       + (" (nominal; mlcc_dcbias judges it derated)"
+                          if req.get("effective") else ""))
             vt(judged, sev, "pin_part_missing", net, [ic],
-              f"{what}: no part spans those pins{extra}",
+              f"{what}: {why}",
               part=req["id"], pin=req["pin"], to=req["to"],
               off_value=off)
         else:
