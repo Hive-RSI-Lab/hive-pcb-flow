@@ -73,8 +73,8 @@ parts on an ordinary board.
 | 15 | I/O supply domain vs the bus level | 2 | 3 | 6 | netlist | each IC's I/O supply pins and the level each interface needs; which rail powers the parts on a bus |
 | 13 | Boot straps on modules | 2 | 3 | 6 | netlist | reference/reset_states.yaml rows for modules (ESP-12/ESP8266); check_straps exists, the rows don't |
 | 7 | Datasheet application circuit (part landed, #1158) | 3 | 2 | 6 | netlist | per-part required externals and reference networks from the typical-application figure; pins that must be connected (unused CMOS inputs, open-collector inputs' pulls) |
-| 10 | Silk pin labels and polarity marks | 3 | 2 | 6 | footprint + silk | none; extends #1028 to pin-number legends and diode cathode marks |
-| 9 | Shared-bus drivers | 5 | 1 | 5 | netlist | driver type per part (push-pull, open drain, tri-state), I2C masters per bus, bus strobes, a pull on a tri-state line |
+| 10 | Silk pin labels and polarity marks (two-column legend rule landed, #1172) | 3 | 2 | 6 | footprint + silk | none; extends #1028 to pin-number legends and diode cathode marks |
+| 9 | Shared-bus drivers (strobe and I2C-master rules landed, #1087, #1170, #1171) | 5 | 1 | 5 | netlist | driver type per part (push-pull, open drain, tri-state), I2C masters per bus, bus strobes, a pull on a tri-state line |
 | 5 | Symbol pin map vs the part (landed, #1134) | 1 | 3 | 3 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts |
 | 6 | Pin function on the wrong net (landed, #1155) | 1 | 3 | 3 | netlist | pin names of the stock symbols, protector cell/load pin names, reference/mcu_pins.yaml debug pins; input-only pins of CPLDs |
 | 11 | Load against a source's limit | 1 | 1 | 1 | netlist + a stated load | the off-board load's capacitance |
@@ -211,7 +211,11 @@ diodes); 5 before 6.
 9. **Shared-bus drivers.**
    - byte-hamr-1: push-pull onto wired-OR lines.
    - ice1usb-r10-1: a GPS module that is an I2C master shares the port.
-   - gcm-v50-1: two drivers on one strobe.
+     The single-master rule (#1170) stays quiet: the MAX-M8W's datasheet
+     makes its DDC port a slave, and the clone's master mode is in no file.
+   - gcm-v50-1: two drivers on one strobe. The strobe-contention rule
+     (#1171) stays quiet: U12 and U40 both take BWRITE1 as an input, so
+     the clash is in the firmware, not the netlist.
    - spitfire-2: SPI MISO with no pull-up floats when nothing is selected (round 3).
    - mmm-2: an LED circuit designed for a tri-state output on a status pin that is not tri-state (round 3).
 
