@@ -195,6 +195,24 @@ schematic-level structural problems BEFORE board work starts:
    in gateware or firmware. Fact offboard_inputs_judged
    counts the (net, pin) pairs a verified row covered (class 3 of
    docs/miss-taxonomy.md).
+ - pin_role_net (error/warning/info): a part's pin whose role, by its
+   symbol's pin name, doesn't fit its net: a ground pin (GND, VSS) on a
+   positive rail is an error, a supply pin (VCC, VDD, VBUS, VIN) on ground
+   a warning, a VBAT pin on ground an info note (an unused RTC backup
+   domain). One finding per part; connectors, test points and jumpers
+   are not judged (flexgrid v4's USBLC6-2SC6 GND on VBUS).
+ - protector_cell_side (warning): a battery protector with a cell-side
+   pin (GND/VSS) on the board's ground and a load-side pin (BAT-, VM, P-,
+   EB-) on the cell's own terminal: the sides swapped (netscore's
+   FS312MH).
+ - debug_pin_wrong (error), debug_pins_reused (warning): an SWD line, by
+   its net's or header pin's name, reaching an MCU of reference/
+   mcu_pins.yaml's debug rows on a pin other than its SWDIO/SWCLK pin
+   (fc980c's SWDIO on the F401's PA15); an SWD pin wired to other parts
+   with no header, test point or SWD-named net within one resistor (and
+   on STM32G0/C0 PA14 is BOOT0 too). Class 6 of docs/miss-taxonomy.md;
+   facts pin_role_parts_checked, protector_cell_sides_checked,
+   debug_mcus_checked.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -1595,6 +1613,195 @@ def _protector_orientation(nets: dict, comps: dict,
         if on_vss and len(on_vss) > len(on_pack):
             yield ref, vss, pack, on_vss, on_pack
     yield "checked", checked, "", [], []
+
+
+# Class 6 of docs/miss-taxonomy.md: a pin whose role doesn't fit its net.
+# A pin's role is its symbol's pin name (the stock symbol's, when the
+# part is placed from KiCad's library): a ground pin, a supply pin, a
+# battery-backup pin.
+_ROLE_SKIP_RE = re.compile(r"^(J|P|CN|X|TP|JP|H|MH|SB|NT|SW|K)\d")
+_ROLE_SUPPLY_RE = re.compile(
+    r"^(VCC|VDD|VBUS|VIN|AVDD|DVDD|VDDA|VDDIO|IOVDD|VCCIO|VCCA|VCCB|VS)"
+    r"\d*$")
+_VBAT_PIN_RE = re.compile(r"^VBAT\d*$")
+_POS_NET_RE = re.compile(
+    r"^\+|^(VCC|VDD|VBUS|VIN|VSYS|VBAT|VBATT|V_?USB)(_|$)")
+
+
+def _pin_role(func: str | None) -> str | None:
+    """'ground', 'supply', 'vbat' or None, from a symbol's pin name."""
+    name = re.sub(r"[_{}]", "", _pin_base(func)) if func else ""
+    if not name:
+        return None
+    if _GROUND_RE.search(name):
+        return "ground"
+    if _VBAT_PIN_RE.match(name):
+        return "vbat"
+    if _ROLE_SUPPLY_RE.match(name):
+        return "supply"
+    return None
+
+
+def _net_polarity(net: str, rails: dict) -> str | None:
+    """'ground' or 'positive' when the net's name or volts say so."""
+    if net.startswith("unconnected-"):
+        return None
+    if _is_ground_name(net) or rails.get(net) == 0:
+        return "ground"
+    if (rails.get(net) or 0) > 0 or _POS_NET_RE.search(
+            net.lstrip("/").upper()):
+        return "positive"
+    return None
+
+
+def _pin_role_nets(nets: dict, comps: dict, rails: dict):
+    """Yield (ref, [(sev, pin, func, role, net)]) for each part with a
+    ground pin on a positive rail (error), a supply pin on ground
+    (warning) or a VBAT pin on ground (info: an RTC's backup pin is
+    grounded when unused). The last item is ('checked', n)."""
+    hits: dict[str, list] = {}
+    seen: set[str] = set()
+    for net, members in sorted(nets.items()):
+        pol = _net_polarity(net, rails)
+        for m in members:
+            ref = m["ref"]
+            if (_ROLE_SKIP_RE.match(ref or "")
+                    or (comps.get(ref) or {}).get("dnp")):
+                continue
+            role = _pin_role(m.get("pinfunction"))
+            if role is None:
+                continue
+            seen.add(ref)
+            sev = {("ground", "positive"): "error",
+                   ("supply", "ground"): "warning",
+                   ("vbat", "ground"): "info"}.get((role, pol))
+            if sev:
+                hits.setdefault(ref, []).append(
+                    (sev, m["pin"], m.get("pinfunction"), role, net))
+    for ref in sorted(hits):
+        yield ref, hits[ref]
+    yield "checked", len(seen)
+
+
+# A battery protector's pins: its cell side (GND/VSS on the cell's -) and
+# its load side (BAT-/VM/P-/EB-, toward the pack's - the load returns to).
+_PROT_CELL_PINS = {"GND", "VSS"}
+_PROT_LOAD_PINS = {"BAT-", "VM", "P-", "EB-", "PACK-"}
+_CELL_REF_RE = re.compile(r"^(BAT|BT)\d")
+
+
+def _battery_net(net: str, nets: dict, comps: dict) -> bool:
+    """NET is the cell's own terminal: a battery part sits on it, or its
+    name says BAT."""
+    if "BAT" in net.upper():
+        return True
+    for m in nets.get(net, []):
+        comp = comps.get(m["ref"]) or {}
+        lib = " ".join((comp.get("libsource") or ("", ""))).upper()
+        if _CELL_REF_RE.match(m["ref"] or "") or "BATTERY" in lib:
+            return True
+    return False
+
+
+def _protector_cell_side(nets: dict, comps: dict):
+    """Yield (ref, cell pin, cell net, load pin, load net) for each
+    protector whose cell-side pin is on the board's ground while its
+    load-side pin sits on the cell's own terminal: the two swapped, so the
+    FETs sit in no path and the protector cuts nothing. The last item is
+    ('checked', n, '', '', '')."""
+    funcs: dict[str, dict[str, tuple[str, str]]] = {}
+    for net, members in nets.items():
+        for m in members:
+            funcs.setdefault(m["ref"], {})[_norm_pin(
+                m.get("pinfunction"))] = (m["pin"], net)
+    checked = 0
+    for ref, fn in sorted(funcs.items()):
+        cell = sorted(_PROT_CELL_PINS & set(fn))
+        load = sorted(_PROT_LOAD_PINS & set(fn))
+        if not cell or not load or (comps.get(ref) or {}).get("dnp"):
+            continue
+        checked += 1
+        cnet, lnet = fn[cell[0]][1], fn[load[0]][1]
+        if (cnet != lnet and _is_ground_name(cnet)
+                and not _is_ground_name(lnet)
+                and _battery_net(lnet, nets, comps)):
+            yield ref, cell[0], cnet, load[0], lnet
+    yield "checked", checked, "", "", ""
+
+
+# An MCU's serial-wire debug pins (mcu_pins.yaml debug)
+_DEBUG_NET_RE = {"SWDIO": re.compile(r"SWDIO|SWDAT|SWD_IO|SWD_DIO"),
+                 "SWCLK": re.compile(r"SWCLK|SWCK|SWD_CLK")}
+_DEBUG_PORT_RE = re.compile(r"^(J|P|CN|X|TP)\d")
+
+
+def _debug_signal(net: str, nets: dict) -> str | None:
+    """The SWD signal NET carries by its name or a connector pin's name."""
+    names = [net.upper()] + [_norm_pin(m.get("pinfunction"))
+                             for m in nets.get(net, [])
+                             if _DEBUG_PORT_RE.match(m["ref"] or "")]
+    for sig, rx in _DEBUG_NET_RE.items():
+        if any(rx.search(n) for n in names):
+            return sig
+    return None
+
+
+def _pin_tokens(func: str | None) -> set[str]:
+    """Every name a pin goes by: PA13(SWDIO) is PA13 and SWDIO,
+    PA15/PA14-BOOT0 is PA15, PA14 and BOOT0, SYS_SWCLK is SWCLK too."""
+    return {t for t in re.split(r"[-/()_ ,]+", _norm_pin(func)) if t}
+
+
+def _debug_reach(net: str, nets: dict, comps: dict,
+                 comp_pins: dict[str, dict[str, str]]) -> list[str]:
+    """NET and the nets one 2-pin resistor away (a series resistor to the
+    debug header)."""
+    out = [net]
+    for m in nets.get(net, []):
+        pins = comp_pins.get(m["ref"], {})
+        if _part_kind(m["ref"]) == "R" and len(pins) == 2:
+            far = next((n for p, n in pins.items() if p != m["pin"]), None)
+            if far and far not in out and not far.startswith("unconn"):
+                out.append(far)
+    return out
+
+
+def _debug_pins(nets: dict, comps: dict,
+                comp_pins: dict[str, dict[str, str]], table: dict):
+    """Yield ('wrong', row, mcu, sig, pin, func, net) for an SWD line that
+    reaches the MCU on a pin other than the one its debug port has, and
+    ('reused', row, mcu, sig, pin, func, net) for an SWD pin wired to
+    other parts with no debug header, test point or SWD-named net within
+    one resistor: debugging is locked out once firmware takes the pin.
+    The last item is ('checked', n, ...)."""
+    rows = [r for r in (table.get("mcus") or []) if r.get("debug")]
+    checked = 0
+    for ref in sorted(comps):
+        row = _mcu_row(comps[ref], rows) if rows else None
+        if not row or comps[ref].get("dnp"):
+            continue
+        checked += 1
+        want = {s.upper(): p.upper() for s, p in row["debug"].items()}
+        pins = _pin_funcs(ref, nets, comp_pins)
+        by_name = {t: (pn, net, f) for f, (pn, net) in pins.items()
+                   for t in _pin_tokens(f)}
+        for f, (pn, net) in sorted(pins.items()):
+            sig = _debug_signal(net, nets)
+            if sig in want and not {want[sig], sig} & _pin_tokens(f):
+                yield "wrong", row, ref, sig, pn, f, net
+        for sig, mpin in sorted(want.items()):
+            at = by_name.get(mpin) or by_name.get(sig)
+            if not at or at[1].startswith("unconnected-"):
+                continue
+            reach = _debug_reach(at[1], nets, comps, comp_pins)
+            others = [m for n in reach for m in nets.get(n, [])
+                      if m["ref"] != ref]
+            if not others or any(
+                    _debug_signal(n, nets) for n in reach) or any(
+                    _DEBUG_PORT_RE.match(m["ref"] or "") for m in others):
+                continue
+            yield "reused", row, ref, sig, at[0], at[2], at[1]
+    yield "checked", checked, None, None, None, None, None
 
 
 # An off-board input: a connector pin whose net is held only by a resistor
@@ -3729,6 +3936,87 @@ def audit(parsed: dict, constraints: dict,
            level_v=round(hit["level"], 3), held_v=round(hit["after"], 3),
            vmin=hit["vmin"], vmax=hit["vmax"], absent_rail=hit["absent"])
 
+    # 29. a pin whose role doesn't fit its net (class 6 of
+    # docs/miss-taxonomy.md; errata corpus: flexgrid v4's USBLC6-2SC6 had
+    # its GND pin on VBUS and VBUS on ground, rev B swapped them back)
+    role_checked = 0
+    for ref, found in _pin_role_nets(nets, comps, pl_rails):
+        if ref == "checked":
+            role_checked = found
+            continue
+        sev = next(s for s in ("error", "warning", "info")
+                   if any(h[0] == s for h in found))
+        said = "; ".join(f"{func} (pin {pn}, a {role} pin) on '{net}'"
+                         for _, pn, func, role, net in found[:6])
+        if sev == "info":
+            msg = (f"{ref} ({comps[ref].get('value')}) has its battery "
+                   f"backup pin grounded: {said}. Fine when the backup "
+                   f"domain is unused (most RTC datasheets say tie VBAT to "
+                   f"ground then); check that is meant")
+        else:
+            msg = (f"{ref} ({comps[ref].get('value')}) has a pin whose "
+                   f"role doesn't fit its net: {said}. A ground pin on a "
+                   f"supply rail or a supply pin on ground shorts the rail "
+                   f"through the part or leaves it unpowered; check the "
+                   f"symbol's pin map and the wiring against the datasheet")
+        v(sev, "pin_role_net", found[0][4], [ref], msg,
+          pins=[{"pin": pn, "function": func, "role": role, "net": net}
+                for _, pn, func, role, net in found])
+
+    # 30. a battery protector with its cell side and load side swapped
+    # (errata corpus: netscore's FS312MH had GND on the board's ground and
+    # BAT- on the cell's -; its rev B put GND on the cell)
+    cell_checked = 0
+    for ref, cpin, cnet, lpin, lnet in _protector_cell_side(nets, comps):
+        if ref == "checked":
+            cell_checked = cpin
+            continue
+        v("warning", "protector_cell_side", lnet, [ref],
+          f"{ref} ({comps[ref].get('value')}) has its cell-side pin "
+          f"{cpin} on the board ground '{cnet}' and its load-side pin "
+          f"{lpin} on the cell's own terminal '{lnet}': the two are "
+          f"swapped, so the protector's FETs carry no current and it "
+          f"cuts nothing. {cpin} goes to the cell's -, {lpin} to the "
+          f"ground the load returns to [ABLIC S-8261 Rev.5.5_00 Figure "
+          f"10, the same split]",
+          cell_net=cnet, load_net=lnet)
+
+    # 31. an MCU's serial-wire debug pins (mcu_pins.yaml debug; errata
+    # corpus: fc980c rev1 wired its SWDIO header pin to the F401's PA15,
+    # not PA13)
+    dbg_checked = 0
+    dbg_ok = {(h[2], h[3], h[0]) for h in _debug_pins(
+        nets, comps, comp_pins, _verified_only(mp_table))}
+    for kind, row, ref, sig, pn, func, net in _debug_pins(
+            nets, comps, comp_pins, mp_table):
+        if kind == "checked":
+            dbg_checked = row
+            continue
+        src = " ".join(row["source"].split())
+        want = row["debug"][sig]
+        shared = (row.get("shared") or {}).get(want)
+        if kind == "wrong":
+            vt((ref, sig, kind) in dbg_ok, "error", "debug_pin_wrong",
+               net, [ref],
+               f"'{net}' carries {sig} but reaches {ref} "
+               f"({comps[ref].get('value')}) on {func} (pin {pn}); "
+               f"{row['mpn']} has {sig} only on {want}, so the debugger "
+               f"cannot reach the core [{src}]",
+               mcu=ref, signal=sig, want_pin=want, part=row["mpn"])
+            continue
+        note = (f" On this part {want} is also {shared} at reset, so a "
+                f"load that pulls it can change how it boots."
+                if shared else "")
+        vt((ref, sig, kind) in dbg_ok, "warning", "debug_pins_reused",
+           net, [ref],
+           f"{ref} ({comps[ref].get('value')}) uses its {sig} pin {func} "
+           f"(pin {pn}) on '{net}' for other parts, with no debug header, "
+           f"test point or SWD-named net on it: once firmware takes the "
+           f"pin as GPIO the debugger can't attach, and recovering the "
+           f"chip needs a connect-under-reset or the boot loader.{note} "
+           f"Bring {sig} to a header or pad [{src}]",
+           mcu=ref, signal=sig, part=row["mpn"])
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -3763,6 +4051,9 @@ def audit(parsed: dict, constraints: dict,
         "channel_parts_checked": ch_checked,
         "mcu_i2c_parts_checked": i2c_checked,
         "offboard_inputs_judged": obi_judged,
+        "pin_role_parts_checked": role_checked,
+        "protector_cell_sides_checked": cell_checked,
+        "debug_mcus_checked": dbg_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged

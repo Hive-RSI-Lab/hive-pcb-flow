@@ -694,8 +694,14 @@ boards:
     source_quote: "SWDIO has been routed to the wrong pin on the MCU (PA15 instead of PA13)"
     fault_class: SCH (pin function vs datasheet)
     blind: missed
-    verdict: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: debug_pin_wrong, net: SWDIO}
     follow_up: "SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070)"
+    note: >-
+      Caught by netlist_audit rule 31 (class 6), written knowing this
+      defect: a net named SWDIO reaches the STM32F401 on PA15, and
+      reference/mcu_pins.yaml (from ST's open pin data) puts SWDIO only on
+      PA13. A training catch, not an independent one; quiet on rev2.
   - id: fc980c-2
     summary: KEY_STATE open-collector line has no 5V pull-up
     source_quote: "the KEY_STATE pin is missing a 5V pull-up resistor"
@@ -753,7 +759,6 @@ boards:
       the divider with the system-under-test +5V gone and finds -5 V at the
       Pico pin. zxdiag-v10 (v1.0 and v1.1, still holdout) carries the same
       divider unfixed; rule 24 flags it there too, on both revisions.
-holdout:
 - id: netscore-main
   url: https://github.com/arcticlula/Netscore
   commit: 4426f309aab51d447e32f062f66db48317256ff4
@@ -769,7 +774,9 @@ holdout:
   note: >-
     v3.1 fixes both in the schematic only; its PCB is v3.0's. The C9
     footprint polarity ("pad 1 (the footprint's +) is on GND") is on v3.1
-    too, so it is not judged.
+    too, so it is not judged. Swept blind as a holdout board (round 1),
+    then moved here: rule 30 (class 6) was written knowing netscore-2, so
+    its catch is a training catch. The blind and swept fields are kept.
   defects:
   - id: netscore-1
     summary: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT
@@ -788,8 +795,53 @@ holdout:
     source_quote: "BMS1 (FS312MH) GND and BAT- swapped — datasheet §6/§8: pin 1 GND is the cell negative and pin 3 BAT- is \"negative of charger or load\""
     fault_class: SCH (pin function vs datasheet)
     blind: missed
-    verdict: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: protector_cell_side, net: -BATT, refs: [BMS1]}
     follow_up: "protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors"
+    note: >-
+      Caught by netlist_audit rule 30 (class 6), written knowing this
+      defect, so not independent: BMS1's cell-side pin GND is on the board
+      ground and its load-side BAT- on the cell's -BATT. Quiet on v3.1.
+- id: flexgrid-v4
+  url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
+  commit: d3529287a8998dba79bdf6f593d1d67532386edc
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: V4 as ordered, commit: 2dc7881049a434334ef6d609ab18f7a98c45d129, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  rev_b: {name: V4-2, commit: a5997da259c307a4a0a97f9a49eea153a3eb2127, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  source: KiCad/OM-FlexGrid V4/README.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  note: >-
+    Swept blind as a holdout board (round 2), then moved here: rule 29
+    (class 6) was written knowing flexgrid-v4-1, so its catch is a training
+    catch. The blind and swept fields are kept as the record.
+  defects:
+  - id: flexgrid-v4-1
+    summary: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC
+    source_quote: "The V4 KiCad schematic wired the USBLC6 with pin 2 on VBUS and pin 5 on GND. The actual chip pinout is the other way around (pin 2 = GND, pin 5 = VCC)."
+    fault_class: SCH (pin function vs datasheet)
+    blind: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: pin_role_net, net: GND, refs: [U5]}
+    follow_up: "pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts"
+    note: >-
+      Caught by netlist_audit rule 29 (class 6), written knowing this
+      defect, so not independent: KiCad's stock USBLC6-2SC6 symbol names
+      pin 5 VBUS and pin 2 GND, and rev A wires VBUS to GND and GND to
+      VBUS. Quiet on V4-2.
+  - id: flexgrid-v4-2
+    summary: 29 vias inside SMD pads that wick solder in reflow
+    source_quote: "The June layout had 29 vias sitting inside SMD pads (ESP32 module pads, mux, LDO, charger, buttons, microSD socket, several resistors). An unplugged via inside a pad wicks solder away from the joint during reflow."
+    fault_class: DFM (via in pad)
+    blind: missed
+    verdict: caught
+    caught_by: "#1088"
+    catch: {script: check_wicking, kind: wick_via_in_pad, refs: [U1, U2, U3, U4, U5, IC1, J9, Q3]}
+    note: >-
+      Not an independent catch: check_wicking's via-in-pad rule (#475) is
+      older than this round, but it joined the corpus runners (#1088) after
+      this defect was read. 29 open vias in SMD pads on V4 as ordered (the
+      erratum's 29), across 18 parts, and none on V4-2.
+holdout:
 - id: netscore-big
   url: https://github.com/arcticlula/Netscore
   commit: 4426f309aab51d447e32f062f66db48317256ff4
@@ -1117,35 +1169,6 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why"
-- id: flexgrid-v4
-  url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
-  commit: d3529287a8998dba79bdf6f593d1d67532386edc
-  licence: CERN-OHL-S-2.0
-  rev_a: {name: V4 as ordered, commit: 2dc7881049a434334ef6d609ab18f7a98c45d129, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
-  rev_b: {name: V4-2, commit: a5997da259c307a4a0a97f9a49eea153a3eb2127, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
-  source: KiCad/OM-FlexGrid V4/README.md
-  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
-  defects:
-  - id: flexgrid-v4-1
-    summary: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC
-    source_quote: "The V4 KiCad schematic wired the USBLC6 with pin 2 on VBUS and pin 5 on GND. The actual chip pinout is the other way around (pin 2 = GND, pin 5 = VCC)."
-    fault_class: SCH (pin function vs datasheet)
-    blind: missed
-    verdict: missed
-    follow_up: "pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts"
-  - id: flexgrid-v4-2
-    summary: 29 vias inside SMD pads that wick solder in reflow
-    source_quote: "The June layout had 29 vias sitting inside SMD pads (ESP32 module pads, mux, LDO, charger, buttons, microSD socket, several resistors). An unplugged via inside a pad wicks solder away from the joint during reflow."
-    fault_class: DFM (via in pad)
-    blind: missed
-    verdict: caught
-    caught_by: "#1088"
-    catch: {script: check_wicking, kind: wick_via_in_pad, refs: [U1, U2, U3, U4, U5, IC1, J9, Q3]}
-    note: >-
-      Not an independent catch: check_wicking's via-in-pad rule (#475) is
-      older than this round, but it joined the corpus runners (#1088) after
-      this defect was read. 29 open vias in SMD pads on V4 as ordered (the
-      erratum's 29), across 18 parts, and none on V4-2.
 - id: flexgrid-v3
   url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
   commit: d3529287a8998dba79bdf6f593d1d67532386edc
