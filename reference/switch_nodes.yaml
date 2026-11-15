@@ -93,3 +93,74 @@ regulators:
     current_a: 4.0
     source: Aerosemi MT3608 datasheet, 4A switch current limit (boost)
     verified: false
+  # Rows below re-read from the manufacturer PDFs. A buck's figure is
+  # its rated output current; a boost's the switch current limit its
+  # datasheet states (minimum where it gives one). pins lists both SW and LX
+  # where the board symbols in use name the pin differently from the
+  # datasheet (the Glasgow Silergy symbols say SW, the byte-hamr TLV62569
+  # symbol LX).
+  - match: '^TPS629203'
+    pins: [SW]
+    current_a: 0.3
+    source: TI SLVSGE2 TPS629203 300-mA buck; SW pin 4 (DRL SOT-5X3-8, the only package)
+    verified: true
+  - match: '^TLV62569'
+    pins: [SW, LX]
+    current_a: 2.0
+    source: TI SLVSDG1C TLV62569 2-A buck; SW pin 3 (DBV SOT-23-5, DDC/PDDC SOT-23-6), pin 4 (DRL/PDRL SOT-563)
+    verified: true
+  - match: '^TPS62A01'
+    pins: [SW]
+    current_a: 1.0
+    source: TI SLUSEG9E TPS62A01 1-A buck (TPS62A02 is the 2-A part); SW pin 2 (DRL SOT-563), pin 3 (DDC SOT-23-6)
+    verified: true
+  - match: '^TPS56120[18]'
+    pins: [SW]
+    current_a: 1.0
+    source: TI SLVSC95A TPS561201/TPS561208 1-A buck; SW pin 2 (DDC SOT-23-6, the only package)
+    verified: true
+  - match: '^LMR54406'
+    pins: [SW]
+    current_a: 0.6
+    source: TI SLUSEG8E LMR54406 0.6-A buck (LMR54410 is the 1-A part); SW pin 6 (DBV SOT-23-6, the only package)
+    verified: true
+  - match: '^TLV61070'
+    pins: [SW]
+    current_a: 2.5
+    source: TI SLVSGK6B TLV61070A boost, 2.5-A valley switch current limit (2.00 A min at 25C); SW pin 1 (DBV SOT-23-6, DDC SOT-23-6-THN)
+    verified: true
+  - match: '^LM51581'
+    pins: [SW]
+    current_a: 1.63
+    source: TI SNVSBZ7 LM51581 boost, internal MOSFET current limit 1.63/1.875/2.12 A; SW pins 13, 14 (RTE WQFN-16, the only package)
+    verified: true
+  - match: '^LM5158'
+    pins: [SW]
+    current_a: 3.26
+    source: TI SNVSBZ7 LM5158 boost, internal MOSFET current limit 3.26/3.75/4.24 A (3.26 A minimum peak); SW pins 13, 14 (RTE WQFN-16, the only package)
+    verified: true
+  - match: '^SY7200'
+    pins: [LX, SW]
+    current_a: 2.0
+    source: Silergy AN_SY7200A Rev 0.1 (preliminary) boost LED driver, switch current limit 2 A (min); LX pin 1 (SOT23-6, SY7200AABC)
+    verified: true
+  - match: '^SY7208C'
+    pins: [LX, SW]
+    current_a: 0.6
+    source: Silergy AN_SY7208C 600-mA boost, main FET current limit 600 mA (min); LX pin 1 (SOT23-6, SY7208CABC). The C is the spec code, not the temperature code
+    verified: true
+  - match: '^SY7208'
+    pins: [LX, SW]
+    current_a: 2.0
+    source: Silergy SY7208/SY7208B Rev 0.6 2-A boost, main FET current limit 2 min / 2.6 max A; LX pin 1 (SOT23-6, AB package code)
+    verified: true
+  - match: '^SY8301'
+    pins: [LX, SW]
+    current_a: 1.0
+    source: Silergy AN_SY8301 Rev 0.9A 1-A 40-V buck (top FET limit 1.6 min / 2.5 max A); LX pin 6 (SOT23-6, SY8301ABC)
+    verified: true
+  - match: '^DRV8662'
+    pins: [SW]
+    current_a: 2.34
+    source: TI SLOS709C DRV8662 piezo driver's integrated 105-V boost; SW pins 7, 8 carry the inductor current. The limit is set by REXT (ILIM = 14175 V / (REXT + 60 ohm)); 2.34 A is the top of its range (REXT 6 kohm, the smallest recommended). RGP VQFN-20 only
+    verified: true

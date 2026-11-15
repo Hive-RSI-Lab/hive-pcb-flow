@@ -1543,6 +1543,38 @@ def test_switch_node_small_part_without_load_is_not_judged(tmp_path_factory):
     assert facts["not_judged"] == "no_declared_load"
 
 
+def test_switch_node_planted_fault_byte_hamr_tlv62569(tmp_path_factory):
+    # byte-hamr U3 TLV62569DBV (pin named LX on its symbol), FPGA core buck:
+    # its switch node routed at 0.2 mm, no load stated - screened at 2 A
+    p = _sw_run(tmp_path_factory, "swbytehamr",
+                _buck(0.2, "TLV62569DBV", "LX"))
+    [v] = p["violations"]
+    assert v["severity"] == "warning" and v["from_part"] == "U1"
+    assert v["current_a"] == 2.0 and v["kind"] == "undersized_track"
+
+
+def test_switch_node_quiet_twin_byte_hamr_tlv62569(tmp_path_factory):
+    # the same node at 0.5 mm carries the part's 2 A at dT=60C
+    p = _sw_run(tmp_path_factory, "swbytehamrok",
+                _buck(0.5, "TLV62569DBV", "LX"))
+    assert p["violations"] == []
+    [c] = [c for c in p["checked"] if c.get("inferred")]
+    assert c["current_a"] == 2.0 and c["load_source"] == "part rating"
+
+
+def test_switch_rows_variant_before_family():
+    # the 600 mA SY7208C (Glasgow's SY7208CABC) and the LM51581 half-limit
+    # part must not fall to their family's rows
+    rows = check_current.switch_rows()
+    rate = {v: check_current.switch_row({"value": v, "props": {}},
+                                        rows)["current_a"]
+            for v in ("SY7208CABC", "SY7208ABC", "LM51581", "LM5158RTER",
+                      "TLV62569PDRL", "LMR54406DBVR", "DRV8662")}
+    assert rate == {"SY7208CABC": 0.6, "SY7208ABC": 2.0, "LM51581": 1.63,
+                    "LM5158RTER": 3.26, "TLV62569PDRL": 2.0,
+                    "LMR54406DBVR": 0.6, "DRV8662": 2.34}
+
+
 # ---- constraints for a state_snapshots/ copy, and a file that only partly
 # matches the board (hwde-reroute-tools, a03cb 2026-11-15) ------------------
 # usb-buck PCB-0002 keeps copies under state_snapshots/<tag>/kicad/; the
