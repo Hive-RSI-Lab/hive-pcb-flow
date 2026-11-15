@@ -9,8 +9,11 @@ The planted faults are the errata corpus's, cut down:
   pin to -1 V against the RP2040's -0.5 V. A Schottky clamp is the fix.
 - smart-lcc rev A: TX straight out a cable that also carries +12V, no
   clamp, no series resistor. Its rev B adds zeners.
-- fc980c rev1: KEY_STATE from a +5V keyboard cable read by a 3.3 V MCU
-  with no pull. Its rev2 adds the pull-up."""
+- fc980c rev1: KEY_STATE from a +5V keyboard cable read by a 3.3 V MCU's
+  5 V-tolerant pin with no pull. Its rev2 adds the pull-up.
+- glasgow (a false hit, now an info note): DETECT on a +5V port read by
+  the ECP5, whose pins can't take 5 V, so the line can only idle at the
+  FPGA's own rail, a pull its gateware sets."""
 from __future__ import annotations
 
 import sys
@@ -138,16 +141,22 @@ def test_lcc_pin_header_is_quiet():
     assert _audit(*_lcc(fp=HDR))[0] == []
 
 
-def _fc(fp=JST, pull=False, hot=True):
-    """J3: +5V to the keyboard (U3's supply), KEY_STATE to the 3.3 V
-    RP2040's GPIO1 as an input."""
-    comps = {"U1": ("RP2040", ""), "U2": ("AP2112K-3.3", ""),
+_READERS = {"stm32": ("STM32G031K8T6", "VDD", "PB15"),
+            "rp2040": ("RP2040", "IOVDD", "GPIO1"),
+            "ecp5": ("LFE5U-25F-6BG256C", "VCCIO0", "PT18A")}
+
+
+def _fc(fp=JST, pull=False, hot=True, reader="stm32", vdd_net="+3V3"):
+    """J3: +5V to the keyboard (U3's supply), KEY_STATE to a 3.3 V
+    reader's I/O pin as an input."""
+    part, sup, io = _READERS[reader]
+    comps = {"U1": (part, ""), "U2": ("AP2112K-3.3", ""),
              "J3": ("KEYBOARD", fp)}
-    nets = {"GND": [_m("J3", "2"), _m("U1", "57", "GND", "power_in"),
+    nets = {"GND": [_m("J3", "2"), _m("U1", "57", "VSS", "power_in"),
                     _m("U2", "2", "GND", "power_in")],
-            "+3V3": [_m("U1", "1", "IOVDD", "power_in"),
-                     _m("U2", "5", "VOUT", "power_out")],
-            "KEY_STATE": [_m("J3", "3"), _m("U1", "3", "GPIO1", "input")]}
+            vdd_net: [_m("U1", "1", sup, "power_in"),
+                      _m("U2", "5", "VOUT", "power_out")],
+            "KEY_STATE": [_m("J3", "3"), _m("U1", "3", io, "input")]}
     if hot:
         nets["+5V"] = [_m("J3", "1"), _m("U2", "1", "VIN", "power_in")]
     if pull:
@@ -163,6 +172,34 @@ def test_fc_status_line_with_no_pull_floats():
     assert [(h["net"], h["severity"]) for h in fl] == [("KEY_STATE",
                                                         "warning")]
     assert "+5V" in fl[0]["msg"] and "SPRACK9" in fl[0]["msg"]
+
+
+def test_fc_reader_rail_not_named_is_taken_as_3v3():
+    # fc980c's STM32F401 sits on a net named VDDA, which carries no voltage
+    hits, _ = _audit(*_fc(vdd_net="VDDA"))
+    fl = [h for h in hits if h["kind"] == "offboard_input_floating"]
+    assert [h["severity"] for h in fl] == ["warning"]
+    assert "taken as 3.3 V" in fl[0]["msg"]
+
+
+def test_fc_reader_rated_below_the_cable_rail_is_info():
+    # glasgow: DETECT on a +5V port into the ECP5 (3.63 V max), and the
+    # RP2040 (IOVDD + 0.5 V): the pull can only be at the reader's own
+    # rail, set in gateware or firmware
+    for reader in ("ecp5", "rp2040"):
+        hits, _ = _audit(*_fc(reader=reader))
+        fl = [h for h in hits if h["kind"] == "offboard_input_floating"]
+        assert [h["severity"] for h in fl] == ["info"], reader
+        assert "gateware or firmware" in fl[0]["msg"]
+        assert fl[0]["pull"] == "configurable"
+
+
+def test_fc_reader_with_no_rating_row_stays_a_warning():
+    comps, nets = _fc()
+    comps["U1"] = ("XYZ123", "")
+    hits, _ = _audit(comps, nets)
+    assert [h["severity"] for h in hits
+            if h["kind"] == "offboard_input_floating"] == ["warning"]
 
 
 def test_fc_pull_up_is_the_fix():

@@ -189,7 +189,10 @@ schematic-level structural problems BEFORE board work starts:
    series resistor (smart-lcc's J1 with +12V); floating: a status-named
    net (STATE, DET, INT...) read by an IC input with no pull, driver or
    clamp, on a cable that brings a rail above the reader's supply and is
-   not a host-bus edge (fc980c's KEY_STATE). Fact offboard_inputs_judged
+   not a host-bus edge (fc980c's KEY_STATE); an info note instead when
+   every reader's pin is rated below that rail (glasgow's ECP5 DETECT on a
+   +5V port): the line can only idle at the reader's own rail, a pull set
+   in gateware or firmware. Fact offboard_inputs_judged
    counts the (net, pin) pairs a verified row covered (class 3 of
    docs/miss-taxonomy.md).
  - metadata_mismatch (error): a decoupling association that contradicts the
@@ -1783,6 +1786,7 @@ _OB_USB_RE = re.compile(r"(USB|\bD[+-]|\bDP\b|\bDM\b|\bCC\d?\b|VBUS|SHIELD)",
 _OB_STATUS_RE = re.compile(r"(STATE|STATUS|DET(ECT)?|INT|IRQ|ALERT|"
                            r"FAULT|READY|RDY|BUSY|FLAG)")
 _OB_WEAK_MARGIN = 0.5
+_OB_ASSUMED_VDD = 3.3
 _OB_SERIES_MIN = 100.0
 
 
@@ -1995,6 +1999,7 @@ def _offboard_inputs(nets: dict, comps: dict,
         if not direct and not via:
             continue
         clamps = _ob_clamps(net, nets, comps, comp_pins, rails, diodes)
+        pin_vmax = {}
         for m in members:
             ref = m["ref"] or ""
             if not ref.startswith("U") or ref not in comps:
@@ -2019,6 +2024,7 @@ def _offboard_inputs(nets: dict, comps: dict,
             vmin = None if row.get("vmin") is None else float(row["vmin"])
             if vmax is None and vmin is None:
                 continue
+            pin_vmax[(ref, m["pin"])] = vmax
             checked += 1
             pairs.append((net, ref, m["pin"]))
             base = {"net": net, "receiver": ref, "rpin": m["pin"],
@@ -2105,20 +2111,31 @@ def _offboard_inputs(nets: dict, comps: dict,
             # a host-bus edge (an Apple II or ZX slot) holds its own lines
             def supply(ref):
                 vs = [rails[n] for n, ms in nets.items() if n in rails
+                      and rails[n] > 0 and not _is_ground_name(n)
                       for y in ms if y["ref"] == ref
                       and _base_type(y.get("pintype")) in _POWER_TYPES]
                 return max(vs) if vs else None
             rvdd = [supply(x["ref"]) for x in readers]
             rvdd = max((v for v in rvdd if v is not None), default=None)
+            # a reader whose supply net carries no voltage (fc980c's
+            # STM32F401 on 'VDDA') is taken as 3.3 V logic
+            seen = rvdd if rvdd is not None else _OB_ASSUMED_VDD
             hot = sorted({n for c in direct
                           for n in comp_pins.get(c["ref"], {}).values()
-                          if rvdd is not None and rails.get(n, 0) > rvdd + 0.5})
+                          if rails.get(n, 0) > seen + 0.5})
             higher = bool(hot)
             edge = any("EDGE" in str(comps.get(c["ref"], {}).get(
                 "footprint") or "").upper() for c in direct)
+            # a reader rated below the cable's rail (glasgow's ECP5 bank on
+            # a +5V port) can't be pulled to it: the only pull that works is
+            # one at its own rail, which its gateware or firmware sets
+            top = max((rails[n] for n in hot), default=0.0)
+            lims = [pin_vmax.get((x["ref"], x["pin"])) for x in readers]
+            own = bool(lims) and all(v is not None and v < top for v in lims)
             if (readers and higher and not edge and not pulls
                     and not drivers and not clamps):
                 yield {"net": net, "kind": "float", "hot": hot, "rvdd": rvdd,
+                       "own_rail": own, "top": top,
                        "connectors": [f"{c['ref']}.{c['pin']}"
                                       for c in direct],
                        "readers": [f"{x['ref']}."
@@ -3625,6 +3642,18 @@ def audit(parsed: dict, constraints: dict,
         if "checked" in hit:
             continue
         kind = hit["kind"]
+        if kind == "float" and hit.get("own_rail"):
+            v("info", "offboard_input_floating", hit["net"],
+              sorted({c.split(".")[0] for c in hit["connectors"]}
+                     | {r.split(".")[0] for r in hit["readers"]}),
+              f"'{hit['net']}' comes in at {', '.join(hit['connectors'])} "
+              f"and goes to {', '.join(hit['readers'])} with no pull on "
+              f"this board; its cable brings {', '.join(hit['hot'])}, but "
+              f"the reader's pins are rated below {hit['top']:g} V, so the "
+              f"line can only idle at the reader's own rail: pull set in "
+              f"gateware or firmware, not on the board",
+              connectors=hit["connectors"], pull="configurable")
+            continue
         if kind == "float":
             v("warning", "offboard_input_floating", hit["net"],
               sorted({c.split(".")[0] for c in hit["connectors"]}
@@ -3632,8 +3661,11 @@ def audit(parsed: dict, constraints: dict,
               f"'{hit['net']}' comes in at {', '.join(hit['connectors'])} "
               f"and goes to {', '.join(hit['readers'])} with no pull "
               f"resistor, no driver and no clamp on this board, on a cable "
-              f"that also brings {', '.join(hit['hot'])} (the reader runs "
-              f"at {hit['rvdd']:g} V): a status line whose far end is open "
+              f"that also brings {', '.join(hit['hot'])} ("
+              + (f"the reader runs at {hit['rvdd']:g} V" if hit["rvdd"]
+                 is not None else "the reader's supply net carries no "
+                 "voltage; taken as 3.3 V")
+              + "): a status line whose far end is open "
               f"collector at its own level, or unplugged, leaves the input "
               f"floating, and a pull inside the reader isn't at that level. "
               f"Pull it to the level it idles at "
