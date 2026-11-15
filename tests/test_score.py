@@ -95,6 +95,36 @@ def test_an_info_note_costs_nothing():
     assert j.charges == 1 and [f["refs"] for f in j.unjudged] == [["C11"]]
 
 
+def test_a_failed_model_fetch_is_not_judged_and_costs_nothing():
+    # dfm's cpl_fetch_failed says EasyEDA didn't answer (rate limit,
+    # network): the check could not judge those parts. It must charge 0 and
+    # be no catch. A part EasyEDA has no model for (cpl_no_model) is a real
+    # finding and still charges as before.
+    fetch = {"check": "dfm", "kind": "cpl_fetch_failed", "severity": "error",
+             "refs": ["L3"], "reason": "HTTP 429"}
+    nomodel = {"check": "dfm", "kind": "cpl_no_model", "severity": "error",
+               "refs": ["U2"]}
+    result = {"failing": [fetch, nomodel], "warnings": [], "warnings_count": 0}
+    fs, past = score.gate_findings("dfm", result)
+    assert past == 0 and len(fs) == 2          # both still reported
+    j = score.judge(fs, [], {"dfm"})
+    assert j.charges == 1
+    assert [f["refs"] for f in j.not_judged] == [["L3"]]
+    assert [f["refs"] for f in j.unjudged] == [["U2"]]
+    assert score.gate_charges(result) == {"dfm": 1}
+    # a ledger entry, even one marked real, can't turn it into a catch
+    real = dict(score.finding_of("dfm", fetch), verdict="real", reason="r")
+    j = score.judge(fs, [real], {"dfm"})
+    assert j.real == [] and j.charges == 1 and len(j.not_judged) == 1
+    # and the old scorer (no NOT_JUDGED) charged it
+    old = score.NOT_JUDGED
+    try:
+        score.NOT_JUDGED = {}
+        assert score.judge(fs, [], {"dfm"}).charges == 2
+    finally:
+        score.NOT_JUDGED = old
+
+
 def test_gate_charges_take_a_plain_string_warning():
     # a gate may report a warning (or a failing finding) as a plain string
     result = {"failing": ["board has no outline"],
