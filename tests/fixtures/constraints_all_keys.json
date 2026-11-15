@@ -6,6 +6,8 @@
   "coating": "soldermask",
   "antennas": {"AE1": "pcb", "AE2": "external"},
   "cable_pf": {"J1": 50, "J2": 0},
+  "switched_loads": [{"nets": ["/PANEL_A", "/PANEL_B"], "capacitance_f": 1.4e-7},
+                     {"net": "/PANEL_A", "capacitance_f": 1e-7}],
   "pin_modes": {"U1": {"PA0": "analog", "3": "push_pull"}},
   "io_supply": {"U1": "VDDIO"},
   "high_speed": [

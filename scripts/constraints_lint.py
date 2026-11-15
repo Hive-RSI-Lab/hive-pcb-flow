@@ -323,7 +323,7 @@ SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
     "placement", "coating", "antennas", "pcb_antennas", "si", "cable_pf",
     "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
     "isolation", "mechanical", "transformers", "pinouts",
-    "design_intent"}
+    "design_intent", "switched_loads"}
 PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
@@ -754,6 +754,20 @@ class _FileLint:
                              f"{path}: testpoints must be an object of "
                              f"{', '.join(sorted(nums))} (numbers), fixture "
                              "(bool), nets (globs)", path)
+            elif key == "switched_loads":
+                # netlist_audit switched_load_droop (#1093): a capacitive
+                # load a bridge or switch steps, against its converter
+                if not (isinstance(val, list) and all(
+                        isinstance(e, dict)
+                        and (isinstance(e.get("net"), str) or (
+                            isinstance(e.get("nets"), list) and all(
+                                isinstance(n, str) for n in e["nets"])))
+                        and isinstance(e.get("capacitance_f"), (int, float))
+                        and not isinstance(e.get("capacitance_f"), bool)
+                        for e in val)):
+                    self.add("error", "bad_type",
+                             f"{path}: switched_loads must be a list of "
+                             "{nets: [a, b] | net: x, capacitance_f}", path)
             elif key == "rf_match":
                 # check_rf_match (#488) validates its entries itself (exit 2)
                 if not (isinstance(val, (list, dict))):
