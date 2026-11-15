@@ -24,7 +24,7 @@
      "min_width_mm": 0.4, "source": ["U2"], "loads": {"U1": 0.8, "U3": 0.4},
      "return_net": "GND", "source_ref": "U2",
      "sinks": [{"ref": "U1", "current_a": 0.8}], "cell_mm": 0.5,
-     "irdrop_mv_max": 30, "jmax_a_per_mm": 10, "voltage": 3.3,
+     "irdrop_mv_max": 30, "jmax_a_per_mm": 10, "voltage": 3.3, "min_cout": 1e-05,
      "pdn_target_mohm": 50, "transient_a": 0.5, "ripple_pct": 3,
      "f_max_mhz": 100, "edge_ns": 2,
      "package": {"l_pkg_nh": 0.5, "c_die_nf": 2, "r_pkg_mohm": 5,

@@ -24,6 +24,11 @@
 #           (AD8232 SW shorted to IAOUT has no second high-pass capacitor);
 #           without it a tie means there is nothing to span
 #   severity  error (default) | warning, when the part is missing
+#   effective  true: min is effective capacitance at the part's DC (the
+#           cited quote says so). mlcc_dcbias.py then holds the net `pin` is
+#           on to it, derated; pin_part_missing still checks the nominal
+#           (#1067). A min the datasheet gives as a nominal part stays
+#           without it.
 #   source  where the datasheet says it (document, revision, table/section)
 #   cite    [{doc, sha256, page, table, quote, fields}]: the quote is text
 #           on that page; fields the row's numbers it gives (value, min,
@@ -150,6 +155,7 @@ parts:
     aliases: {VIN: IN, VOUT: OUT}
     requires:
       - {id: COUT, pin: OUT, to: GND, kinds: [C], min: 0.47e-6, max: 200.0e-6,
+         effective: true,
          source: "TPS7A20 pin table OUT and Recommended Operating Conditions note 3: 0.47 uF to 200 uF effective, required for stability",
          cite: [{doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 3, table: '', quote: 'A low equivalent series resistance (ESR) capacitor is required from OUT to ground for stability.', fields: []},
                 {doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 5, table: 'Recommended Operating Conditions', quote: 'Effective output capacitance of 0.47 μF minimum and 200 μF maximum is required for stability.', fields: [min, max]}]}

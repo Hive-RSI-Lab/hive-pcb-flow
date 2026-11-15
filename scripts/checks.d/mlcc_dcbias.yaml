@@ -1,0 +1,12 @@
+# mlcc_dcbias (#1067): each rail's ceramics derated to their DC, summed and
+# held to the rail's effective-capacitance floor (constraints power[].min_cout,
+# else the regulator's verified pin_requirements row with `effective: true`).
+# Reads the board's own <board>.net beside it; a regulator-fed rail with no
+# floor stated goes under not_judged.
+name: mlcc_dcbias
+needs: []
+args: []
+optional:
+  constraints: [--constraints, "{constraints}"]
+  parts: [--parts, "{parts}"]
+  netlist: [--netlist, "{netlist}"]
