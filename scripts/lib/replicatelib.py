@@ -136,6 +136,9 @@ def idents_from_board(pcb: Path) -> dict[str, Ident]:
         parts = [x for x in geom._strs(p)[0].split("/") if x]
         sn = geom._kid(fp, "sheetname")
         name = geom._strs(sn)[0] if sn is not None and geom._strs(sn) else ""
+        # KiCad writes the human path ("/ch2/", "/" on the root); older
+        # boards a bare name ("ch2")
+        name = name.strip("/")
         sheet = f"/{name}/" if name else ("/" if len(parts) <= 1
                                           else "/" + "/".join(parts[:-1]) + "/")
         out[ref] = Ident(ref, sheet, parts[-1] if parts else "")
