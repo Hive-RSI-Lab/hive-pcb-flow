@@ -321,8 +321,141 @@ def test_fp_verify_pin1_prose_not_judged(tmp_path, capsys):
     code, payload = _fpv(tmp_path, capsys, LEGACY_FP, ds)
     assert code == 0
     assert not any(v["kind"].startswith("pin1") for v in payload["violations"])
-    nj, = payload["not_judged"]
-    assert nj["check"] == "pin1" and "not a pad name" in nj["why"]
+    nj, = [n for n in payload["not_judged"] if n["check"] == "pin1"]
+    assert "not a pad name" in nj["why"]
+
+
+# #1102: which pad carries which pin. Each wrong footprint is the issue's.
+def _numbered_fp(tmp_path, name, pads, npth=()) -> Path:
+    """pads: (number, x, y, w, h) in KiCad's y-down frame."""
+    lines = [f'  (pad "{n}" smd rect (at {x:g} {y:g}) (size {w:g} {h:g}) '
+             '(layers "F.Cu" "F.Paste" "F.Mask"))' for n, x, y, w, h in pads]
+    lines += [f'  (pad "" np_thru_hole circle (at {x:g} {y:g}) (size {d:g} {d:g}) '
+              f'(drill {d:g}) (layers "*.Cu" "*.Mask"))' for x, y, d in npth]
+    fp = tmp_path / f"{name}.kicad_mod"
+    fp.write_text(f'(footprint "{name}" (layer "F.Cu")\n' + "\n".join(lines)
+                  + "\n)\n", encoding="utf-8")
+    return fp
+
+
+SIT_RIGHT = {"1": (-1.1, 0.95), "2": (1.1, 0.95), "3": (1.1, -0.95),
+             "4": (-1.1, -0.95)}
+SIT_WRONG = {"1": (-1.1, -0.95), "2": (-1.1, 0.95), "3": (1.1, 0.95),
+             "4": (1.1, -0.95)}
+
+
+def _sit_ds(tmp_path, pads=SIT_RIGHT, **extra):
+    return write_ds(tmp_path, {"mpn": "SiT1602B", "pinout": [
+        {"pin": str(i), "name": n, "type": "passive"}
+        for i, n in enumerate(["OE", "GND", "OUT", "VDD"], 1)],
+        "land_pattern": {"pad_count": 4, "pin1": "1", **extra, "pads": [
+            {"number": k, "at_mm": list(xy)} for k, xy in pads.items()]}})
+
+
+def _sit_fp(tmp_path, pads, turn=False):
+    return _numbered_fp(tmp_path, "SiT", [
+        (k, -y if turn else x, x if turn else y, 1.4, 1.2)
+        for k, (x, y) in pads.items()])
+
+
+def test_fp_verify_sit1602_numbered_round_the_short_side_fails(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys, _sit_fp(tmp_path, SIT_WRONG),
+                         _sit_ds(tmp_path))
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    assert v["severity"] == "error" and v["hint"] == "numbering_rotated"
+    assert {"pad": "1", "drawing_pin": "4"} in v["misplaced"]
+    assert payload["pad_numbering"]["fit"] is False
+
+
+def test_fp_verify_sit1602_right_numbering_passes_turned(tmp_path, capsys):
+    for turn in (False, True):
+        code, payload = _fpv(tmp_path, capsys,
+                             _sit_fp(tmp_path, SIT_RIGHT, turn), _sit_ds(tmp_path))
+        assert code == 0, payload["violations"]
+        f = payload["pad_numbering"]
+        assert f["fit"] is True and f["turn_deg"] in ((90, 270) if turn else (0,))
+
+
+T5848_RIGHT = {"7": (-1.364, -0.9), "6": (-0.544, -0.9), "2": (-0.544, 0.9),
+               "1": (-1.364, 0.9), "8": (-1.364, 0.0), "5": (1.473, -1.05),
+               "4": (1.473, 1.05)}
+
+
+def _t5848(tmp_path, swap: bool):
+    pos = dict(T5848_RIGHT)
+    if swap:
+        for a, b in (("1", "7"), ("2", "6"), ("4", "5")):
+            pos[a], pos[b] = pos[b], pos[a]
+    pads = [(k, x, y, 0.3 if k in "45" else 0.522, 0.3 if k in "45" else 0.6)
+            for k, (x, y) in pos.items()]
+    pads.append(("3", 0.708, 0.0, 1.0, 1.0))
+    return _numbered_fp(tmp_path, "T5848", pads, npth=[(0.708, 0.0, 0.5)])
+
+
+def test_fp_verify_t5848_bottom_view_numbering_fails(tmp_path, capsys):
+    ref = {**T5848_RIGHT, "3": (0.708, 0.0)}
+    ds = write_ds(tmp_path, {"mpn": "T5848", "pinout": [
+        {"pin": k, "type": "passive"} for k in ref],
+        "land_pattern": {"pad_count": 8, "pin1": "1", "pads": [
+            {"number": k, "at_mm": list(xy)} for k, xy in ref.items()]}})
+    code, payload = _fpv(tmp_path, capsys, _t5848(tmp_path, True), ds)
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    assert v["hint"] == "bottom_view_numbering"
+    assert {"pad": "1", "drawing_pin": "7"} in v["misplaced"]
+    code, payload = _fpv(tmp_path, capsys, _t5848(tmp_path, False), ds)
+    assert code == 0, payload["violations"]
+    assert payload["pad_numbering"]["fit"] is True
+
+
+def test_fp_verify_ball_grid_numbered_from_the_bottom(tmp_path, capsys):
+    ds = _bga_ds(tmp_path, pinout_a1=True)
+    code, payload = _fpv(tmp_path, capsys, _bga24(tmp_path, depop=()), ds)
+    assert not [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    assert payload["pad_numbering"] == {"from": "ball_names", "fit": True}
+    fp = _bga24(tmp_path, depop=())
+    fp.write_text(fp.read_text().replace("(at -", "(at M").replace(
+        "(at ", "(at -").replace("(at -M", "(at ").replace("(at -0 ", "(at 0 "))
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    assert v["hint"] == "bottom_view_numbering"
+
+
+def test_fp_verify_ccw_numbering_and_not_judged(tmp_path, capsys):
+    ccw = {"1": (-1.1, -0.95), "2": (-1.1, 0.95), "3": (1.1, 0.95),
+           "4": (1.1, -0.95)}  # down the left, back up the right: CCW on screen
+    cw = {k: (-x, y) for k, (x, y) in ccw.items()}
+    lp = {"pad_count": 4, "pin1": "1"}
+    for pads, code_want in ((ccw, 0), (cw, 1)):
+        ds = write_ds(tmp_path, {"mpn": "X", "pinout": [{"pin": "1", "type": "passive"}],
+                                 "land_pattern": {**lp, "numbering": "ccw_top"}})
+        code, payload = _fpv(tmp_path, capsys, _sit_fp(tmp_path, pads), ds)
+        assert code == code_want, payload["violations"]
+    ds = write_ds(tmp_path, {"mpn": "X", "pinout": [{"pin": "1", "type": "passive"}],
+                             "land_pattern": lp})
+    code, payload = _fpv(tmp_path, capsys, _sit_fp(tmp_path, cw), ds)
+    assert code == 0 and payload["pad_numbering"] is None
+    assert [n for n in payload["not_judged"] if n["check"] == "pad_numbering"]
+
+
+def test_datasheet_validate_land_pattern_pads(tmp_path, capsys):
+    ds = {"mpn": "X", "pinout": [], "land_pattern": {
+        "pad_count": 2, "numbering": "ccw_top", "pads": [
+            {"number": "1", "at_mm": [0, 0], "size_mm": [1, 1],
+             "source": "POD fig 3, mirrored"},
+            {"number": "2", "at_mm": [1, 0]}]}}
+
+    def check(name):
+        return run_main(datasheet_extract, ["--validate", str(write_ds(tmp_path, ds))],
+                        tmp_path, capsys, name=name)[0]
+    assert check("ok") == 0
+    ds["land_pattern"]["pads"][1]["at_mm"] = [1]
+    assert check("short") == 1
+    ds["land_pattern"]["pads"][1]["at_mm"] = [1, 0]
+    ds["land_pattern"]["numbering"] = "cw"
+    assert check("dir") == 1
 
 
 # #1066: a footprint with two pitches. A micro-SD socket: eight contacts at
@@ -1481,3 +1614,78 @@ def test_fp_verify_row_spacing_on_a_quad_and_unmeasurable(tmp_path, capsys):
     un = [v for v in payload["violations"]
           if v["kind"] == "row_spacing_unmeasured"]
     assert code == 0 and len(un) == 1 and un[0]["severity"] == "warning"
+
+
+SO8_PINS = {str(i): ((-2.5 if i <= 4 else 2.5),
+                     (-1.905 + 1.27 * (i - 1) if i <= 4 else 1.905 - 1.27 * (i - 5)))
+            for i in range(1, 9)}
+
+
+def _so8_ds(tmp_path, rows=3.85):
+    """The maker's land: rows `rows` apart, not the footprint's 5 mm."""
+    k = rows / 5.0
+    return write_ds(tmp_path, {"mpn": "SO8", "pinout": [
+        {"pin": str(i), "name": f"P{i}", "type": "passive"} for i in range(1, 9)],
+        "land_pattern": {"pad_count": 8, "pin1": "1",
+                         "pads_source": "p.33 example board layout",
+                         "pads": [{"number": n, "at_mm": [x * k, y]}
+                                  for n, (x, y) in SO8_PINS.items()]}})
+
+
+def test_fp_verify_pads_judged_by_nearest_pin_not_tolerance(tmp_path, capsys):
+    ds = _so8_ds(tmp_path)
+    right = _numbered_fp(tmp_path, "SO8", [(n, x, y, 1.5, 0.6)
+                                           for n, (x, y) in SO8_PINS.items()])
+    code, payload = _fpv(tmp_path, capsys, right, ds)
+    assert code == 0, payload["violations"]
+    assert payload["pad_numbering"]["fit"] is True
+    assert payload["coverage"]["pad_numbering"] == "judged"
+    mirror = _numbered_fp(tmp_path, "SO8", [(n, -x, y, 1.5, 0.6)
+                                            for n, (x, y) in SO8_PINS.items()])
+    code, payload = _fpv(tmp_path, capsys, mirror, ds)
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    assert v["hint"] == "bottom_view_numbering"
+    assert v["drawing"] == "p.33 example board layout"
+
+
+def test_fp_verify_pads_two_pad_land_and_other_shape_not_judged(tmp_path, capsys):
+    ds = write_ds(tmp_path, {"mpn": "D", "pinout": [], "land_pattern": {
+        "pad_count": 2, "pads": [{"number": "1", "at_mm": [-1.6, 0]},
+                                 {"number": "2", "at_mm": [1.6, 0]}]}})
+    fp = _numbered_fp(tmp_path, "D", [("1", 1.6, 0, 1, 1), ("2", -1.6, 0, 1, 1)])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and payload["pad_numbering"] is None
+    assert "mirror" in [n for n in payload["not_judged"]
+                        if n["check"] == "pad_numbering"][0]["why"]
+    # three pads in a line on the drawing, a triangle on the footprint
+    ds = write_ds(tmp_path, {"mpn": "Q", "pinout": [], "land_pattern": {
+        "pad_count": 3, "pads": [{"number": str(i), "at_mm": [i - 2.0, 0]}
+                                 for i in (1, 2, 3)]}})
+    fp = _numbered_fp(tmp_path, "Q", [("1", -0.95, 1, 1, 1), ("2", 0.95, 1, 1, 1),
+                                      ("3", 0, -1, 1, 1)])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and payload["coverage"]["pad_numbering"] == "not_judged"
+
+
+def test_fp_verify_pairs_coverage_counts(tmp_path, capsys):
+    ds = _so8_ds(tmp_path)
+    fp = _numbered_fp(tmp_path, "SO8", [(n, x, y, 1.5, 0.6)
+                                        for n, (x, y) in SO8_PINS.items()])
+    (tmp_path / "b").mkdir()
+    bare = write_ds(tmp_path / "b", {"mpn": "B", "pinout": [],
+                                     "land_pattern": {"pad_count": 8, "pin1": "1"}})
+    pairs = tmp_path / "pairs.tsv"
+    pairs.write_text(f"{fp}\t{ds}\n{fp}\t{bare}\n", encoding="utf-8")
+    code, payload = run_main(fp_verify, ["--pairs", str(pairs)], tmp_path, capsys)
+    assert code == 0
+    c = payload["coverage"]["pad_numbering"]
+    assert (c["judged"], c["not_judged"], payload["pairs"]) == (1, 1, 2)
+    assert payload["errors"] == []
+    # a one-step shift on a judged pair is listed with its kind and message
+    shifted = _numbered_fp(tmp_path / "b", "SO8s", [
+        (str(int(n) % 8 + 1), x, y, 1.5, 0.6) for n, (x, y) in SO8_PINS.items()])
+    pairs.write_text(f"{shifted}\t{ds}\n", encoding="utf-8")
+    code, payload = run_main(fp_verify, ["--pairs", str(pairs)], tmp_path, capsys)
+    assert [e["kind"] for e in payload["errors"]] == ["pad_numbering"]
+    assert code == 1 and payload["errors"][0]["message"]

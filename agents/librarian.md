@@ -33,7 +33,10 @@ scripts with the repo venv python; JSON out, exit 0/1/2. Keep output ASCII.
    - pad count/pitch/pin-1/size/drill diff vs the land pattern; the SVG
    overlay lands beside the report, never in the library. A footprint with
    two pitches (a card socket's contacts and its switch pads) gets
-   `land_pattern.pitches_mm` entries for each run. Errors FAIL; warnings (pad_size,
+   `land_pattern.pitches_mm` entries for each run. Give `land_pattern.pads`
+   (each pad's number and top-view centre from the land drawing; mirror x
+   when the drawing is a bottom view) so pad numbering is checked; without
+   it fp_verify reports pad_numbering as not_judged. Errors FAIL; warnings (pad_size,
    no_courtyard, stroked_pad_primitive) pass but must be listed in your summary.
 
 ## Method
