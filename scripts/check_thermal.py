@@ -1288,8 +1288,9 @@ def run(argv=None):
 
     cons = (checklib.load_json(args.constraints, "constraints")
             if args.constraints else {})
-    bg = geom.load_board(Path(args.pcb))
-    bg.assert_fresh()
+    # unfilled zones: judged on a refilled scratch copy, or (kicad-cli can't
+    # refill) as committed with findings on their nets cut to warnings
+    bg, fill = geom.fresh_board(Path(args.pcb))
 
     violations: list[dict] = []
     checked: list[dict] = []
@@ -1346,11 +1347,14 @@ def run(argv=None):
     if ripple:
         extra["ripple"] = ripple
 
+    extra_fill = checklib.zone_fill_facts(violations, fill)
     payload = checklib.report(
         SCRIPT, args.pcb, violations, checked=checked,
         nothing_to_judge=None if checked or ripple else
         "no thermal or ripple entries in constraints, and no power IC "
-        "reference/thermal_parts.yaml knows", not_judged=not_judged, **extra)
+        "reference/thermal_parts.yaml knows",
+        not_judged=not_judged + extra_fill.pop("not_judged", []), **extra,
+        **extra_fill)
     return payload, args.out
 
 

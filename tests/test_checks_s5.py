@@ -1229,19 +1229,18 @@ def test_cluster_missing_source_no_crash():
 def test_verify_all_no_stale_report(tmp_path):
     """A check that ERRORS this run must not be reported as pass from a stale
     report file left by a previous run."""
-    # board with an unfilled zone -> the zone-reading checks exit 2
+    # a power entry for a net the board lacks -> check_current exits 2 (an
+    # unfilled zone no longer does: it's judged on a refill, or noted)
     board = tmp_path / "stale.kicad_pcb"
     board.write_text("""(kicad_pcb (version 20260206) (generator "test")
   (general (thickness 1.6))
   (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user)) (setup)
   (gr_rect (start 0 0) (end 20 10) (stroke (width 0.1)) (fill no)
     (layer "Edge.Cuts"))
-  (segment (start 1 1) (end 9 1) (width 0.25) (layer "F.Cu") (net "+3V3"))
-  (zone (net "GND") (layer "B.Cu")
-    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10)))))
+  (segment (start 1 1) (end 9 1) (width 0.25) (layer "F.Cu") (net "+3V3")))
 """, encoding="utf-8")
     cons = tmp_path / "constraints.json"
-    cons.write_text(json.dumps({"power": [{"net": "+3V3", "current_a": 0.4}]}),
+    cons.write_text(json.dumps({"power": [{"net": "+5V", "current_a": 0.4}]}),
                     encoding="utf-8")
     reports = tmp_path / "reports"
     reports.mkdir()

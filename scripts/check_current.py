@@ -2339,8 +2339,9 @@ def run(argv=None):
     cons = (checklib.load_json(args.constraints, "constraints")
             if args.constraints else {})
     entries = cons.get("power", [])
-    bg = geom.load_board(Path(args.pcb))
-    bg.assert_fresh()
+    # unfilled zones: judged on a refilled scratch copy, or (kicad-cli can't
+    # refill) as committed with findings on their nets cut to warnings
+    bg, fill = geom.fresh_board(Path(args.pcb))
 
     violations: list[dict] = []
     checked: list[dict] = []
@@ -2372,6 +2373,7 @@ def run(argv=None):
         checked.append(facts)
 
     extra = {"unrated_switch_nodes": unrated} if unrated else {}
+    extra_fill = checklib.zone_fill_facts(violations, fill)
     payload = checklib.report(
         SCRIPT, args.pcb, violations, checked=checked,
         stackup_assumed=bg.stackup.assumed,
@@ -2379,7 +2381,8 @@ def run(argv=None):
         "no power entries in constraints and no switcher the table knows",
         not_judged=[f"{u['ref']} ({u.get('value')}) {u['pin']} on {u['net']}: "
                     "a switch node whose part isn't in switch_nodes.yaml and "
-                    "with no power entry" for u in unrated], **extra)
+                    "with no power entry" for u in unrated]
+        + extra_fill.pop("not_judged", []), **extra, **extra_fill)
     return payload, args.out
 
 

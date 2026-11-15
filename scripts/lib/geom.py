@@ -131,7 +131,11 @@ def _nums(n) -> list[float]:
 
 
 def _strs(n) -> list[str]:
-    return [x for x in n[1:] if isinstance(x, str)]
+    # plain str: a bare token (KiCad <= 5 writes `(net 1 GND)`, `(layer
+    # F.Cu)`) is a sexpdata.Symbol, which never equals the same str, so a
+    # constraints net or "F.Cu" would never match it
+    return [_tok(x) if isinstance(x, sexpdata.Symbol) else x
+            for x in n[1:] if isinstance(x, str)]
 
 
 def _uuid_of(node) -> "Optional[str]":
@@ -665,6 +669,10 @@ class BoardGeom:
         layers_node = _kid(root, "layers")
         if layers_node is None:
             raise GeomError(f"no (layers) block in {path}")
+        # KiCad 5 and older let a copper layer be renamed (cmm2-jlc's "GND"
+        # and "POWER"), and every item then names it so: map those names to
+        # the canonical In<n>.Cu by ordinal before anything reads a layer.
+        self.layer_aliases = _canonical_copper_names(root, layers_node)
         for entry in layers_node[1:]:
             if not _is_node(entry):
                 continue
@@ -701,6 +709,8 @@ class BoardGeom:
         self._pads: list[Pad] = []
         self._zones: list[Zone] = []
         self.rule_areas: list[dict] = []  # keepout areas: {name, layers, outline}
+        # zones on layers missing from the stack (not copper; see _parse_zones)
+        self.off_stack_zones: list[dict] = []
         self.footprint_rule_areas: list[dict] = []  # the same, inside footprints
         # every np_thru_hole pad, with or without copper layers (a pad with
         # none is not in _pads): route_auto keeps the router off them and
@@ -995,6 +1005,18 @@ class BoardGeom:
         zid = 0
         for zone in _kids(root, "zone"):
             declared = self._zone_layers(zone)
+            if not declared:
+                named = [t for n in (_kid(zone, "layer"), _kid(zone, "layers"))
+                         if n is not None for t in _strs(n)]
+                if named and not any(t in self._copper_set or "*" in t
+                                     or t == "F&B.Cu" for t in named):
+                    # A zone on a layer the stack doesn't have (ambient rev_d,
+                    # a 2-layer KiCad 4 board, keeps zones on In1/In2.Cu):
+                    # no copper is made of it, so it can't be stale either.
+                    self.off_stack_zones.append(
+                        {"net": self._resolve_net(zone) or "",
+                         "layers": named})
+                    continue
             if _kid(zone, "keepout") is not None:
                 # Rule area: never fills, carries no copper. It must NOT enter
                 # the zone list or the freshness gate would flag it as an
@@ -1227,6 +1249,7 @@ class BoardGeom:
             return self._refill_empty
         self._refill_empty = set()
         self._refill_why = None
+        self._refilled = None
         unfilled = self.unfilled_zones()
         if not unfilled:
             return self._refill_empty
@@ -1235,10 +1258,21 @@ class BoardGeom:
         except KicadCliMissing as exc:          # say so in assert_fresh
             self._refill_why = str(exc)
             return self._refill_empty
-        except Exception:                       # kicad-cli failed
+        except Exception as exc:                # kicad-cli failed: say why
+            self._refill_why = (f"the kicad-cli refill failed: "
+                                f"{type(exc).__name__}: {str(exc)[:300]}")
             return self._refill_empty
         try:
-            other = BoardGeom.from_file(fresh)
+            try:
+                other = BoardGeom.from_file(fresh)
+            except Exception as exc:
+                self._refill_why = (f"the refilled copy did not parse: "
+                                    f"{type(exc).__name__}: {str(exc)[:300]}")
+                return self._refill_empty
+            # judged in place of this board by fresh_board(); its path points
+            # back here so sibling files (.kicad_pro, schematic) still resolve
+            other.path = self.path
+            self._refilled = other
             filled = {(z.net, z.layers, z.outline) for z in other._zones if z.filled}
             known = {(z.net, z.layers, z.outline) for z in other._zones}
             self._refill_empty = {z.zone_id for z in unfilled
@@ -1381,6 +1415,77 @@ def _cleanup(pcb: Path) -> None:
 # ============================================================ module cache
 
 _CACHE: dict[str, tuple[tuple, BoardGeom]] = {}
+
+
+def fresh_board(path) -> "tuple[BoardGeom, Optional[dict]]":
+    """The board to judge, and a note on its zone fill (None when the
+    committed fill is usable). Like BoardGeom.assert_fresh, but never raises
+    on unfilled zones: when kicad-cli can refill them, the geometry of a
+    refilled scratch copy is returned (the board file is not touched); when
+    it can't, the board as committed, with the reason. Either way the note
+    names the zones: {"refilled": bool, "zones": [{"id", "net", "layers"}],
+    "why": str|None}."""
+    bg = load_board(path)
+    unfilled = [z for z in bg.unfilled_zones()
+                if z.zone_id not in bg._empty_by_refill()]
+    if not unfilled:
+        return bg, None
+    note = {"zones": [{"id": z.zone_id, "net": z.net, "layers": list(z.layers)}
+                      for z in unfilled]}
+    if bg._refilled is not None:
+        note.update(refilled=True, why=None)
+        return bg._refilled, note
+    note.update(refilled=False, why=bg._refill_why or
+                "kicad-cli gave no refilled copy")
+    return bg, note
+
+
+def fill_note_text(note: dict) -> str:
+    """One line for a report's not_judged / notes on a fresh_board() note."""
+    zs = ", ".join(f"{z['id']} ({z['net'] or 'no net'} on "
+                   f"{'/'.join(z['layers']) or '?'})" for z in note["zones"])
+    if note["refilled"]:
+        return (f"zone(s) {zs} are unfilled in the committed board: judged on "
+                "a kicad-cli refill of a scratch copy (refill and save the "
+                "board in KiCad)")
+    return (f"zone(s) {zs} are unfilled and could not be refilled "
+            f"({note['why']}): judged with them empty, so copper on their "
+            "nets is undercounted and findings there are only warnings")
+
+
+def _canonical_copper_names(root, layers_node) -> dict[str, str]:
+    """Rename user-named copper layers (KiCad <= 5 files, where items name a
+    layer by its user name) to KiCad's canonical names, in place, by ordinal:
+    0 F.Cu, 31 B.Cu, 1..30 In<n>.Cu. Returns {user name: canonical}."""
+    aliases: dict[str, str] = {}
+    for entry in layers_node[1:]:
+        if not _is_node(entry) or not isinstance(entry[0], (int, float)):
+            continue
+        strs = _strs(entry)
+        if len(strs) < 2 or strs[0].endswith(".Cu"):
+            continue
+        if _tok(strs[1]) not in ("signal", "power", "mixed", "jumper"):
+            continue
+        n = int(entry[0])
+        aliases[str(strs[0])] = ("F.Cu" if n == 0 else "B.Cu" if n == 31
+                                 else f"In{n}.Cu" if 0 < n < 31 else str(strs[0]))
+    aliases = {k: v for k, v in aliases.items() if k != v}
+    if not aliases:
+        return aliases
+    for entry in layers_node[1:]:
+        if _is_node(entry) and len(entry) > 1 and str(entry[1]) in aliases:
+            entry[1] = aliases[str(entry[1])]
+
+    def walk(node):
+        for i, c in enumerate(node):
+            if _is_node(c):
+                if _head(c) in ("layer", "layers"):
+                    for j in range(1, len(c)):
+                        if isinstance(c[j], str) and str(c[j]) in aliases:
+                            c[j] = aliases[str(c[j])]
+                walk(c)
+    walk(root)
+    return aliases
 
 
 def load_board(path, *, refresh: bool = False) -> BoardGeom:
