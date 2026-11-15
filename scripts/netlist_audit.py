@@ -5133,11 +5133,11 @@ def audit(parsed: dict, constraints: dict,
     # TI SLVA139 Fig 3: a P-FET's drain on the input, its gate to ground;
     # a high-side P-FET's source on the supply, a low-side N-FET's on
     # ground, or the body diode carries the load with the FET off)
-    sw_checked, sw_nj = 0, {}
+    ps_checked, sw_nj = 0, {}
     for ref, ch, case, sup, other in _power_switches(nets, comps, comp_pins,
                                                      pl_rails):
         if ref == "checked":
-            sw_checked, sw_nj = ch, case
+            ps_checked, sw_nj = ch, case
             continue
         d_s = "source to drain" if ch == "N" else "drain to source"
         val = comps.get(ref, {}).get("value")
@@ -5621,7 +5621,7 @@ def audit(parsed: dict, constraints: dict,
         "io_drive_pins_checked": iolv_checked,
         "power_good_pins_checked": pg_checked,
         "power_path_fets_checked": pp_checked,
-        "power_switches_checked": sw_checked,
+        "power_switches_checked": ps_checked,
         "power_switches_not_judged": sw_nj,
         "battery_protectors_checked": prot_checked,
         "unverified_findings": len(not_judged),

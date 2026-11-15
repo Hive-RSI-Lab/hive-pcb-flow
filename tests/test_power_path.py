@@ -300,3 +300,12 @@ def test_channel_from_a_part_number_or_a_value_note():
     comps["Q1"] = {"value": "AO4407A", "libsource": ("aiee", "AO4407A_C1")}
     hits, facts = _audit(comps, nets, "power_switch_reversed")
     assert hits == [] and facts["power_switches_checked"] == 1
+
+
+def test_power_switch_count_is_not_the_switched_load_count():
+    # #1209's switched-load count once wrote over this one (both were
+    # sw_checked), so a board with two switches and no switched load
+    # reported 0 power switches checked
+    _, facts = _audit(*_high_side(), "power_switch_reversed")
+    assert facts["power_switches_checked"] == 2
+    assert facts["switched_loads_checked"] == 0
