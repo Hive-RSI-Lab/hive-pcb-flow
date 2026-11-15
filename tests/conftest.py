@@ -96,6 +96,8 @@ SLOW = {
     "tests/test_hdi_route.py::test_live_plane_balls_join_through_the_stack": "escapes a ball field, refills and runs kicad-cli DRC",
     "tests/test_route_escape.py::test_live_escape_synthetic_bga": "runs KRT bga_fanout and kicad-cli DRC on a synthetic BGA",
     "tests/test_route_escape.py::test_live_power_first_lands_before_the_escape": "runs KRT bga_fanout and kicad-cli DRC on a synthetic BGA",
+    "tests/test_route_escape.py::test_live_fault_via_on_a_neighbours_pad_is_ripped": "runs KRT bga_fanout and kicad-cli DRC on a synthetic BGA",
+    "tests/test_route_escape.py::test_live_fault_track_between_two_pads_is_ripped": "runs KRT bga_fanout and kicad-cli DRC on a synthetic BGA",
     "tests/test_zroute.py::test_live_route_critical_pair_l1_l3_drc_clean": "runs KRT route_diff/route and kicad-cli DRC on a synthetic 6-layer board",
     "tests/test_zroute.py::test_live_freerouting_draws_dsn_layer_widths": "runs Freerouting and kicad-cli DRC on a synthetic 6-layer board",
     "tests/test_check_net_tie.py::test_stock_net_tie_footprints_pass_and_keep_their_copper": "runs KRT's writer on every net-tie footprint KiCad ships, front and back",

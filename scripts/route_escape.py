@@ -20,8 +20,13 @@ Per BGA (lib/bgalib.find_bgas: geometric grid detection, not the name):
   3. via-in-pad is a paid fab option (filled and capped vias): KRT's
      dog-bone falls back to it for a ball with no free gap site, without
      checking the fallback against the gap vias already placed (0.57 mm
-     apart, hole_to_hole + clearance errors on linux-computer). Those
-     balls' escapes are removed unless --allow-via-in-pad;
+     apart, hole_to_hole + clearance errors on linux-computer). The fab
+     decides whether they stay (via_in_pad_choice, #325): JLCPCB fills
+     and caps vias free on 6+ layers and its BGA guide wants filled
+     via-in-pad at 0.5 mm pitch, so there they are kept, checked
+     (vip_conflicts) and marked filled; on a stack where filling costs
+     (4 layers) those balls' escapes are removed. --allow-via-in-pad /
+     --no-via-in-pad override;
   4. optional cap nudge (KRT place_fanout_clearance) for decouplers whose
      pads a via landed on (the back-side decouplers place_seed puts under
      the field). Moves are reported per ref;
@@ -154,6 +159,10 @@ from checklib import CheckError, violation  # noqa: E402
 
 SCRIPT = "route_escape"
 ESCAPE_RIP_ROUNDS = 3
+# DRC checks whose items name every net with unrouted copper, not the copper
+# at fault: one stray island grows the count, and naming its items ripped
+# the whole field (#325 fault test: 34 of 36 nets for one bad track).
+NOT_A_FAULT = frozenset({"unconnected_items"})
 PLANE_COVER = 0.5          # an inner zone over >= this share of the field is a plane
 DEFAULT_GRID = 0.05        # mm - KRT stub-end snap; 0.1 shifts 0.8 mm-pitch stubs
 
@@ -209,20 +218,51 @@ def escape_layers(bg, bga: bgalib.Bga, explicit: list[str] | None = None
     return [ly for ly in bg.copper_layers if ly not in planes], planes
 
 
-def via_in_pad_nets(bg, bga: bgalib.Bga, new_uuids: set[str]) -> dict[str, int]:
-    """net -> count of NEW vias whose centre lies inside one of the BGA's
-    own pads on that net (KRT's via-in-pad fallback)."""
+def in_pad_vias(bg, bga: bgalib.Bga, new_uuids: set[str]) -> list:
+    """NEW vias whose centre lies inside one of the BGA's own pads on that
+    net (KRT's via-in-pad fallback)."""
     pads = [p for p in bg.pads_of(ref=bga.ref) if p.net]
-    out: dict[str, int] = {}
+    out = []
     for v in bg.vias_of():
         if not v.uuid or v.uuid not in new_uuids:
             continue
         pt = Point(v.at)
-        for p in pads:
-            if p.net == v.net and p.poly.buffer(1e-4).contains(pt):
-                out[v.net] = out.get(v.net, 0) + 1
-                break
+        if any(p.net == v.net and p.poly.buffer(1e-4).contains(pt)
+               for p in pads):
+            out.append(v)
     return out
+
+
+def via_in_pad_nets(bg, bga: bgalib.Bga, new_uuids: set[str]) -> dict[str, int]:
+    """net -> count of NEW in-pad vias (in_pad_vias)."""
+    out: dict[str, int] = {}
+    for v in in_pad_vias(bg, bga, new_uuids):
+        out[v.net] = out.get(v.net, 0) + 1
+    return out
+
+
+def via_in_pad_choice(n_copper: int, allow: bool, forbid: bool,
+                      free: set[int]) -> tuple[bool, str]:
+    """Keep KRT's in-pad vias in a ball field? The fab decides (#325).
+    JLCPCB fills and caps vias (POFV) free on 6+ layer boards and charges
+    for it below (jlc_pricing.yaml options.via_fill_epoxy, `free` = the
+    layer counts priced 0; jlcpcb.com/help/article/pcb-via-covering), and
+    its BGA guide calls a 0.5 mm pitch dog-bone not manufacturable: 0.25 mm
+    pads with filled via-in-pad (jlcpcb.com/help/article/BGA-Design-
+    Guidelines---PCB-Layout-Recommendations-for-BGA-packages). So: kept
+    when the option is free on this stack, stripped when it would cost,
+    and --allow-via-in-pad / --no-via-in-pad override either way."""
+    if allow and forbid:
+        raise CheckError("--allow-via-in-pad and --no-via-in-pad conflict")
+    if allow:
+        return True, "--allow-via-in-pad"
+    if forbid:
+        return False, "--no-via-in-pad"
+    if n_copper in free:
+        return True, (f"filled, capped vias are free on {n_copper} layers "
+                      "(jlc_pricing via_fill_epoxy)")
+    return False, (f"filled, capped vias cost extra on {n_copper} layers "
+                   "(jlc_pricing via_fill_epoxy); --allow-via-in-pad to pay")
 
 
 FIELD_REACH_MM = 3.0      # an escape's copper lies within this of its ball bbox
@@ -437,6 +477,14 @@ def starved_fields(before: dict, after: dict, nets: set[str],
     return {n: set(refs) if refs else None for n in nets}
 
 
+def faults_only(report: dict) -> dict:
+    """The DRC report without the NOT_A_FAULT checks, for naming the nets
+    to rip (the count still grades the escape)."""
+    return {**report, "violations": [
+        v for v in report.get("violations", [])
+        if v.get("check") not in NOT_A_FAULT]}
+
+
 def grade_and_rip(staged: Path, old_uuids: set[str], before: dict,
                   bgas: list, drc) -> tuple[dict, dict, list[dict]]:
     """DRC the staged escape (`drc()`: refill and grade) and rip, up to
@@ -452,8 +500,9 @@ def grade_and_rip(staged: Path, old_uuids: set[str], before: dict,
         if not delta["new"]:
             break
         mine = nets_with_new_copper(geom.BoardGeom.from_file(staged), old_uuids)
-        bad = rc.nets_in_new_errors(before, after, mine)
-        where = error_fields(before, after, bad, bgas) if bad else {}
+        fb, fa = faults_only(before), faults_only(after)
+        bad = rc.nets_in_new_errors(fb, fa, mine)
+        where = error_fields(fb, fa, bad, bgas) if bad else {}
         starving = rc.nets_starving_thermals(before, after, mine, staged,
                                              old_uuids) - bad
         if starving:
@@ -744,7 +793,12 @@ def run(argv: list[str] | None = None):
                     help="keep KRT's via-in-pad fallbacks (a paid fab option: "
                          "filled, capped vias); with --pads, a pad with no "
                          "spot outside and nothing to join gets a filled, "
-                         "capped via at its centre (#940)")
+                         "capped via at its centre (#940). Ball fields "
+                         "keep them by default where the fab fills vias "
+                         "free (6+ layers at JLC, #325)")
+    ap.add_argument("--no-via-in-pad", action="store_true",
+                    help="strip KRT's via-in-pad fallbacks even where the "
+                         "fab fills vias free")
     ap.add_argument("--no-cap-nudge", action="store_true",
                     help="never move decouplers; balls whose via lands on one "
                          "are ripped instead")
@@ -834,6 +888,9 @@ def run(argv: list[str] | None = None):
                          "of stackups.yaml, which drills through vias only")
     hdi_caps = hdilib.load_hdi_caps()
     spans = hdilib.spans_of(entry, bg0.copper_layers, caps=hdi_caps) if build else []
+    keep_vip, vip_why = via_in_pad_choice(
+        len(bg0.copper_layers), args.allow_via_in_pad, args.no_via_in_pad,
+        free_filled_via_layers())
     plans = []
     for b in bgas:
         ep = bgalib.escape_params(b, floors)
@@ -954,8 +1011,8 @@ def run(argv: list[str] | None = None):
                if x.uuid and x.uuid not in old_uuids}
         vip = via_in_pad_nets(bg, b, new)
         r["via_in_pad"] = {"nets": len(vip), "vias": sum(vip.values()),
-                           "kept": bool(args.allow_via_in_pad)}
-        if vip and not args.allow_via_in_pad:
+                           "kept": keep_vip, "why": vip_why}
+        if vip and not keep_vip:
             r["via_in_pad"]["items_removed"] = rc.rip_new_copper(
                 staged, old_uuids, set(vip))
         elif vip:
@@ -965,7 +1022,7 @@ def run(argv: list[str] | None = None):
                 r["via_in_pad"]["clashing"] = sorted(clash)
                 r["via_in_pad"]["items_removed"] = rip_in_fields(
                     staged, old_uuids, {n: {b.ref} for n in clash}, [b])
-        r["_vip"] = set(vip) if not args.allow_via_in_pad else set()
+        r["_vip"] = set(vip) if not keep_vip else set()
         r["_lost"] = set(held) | set(r["via_in_pad"].get("clashing", []))
         results.append(r)
 
@@ -1032,6 +1089,22 @@ def run(argv: list[str] | None = None):
             "escape left new DRC errors after ripping (original board "
             f"untouched): {delta['new']}; work dir kept at {work}")
 
+    filled = []
+    if keep_vip and kept_nets:
+        # kept in-pad vias get filling and capping set (route_edit
+        # fill_vias), so check_wicking reads them closed and fab_export
+        # writes VIA-FILL.md for the order, as --pads does (#940)
+        import route_edit
+        filled = [v for p in plans
+                  for v in in_pad_vias(bg1, p["bga"], {x.uuid for x in new_items})]
+        if filled:
+            route_edit.apply_ops(staged, [
+                {"op": "fill_vias", "kind": "via", "uuid_prefix": v.uuid,
+                 "filled": True} for v in filled])
+    for r, p in zip(results, plans):
+        r["via_in_pad"]["filled"] = sum(
+            1 for v in filled if v.net in set(p["bga"].nets.values()))
+
     board_updated = (bool(kept_nets) or bool(moved)
                      or bool(power_first.get("placed")))
     if board_updated:
@@ -1059,6 +1132,14 @@ def filled_via_layers() -> set[int]:
     table = (order_quote.load_pricing(order_quote.PRICING).get("options")
              or {}).get("via_fill_epoxy") or {}
     return {int(k) for k in table}
+
+
+def free_filled_via_layers() -> set[int]:
+    """Layer counts whose filled, capped vias the fab charges nothing for."""
+    import order_quote
+    table = (order_quote.load_pricing(order_quote.PRICING).get("options")
+             or {}).get("via_fill_epoxy") or {}
+    return {int(k) for k, v in table.items() if float(v or 0) == 0}
 
 
 def plane_ball_specs(bg, refs: list[str], nets: list[str]) -> list[str]:
