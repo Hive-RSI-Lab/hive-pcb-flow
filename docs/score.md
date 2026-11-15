@@ -86,7 +86,10 @@ For every pinned board, a scratch copy goes through `erc`, `drc_routed`,
 shim in `bin/pcb-flow` is off (`HWDE_NO_SHIMS`), so a gate gets no help pcb-flow
 doesn't ship. The findings are each finding a gate fails on that no waiver
 covers (the board's own `reports/verify-waivers.json`, applied by the gate
-as always) and each warning no waiver in that file covers. One charge is:
+as always) and each warning no waiver in that file covers. An info note
+(severity `info`: a screen with no limit behind it, or a part of what a
+check left `not_judged`) is not a warning and is never charged, though the
+gate's result carries it among its `warnings`. One charge is:
 
 1. each finding the ledger holds **false**;
 2. each finding the ledger doesn't hold as judged (`?`, or not in it): an

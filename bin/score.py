@@ -43,6 +43,7 @@ HWDE = os.environ.get("HWDE_BIN", str(ROOT / "bin" / "hwde"))
 SKILL = ROOT / "scripts"
 GATES = ("erc", "drc_routed", "verify", "dfm")
 CRASH = 100
+INFO = "info"   # a note below the warning bar: never charged
 
 # The pinned boards and the sha256 of each one's pin and files (digest()).
 # bin/pin.py writes this block; don't edit it by hand.
@@ -207,11 +208,16 @@ def gate_findings(gate_name: str, result: dict, waivers: list[dict] | None = Non
     """The findings one gate result reports: those it fails on that no
     waiver covered (the gate already took those out), and every warning no
     waiver covers; and how many warnings sat past the gate's cap, which
-    travel only as a count and so can't be named."""
+    travel only as a count and so can't be named. The gate's `warnings`
+    carry everything below its fail bar, info included; an info note (a
+    screen, or what a check left not judged) is neither, so it costs
+    nothing."""
     import gate  # the skill's: its waiver matching
     out = [finding_of(gate_name, v) for v in result.get("failing") or []]
     warns = result.get("warnings") or []
     for v in warns:
+        if isinstance(v, dict) and v.get("severity") == INFO:
+            continue
         if not (isinstance(v, dict) and any(gate.waiver_matches(w, v) for w in waivers or [])):
             out.append(finding_of(gate_name, v))
     return out, max(0, int(result.get("warnings_count") or 0) - len(warns))

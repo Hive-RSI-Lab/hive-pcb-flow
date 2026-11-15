@@ -80,6 +80,21 @@ def test_gate_charges_count_failing_and_unwaived_warnings():
     assert sum(score.gate_charges({"failing": [], "warnings": [], "warnings_count": 0}).values()) == 0
 
 
+def test_an_info_note_costs_nothing():
+    # gate.evaluate ships everything below the fail bar as `warnings`, info
+    # included. mlcc_dcbias's 50 % screen on a rail it left not_judged (no
+    # floor stated, #1067) is info: it must not charge as an unjudged finding
+    note = {"check": "mlcc_dcbias", "kind": "cap_dc_bias_low", "severity": "info",
+            "net": "+5V", "refs": ["C10"]}
+    warn = dict(note, severity="warning", refs=["C11"])
+    result = {"failing": [], "warnings": [note, warn], "warnings_count": 2}
+    assert score.gate_charges(result) == {"mlcc_dcbias": 1}
+    fs, past = score.gate_findings("verify", result)
+    assert [f["refs"] for f in fs] == [["C11"]] and past == 0
+    j = score.judge(fs, [], {"verify"})
+    assert j.charges == 1 and [f["refs"] for f in j.unjudged] == [["C11"]]
+
+
 def test_gate_charges_take_a_plain_string_warning():
     # a gate may report a warning (or a failing finding) as a plain string
     result = {"failing": ["board has no outline"],
