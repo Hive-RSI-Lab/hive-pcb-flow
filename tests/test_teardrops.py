@@ -96,6 +96,20 @@ def _strip_drop_of(text: str, x: float, y: float) -> str:
     raise AssertionError("no teardrop zone at the point")
 
 
+def _drop_type(text: str, prio: int, new: str | None) -> str:
+    """Retype the teardrop zone at this priority: (type new), or no type
+    at all (an older file's drop)."""
+    for a, b in _drop_zones(text):
+        z = text[a:b]
+        if f"(priority {prio})" not in z:
+            continue
+        m = re.search(r"\n\t*\(type padvia\)", z)
+        assert m
+        rep = "" if new is None else m.group(0).replace("padvia", new)
+        return text[:a] + z[:m.start()] + rep + z[m.end():] + text[b:]
+    raise AssertionError("no teardrop zone at that priority")
+
+
 def _add_flex(text: str) -> str:
     i = text.rstrip().rindex(")")
     return text[:i] + FLEX_AREA + text[i:]
@@ -213,60 +227,91 @@ def test_a_track_grazing_a_via_is_no_join(tmp_path):
     assert by[VIA_B].joins == {"F.Cu": 2} and by[VIA_B].missing() == ["F.Cu"]
 
 
+def test_a_track_end_drop_is_no_items(tmp_path):
+    """Via B's drop retyped track_end (KiCad's track-to-track drops) is
+    still a teardrop zone but not the via's: the via lacks its drop. With
+    no type (an older file) it is the via's."""
+    pcb = _edit(_copy(tmp_path, DROPPED),
+                lambda t: _drop_type(t, 30001, "track_end"))
+    b = tdl.read(pcb)
+    by = {it.name: it for it in b.items}
+    assert b.drop_count == 3
+    assert by[VIA_B].drops == {} and by[VIA_B].missing() == ["F.Cu"]
+    pcb = _edit(_copy(tmp_path, DROPPED, "old.kicad_pcb"),
+                lambda t: _drop_type(t, 30001, None))
+    by = {it.name: it for it in tdl.read(pcb).items}
+    assert by[VIA_B].drops == {"F.Cu": 1} and by[VIA_B].missing() == []
+
+
 @pytest.mark.parametrize("r, sides", [(0.3, 24), (0.1, 16), (1.0, 32)])
 def test_kicad_circle_is_the_polygon_kicad_tests_a_graze_on(r, sides):
     """TransformCircleToPolygon at 0.005 mm error: at least 16 sides, a
-    multiple of 8, the first corner at angle 0."""
+    multiple of 8, the corners on the circle half a step off angle 0
+    (probed on pcbnew: a 0.6 mm via's first corners at +/-7.5 deg)."""
+    import math
     c = tdl._kicad_circle((1.0, 2.0), r)
     pts = list(c.exterior.coords)[:-1]
     assert len(pts) == sides
-    assert pts[0] == pytest.approx((1.0 + r, 2.0))
+    h = math.pi / sides
+    assert pts[0] == pytest.approx((1.0 + r * math.cos(h),
+                                    2.0 + r * math.sin(h)))
     assert all(abs(((x - 1) ** 2 + (y - 2) ** 2) ** 0.5 - r) < 1e-9
                for x, y in pts)
 
 
 def test_chord_is_the_copper_the_centreline_crosses():
+    import math
     c = tdl._kicad_circle((0, 0), 0.3)
-    # through the centre, corner to corner
-    assert tdl._chord([(0, 0), (2, 0)], c, (0, 0)) == pytest.approx(0.6)
+    side = 0.3 * math.cos(math.pi / 24)     # the 24-gon's side on the axis
+    # through the centre, side to side
+    assert tdl._chord([(0, 0), (2, 0)], c, (0, 0)) == pytest.approx(2 * side)
     # 0.285 off: under the true circle's 0.187
     ch = tdl._chord([(0.05, 0.285), (2, 0.285)], c, (0.05, 0.285))
     assert 0.15 < ch < 2 * (0.3 ** 2 - 0.285 ** 2) ** 0.5
-    # the inside end on the edge, within TOL: still found
-    assert tdl._chord([(0.3 + tdl.TOL / 2, 0), (2, 0)], c,
-                      (0.3 + tdl.TOL / 2, 0)) == pytest.approx(0.6)
+    # the inside end past the side, within TOL: still found; past TOL not
+    p = (side + tdl.TOL / 2, 0)
+    assert tdl._chord([p, (2, 0)], c, p) == pytest.approx(2 * side)
+    p = (side + 2 * tdl.TOL, 0)
+    assert tdl._chord([p, (2, 0)], c, p) == math.inf
     # an arc or a zero-length track: KiCad keeps the drop
-    import math
     assert tdl._chord([(0, 0), (1, 1), (2, 0)], c, (0, 0)) == math.inf
     assert tdl._chord([(0, 0), (0, 0)], c, (0, 0)) == math.inf
 
 
 def test_join_band_runs_on_from_the_outer_end():
     """A track into the via and the track going on from its outer end
-    share the band (two_tracks); a stub wholly inside, and a track with
-    neither end inside that misses the centre, have none."""
+    share the band (two_tracks). A stub wholly inside, a track with
+    neither end inside that crosses the copper off the centre, and one
+    entering on a chord narrower than itself have none, and say why; a
+    track that never meets the copper is not into the via at all."""
     from types import SimpleNamespace
     from shapely.geometry import LineString
 
     def trk(a, b, w=0.2):
         return SimpleNamespace(shape=LineString([a, b]), width=w)
+
+    def jb(t):
+        return tdl._join_band(t, at, cu, circ, tdl._end_index([t]))
     at = (0.0, 0.0)
     cu = Point(at).buffer(0.3 + tdl.TOL)
     circ = tdl._kicad_circle(at, 0.3)
     into, on, far = trk((0, 0), (0, 1)), trk((0, 1), (1, 1)), trk((5, 5), (6, 5))
     ends = tdl._end_index([into, on, far])
-    band = tdl._join_band(into, at, cu, circ, ends)
+    band, why = tdl._join_band(into, at, cu, circ, ends)
+    assert why is None
     assert [(ln, h) for ln, h in band] == [(into.shape, 0.1 + tdl.BAND_MM),
                                           (on.shape, 0.1 + tdl.BAND_MM)]
     assert tdl._in_band(Point(0.5, 1.05), band)
     assert not tdl._in_band(Point(0.5, 0.5), band)
-    stub = trk((0, 0), (0.1, 0))
-    assert tdl._join_band(stub, at, cu, circ, tdl._end_index([stub])) is None
-    off = trk((-1, 0.2), (1, 0.2))
-    assert tdl._join_band(off, at, cu, circ, tdl._end_index([off])) is None
-    thru = trk((-1, 0.05), (1, 0.05))
-    assert tdl._join_band(thru, at, cu, circ,
-                          tdl._end_index([thru])) is not None
+    assert jb(trk((0, 0), (0.1, 0))) == (None, "inside")
+    assert jb(trk((-1, 0.2), (1, 0.2))) == (None, "crosses")
+    assert jb(trk((-1, 0.5), (1, 0.5))) == (None, None)
+    # an end in the copper 0.285 off the centre: a 0.171 mm chord
+    assert jb(trk((0.05, 0.285), (2, 0.285), 0.25)) == (None, "grazes")
+    band, why = jb(trk((0.05, 0.285), (2, 0.285), 0.15))
+    assert band is not None and why is None
+    band, why = jb(trk((-1, 0.05), (1, 0.05)))
+    assert band is not None and why is None
 
 
 def test_matched_pairs_each_drop_with_one_join():
@@ -284,30 +329,60 @@ def test_matched_pairs_each_drop_with_one_join():
     assert tdl._matched([b0, b1], [only1, both]) == 2
 
 
-def test_deficit_counts_per_layer_at_a_size_and_limits():
+def test_tracks_into_an_item_answered_or_named_per_layer():
+    """A drop answers one track into the item; each track no drop
+    answers says why: a join with no drop, a track too wide for one, a
+    graze or an off-centre crossing. deficit counts the joins alone,
+    missing the unheld layers with one, undropped the unheld layers with
+    a graze or crossing narrow enough for a drop."""
     from shapely.geometry import LineString
 
     def band(x, w):
         return ((LineString([(x, 0), (x, -2)]), w / 2 + tdl.BAND_MM),)
+    lim = tdl._limits(tdl.ITEM_PARAMS)
     it = tdl.Item("via", "A", (0, 0), Point(0, 0).buffer(0.3),
-                  ("F.Cu", "B.Cu"), 0.15, 0.6, True,
+                  ("F.Cu", "In1.Cu", "B.Cu"), 0.15, 0.6, True,
                   joins={"F.Cu": 2, "B.Cu": 1}, held={"B.Cu"},
-                  drops={"F.Cu": 1},
-                  lim=tdl._limits(tdl.ITEM_PARAMS),
-                  cands={"F.Cu": [(0.2, band(0, 0.2)), (0.5, band(0.3, 0.5))],
+                  drops={"F.Cu": 2}, lim=lim,
+                  cands={"F.Cu": [(0.55, band(0.6, 0.55)),
+                                  (0.2, band(0, 0.2)),
+                                  (0.2, band(-0.6, 0.2))],
                          "B.Cu": [(0.2, band(0, 0.2))]},
-                  tips={"F.Cu": [Point(0, -1)]})
+                  grazes={"F.Cu": [(0.3, "crosses")],
+                          "In1.Cu": [(0.6, "grazes")],
+                          "B.Cu": [(0.25, "grazes")]},
+                  tips={"F.Cu": [Point(0, -1), Point(0.6, -1)]})
+    # 0.55 mm is too wide on a 0.6 mm via (filter_ratio 0.9: 0.54), 0.5
+    # is not; under max_width 0 every track is (10.0.6 makes no drop)
+    assert it.too_wide(0.55) and not it.too_wide(0.5)
+    assert tdl.too_wide(0.5, 0.5, lim)
+    assert tdl.too_wide(0.1, 0.6, (0.0, 1.0, 0.9))
+    # F.Cu: the too-wide track and one join have a drop each
+    assert (it.answered("F.Cu"), it.into("F.Cu")) == (2, 4)
+    assert it.unanswered("F.Cu") == [(0.2, "no drop"), (0.3, "crosses")]
     assert (it.deficit("F.Cu"), it.deficit("B.Cu")) == (1, 1)
+    assert (it.answered("In1.Cu"), it.into("In1.Cu")) == (0, 1)
+    assert it.unanswered("In1.Cu") == [(0.6, "grazes")]
+    assert it.deficit("In1.Cu") == 0
     assert it.missing() == ["F.Cu"]
     assert it.missing(in_pours=True) == ["B.Cu", "F.Cu"]
-    # at 0.5 mm the 0.5 mm track is too wide (0.5 >= 0.9 x 0.5)
-    assert it.deficit("F.Cu", size=0.5) == 0
-    # max_width 0 (KiCad keeps a zero): no drop for any track
-    assert it.deficit("F.Cu", lim=(0.0, 1.0, 0.9)) == 0
+    # In1.Cu's graze is too wide for a drop, B.Cu's is held
+    assert it.undropped() == ["F.Cu"]
+    # one drop in a too-wide track's band and a join's: it is the join's
+    two = tdl.Item("via", "A", (0, 0), Point(0, 0).buffer(0.3), ("F.Cu",),
+                   0.15, 0.6, True, joins={"F.Cu": 1}, drops={"F.Cu": 1},
+                   lim=lim, cands={"F.Cu": [(0.55, band(0.1, 0.55)),
+                                            (0.2, band(0, 0.2))]},
+                   tips={"F.Cu": [Point(0.05, -1)]})
+    assert two.answered("F.Cu") == 1
+    assert two.unanswered("F.Cu") == [(0.55, "too wide")]
+    assert two.deficit("F.Cu") == 0 and two.missing() == []
     # an item read() did not fill compares its counts
     bare = tdl.Item("via", "A", (0, 0), Point(0, 0).buffer(0.3), ("F.Cu",),
                     0.15, 0.6, True, joins={"F.Cu": 2}, drops={"F.Cu": 1})
     assert bare.deficit("F.Cu") == 1 and bare.deficit("B.Cu") == 0
+    assert (bare.answered("F.Cu"), bare.into("F.Cu")) == (1, 2)
+    assert bare.undropped() == []
 
 
 def test_limits_keep_a_zero_and_read_the_rest_as_the_defaults():
@@ -367,6 +442,29 @@ def test_mutant_teardrop_deleted_is_caught(tmp_path):
     f = tdl.ring_findings(b, req=True)
     assert [(x["kind"], x["severity"]) for x in f] == \
         [("dfm_ring_breakout", "error")]
+
+
+def test_a_graze_on_a_thin_ring_is_a_breakout_that_says_so(tmp_path):
+    """Via B shrunk to 0.5 mm (a 16-gon) keeps its drop; a 0.25 mm track
+    with an end in its copper 0.22 mm off the centre crosses a 0.219 mm
+    chord: KiCad makes it no drop, and the thin ring is a breakout that
+    names the graze. A track too wide for a drop, or a graze in a pour,
+    is none."""
+    def board(name, w, layer="F.Cu"):
+        add = _add_track((13.2, 21.96), (15.0, 21.96), w, layer=layer)
+        pcb = _edit(_copy(tmp_path, DROPPED, name),
+                    lambda t: add(_shrink_via_b(t)))
+        return tdl.read(pcb)
+    b = board("g.kicad_pcb", 0.25)
+    assert {it.name: it for it in b.items}[VIA_B].grazes == \
+        {"F.Cu": [(0.25, "grazes")]}
+    f = tdl.ring_findings(b, req=False)
+    assert [(x["kind"], x["item"], x["layers"]) for x in f] == \
+        [("dfm_ring_breakout", VIA_B, ["F.Cu"])]
+    assert "grazes the copper" in f[0]["msg"]
+    assert tdl.ring_findings(board("w.kicad_pcb", 0.46), req=False) == []
+    assert tdl.ring_findings(board("b.kicad_pcb", 0.25, "B.Cu"),
+                             req=False) == []
 
 
 def test_flex_board_requires_drops_on_every_join(tmp_path):

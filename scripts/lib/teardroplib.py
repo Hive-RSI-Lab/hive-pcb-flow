@@ -9,6 +9,15 @@ padvia))))`, on the track's layer. So the board stores the INTENT on the item
 and the copper as zones; scripts/route_teardrops.py sets the intent (SWIG,
 lib/teardrop_swig.py) and refills.
 
+Model: KiCad 10.0.6, the pipeline's kicad-cli and pcbnew. Each rule below
+was read from that tag's source and probed on it. The 10.0 branch after
+the tag (ae47c29e, 20cbfb7a) makes drops otherwise in three ways not
+modelled here: max_width 0 means no limit (10.0.6 makes no drop); a track
+through a via gets two drops, one each side (10.0.6 makes up to three,
+and this counts one join); and a drop beside another net's copper is
+fitted round it or left out (10.0.6 makes it whole). A pipeline moved to
+a newer KiCad needs those three ported.
+
 Terms:
   item   a via, or a pad with a drill and copper (thru_hole); SMD pads only
          when the scope asks (off by default; never under a fine-pitch part)
@@ -19,8 +28,10 @@ Terms:
          graze: no drop), or neither end in it and the track over the
          item's centre (a track through it). A stub wholly inside, or a
          track crossing the copper off the centre with no end in it, gets
-         none. A track through a via got three drops in 10.0.6 (both ways,
-         one twice); it counts as one join. The track must be narrower than
+         none; read() keeps the grazes and those crossings apart
+         (Item.grazes), so a check can name them. A track through a via
+         got three drops in 10.0.6 (both ways, one twice); it counts as one
+         join. The track must be narrower than
          max_width_mm, width_ratio x and filter_ratio x the item's smaller
          copper size, from the item's own teardrop settings when it has
          them on, else from the constraints (10.0.6, a 0.6 mm via at
@@ -35,23 +46,30 @@ Terms:
          pour, prefer_zone_connections yes or no), so a check that a drop
          stays (part_repair, #1138) counts those layers too:
          missing(in_pours=True)
-  drop   a teardrop zone (same net, same layer) touching the item; it
-         answers one join, the one whose track, or a track going on from
-         that track's outer end (two_tracks lets a drop run onto it), runs
-         within its width / 2 + BAND_MM of the drop's tip (the drop's
-         farthest corner outside the item's copper). A join no drop answers
-         is missing, so a track's lost drop shows even when a track through
-         the item left extra ones
+  drop   a teardrop zone of type padvia (or none: older files), same net
+         and layer, touching the item (a track-end drop, type track_end,
+         is not the item's); it answers one join, the one whose track, or
+         a track going on from that track's outer end (two_tracks lets a
+         drop run onto it), runs within its width / 2 + BAND_MM of the
+         drop's tip (the drop's farthest corner outside the item's copper).
+         A join no drop answers is missing, so a track's lost drop shows
+         even when a track through the item left extra ones.
+         Item.answered counts the tracks drops answer at any width,
+         Item.into the tracks into the item (joins at any width, grazes,
+         crossings) and Item.unanswered names the rest
 
 Ring breakout (dfm_check family `teardrop`): the fab drills within
 +/- drill_wander_mm of the pad centre (JLC 0.075). A ring under
 min_ring_abs_mm + drill_wander_mm (JLC 0.05 + 0.075 = 0.125) can lose its
 copper at the track neck; IPC-2221 / IPC-6012 class 2 accept that breakout
 only where the land is filleted. Such an item with an unheld join lacking a
-drop is `dfm_ring_breakout`. On a board where teardrops are REQUIRED (rigid-
-flex: a rule area named FLEX_*, or constraints `teardrops.required`), any
-item with an unheld join lacking a drop is `dfm_teardrop_missing` (error) and
-a breakout is an error too; elsewhere breakout is a warning.
+drop, or an unheld track that grazes its copper or crosses it off the
+centre (KiCad makes that no drop: the track must run into the copper), is
+`dfm_ring_breakout`. A track too wide for a drop (too_wide) is neither: by
+the item's own limits it gets none. On a board where teardrops are REQUIRED
+(rigid-flex: a rule area named FLEX_*, or constraints `teardrops.required`),
+any item with such a join or track is `dfm_teardrop_missing` (error) and a
+breakout is an error too; elsewhere breakout is a warning.
 
 constraints.json:
   "teardrops": {"enabled": true,        # route_teardrops runs (default off,
@@ -255,14 +273,16 @@ class Item:
     number: str | None = None
     joins: dict = field(default_factory=dict)   # layer -> n eligible tracks
     held: set = field(default_factory=set)      # layers with same-net fill
-    drops: dict = field(default_factory=dict)   # layer -> n teardrop zones
+    drops: dict = field(default_factory=dict)   # layer -> n drops (padvia)
     # set by read(): the width limits it is judged by (_limits), every
     # track KiCad would drop on at some width, layer -> [(width, band)]
     # (band: (centreline, half width + BAND_MM) of the track and of each
-    # track going on from its outer end), and its drops' tips, layer ->
-    # [Point]
+    # track going on from its outer end), the tracks into it KiCad drops
+    # on at no width, layer -> [(width, "grazes" | "crosses")], and its
+    # drops' tips, layer -> [Point]
     lim: tuple | None = None
     cands: dict = field(default_factory=dict)
+    grazes: dict = field(default_factory=dict)
     tips: dict = field(default_factory=dict)
 
     @property
@@ -271,19 +291,57 @@ class Item:
             return f"via@{self.at[0]:.3f},{self.at[1]:.3f}"
         return f"{self.ref}.{self.number}"
 
-    def deficit(self, layer: str, size: float | None = None,
-                lim=None) -> int:
+    def too_wide(self, width: float) -> bool:
+        """too_wide at this item's size and limits."""
+        return too_wide(width, self.min_size_mm,
+                        self.lim or _limits(ITEM_PARAMS))
+
+    def _answer(self, layer: str) -> tuple[list, set]:
+        """(layer's cands, those KiCad drops on first; the indices in it
+        a drop answers). Matching those first keeps a drop on the track
+        it was made for when a too-wide track runs beside it."""
+        cs = sorted(self.cands.get(layer, []),
+                    key=lambda c: self.too_wide(c[0]))
+        return cs, set(_match([b for _, b in cs], self.tips.get(layer, [])))
+
+    def unanswered(self, layer: str) -> list[tuple[float, str]]:
+        """The tracks into the item on layer that no drop answers, as
+        (width, why): "no drop" (a join), "too wide" (too_wide), and
+        "grazes" or "crosses" (see join in the module docstring)."""
+        cs, hit = self._answer(layer)
+        out = [(w, "too wide" if self.too_wide(w) else "no drop")
+               for i, (w, _) in enumerate(cs) if i not in hit]
+        return out + list(self.grazes.get(layer, []))
+
+    def answered(self, layer: str) -> int:
+        """Tracks on layer, at any width, that a drop answers. An item
+        read() did not fill: the lesser of its joins and drops."""
+        if layer not in self.cands:
+            return min(self.joins.get(layer, 0), self.drops.get(layer, 0))
+        return len(self._answer(layer)[1])
+
+    def into(self, layer: str) -> int:
+        """Tracks into the item on layer: its joins at any width, grazes
+        and off-centre crossings. An item read() did not fill: its
+        joins."""
+        if layer not in self.cands and layer not in self.grazes:
+            return self.joins.get(layer, 0)
+        return len(self.cands.get(layer, [])) + len(self.grazes.get(layer, []))
+
+    def deficit(self, layer: str) -> int:
         """Joins on layer that no drop answers (see drop in the module
-        docstring). size and lim judge the tracks' widths at another copper
-        size and limits than the item's own (part_repair: a new via at the
-        size of the via it replaced, #1138). An item read() did not fill
-        compares its counts."""
+        docstring). An item read() did not fill compares its counts."""
         if layer not in self.cands:
             return max(0, self.joins.get(layer, 0) - self.drops.get(layer, 0))
-        s = self.min_size_mm if size is None else size
-        lm = lim or self.lim or _limits(ITEM_PARAMS)
-        bands = [b for w, b in self.cands[layer] if not too_wide(w, s, lm)]
-        return len(bands) - _matched(bands, self.tips.get(layer, []))
+        return sum(1 for _, why in self.unanswered(layer) if why == "no drop")
+
+    def undropped(self) -> list[str]:
+        """Unheld layers with a track narrow enough for a drop that grazes
+        the copper or crosses it off the centre: KiCad makes it none, and
+        the ring rule asks for the track to run into the copper."""
+        return sorted(l for l, gs in self.grazes.items()
+                      if l not in self.held
+                      and any(not self.too_wide(w) for w, _ in gs))
 
     def missing(self, *, in_pours: bool = False) -> list[str]:
         """Layers with a join no drop answers (deficit), less the held
@@ -355,9 +413,11 @@ def _in_band(tip, band) -> bool:
     return any(line.distance(tip) <= half for line, half in band)
 
 
-def _matched(bands: list, tips: list) -> int:
-    """The most joins (bands) that distinct drops (tips) answer: a
-    matching, by augmenting paths (a few of each per item and layer)."""
+def _match(bands: list, tips: list) -> dict[int, int]:
+    """The most joins (bands) that distinct drops (tips) answer, band
+    index -> tip index: a matching, by augmenting paths (a few of each per
+    item and layer). A band matched stays matched as later ones are
+    placed, so the bands first in the list go first."""
     owner: dict[int, int] = {}          # tip -> band
 
     def place(b, seen):
@@ -370,19 +430,27 @@ def _matched(bands: list, tips: list) -> int:
                 return True
         return False
 
-    return sum(1 for b in range(len(bands)) if place(b, set()))
+    for b in range(len(bands)):
+        place(b, set())
+    return {b: j for j, b in owner.items()}
+
+
+def _matched(bands: list, tips: list) -> int:
+    """How many joins (bands) distinct drops (tips) answer (_match)."""
+    return len(_match(bands, tips))
 
 
 def _kicad_circle(at, r: float, max_err: float = MAX_ERROR_MM) -> Polygon:
     """A round item's copper as KiCad 10.0.6 polygonises it for the graze
-    test (TransformCircleToPolygon, ERROR_INSIDE, at least 16 sides,
-    rounded up to a multiple of 8, corners on the circle from angle 0)."""
+    test (TransformCircleToPolygon, ERROR_INSIDE: at least 16 sides,
+    rounded up to a multiple of 8, corners on the circle half a step off
+    angle 0; probed on pcbnew, a 0.6 mm via's at +/-7.5 deg)."""
     rel = min(max_err / r, 1.0) if r > 0 else 1.0
     inc = min(360.0 / 8, math.degrees(math.acos(1.0 - rel)) * 2)
     n = max(2, int(360.0 / inc + 0.5)) if inc > 0 else 16
     n = (max(16, n) + 7) // 8 * 8
-    return Polygon([(at[0] + r * math.cos(2 * math.pi * k / n),
-                     at[1] + r * math.sin(2 * math.pi * k / n))
+    return Polygon([(at[0] + r * math.cos(2 * math.pi * (k + 0.5) / n),
+                     at[1] + r * math.sin(2 * math.pi * (k + 0.5) / n))
                     for k in range(n)])
 
 
@@ -426,19 +494,21 @@ def _chord(coords, shape, inside) -> float:
     return math.inf
 
 
-def _join_band(t, at, cu, chord_shape, ends) -> tuple | None:
-    """The band a drop for track t on this item lies in (see drop in the
-    module docstring), or None when KiCad 10.0.6 makes it none: t wholly
-    inside, crossing off the centre with no end inside, or entering on a
-    chord shorter than its width (a graze). ends: (x, y) -> the tracks of
-    t's net and layer with an end there, keyed by _end_key."""
+def _join_band(t, at, cu, chord_shape, ends) -> tuple:
+    """(band, None): the band a drop for track t on this item lies in (see
+    drop in the module docstring); or (None, why) when KiCad 10.0.6 makes
+    it none: "inside" (t wholly in the copper), "crosses" (its centreline
+    crosses the copper off the centre, no end in it), "grazes" (it enters
+    on a chord shorter than its width), None (its centreline never meets
+    the copper: not into the item). ends: (x, y) -> the tracks of t's net
+    and layer with an end there, keyed by _end_key."""
     a, b = t.shape.coords[0][:2], t.shape.coords[-1][:2]
     ins = [cu.contains(Point(a)), cu.contains(Point(b))]
     if ins[0] and ins[1]:
-        return None
+        return None, "inside"
     if not ins[0] and not ins[1]:
         if t.shape.distance(Point(at)) > t.width / 2.0:
-            return None
+            return None, ("crosses" if t.shape.intersects(cu) else None)
         outer = (a, b)
     else:
         inside = a if ins[0] else b
@@ -446,14 +516,14 @@ def _join_band(t, at, cu, chord_shape, ends) -> tuple | None:
         # counts as a graze, so a tie never asks for a drop
         if _chord(list(t.shape.coords), chord_shape, inside) \
                 < t.width + 1e-4:
-            return None
+            return None, "grazes"
         outer = (b if ins[0] else a,)
     band = [(t.shape, t.width / 2.0 + BAND_MM)]
     for e in outer:
         for u in _near_ends(ends, e):
             if u is not t:
                 band.append((u.shape, u.width / 2.0 + BAND_MM))
-    return tuple(band)
+    return tuple(band), None
 
 
 def _end_key(p) -> tuple[int, int]:
@@ -520,10 +590,13 @@ def read(pcb, cfg: dict | None = None, area=None) -> Board:
     bg = geom.BoardGeom(Path(pcb), root)
     via_par = via_params(root)
     pad_par = pad_params(root)
-    drop_zones = []
+    # every teardrop zone (each is copper, never a pour), and those that
+    # are an item's drop: type padvia, or none in an older file
+    drop_zones, credit = [], []
     for z in _kids(root, "zone"):
         attr = _kid(z, "attr")
-        if attr is None or _kid(attr, "teardrop") is None:
+        td = _kid(attr, "teardrop") if attr is not None else None
+        if td is None:
             continue
         net = _kid(z, "net")
         layer = _kid(z, "layer")
@@ -533,6 +606,9 @@ def read(pcb, cfg: dict | None = None, area=None) -> Board:
         if len(xy) >= 3 and net is not None and layer is not None:
             drop_zones.append((_strs(net)[0] if _strs(net) else "",
                                _strs(layer)[0], Polygon(xy).buffer(0)))
+            ty = _kid(td, "type")
+            if ty is None or _strs(ty)[:1] in ([], ["padvia"]):
+                credit.append(drop_zones[-1])
 
     def own(p):
         """(enabled, its own settings over ITEM_PARAMS or None)"""
@@ -574,6 +650,8 @@ def read(pcb, cfg: dict | None = None, area=None) -> Board:
             if items else None
         drop_zones = [d for d in drop_zones
                       if near is not None and d[2].intersects(near)]
+        credit = [d for d in credit
+                  if near is not None and d[2].intersects(near)]
 
     lim_cfg = _limits(cfg)
     by_net_layer: dict = {}     # (net, layer) -> (tracks, _end_index)
@@ -591,17 +669,21 @@ def read(pcb, cfg: dict | None = None, area=None) -> Board:
                 ts = bg.tracks_of(net=it.net, layer=layer)
                 by_net_layer[key] = (ts, _end_index(ts))
             tracks, ends = by_net_layer[key]
-            cands = []
+            cands, grazes = [], []
             for t in tracks:
                 tb = t.shape.bounds
                 if tb[2] < box[0] or tb[0] > box[2] or tb[3] < box[1] \
                         or tb[1] > box[3]:
                     continue
-                band = _join_band(t, it.at, cu, chord_shape, ends)
+                band, why = _join_band(t, it.at, cu, chord_shape, ends)
                 if band is not None:
                     cands.append((t.width, band))
+                elif why in ("grazes", "crosses"):
+                    grazes.append((t.width, why))
             if cands:
                 it.cands[layer] = cands
+            if grazes:
+                it.grazes[layer] = grazes
             n = sum(1 for w, _ in cands
                     if not too_wide(w, it.min_size_mm, it.lim))
             if n:
@@ -617,8 +699,9 @@ def read(pcb, cfg: dict | None = None, area=None) -> Board:
     # each drop to ONE item: of the same-net items on its layer whose copper
     # it touches, the one whose centre is nearest a vertex (KiCad anchors
     # the polygon on the pad/via centre; a drop running along a short track
-    # also touches the item at the far end)
-    for net, layer, poly in drop_zones:
+    # also touches the item at the far end). A track_end drop (KiCad's
+    # track-to-track teardrops) is no item's.
+    for net, layer, poly in credit:
         verts = list(poly.exterior.coords) if hasattr(poly, "exterior") \
             else [c for g in poly.geoms for c in g.exterior.coords]
         best = None
@@ -679,25 +762,33 @@ def ring_findings(board: Board, *, req: bool, wander: float = DRILL_WANDER_MM,
         if it.kind == "smd" or not it.net:
             continue
         miss = it.missing()
+        bare = it.undropped()
+        layers = sorted(set(miss) | set(bare))
+        why = ""
+        if bare:
+            why = (f"; on {', '.join(bare)} a track grazes the copper or "
+                   f"crosses it off its centre, which KiCad gives no drop: "
+                   f"run the track into the copper")
         breakout = it.ring_mm is not None and it.ring_mm < lim - 1e-9
-        if breakout and miss:
+        if breakout and layers:
             out.append({
                 "kind": "dfm_ring_breakout",
                 "severity": "error" if req else "warning",
                 "item": it.name, "pos": it.at, "net": it.net,
                 "ring_mm": round(it.ring_mm, 4), "limit_mm": round(lim, 4),
-                "layers": miss,
+                "layers": layers,
                 "msg": (f"{it.kind} {it.name} ring {it.ring_mm:.3f} mm < "
                         f"{abs_min} + {wander} drill wander: the drill can "
-                        f"break out at the track neck on {', '.join(miss)} "
-                        f"with no teardrop there (route_teardrops.py)")})
-        elif req and miss:
+                        f"break out at the track neck on {', '.join(layers)} "
+                        f"with no teardrop there (route_teardrops.py){why}")})
+        elif req and layers:
             out.append({
                 "kind": "dfm_teardrop_missing", "severity": "error",
                 "item": it.name, "pos": it.at, "net": it.net,
                 "ring_mm": None if it.ring_mm is None else round(it.ring_mm, 4),
-                "limit_mm": None, "layers": miss,
+                "limit_mm": None, "layers": layers,
                 "msg": (f"{it.kind} {it.name}: teardrops are required on this "
                         f"board (flex) and the track join on "
-                        f"{', '.join(miss)} has none (route_teardrops.py)")})
+                        f"{', '.join(layers)} has none "
+                        f"(route_teardrops.py){why}")})
     return out

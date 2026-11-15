@@ -681,55 +681,74 @@ def test_td_params_are_add_vias_teardrops(p, want):
 
 
 def test_lands_on_is_an_add_route_edit_would_answer_exists():
-    vias = [SimpleNamespace(net="A", at=(1.0, 2.0), layers=("F.Cu", "B.Cu")),
-            SimpleNamespace(net="A", at=(7.0, 2.0),
+    vias = [SimpleNamespace(uuid="v1", net="A", at=(1.0, 2.0),
+                            layers=("F.Cu", "B.Cu")),
+            SimpleNamespace(uuid="v2", net="A", at=(7.0, 2.0),
                             layers=("F.Cu", "In1.Cu", "In2.Cu", "B.Cu"))]
     op = {"op": "add_via", "net": "A", "at": [1.0005, 2.0]}
-    assert pr._lands_on(op, vias)
+    assert pr._lands_on(op, vias) == "v1"
     assert pr._lands_on(dict(op, at=[7.0, 2.0], top="F.Cu", bot="B.Cu"),
-                        vias)
-    assert not pr._lands_on(dict(op, at=[1.002, 2.0]), vias)
-    assert not pr._lands_on(dict(op, net="B"), vias)
-    assert not pr._lands_on(dict(op, bot="In1.Cu"), vias)
+                        vias) == "v2"
+    assert pr._lands_on(dict(op, at=[1.002, 2.0]), vias) is None
+    assert pr._lands_on(dict(op, net="B"), vias) is None
+    assert pr._lands_on(dict(op, bot="In1.Cu"), vias) is None
 
 
 def test_restore_teardrops_gives_each_new_via_its_nets_nearest():
     lost = [SimpleNamespace(uuid="b", net="A", at=(0.0, 0.0)),
             SimpleNamespace(uuid="a", net="A", at=(4.0, 0.0)),
+            SimpleNamespace(uuid="f", net="A", at=(10.0, 0.0)),
             SimpleNamespace(uuid="c", net="B", at=(9.0, 9.0)),
             SimpleNamespace(uuid="d", net="C", at=(1.0, 1.0)),
             SimpleNamespace(uuid="e", net="C", at=(2.0, 2.0))]
     on = {"enabled": True, "length_ratio": 0.5}
     params = {"b": dict(on, length_ratio=0.6), "a": on, "c": on,
-              "d": dict(on, enabled=False), "e": None}
-    work = [SimpleNamespace(net="A", at=(5.0, 5.0), layers=("F.Cu", "B.Cu"))]
+              "d": dict(on, enabled=False), "e": None,
+              "f": dict(on, enabled=False)}
+    work = [SimpleNamespace(uuid="w1", net="A", at=(5.0, 5.0),
+                            layers=("F.Cu", "B.Cu")),
+            SimpleNamespace(uuid="w2", net="A", at=(10.0, 0.0),
+                            layers=("F.Cu", "B.Cu"))]
     adds = [{"op": "add_via", "net": "A", "at": [1.0, 0.0]},
             # as far from a as from b: the lower uuid
             {"op": "add_via", "net": "A", "at": [2.0, 0.0]},
             {"op": "add_track", "net": "A", "start": [0, 0], "end": [1, 0]},
             # net C lost vias, none with teardrops on
             {"op": "add_via", "net": "C", "at": [1.0, 1.0]},
-            # on a via already there: route_edit makes nothing
+            # on a via already there: route_edit makes nothing, and the
+            # via there is noted (landed) for the check
             {"op": "add_via", "net": "A", "at": [5.0, 5.0]},
-            {"op": "add_via", "net": "B", "at": [0.0, 9.0]}]
-    src = pr.restore_teardrops(adds, lost, params, work)
-    assert src == ["b", "a", None, None, None, "c"]
+            {"op": "add_via", "net": "B", "at": [0.0, 9.0]},
+            # the nearest lost via (f) had them off, though a had them on
+            {"op": "add_via", "net": "A", "at": [8.0, 0.0]},
+            # on a via already there whose nearest lost via had them off:
+            # nothing to note
+            {"op": "add_via", "net": "A", "at": [10.0, 0.0]}]
+    landed: dict = {}
+    src = pr.restore_teardrops(adds, lost, params, work, landed)
+    assert src == ["b", "a", None, None, None, "c", None, None]
+    assert landed == {"w1": "a"}
     assert adds[0]["teardrops"] == {"length_ratio": 0.6}
     assert adds[1]["teardrops"] == adds[5]["teardrops"] == {
         "length_ratio": 0.5}
     assert [("teardrops" in o) for o in adds] == [
-        True, True, False, False, False, True]
+        True, True, False, False, False, True, False, False]
     # each op gets its own copy
     adds[1]["teardrops"]["curved"] = True
     assert adds[5]["teardrops"] == {"length_ratio": 0.5}
+    # with no vias passed (those the list removes left out), the add at
+    # w1 makes a new via and takes a's
+    add = {"op": "add_via", "net": "A", "at": [5.0, 5.0]}
+    assert pr.restore_teardrops([add], lost, params, []) == ["a"]
+    assert add["teardrops"] == {"length_ratio": 0.5}
 
 
 def test_late_teardrops_give_the_re_prunes_losses_to_vias_made_without():
-    """A via the re-prune after the route takes off (gone) passes its
-    teardrops to the new vias on its net that took none yet: kept and
-    td_src set in place, and the add_vias to send again returned with
-    every setting spelled out (route_edit keeps a via's own value for a key
-    left out)."""
+    """A via the re-prune after the route takes off passes its teardrops
+    to the new vias on its net that took none yet, when it is the nearest
+    the run took off (gone: every one so far): kept and td_src set in
+    place, and the add_vias to send again returned with every setting
+    spelled out (route_edit keeps a via's own value for a key left out)."""
     on = {"enabled": True, "length_ratio": 0.6}
     gone = [SimpleNamespace(uuid="g", net="A", at=(0.0, 0.0)),
             SimpleNamespace(uuid="h", net="B", at=(9.0, 9.0))]
@@ -764,6 +783,10 @@ def test_late_teardrops_give_the_re_prunes_losses_to_vias_made_without():
     assert pr.late_teardrops(kept, made, td_src, gone, params, {3}) == []
     # out of skip, the op going no more takes them too
     assert pr.late_teardrops(kept, made, td_src, [], params, set()) == []
+    # a nearer via the run took off with them off: it takes none
+    near = gone + [SimpleNamespace(uuid="i", net="A", at=(3.5, 0.0))]
+    assert pr.late_teardrops(kept, made, td_src, near,
+                             dict(params, i=None), set()) == []
     assert [o["at"] for o in pr.late_teardrops(
         kept, made, td_src, gone, params, set())] == [[3.0, 0.0]]
 
@@ -819,18 +842,46 @@ def test_teardrop_loss_names_the_drops_the_run_lost():
     new_src = {"n1": "s1", "n2": "s1", "n3": "s2", "n4": "s1",
                "gone": "s1"}  # the re-prune took "gone"
     lost, short = pr.teardrop_loss(b0, b1, new_src, box(-10, -10, 10, 10))
+    took = "on the via it took its teardrops from"
     assert [(e["via"], e["layers"], e["why"]) for e in lost] == [
-        ("n2", ["B.Cu"], "lacks a drop on B.Cu"),
+        ("n2", ["B.Cu"], "on B.Cu 0 of 1 tracks into it have a drop, against"
+         f" 1 {took}: 1 without one"),
         ("n4", [], "has its teardrops off"),
-        ("k2", ["F.Cu"], "lost a drop on F.Cu"),
+        ("k2", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
+         " 1 before: 1 without one"),
         ("k3", [], "had teardrops on and has them off"),
-        ("k6", ["F.Cu"], "lost a drop on F.Cu")]
+        ("k6", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
+         " 1 before: 1 without one")]
+    # n3's via had no drop on F.Cu either: no loss, but a join without one
     assert [(e["via"], e["layers"], e["why"]) for e in short] == [
-        ("n3", ["F.Cu"], "lacks a drop on F.Cu, and the via it took its"
-         " teardrops from lacked one there too")]
+        ("n3", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
+         f" 0 {took}: 1 without one")]
     assert lost[0]["net"] == "A" and lost[0]["at"] == [2.0, 1.0]
-    assert pr._td_line(lost[0]) == ("A via at (2.000, 1.000) lacks a drop"
-                                    " on B.Cu")
+    assert pr._td_line(lost[0]) == (
+        f"A via at (2.000, 1.000) on B.Cu 0 of 1 tracks into it have a drop,"
+        f" against 1 {took}: 1 without one")
+
+
+def test_teardrop_loss_judges_a_new_via_by_the_drops_not_the_gaps():
+    """The via the new one took its teardrops from had two joins on F.Cu
+    and one drop (one join without); the new via has one join and no drop.
+    Its gaps (1) are no more than the old one's, but the old via's one
+    drop is gone: lost."""
+    b0 = SimpleNamespace(items=[
+        _via("s", (0, 0), joins={"F.Cu": 2}, drops={"F.Cu": 1})])
+    b1 = SimpleNamespace(items=[_via("n", (0, 1), joins={"F.Cu": 1})])
+    lost, short = pr.teardrop_loss(b0, b1, {"n": "s"}, box(-1, -1, 1, 1))
+    assert short == [] and [(e["via"], e["layers"], e["why"])
+                            for e in lost] == [
+        ("n", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
+         " 1 on the via it took its teardrops from: 1 without one")]
+    # fewer tracks into it than the old via had drops: each needs one
+    b1 = SimpleNamespace(items=[
+        _via("n", (0, 1), joins={"F.Cu": 1}, drops={"F.Cu": 1})])
+    b0 = SimpleNamespace(items=[
+        _via("s", (0, 0), joins={"F.Cu": 3}, drops={"F.Cu": 3})])
+    assert pr.teardrop_loss(b0, b1, {"n": "s"},
+                            box(-1, -1, 1, 1)) == ([], [])
 
 
 def _band(x, w):
@@ -865,14 +916,59 @@ def test_teardrop_loss_judges_a_smaller_via_at_the_size_it_replaced():
                                    {"n": "s"}, box(-1, -1, 1, 1))
     assert short == [] and [(e["via"], e["layers"], e["why"])
                             for e in lost] == [
-        ("n", ["F.Cu"], "lacks a drop on F.Cu (at 0.5 mm, against the 0.6"
-         " mm via it replaced, it is too small for a drop on a track that"
-         " wide)")]
+        ("n", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
+         " 1 on the via it took its teardrops from: a 0.46 mm track is too"
+         " wide for a drop on a 0.5 mm via")]
     # with its drop, or on a track thin enough for both, nothing is lost
     for it in (_cvia("n", 0.5, {"F.Cu": [wide]}, {"F.Cu": [Point(0, -0.8)]}),
                _cvia("n", 0.5, {"F.Cu": [thin]}, {"F.Cu": [Point(0.1, -1)]})):
         assert pr.teardrop_loss(b0, SimpleNamespace(items=[it]),
                                 {"n": "s"}, box(-1, -1, 1, 1)) == ([], [])
+
+
+@pytest.mark.parametrize("why, said", [
+    ("grazes", "grazes the copper"),
+    ("crosses", "crosses it off the centre")])
+def test_teardrop_loss_names_a_track_kicad_drops_on_at_no_width(why, said):
+    """The run moved the track into a kept via so that it grazes the
+    copper (or crosses it off the centre): KiCad makes it no drop at any
+    width, and the drop the via had is lost."""
+    a = (0.2, _band(0, 0.2))
+    b0 = SimpleNamespace(items=[
+        _cvia("k", 0.6, {"F.Cu": [a]}, {"F.Cu": [Point(0, -1)]})])
+    k1 = _cvia("k", 0.6, {})
+    k1.grazes = {"F.Cu": [(0.2, why)]}
+    assert k1.into("F.Cu") == 1 and k1.answered("F.Cu") == 0 \
+        and k1.deficit("F.Cu") == 0
+    lost, short = pr.teardrop_loss(b0, SimpleNamespace(items=[k1]), {},
+                                   box(-1, -1, 1, 1))
+    assert short == [] and [(e["via"], e["layers"], e["why"])
+                            for e in lost] == [
+        ("k", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
+         f" 1 before: a 0.2 mm track {said}")]
+
+
+def test_teardrop_loss_names_a_via_a_new_one_landed_on_with_them_off():
+    """The route's add_via landed on a via already there (route_edit made
+    nothing), standing in for a removed via with teardrops on: with that
+    via's own off, its drops are lost. Once only: a kept via told already
+    is not told again."""
+    b0 = SimpleNamespace(items=[
+        _via("s", (0, 0), joins={"F.Cu": 1}, drops={"F.Cu": 1}),
+        _via("k", (2, 0), joins={"F.Cu": 1}, drops={"F.Cu": 1})])
+    b1 = SimpleNamespace(items=[
+        _via("w", (1, 0), on=False, joins={"F.Cu": 1}),
+        _via("k", (2, 0), on=False, joins={"F.Cu": 1}),
+        _via("x", (3, 0), joins={"F.Cu": 1}, drops={"F.Cu": 1})])
+    lost, short = pr.teardrop_loss(b0, b1, {}, box(-5, -5, 5, 5),
+                                   {"w": "s", "k": "s", "x": "s",
+                                    "gone": "s"})
+    assert short == [] and [(e["via"], e["why"]) for e in lost] == [
+        ("k", "had teardrops on and has them off"),
+        ("w", "has its teardrops off, and the route's via for a removed one"
+         " with them on (s) landed on it: route_edit add_via on it with"
+         ' "teardrops": {} turns them on')]
+    assert pr.teardrop_loss(b0, b1, {}, box(-5, -5, 5, 5)) == (lost[:1], [])
 
 
 def test_teardrop_loss_counts_drops_per_track_not_per_layer():
@@ -889,7 +985,8 @@ def test_teardrop_loss_counts_drops_per_track_not_per_layer():
     lost, short = pr.teardrop_loss(b0, b1, {}, box(-1, -1, 1, 1))
     assert short == [] and [(e["via"], e["layers"], e["why"])
                             for e in lost] == [
-        ("k", ["F.Cu"], "lost a drop on F.Cu")]
+        ("k", ["F.Cu"], "on F.Cu 1 of 2 tracks into it have a drop, against"
+         " 2 before: a 0.2 mm track has none")]
 
 
 def test_report_says_how_many_new_vias_took_teardrops():

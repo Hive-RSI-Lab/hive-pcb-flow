@@ -268,7 +268,8 @@ def validate_ops(doc: dict) -> list[dict]:
 def _validate_teardrops(i: int, td) -> None:
     """add_via's teardrops (#1138): teardroplib.ITEM_PARAMS names, a flag
     true or false, a ratio or size a number of 0 or more (KiCad keeps a
-    zero: max_length 0 sets no cap, max_width 0 makes no drop)."""
+    zero: in 10.0.6 max_length 0 sets no cap and max_width 0 makes no
+    drop; the 10.0 branch reads max_width 0 as no limit)."""
     if not isinstance(td, dict):
         raise CheckError(f"ops[{i}]: teardrops must be an object of "
                          f"{sorted(tdl.ITEM_PARAMS)}")

@@ -20,7 +20,10 @@ list is safe. A via you replace keeps no teardrops unless you ask: give the
 new one `"teardrops":{"length_ratio":0.5, ...}` (teardroplib.ITEM_PARAMS
 names, a key left out takes its default; `{}` is all defaults) and the next
 refill builds the drops. On a via already there the keys you give are merged
-onto its own settings: the rest keep their values, and `{}` only enables. Find the uuid by matching the segment's `start`/`end` in the board
+onto its own settings: the rest keep their values, and `{}` only enables. A
+remove and an add_via at the same spot in one list make a new via (the add
+does not land on the via the list removes), so the teardrops go on the new
+one. Find the uuid by matching the segment's `start`/`end` in the board
 text - violations carry coordinates, not always uuids.
 
 Widening: take the width from `max(required, the same-net copper abutting both
