@@ -626,3 +626,75 @@ def test_a_project_header_off_its_pitch_or_a_socket_is_not_judged(tmp_path):
                                               fpid="my:Pin_Header_Socket")),
                       None)
     assert vs == []
+
+
+# ---- hive-pcb-flow #1175: four smaller ep_paste gaps
+
+def _split_ep(windows=True):
+    """Pad 9 split into two pieces that share the number 9, left and right,
+    each with two windows (as a split belly or a ThermalVias copy can)."""
+    body = _two_eps(qfn('"F.Cu" "F.Mask"')).replace('(pad "10" ', '(pad "9" ')
+    if windows:
+        wins = "".join(f'    (pad "" smd rect (at {x} {y}) (size 1 1)'
+                       ' (layers "F.Paste"))\n'
+                       for x in (-0.8, 0.8) for y in (-0.8, 0.8))
+        body = body.replace("    (attr smd)\n", "    (attr smd)\n" + wins)
+    return body
+
+
+def test_a_via_under_the_first_of_two_same_numbered_eps_fails(tmp_path):
+    # only the last piece kept its copper, so a window on the first was
+    # judged off every exposed pad and the via only listed
+    vs, facts = cep.check(_board(tmp_path, _split_ep() + via(14.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert vs[0]["pads"] == ["U1:9"] and facts["vias_in_paste"] == []
+    vs, facts = cep.check(_board(tmp_path, _split_ep() + via(14.2, 10)))
+    assert vs == [] and facts["vias_under_paste"] == 0
+
+
+def test_two_parts_sharing_a_ref_each_keep_their_exposed_pad(tmp_path):
+    other = qfn('"F.Cu" "F.Mask"', True).replace("(at 15 10)", "(at 5 10)")
+    body = qfn('"F.Cu" "F.Mask"', True) + other
+    vs, _ = cep.check(_board(tmp_path, body + via(4.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"] and vs[0]["pads"] == ["U1:9"]
+    vs, _ = cep.check(_board(tmp_path, body + via(5, 10)))
+    assert vs == []
+
+
+def test_a_window_touching_only_the_eps_edge_is_not_its_paste(tmp_path):
+    # a 1 mm window whose edge meets the 3 mm pad's at x = 1.5: zero area,
+    # so the pad has no paste (an error), not 0 % paste (a warning)
+    body = _with_window(qfn('"F.Cu" "F.Mask"'), 2.0, 1.0)
+    vs, facts = cep.check(_board(tmp_path, body))
+    assert _kinds(vs) == ["ep_paste_missing"]
+    assert facts["exposed_pads"][0]["apertures"] == 0
+    body = _with_window(qfn('"F.Cu" "F.Mask"'), 0, 2.0)
+    vs, facts = cep.check(_board(tmp_path, body))
+    assert vs == [] and facts["exposed_pads"][0]["apertures"] == 1
+
+
+def test_a_board_paste_graphic_takes_the_part_it_covers(tmp_path):
+    body = qfn('"F.Cu" "F.Mask"') + \
+        '  (gr_rect (start 14 9) (end 16 11) (stroke (width 0)) ' \
+        '(fill yes) (layer "F.Paste"))\n'
+    vs, _ = cep.check(_board(tmp_path, body + via()))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert vs[0]["refs"] == ["U1"] and vs[0]["pads"] == ["U1:9"]
+    assert "board paste graphic on U1 pad 9" in vs[0]["msg"]
+    # the same graphic clear of the part, over a via: listed, not failed
+    away = body.replace("(start 14 9) (end 16 11)", "(start 24 9) (end 26 11)")
+    vs, facts = cep.check(_board(tmp_path, away + via(25, 10)))
+    assert _kinds(vs) == ["ep_paste_missing"]
+    assert facts["vias_in_paste"] == [
+        {"at": [25.0, 10.0], "side": "F", "pads": ["board:graphic"]}]
+
+
+def test_an_unnumbered_ep_does_not_claim_a_window_clear_of_it(tmp_path):
+    body = _with_window(qfn('"F.Cu" "F.Mask"', True), 3).replace(
+        '(pad "9" ', '(pad "" ')
+    vs, facts = cep.check(_board(tmp_path, body + via(18, 10)))
+    assert vs == []
+    assert facts["vias_in_paste"] == [
+        {"at": [18.0, 10.0], "side": "F", "pads": ["U1:"]}]
+    vs, _ = cep.check(_board(tmp_path, body + via(14.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]

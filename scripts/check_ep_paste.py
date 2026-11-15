@@ -84,6 +84,12 @@ EP_AREA_RATIO = 4.0
 HIT_MM2 = 1e-3
 
 
+def _on(poly, cu) -> bool:
+    """Whether an aperture prints on a pad: an overlap of more than HIT_MM2,
+    so a window that only touches the pad's edge is not its paste."""
+    return poly.intersects(cu) and poly.intersection(cu).area > HIT_MM2
+
+
 def _num(node, name: str) -> float | None:
     k = _kid(node, name)
     v = _nums(k) if k is not None else []
@@ -276,19 +282,29 @@ def exposed_pads(pads: list[Ap]) -> list[Ap]:
     return out
 
 
-def _aperture_name(p, poly, ep_cu: dict, at) -> tuple[str, str, str]:
+def _aperture_name(p, poly, ep_cu: list, at) -> tuple[str, str, str]:
     """(ref, pad, label) for an aperture over the via at `at`. A paste-only
     pad (a QFN's window-pane aperture, `(pad "" smd ...)` on F.Paste alone)
     has no number, so it takes the number of the exposed pad it lies on:
-    the one that holds the via, else the one it overlaps most."""
-    ref = p.ref or "board"
+    the one that holds the via, else the one it overlaps most. A board
+    graphic has no part, so it takes the part and pad of the exposed pad
+    it lies on the same way ("board paste graphic on U1 pad 9", "U1:9");
+    one on no exposed pad is "board:graphic"."""
+    if p.ref is None:
+        cands = [(cu.contains(Point(at)), cu.intersection(poly).area, r, n)
+                 for r, n, cu in ep_cu if _on(poly, cu)]
+        if not cands:
+            return "board", "graphic", "board paste graphic"
+        _, _, r, n = max(cands)
+        return r, n, f"board paste graphic on {r} " + (
+            f"pad {n}" if n else "exposed pad")
+    ref = p.ref
     if p.number == "graphic":
         return ref, "graphic", f"{ref} paste graphic"
     if p.copper or p.number:
         return ref, p.number, f"{ref} pad {p.number}"
     cands = [(cu.contains(Point(at)), cu.intersection(poly).area, n)
-             for (r, n), cu in ep_cu.items()
-             if r == p.ref and cu.intersects(poly)]
+             for r, n, cu in ep_cu if r == p.ref and _on(poly, cu)]
     if not cands:
         return ref, "", f"{ref} paste window"
     n = max(cands)[2]
@@ -316,14 +332,16 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
             apertures[side].append((p, poly))
     eps = []
     ep_list = exposed_pads(pads)
-    ep_cu = {(ep.ref, ep.number): ep.copper_poly() for ep in ep_list}
+    # a list, not a dict by (ref, number): two parts can share a ref, and a
+    # split exposed pad's pieces share a number (hive-pcb-flow #1175)
+    ep_cu = [(ep.ref, ep.number, ep.copper_poly()) for ep in ep_list]
     for ep in ep_list:
         side = ep.side if ep.side in ep.copper else \
             next(iter(sorted(ep.copper)))
         cu = ep.copper_poly()
         mine = [poly for p, poly in apertures[side]
                 if (p.ref == ep.ref or p.ref is None)
-                and (p is ep or not p.copper) and poly.intersects(cu)]
+                and (p is ep or not p.copper) and _on(poly, cu)]
         paste = unary_union(mine).intersection(cu) if mine else Polygon()
         cover = paste.area / cu.area if cu.area else 0.0
         under = [v for v in vias if cu.contains(Point(v["at"]))]
@@ -333,7 +351,7 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
                "coverage": checklib.rnd(cover, 3), "apertures": len(mine),
                "graphic_apertures": sum(
                    1 for p, poly in apertures[side] if p.kind == "graphic"
-                   and p.ref in (ep.ref, None) and poly.intersects(cu)),
+                   and p.ref in (ep.ref, None) and _on(poly, cu)),
                "vias_in_pad": len(under)}
         eps.append(row)
         layer = f"{side}.Paste"
@@ -374,10 +392,11 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
             on = sorted({_aperture_name(p, poly, ep_cu, v["at"])
                          for p, poly in under})
             pad_ids = list(dict.fromkeys(f"{r}:{n}" for r, n, _ in on))
-            in_ep = any((p.ref, p.number) in ep_cu or (
-                not p.copper and any(p.ref in (r, None)
-                                     and cu.intersects(poly)
-                                     for (r, _), cu in ep_cu.items()))
+            # an exposed pad's own copper aperture by identity; a paste-only
+            # window or graphic by where it lies, so an unnumbered exposed
+            # pad doesn't claim every unnumbered window of its part
+            in_ep = any(any(p is ep for ep in ep_list) if p.copper else any(
+                p.ref in (r, None) and _on(poly, cu) for r, _, cu in ep_cu)
                 for p, poly in under)
             refs = sorted({r for r, _, _ in on})
             if not in_ep:
