@@ -1,5 +1,5 @@
 """reference/mcu_pins.yaml and netlist_audit's MCU pin-function rules
-(#1032): mcu_pwm_timer and mcu_input_only_drive.
+(#1032): mcu_pwm_timer and mcu_input_only_drive; mcu_pwm_pair (#1115).
 
 Each rule is seeded from an errata-corpus defect; each test plants that
 board's fault (rev A) and its fix (rev B, which must stay quiet)."""
@@ -17,7 +17,7 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 
 import netlist_audit  # noqa: E402
 
-KINDS = ("mcu_pwm_timer", "mcu_input_only_drive")
+KINDS = ("mcu_pwm_timer", "mcu_input_only_drive", "mcu_pwm_pair")
 
 
 def _m(ref, pin, func="", ptype="passive"):
@@ -140,7 +140,10 @@ def test_every_row_cites_its_source():
         for funcs in (row.get("timers") or {}).values():
             assert all(netlist_audit._TIM_RE.match(f) for f in funcs), funcs
     for row in doc["loads"]:
-        assert row["pwm_group"] and row["why"].strip()
+        assert (row.get("pwm_group") or row.get("pwm_pairs")) \
+            and row["why"].strip()
+        for pair in row.get("pwm_pairs") or ():
+            assert len(pair) == 2, pair
 
 
 @pytest.mark.parametrize("inputs,want", [
@@ -150,3 +153,114 @@ def test_every_row_cites_its_source():
 ])
 def test_one_timer_matches_channels(inputs, want):
     assert netlist_audit._one_timer([("", i) for i in inputs]) == want
+
+
+def _bldc(pins, mcu="STM32G431CBT6", links=None):
+    """PCB-0018's bldc board: a DRV8300 U301 whose INHA, INLA, INHB, INLB,
+    INHC, INLC come from G431 U601's `pins` (None: that input is tied to
+    ground). LINKS: {input: 0R resistor value} puts a series resistor
+    between the input and the MCU pin."""
+    comps = {"U601": {"value": mcu, "libsource": ("aiee", mcu)},
+             "U301": {"value": "DRV8300DRGER",
+                      "libsource": ("aiee", "DRV8300DRGER_C3655801")}}
+    nets = {"+3.3V": [_m("U601", "1", "VDD", "power_in")],
+            "GND": [_m("U601", "2", "VSS", "power_in")]}
+    for (func, num), mp in zip([("INHA", "22"), ("INLA", "1"),
+                                ("INHB", "23"), ("INLB", "2"),
+                                ("INHC", "24"), ("INLC", "3")], pins):
+        if mp is None:
+            nets["GND"].append(_m("U301", num, func))
+            continue
+        link = (links or {}).get(func)
+        if link is None:
+            nets[f"/{func}"] = [_m("U301", num, func),
+                                _m("U601", mp, mp, "bidirectional")]
+        else:
+            r = f"R{num}"
+            comps[r] = link
+            nets[f"/{func}"] = [_m("U301", num, func), _m(r, "1")]
+            nets[f"/{func}_MCU"] = [_m(r, "2"),
+                                    _m("U601", mp, mp, "bidirectional")]
+    return comps, nets
+
+
+_BLDC = ["PA8", "PB13", "PA9", "PB14", "PA10", "PB15"]  # TIM1 CH1-3/CH1N-3N
+
+
+def test_bldc_board_tim1_pairs_are_quiet():
+    hits, facts = _audit(*_bldc(_BLDC))
+    assert hits == [] and facts["mcu_pwm_pairs_checked"] == 1
+
+
+def test_a_leg_off_its_channels_complement_is_the_planted_fault():
+    # INLA and INLB swapped: PA8 (TIM1_CH1) pairs with PB14 (TIM1_CH2N)
+    hits, facts = _audit(*_bldc(["PA8", "PB14", "PA9", "PB13", "PA10",
+                                 "PB15"]))
+    assert [(h["kind"], h["refs"], h["severity"]) for h in hits] == [
+        ("mcu_pwm_pair", ["U301", "U601"], "warning")]
+    assert "INHA/INLA on PA8/PB14" in hits[0]["msg"]
+    assert "SLVSFG5D" in hits[0]["msg"]
+    assert facts["mcu_pwm_pairs_checked"] == 1
+
+
+def test_a_low_side_on_another_timer_fires():
+    # INLC on PB11 (TIM2_CH4 only): no CHxN at all
+    hits, _ = _audit(*_bldc(_BLDC[:5] + ["PB11"]))
+    assert [h["kind"] for h in hits] == ["mcu_pwm_pair"]
+    assert "PB11 (TIM1_CH3 | TIM2_CH4)" not in hits[0]["msg"]
+    assert "INHC/INLC on PA10/PB11" in hits[0]["msg"]
+
+
+def test_pairs_split_over_two_timers_fire():
+    # legs A, B on TIM1, leg C on TIM8 (PB8 TIM8_CH2, PB4 TIM8_CH2N): each
+    # pair is complementary but the legs share no counter
+    hits, _ = _audit(*_bldc(_BLDC[:4] + ["PB8", "PB4"]))
+    assert [h["kind"] for h in hits] == ["mcu_pwm_pair"]
+
+
+def test_two_legs_on_one_channel_fire():
+    # legs A and B both only fit TIM1 CH1/CH1N (PA8+PB13, PA8 is reused)
+    hits, _ = _audit(*_bldc(["PA8", "PB13", "PA8", "PC13", "PA10", "PB15"]))
+    assert [h["kind"] for h in hits] == ["mcu_pwm_pair"]
+
+
+def test_swapped_high_and_low_on_one_channel_is_quiet():
+    # CHxN on the high side and CHx on the low side: polarity is the
+    # timer's to set, dead time still applies
+    assert _audit(*_bldc(["PB13", "PA8"] + _BLDC[2:]))[0] == []
+
+
+def test_a_0r_link_is_followed_and_a_resistor_is_not():
+    planted = ["PA8", "PB14", "PA9", "PB13", "PA10", "PB15"]
+    hits, _ = _audit(*_bldc(planted, links={"INLA": "0R"}))
+    assert [h["kind"] for h in hits] == ["mcu_pwm_pair"]
+    # a 100R series resistor is no tie: with INLA and INLB behind one,
+    # legs A and B reach no MCU pin and only leg C is judged
+    hits, facts = _audit(*_bldc(planted, links={"INLA": "100R",
+                                                "INLB": "100R"}))
+    assert hits == [] and facts["mcu_pwm_pairs_checked"] == 1
+
+
+def test_a_tied_off_input_leaves_its_leg_out():
+    hits, facts = _audit(*_bldc(["PA8", None, "PA9", "PB14", "PA10",
+                                 "PB15"]))
+    assert hits == [] and facts["mcu_pwm_pairs_checked"] == 1
+    hits, facts = _audit(*_bldc([None] * 6))
+    assert hits == [] and facts["mcu_pwm_pairs_checked"] == 0
+
+
+def test_an_mcu_with_no_row_leaves_the_driver_unchecked():
+    hits, facts = _audit(*_bldc(["PA8", "PB14", "PA9", "PB13", "PA10",
+                                 "PB15"], mcu="STM32F103C8T6"))
+    assert hits == [] and facts["mcu_pwm_pairs_checked"] == 0
+
+
+@pytest.mark.parametrize("hi,lo,want", [
+    (["TIM1_CH1"], ["TIM1_CH1N"], {("TIM1", 1)}),
+    (["TIM1_CH1N"], ["TIM1_CH1"], {("TIM1", 1)}),
+    (["TIM1_CH1"], ["TIM1_CH2N"], set()),
+    (["TIM1_CH1"], ["TIM1_CH1"], set()),            # no complement
+    (["TIM2_CH3", "TIM1_CH2"], ["TIM1_CH2N", "TIM15_CH1"], {("TIM1", 2)}),
+])
+def test_pair_slots(hi, lo, want):
+    assert netlist_audit._pair_slots(hi, lo) == want
