@@ -92,6 +92,8 @@ def test_real_shipped_board_passes():
     (-30, "VDS (max)", False, (-30.0, None)),     # P-channel: a floor
     (0.4, "VOL output low", False, (None, None)),  # a characteristic
     (200, "BVDSS_min", False, (None, None)),       # abs 'min' above 0
+    (6.5, "VCC supply (min -0.5)", False, (-0.5, 6.5)),  # TI min column
+    (18.5, "VBR at 1 mA (min 16.7)", False, (None, None)),  # breakdown min
     (2.2, "operating range min", True, (2.2, None)),
     ("3.0 / 3.3 / 3.6", "VDD33 recommended", True, (3.0, 3.6)),
     ("-0.5 to (VS) + 0.5", "ALERT", False, (-0.5, ("VS", 0.5))),
@@ -3008,6 +3010,76 @@ def test_a_vds_listing_is_not_judged_against_the_gate_row():
     ext = {"abs_max": [{"param": "Vgs gate-to-source voltage", "value": "+/-20",
                         "unit": "V"}]}
     assert cr.listing_comparisons(bom, ext) == []
+
+
+# NTMFS5C628NL's own abs-max table names the drain row VDSS and the gate row
+# VGS; SSM3K2615R and DMP3013 name the gate row VGSS. The JEDEC suffix (S:
+# third terminal shorted to source, O: open) names the same two pins.
+NFET = {"mpn": "TESTNFET", "pinout": [
+    {"pin": "1", "name": "G", "type": "input"},
+    {"pin": "2", "name": "S", "type": "passive"},
+    {"pin": "3", "name": "D", "type": "passive"}],
+    "abs_max": [
+        {"param": "Drain-to-Source Voltage VDSS", "value": 60, "unit": "V"},
+        {"param": "Gate-to-Source Voltage VGSS", "value": "+/-20", "unit": "V"}]}
+
+
+def _fet_ws(tmp_path, drain, gate="+12V", part=NFET):
+    return _ws(tmp_path, [("Q1", "C5", {"1": gate, "2": "GND", "3": drain})],
+               {"C5": part})
+
+
+def test_vdss_row_rates_the_drain_and_catches_a_planted_overvoltage(tmp_path):
+    p = _run(_fet_ws(tmp_path, "+80V"))
+    [e] = _errors(p)
+    assert e["kind"] == "rating_over_voltage" and e["pin"] == "Q1.3"
+    assert e["limit_v"] == pytest.approx(60) and "VDSS" in e["rating"]
+
+
+def test_vdss_quiet_twin_within_rating_is_rated_and_silent(tmp_path):
+    p = _run(_fet_ws(tmp_path, "+48V"))
+    assert _errors(p) == []
+    assert not [v for v in p["violations"] if v["kind"] == "rating_unrated"]
+
+
+def test_vgss_row_rates_the_gate(tmp_path):
+    assert [e["pin"] for e in _errors(_run(_fet_ws(tmp_path, "+48V",
+                                                   gate="+24V")))] == ["Q1.1"]
+
+
+def test_p_channel_vdss_is_a_floor_not_a_ceiling(tmp_path):
+    """DMP3013's row is -30 V: a drain 12 V above source is outside the
+    P-channel's rating, one at source is not."""
+    pfet = dict(NFET, abs_max=[
+        {"param": "Drain-source voltage VDSS", "value": -30, "unit": "V"},
+        {"param": "Gate-source voltage VGSS", "value": "+/-20", "unit": "V"}])
+    ws = _ws(tmp_path, [("Q1", "C5", {"1": "GND", "2": "+12V", "3": "+12V"})],
+             {"C5": pfet})
+    p = _run(ws)
+    assert _errors(p) == []
+    assert not [v for v in p["violations"] if v["kind"] == "rating_unrated"]
+
+
+@pytest.mark.parametrize("sym,pins,ref", [
+    ("VDSS", {"3"}, "S"), ("VGSS", {"1"}, "S"), ("VCEO", {"3"}, "E"),
+    ("VDS", {"3"}, "S")])
+def test_jedec_symbol_names_its_two_pins(sym, pins, ref):
+    pin = [{"pin": "1", "name": "G", "type": "input"},
+           {"pin": "2", "name": "S", "type": "passive"},
+           {"pin": "3", "name": "D", "type": "passive"}]
+    if sym == "VCEO":
+        pin = [{"pin": "1", "name": "B", "type": "input"},
+               {"pin": "2", "name": "E", "type": "passive"},
+               {"pin": "3", "name": "C", "type": "passive"}]
+    got = cr.classify_row(f"{sym} max", cr.pin_index(pin), pin)
+    assert got[0] == pins and got[2] == ref
+
+
+def test_a_four_letter_word_that_is_no_symbol_binds_nothing():
+    """VDDS is no JEDEC symbol (third letter is not the suffix)."""
+    pin = [{"pin": "1", "name": "D", "type": "power_in"},
+           {"pin": "2", "name": "S", "type": "passive"}]
+    assert not cr.classify_row("VDDS", cr.pin_index(pin), pin)[0]
 
 
 # ---------------------------------------------------- the extraction library

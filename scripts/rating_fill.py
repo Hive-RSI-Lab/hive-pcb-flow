@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""rating_fill: fill a two-pin passive's rating rows from its own datasheet.
+"""rating_fill: fill a two-pin passive's (or a connector's) rating rows from
+its own datasheet.
 
 A part record (parts/<MPN>.json) whose two passive pins carry no
 `pin_ratings` row is counted by check_ratings as rating_unrated ("no rating
@@ -33,6 +34,15 @@ Readers (series, what each reads):
     temperature from the X5R/X7R characteristic range "(From -55 C to 85 C".
   Murata BLM ferrite beads: the rated-current table row for the MPN (85 C
     ambient) and "Operating temperature range"; no voltage figure exists.
+  JST PH wire-to-board headers (S2B-PH-SM4-TB, B10B-PH-K-S): the catalog's
+    Specifications, "Voltage rating: 100 V AC/DC", "Current rating: 2 A
+    AC/DC (AWG #24)" and "Temperature range". JST's catalog PDF draws its
+    text in a font shifted by 0x1F; the reader undoes the shift.
+
+A connector is the one multi-pin record filled: every pin passive, its
+contacts the pins not named MP (mounting pads carry no rating). Its voltage
+is rated between neighbouring contacts, so each contact but the last gets a
+row with ref the next contact's name; its current row names every contact.
 
 Rows this script wrote carry a source starting "rating_fill:" and are
 replaced on a rerun, so it is idempotent; rows written by hand are kept, and
@@ -70,7 +80,11 @@ def pdf_for(rec: dict, parts_dir: Path) -> Path | None:
     cands = []
     if m:
         cands += [parts_dir.parent / m.group(1), parts_dir / m.group(1)]
-    cands.append(parts_dir / "datasheets" / f"{rec.get('mpn')}.pdf")
+    mpn = str(rec.get("mpn") or "")
+    cands.append(parts_dir / "datasheets" / f"{mpn}.pdf")
+    # the sanitized names check_ratings also looks under ("#" -> "-")
+    for rx in (r"[^A-Za-z0-9._-]", r"[^A-Za-z0-9_-]"):
+        cands.append(parts_dir / "datasheets" / f"{re.sub(rx, '-', mpn)}.pdf")
     return next((c for c in cands if c.is_file()), None)
 
 
@@ -98,6 +112,12 @@ def _ohms(code: str) -> float | None:
 
 def _page_ranges(text: str) -> set[tuple[float, float]]:
     return {(float(a), float(b)) for a, b in RANGE_RE.findall(text)}
+
+
+def _unshift(text: str) -> str:
+    """JST's catalog font: every glyph drawn 0x1F below its letter."""
+    return "".join(chr(ord(c) + 0x1F) if 1 <= ord(c) <= 0x5F else c
+                   for c in text)
 
 
 # --- readers: (mpn, pages, title) -> {"rows": [...], "temp": ..., "notes": []}
@@ -251,7 +271,62 @@ def read_murata_blm(mpn: str, pages: list[dict], title: str) -> dict | None:
     return out
 
 
-READERS = (read_yageo_rc, read_murata_grm, read_samsung_cl, read_murata_blm)
+JST_PH_RE = re.compile(r"[SB]\d+B-PH-\S+")
+
+
+def read_jst_ph(mpn: str, pages: list[dict], title: str) -> dict | None:
+    if not JST_PH_RE.fullmatch(mpn):
+        return None
+    out = {"rows": [], "temp": None, "notes": []}
+    for pg in pages:
+        t = pg["text"]
+        if "rating" not in t:
+            t = _unshift(t)
+        where = f"{title}, p{pg['page'] + 1} PH Specifications"
+        v = re.search(r"Voltage\s+rating:\s*(\d+(?:\.\d+)?)\s*V.{0,2}AC/DC", t)
+        if v and not any(r["kind"] == "voltage" for r in out["rows"]):
+            out["rows"].append({
+                "kind": "voltage", "max": float(v.group(1)),
+                "source": f"{where}: Voltage rating {v.group(1)} V AC/DC "
+                          "between contacts"})
+        c = re.search(r"Current\s+rating:\s*(\d+(?:\.\d+)?)\s*A.{0,2}AC/DC"
+                      r"\s*.?(AWG\s*#\s*\d+)?", t)
+        if c and not any(r["kind"] == "current" for r in out["rows"]):
+            awg = f" ({c.group(2)})" if c.group(2) else ""
+            out["rows"].append({
+                "kind": "current", "max": float(c.group(1)),
+                "level": "recommended",
+                "source": f"{where}: Current rating {c.group(1)} A AC/DC"
+                          f"{awg} per contact"})
+        # the catalog's minus sign is drawn as a glyph of its own
+        o = re.search(r"Temperature\s+range:\s*[-\u2212\xf4]\s*(\d+)\D{0,3}"
+                      r"\s*to\s*\+?(\d+)", t)
+        if o and out["temp"] is None:
+            out["temp"] = ([-float(o.group(1)), float(o.group(2))],
+                           f"{where}: Temperature range -{o.group(1)} to "
+                           f"+{o.group(2)} C (including temperature rise)")
+    return out
+
+
+READERS = (read_yageo_rc, read_murata_grm, read_samsung_cl, read_murata_blm,
+           read_jst_ph)
+CONNECTORS = (JST_PH_RE,)
+
+
+def contacts(rec: dict) -> list[dict] | None:
+    """The pins a fill rates: both pins of a two-pin passive, a connector's
+    contacts (its pins not named MP); None for any other record."""
+    pins = list(rec.get("pinout") or [])
+    if any(p.get("type") != "passive" for p in pins):
+        return None
+    if len(pins) == 2:
+        return pins
+    mpn = str(rec.get("mpn") or "")
+    if not any(rx.fullmatch(mpn) for rx in CONNECTORS):
+        return None
+    cs = [p for p in pins if not str(p.get("pin", "")).upper().startswith("MP")
+          and str(p.get("name", "")).upper() != "MP"]
+    return cs if len(cs) >= 2 else None
 
 
 # --- the fill ------------------------------------------------------------------
@@ -259,8 +334,9 @@ READERS = (read_yageo_rc, read_murata_grm, read_samsung_cl, read_murata_blm)
 def _abs_max_figure(rec: dict, kind: str) -> list[float]:
     """The record's own free-text abs_max figures for a kind (V, A, W)."""
     unit = {"voltage": "V", "current": "A", "power": "W"}[kind]
-    rx = {"voltage": r"rated voltage|working voltage",
-          "current": r"rated current", "power": r"rated power"}[kind]
+    rx = {"voltage": r"rated voltage|working voltage|voltage rating",
+          "current": r"rated current|current rating",
+          "power": r"rated power"}[kind]
     return [float(r["value"]) for r in rec.get("abs_max") or []
             if str(r.get("unit") or "").strip() == unit
             and isinstance(r.get("value"), (int, float))
@@ -271,10 +347,11 @@ def fill(rec: dict, pages: list[dict]) -> dict:
     """-> {"record": new record, "filled": [...], "notes": [...]}; the record
     is unchanged when nothing reads."""
     mpn = str(rec.get("mpn") or "")
-    pins = [p for p in rec.get("pinout") or []]
+    pins = contacts(rec)
     rep = {"mpn": mpn, "filled": [], "notes": [], "record": rec}
-    if len(pins) != 2 or any(p.get("type") != "passive" for p in pins):
-        rep["notes"].append("not a two-pin passive: skipped")
+    if pins is None:
+        rep["notes"].append("not a two-pin passive or a known connector: "
+                            "skipped")
         return rep
     title = _title(rec)
     got = None
@@ -290,7 +367,6 @@ def fill(rec: dict, pages: list[dict]) -> dict:
     keep = [r for r in new.get("pin_ratings") or []
             if not str(r.get("source") or "").startswith(TAG)]
     hand = {r.get("kind", "voltage") for r in keep}
-    a, b = pins[0], pins[1]
     rows = list(keep)
     for r in got["rows"]:
         kind = r["kind"]
@@ -309,11 +385,13 @@ def fill(rec: dict, pages: list[dict]) -> dict:
             continue
         src = f"{TAG} {r['source']}"
         if kind == "voltage":
-            rows.append({"pins": [a["pin"]], "kind": "voltage",
-                         "level": "abs_max", "min": -r["max"],
-                         "max": r["max"], "ref": b["name"], "source": src})
+            for a, b in zip(pins, pins[1:]):
+                rows.append({"pins": [a["pin"]], "kind": "voltage",
+                             "level": "abs_max", "min": -r["max"],
+                             "max": r["max"], "ref": b["name"],
+                             "source": src})
         else:
-            rows.append({"pins": [a["pin"], b["pin"]], "kind": kind,
+            rows.append({"pins": [p["pin"] for p in pins], "kind": kind,
                          "level": r.get("level", "abs_max"), "max": r["max"],
                          "source": src})
         rep["filled"].append({"kind": kind, "max": r["max"], "source": src})
@@ -362,8 +440,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if not isinstance(rec, dict) or "pinout" not in rec:
             continue
-        pins = rec.get("pinout") or []
-        if len(pins) != 2 or any(p.get("type") != "passive" for p in pins):
+        if contacts(rec) is None:
             continue
         pdf = pdf_for(rec, a.parts)
         if pdf is None:
