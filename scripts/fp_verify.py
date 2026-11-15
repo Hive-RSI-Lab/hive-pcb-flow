@@ -34,14 +34,72 @@ Checks (land_pattern fields drive which run):
   - mechanical: with the extraction's `mechanical` block, every lead fits
                 its hole and every locating post has one
                 (check_connector_fit's tht_pin_tight, post_holes_missing ...)
+  - pad_numbering: with land_pattern.pads (where each pin sits in the  (error)
+                datasheet's top view) the record is fitted onto the pads
+                (quarter turns, and the angle the pin numbers point to, with
+                a shift; mirrored too, to name the cause) and each spot's
+                pad must carry the record's pin. `cause`:
+                bottom_view_numbering (the numbers fit the record mirrored),
+                numbering_rotated (they fit it turned: numbered from the
+                wrong corner), mirrored_footprint (the pads fit only
+                mirrored), numbers_differ. Still an error when the record's
+                own pins run clockwise and the footprint's don't: the message
+                says the record may be the fault, but a part that really
+                numbers clockwise must not pass on a wrong footprint
+  - pad_numbering_tied: after a pass, a record pin on a pad the       (warning)
+                footprint numbers otherwise, where a datasheet may tie the
+                two: the record's EP on a tab the footprint numbers 2
+                (`rule` shared), or a pin the record lists twice on a pad
+                numbered 4 or unnumbered, which gets no net (`rule`
+                repeated). Check the datasheet; the fit itself passed
+  - pad_positions_unmatched: land_pattern.pads fit the pads at no     (warning)
+                turn tried, straight or mirrored (check the record);
+                numbering is then judged by direction, if the family
+                allows, else unchecked
+  - pad_positions_off_axis: land_pattern.pads share no row or column  (warning)
+                while the pads do and fit no way that passes: the record is
+                turned by an angle that is no quarter turn, and its pin
+                numbers don't point to one that fits; judged as above
+  - pad_names_unmatched: land_pattern.pads share under half their     (warning)
+                pin numbers with the pads (named VDD/GND, say, where the
+                footprint numbers them); judged as above
+  - pad_numbering_direction: no per-pin data (or after a pass): on a  (warning)
+                perimeter package (SOIC, SOJ, SOP, SOT, SC-70, DFN, SON,
+                QFN, QFP, LGA, PowerPAK ...; lib/padnum.py lists them)
+                top-view numbers run counter-clockwise from pin 1;
+                clockwise means numbered from the bottom view. An error
+                when land_pattern.numbering says the other way
+  - bga_numbering_mirrored: on a BGA/CSP/WLP seen from the top with   (warning)
+                A1 top left, numbers run right and letters down; one of
+                the two flipped means numbered from the bottom view
+  - land_pattern_invalid: a land_pattern.pads entry the check can't   (warning)
+                read (not an object, no number, at_mm not two finite
+                numbers: left out; a bad size_mm: size ignored), pads not
+                a list, or a numbering other than ccw_top / cw_top
+                (ignored). `field` says which
 
-Not checked: which pad carries which pin. pin1 only asks that a pad numbered
-'1' exists, and the geometry checks don't read numbers, so a footprint that
-numbers its pads round the wrong side passes. Example: on SiTime's 3.2 x 2.5 mm
-PQFN-4 oscillator, pins 1 and 2 share a LONG side (2.1 mm apart, SiT1602B
-drawing POD-PQFN-004-X03225-002); numbering round the short side puts VDD on
-OE and OUT on the supply, and the clock never starts. Check numbering against
-the datasheet's top view or KiCad's stock footprint.
+Pad numbering (lib/padnum.py; facts.pad_numbering says what was judged and
+why not). The geometry checks never read a pad number, so these catch a
+footprint that matches the land pattern pad for pad with the pins on the
+wrong pads. Example: on SiTime's 3.2 x 2.5 mm PQFN-4 oscillator, pins 1 and 2
+share a LONG side (2.1 mm apart, SiT1602B drawing POD-PQFN-004-X03225-002);
+numbering round the short side puts VDD on OE and OUT on the supply, and the
+clock never starts. Those numbers still run counter-clockwise, so only
+land_pattern.pads catches it. The direction is read from the pins round
+the outline: tabs and exposed pads are left out, with the drilled pads
+numbered like them (thermal vias), and a ring whose top number is over
+twice its count of numbers (13, 4, 58: names, not pin numbers) gets no
+direction. The direction checks are warnings, not errors, because some
+parts really number clockwise in the top view: measured 2026-11-15 they
+flag 0 of 1536 perimeter footprints in KiCad's stock library (17 give no
+direction) and 1 of 303 BGAs (a WLCSP-6, not yet confirmed), and 3 of 456
+pulled ones: two Bosch LGA-8s (BME280), which really number clockwise, and
+an SO-6 not yet confirmed. A record that says which way
+(land_pattern.numbering: cw_top) silences that and makes a mismatch an
+error. Left alone: connectors (by the footprint's name), PLCCs, SOT-227
+modules, through-hole footprints (lib/fpattr.py's rule), unnamed families
+(chips, crystals, modules) and names that declare their numbering
+(Clockwise, CW, Reverse, SOT-143R, Pin_Swap, pinswapped).
 
 Exit (SPEC section 6): 0 = no error-severity findings (warnings allowed),
 1 = one or more errors, 2 = unreadable footprint/JSON.
@@ -64,12 +122,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import checklib  # noqa: E402
 import fplib  # noqa: E402
+import padnum  # noqa: E402
 
 SOURCE = "check.fp_verify"
 
 # JLC minimum annular ring (jlc_capabilities.yaml, the EDITS.md acceptance
 # bar); a THT pad below it cannot fab reliably whatever the datasheet says.
 ANNULUS_FLOOR_MM = 0.15
+
+# findings that name the pads carrying the wrong pin (reddened in the overlay)
+NUMBERING_KINDS = ("pad_numbering", "pad_numbering_tied",
+                   "pad_numbering_direction", "bga_numbering_mirrored")
 
 
 # A pad or ball name: "1", "A1", "EP", "SH2". Anything with a space is prose
@@ -198,7 +261,249 @@ def _modal_size(pads: list[fplib.Pad]) -> tuple[float, float] | None:
     return sizes.most_common(1)[0][0]
 
 
-def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tuple[list[dict], dict]:
+_TURNS = {1: "a quarter turn counter-clockwise", -1: "a quarter turn clockwise",
+          2: "a half turn"}
+_WAY = {"ccw": "counter-clockwise", "cw": "clockwise"}
+_CAUSE = {
+    "numbering_rotated": "the numbers would fit the record turned {turns} from "
+                         "where its pins fit the pads: numbered from the wrong "
+                         "corner or round the wrong side",
+    "bottom_view_numbering": "the numbers fit the record mirrored: numbered "
+                             "from the datasheet's bottom view",
+    "mirrored_footprint": "the pads fit the record only mirrored: the "
+                          "footprint was drawn from the datasheet's bottom view",
+    "numbers_differ": "the numbers fit the record at no turn tried, "
+                      "straight or mirrored",
+}
+
+
+def _turn_words(fit: dict) -> str:
+    """fit_record's numbering_rotated turn in words."""
+    if fit["turns"] in _TURNS:
+        return _TURNS[fit["turns"]]
+    d = fit.get("turn_deg") or 0.0
+    way = "counter-clockwise" if d > 0 else "clockwise"
+    return f"about {abs(d):.0f} degrees {way}" if abs(d) >= 1 else \
+        f"about {abs(d):.1f} degrees {way}"
+
+
+def _nums(nums) -> str:
+    return "/".join(n if n else "(unnumbered)" for n in nums)
+
+
+def _tie_message(tie: dict) -> str:
+    """Why a pin on a pad numbered otherwise passed, and what to check."""
+    pin, nums = tie["pin"], [n for n in tie["pads"] if n]
+    if tie["rule"] == "shared":
+        n = _nums(nums)
+        return (f"the record's pin {pin} sits on pad {n}, a tab or exposed "
+                f"pad: the footprint ties it to pin {n}; check that the "
+                f"datasheet connects {pin} to pin {n}")
+    if not nums:
+        return (f"the record lists pin {pin} here as well, and this pad has "
+                "no number, so it gets no net: number it "
+                f"{pin} unless the datasheet leaves it unconnected")
+    n = _nums(nums)
+    return (f"the record lists pin {pin} here as well, and the footprint "
+            f"numbers this pad {n}, which the record doesn't use: check that "
+            f"the datasheet ties it to pin {pin} and that the symbol has a "
+            f"pin {n}, or the pad gets no net")
+
+
+def _through_hole(fp: fplib.Footprint) -> bool:
+    """A through-hole part by lib/fpattr.py's rule: its pads, when they are
+    all one kind (a plated hole inside an SMD pad is that pad's thermal via,
+    not a pin), else its (attr). fpattr pulls in shapely, so it loads here."""
+    import fpattr
+    import sexpdata
+    v = fpattr.judge(sexpdata.loads(
+        Path(fp.path).read_text(encoding="utf-8", errors="replace")))
+    return (v["pads_say"] or v["declared"]) == "through_hole"
+
+
+def _check_numbering(fp: fplib.Footprint, ds: dict, land: dict, v,
+                     size_tol: float = 0.1) -> dict:
+    """Which pad carries which pin (lib/padnum.py). With land_pattern.pads
+    (the record's top-view pin positions) every pin's spot is compared,
+    within size_tol (--size-tol-mm) at least; else, and after a pass, the
+    direction the numbers run is judged by package family. Emits through
+    `v`; returns the facts."""
+    # library footprints are drawn from the front: a pad whose only copper
+    # is B.Cu (an exposed pad's back, a far-side test point) is no pin's land
+    copper = [p for p in fp.copper_pads
+              if [ly for ly in p.layers if ly.endswith(".Cu")] != ["B.Cu"]]
+    declared = land.get("numbering")
+    if declared is not None and declared not in ("ccw_top", "cw_top"):
+        v("warning", None,
+          f"land_pattern.numbering is {declared!r}, not ccw_top or cw_top: "
+          "ignored", "land_pattern_invalid", field="numbering")
+        declared = None
+    expected = "cw" if declared == "cw_top" else "ccw"
+    family, why = padnum.classify(
+        fp.name, *(n for n in (land.get("package"), ds.get("package"))
+                   if isinstance(n, str)))
+    if family is not None and _through_hole(fp):
+        family, why = None, "through_hole"
+    skipped: list = []
+    rec = padnum.record_pads(land, skipped)
+    if skipped:
+        said = "; ".join(
+            s["why"] if s["index"] is None else
+            f"pads[{s['index']}]" + (f" (pin {s['number']})" if s["number"] else "")
+            + f": {s['why']}" for s in skipped[:4])
+        if len(skipped) > 4:
+            said += f"; {len(skipped) - 4} more"
+        given = land.get("pads")
+        compared = (f"{len(rec)} of {len(given)} record pins compared"
+                    if isinstance(given, list) else "No record pin compared")
+        v("warning", None, f"{said}. {compared}; fix the record",
+          "land_pattern_invalid", field="pads", skipped=skipped)
+    fit = padnum.fit_record(copper, rec, size_tol) if rec else None
+    fp_dir = padnum.judge(copper, family) if family else None
+    rec_dir = padnum.judge(padnum.record_as_pads(rec), family) \
+        if family and rec else None
+    # the record decides when its pins fit the pads; else the direction does
+    by_record = bool(fit) and fit["verdict"] in ("pass", "numbering")
+    fact: dict = {"method": "record" if by_record else
+                  "direction" if fp_dir else None,
+                  "family": family, "why_not": None if family else why,
+                  "expected": _WAY[expected], "declared": declared}
+
+    def way(d):
+        """'cw'/'ccw' for a perimeter result, else None."""
+        return d.get("direction") if d and d["family"] == "perimeter" else None
+
+    if fp_dir:
+        fact["direction"] = {k: fp_dir[k] for k in
+                             ("family", "direction", "up", "down", "order",
+                              "turn", "mirrored") if k in fp_dir}
+    if rec_dir:
+        fact["record_direction"] = way(rec_dir) if rec_dir["family"] == "perimeter" \
+            else ("mirrored" if rec_dir["mirrored"] else "top")
+    if fit:
+        place = fit["placement"] or {}
+        fact.update(result=fit["verdict"], cause=fit["cause"], turns=fit["turns"],
+                    cost_mm=fit["cost"], tol_mm=fit["tol"],
+                    shared_names=fit["shared_names"],
+                    turn_deg=fit["turn_deg"],
+                    record_rotation_deg=place["turn_deg"] if place else None,
+                    record_mirrored=place.get("mirrored"),
+                    renames=[{"pin": r["pin"], "pads": r["pads"]}
+                             for r in fit["renames"]],
+                    ties=[{"pin": t["pin"], "pads": t["pads"], "rule": t["rule"]}
+                          for t in fit["ties"]])
+        if fit["verdict"] == "pass":
+            for t in fit["ties"]:
+                v("warning", t["at"], _tie_message(t), "pad_numbering_tied",
+                  pads=list(t["pads"]), pin=t["pin"], rule=t["rule"])
+        if fit["verdict"] == "numbering":
+            mm = fit["mismatches"]
+            spots = "; ".join(f"pad {_nums(m['pads'])} sits where the datasheet's "
+                              f"top view has pin {m['pin']}" for m in mm[:4])
+            if len(mm) > 4:
+                spots += f"; {len(mm) - 4} more"
+            hint = _CAUSE[fit["cause"]].format(turns=_turn_words(fit))
+            if fit["cause"] in ("bottom_view_numbering", "mirrored_footprint"):
+                hint += (" (if the record was copied from a bottom view or "
+                         "with y up, fix the record instead)")
+            if way(rec_dir) not in (None, expected) and way(fp_dir) == expected:
+                # still an error: some parts really number clockwise, and
+                # the record is what the footprint is checked against
+                hint += (f"; the record's own pins run {_WAY[way(rec_dir)]} "
+                         f"and the footprint's {_WAY[expected]}: check the "
+                         "record first (a record copied from a bottom view "
+                         "runs the wrong way); if the part really numbers "
+                         f"{_WAY[way(rec_dir)]}, the footprint is wrong")
+            elif rec_dir and fp_dir and fp_dir["family"] == rec_dir["family"] \
+                    == "bga" and rec_dir["mirrored"] and not fp_dir["mirrored"]:
+                # every ball grid's top view runs the same way: the record
+                # is the likelier fault, but it is what the footprint is
+                # checked against
+                hint += ("; the record's ball rows and columns run as in a "
+                         "bottom view and the footprint's as in the top view: "
+                         "check the record first")
+            bad = {n for m in mm for n in m["pads"]}
+            if fit["cause"] == "mirrored_footprint":
+                # drawn from the bottom view, pads and numbers mirrored
+                # together, it can match the mirrored record spot for spot:
+                # the pads are wrong, not their numbers. Those off their pins
+                # with the record laid straight, or all when that tells none
+                # apart (padnum._misplaced)
+                bad |= set(fit["misplaced"] or (p.number for p in copper))
+            bad = sorted(bad)
+            v("error", mm[0]["at"] if mm else None,
+              f"{spots}: {hint}" if spots else hint,
+              "pad_numbering", pads=bad, cause=fit["cause"], turns=fit["turns"],
+              turn_deg=fit["turn_deg"],
+              mismatches=[{"pin": m["pin"], "pads": m["pads"]} for m in mm])
+            return fact
+        # without a direction to fall back on (no package family, too few
+        # pads, numbers that run both ways) the numbering went unchecked
+        judged = bool(fp_dir) and (fp_dir["family"] == "bga" or
+                                   fp_dir.get("direction") is not None)
+        rest = ("the numbering was checked only by direction" if judged else
+                "the numbering was not checked")
+        if fit["verdict"] == "names_differ":
+            n_rec = len({r["number"] for r in rec})
+            v("warning", None,
+              f"land_pattern.pads and the footprint's pads share "
+              f"{fit['shared_names']} of the record's {n_rec} pin numbers: "
+              "nothing to compare (the record numbers its pins as the "
+              f"pinout does: '1', 'A1', 'EP'); {rest}",
+              "pad_names_unmatched", shared_names=fit["shared_names"])
+        if fit["verdict"] == "unmatched":
+            v("warning", None,
+              f"land_pattern.pads fit the footprint's pads at no turn tried, "
+              f"straight or mirrored (worst pin {fit['cost']:.2f} mm off, limit "
+              f"{fit['tol']:.2f} mm): check the record's pad positions; {rest}",
+              "pad_positions_unmatched", cost_mm=fit["cost"], tol_mm=fit["tol"])
+        if fit["verdict"] == "off_axis":
+            v("warning", None,
+              "land_pattern.pads share no row or column while the footprint's "
+              "pads do, and fit no way that passes: the record looks turned by "
+              "other than a quarter turn, and its pin numbers point to no turn "
+              "that fits. Redraw it square to the axes; "
+              f"{rest}", "pad_positions_off_axis")
+    same = (" The record's pins sit the same way (land_pattern.pads matches "
+            "pad for pad): if they were copied from a bottom view, fix both."
+            if fit and fit["verdict"] == "pass" else "")
+    if not fp_dir:
+        return fact
+    pin1 = next((p.copper_center for p in copper
+                 if p.number.strip().upper() in ("1", "A1")), None)
+    if fp_dir["family"] == "perimeter":
+        got = fp_dir["direction"]
+        if got is None or got == expected:
+            return fact
+        order = ", ".join(str(n) for n in fp_dir["order"][:12])
+        if len(fp_dir["order"]) > 12:
+            order += ", ..."
+        if declared:
+            msg = (f"pads numbered {_WAY[got]} seen from the top (round the "
+                   f"outline: {order}), but the record's land_pattern.numbering "
+                   f"is {declared} ({_WAY[expected]})")
+        else:
+            msg = (f"pads numbered clockwise seen from the top (round the "
+                   f"outline: {order}): top-view numbers run counter-clockwise "
+                   "from pin 1, so this looks numbered from the datasheet's "
+                   "bottom view; if the part really numbers clockwise (Bosch's "
+                   "LGA-8), say so in its record: land_pattern.numbering: cw_top")
+        v("error" if declared else "warning", pin1, msg + same,
+          "pad_numbering_direction", pads=[str(n) for n in fp_dir["order"]],
+          direction=got, expected=expected)
+    elif fp_dir["mirrored"]:
+        v("warning", pin1,
+          "ball rows and columns run the wrong way round: seen from the top "
+          "with A1 at the top left, numbers run right and letters down, and "
+          "here one of them runs the other way, as when numbered from the "
+          "bottom view" + same,
+          "bga_numbering_mirrored", pads=sorted({p.number for p in copper}),
+          turn=fp_dir["turn"])
+    return fact
+
+
+def verify(footprint: Path, ds: dict, pitch_tol: float,
+           size_tol: float) -> tuple[list[dict], dict, fplib.Footprint]:
     fp = fplib.parse_footprint(footprint)
     copper = fp.copper_pads
     centers = [p.center for p in copper]
@@ -359,6 +664,10 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               "half-annuli overlapping at the seams)",
               "stroked_pad_primitive", primitives=p.stroked_prims)
 
+    # --- which pad carries which pin: against the record's top view
+    # (land_pattern.pads), else by the way the numbers run
+    numbering = _check_numbering(fp, ds, land, v, size_tol)
+
     # --- courtyard presence (warning; LEARNINGS: easyeda2kicad sometimes omits it)
     if not fp.has_courtyard:
         v("warning", None, "no courtyard layer (F/B.CrtYd) - courtyard-based "
@@ -378,6 +687,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "mechanical": mech_fact or None,
         "pin1": pin1_fact,
         "not_judged": not_judged,
+        "pad_numbering": numbering,
     }
     return viol, facts, fp
 
@@ -398,7 +708,8 @@ def write_svg(path: Path, fp: fplib.Footprint, bad_pads: set[str],
               land: dict, scale: float = 40.0, margin: float = 10.0) -> None:
     """Overlay: copper pads (rotated rects) with numbers + size labels.
 
-    Pads flagged as geometry mismatches are drawn red; others blue. A header
+    Pads flagged as geometry or numbering mismatches are drawn red; others
+    blue. A header
     line states measured vs datasheet-expected count/pitch/size.
     """
     copper = fp.copper_pads
@@ -431,7 +742,7 @@ def write_svg(path: Path, fp: fplib.Footprint, bad_pads: set[str],
                  f'(datasheet {exp_ct}), pitch/size from datasheet '
                  f'{exp_pitch}mm</text>')
     parts.append(f'<text x="{margin}" y="32" font-family="monospace" '
-                 f'font-size="11" fill="#b00">red = geometry mismatch</text>'
+                 f'font-size="11" fill="#b00">red = geometry or numbering mismatch</text>'
                  if bad_pads else
                  f'<text x="{margin}" y="32" font-family="monospace" '
                  f'font-size="11" fill="#080">all pads within tolerance</text>')
@@ -479,6 +790,10 @@ def main(argv: list[str] | None = None) -> int:
         flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing")
                    for v in viol)
         bad_pads = {p.number for p in fp.copper_pads} if flag else set()
+        # a numbering finding names its pads
+        for x in viol:
+            if x["kind"] in NUMBERING_KINDS:
+                bad_pads.update(x.get("pads") or [])
         write_svg(svg_path, fp, bad_pads, facts["land_pattern"])
         facts["svg"] = str(svg_path)
 

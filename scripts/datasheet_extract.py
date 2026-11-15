@@ -258,6 +258,59 @@ DATASHEET_SCHEMA: dict = {
                          "(default '1'; 'A1' on a ball grid, even when "
                          "that ball is depopulated). A name, not a "
                          "description: put where pin 1 is in notes"},
+                # fp_verify's pad_numbering: each footprint pad must carry
+                # the pin that sits at its spot (lib/padnum.py, #1102)
+                "pads": {
+                    "type": "array",
+                    "description": "where each pin sits in the TOP view: "
+                                   "centre in mm from the package centre, "
+                                   "x right, y down (as KiCad draws). Take "
+                                   "it from the recommended land pattern "
+                                   "(a top view) when there is one. Mirror "
+                                   "(x -> -x) only a figure the datasheet "
+                                   "labels a bottom view, as many package "
+                                   "outlines are. Any quarter turn is fine "
+                                   "(fp_verify tries all four). Keep it "
+                                   "square to the axes: drawn at another "
+                                   "angle it still fits a right footprint, "
+                                   "but a wrong one then only warns "
+                                   "(pad_positions_off_axis)",
+                    "items": {
+                        "type": "object",
+                        "required": ["number", "at_mm"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "number": {"type": "string", "minLength": 1,
+                                       "description": "pin number as the "
+                                       "pinout gives it ('1', 'A1', 'EP')"},
+                            "at_mm": {"type": "array",
+                                      "items": {"type": "number"},
+                                      "minItems": 2, "maxItems": 2},
+                            "size_mm": {"type": "array",
+                                        "items": {"type": "number",
+                                                  "minimum": 0},
+                                        "minItems": 2, "maxItems": 2,
+                                        "description": "the land's [x, y] "
+                                        "extent in the same top view (a QFN's "
+                                        "left and right pins are longer in x "
+                                        "than in y). Optional; give it for "
+                                        "every pin or none: it keeps a tab "
+                                        "or exposed pad out of the record's "
+                                        "own direction check. A size that "
+                                        "misses the pad's by more than "
+                                        "fp_verify's --size-tol-mm makes "
+                                        "the fit worse; a pin's spot may "
+                                        "be off by 0.4 x the closest pin "
+                                        "spacing (at least --size-tol-mm)"},
+                            "source": _SRC,
+                        },
+                    },
+                },
+                "numbering": {"type": "string", "enum": ["ccw_top", "cw_top"],
+                              "description": "which way the pin numbers run "
+                              "round the package in the TOP view; set "
+                              "cw_top for the rare part numbered clockwise "
+                              "(Bosch's LGA-8) so fp_verify expects it"},
                 "notes": {"type": "string"},
             },
         },

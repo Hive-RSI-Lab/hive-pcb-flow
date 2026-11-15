@@ -58,6 +58,24 @@ venv python; JSON out, exit 0/1/2. Keep output ASCII.
   the body), `land_pattern.courtyard_mm` [w, h], and for a connector
   `land_pattern.wire_entry_local` (+X/-X/+Y/-Y, KiCad y down). A missing one
   is a gap the P3 screen reports, never a number you guess.
+- Pin positions (`land_pattern.pads`, every part with a package drawing):
+  where each pin sits in the TOP view, `{number, at_mm: [x, y], size_mm:
+  [x, y], source}` with mm from the package centre, x right and y down, and
+  `size_mm` the land's extent along x and y in that same view (a QFN's left
+  and right pins are longer in x than in y), for every pin or none. Take the
+  places from the recommended land pattern (a top view) when there is one;
+  mirror (x -> -x) only a figure the datasheet labels a BOTTOM view, as many
+  package outlines are. Any quarter turn is fine (fp_verify tries all four),
+  but keep it square to the axes: drawn at another angle it still fits a
+  right footprint, while a wrong one only warns. Say which figure gave the
+  numbers (the pinout's "top view" figure) and which gave the places (the
+  land drawing). fp_verify fits these onto the
+  footprint's pads and fails a pad carrying the wrong pin: a footprint
+  numbered from the bottom view or from the wrong corner (SiT1602 PQFN-4:
+  pins 1 and 2 share a long side) matches every dimension and still swaps
+  nets. Set `land_pattern.numbering: cw_top` when the top view really
+  numbers clockwise (Bosch's LGA-8), `ccw_top` when the drawing says so;
+  leave it out when you can't tell.
 - Mechanical (every through-hole part and every connector): the
   `mechanical` block from the dimensioned drawing and its PCB layout -
   `pins` (the leads' MAX cross-section, dia_mm or w_mm x t_mm, with the

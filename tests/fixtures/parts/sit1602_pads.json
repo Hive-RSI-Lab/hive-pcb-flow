@@ -1,0 +1,88 @@
+{
+ "mpn": "SIT1602BI-22-18E-25.000000E",
+ "package": "4-pad PQFN 3.2 x 2.5 x 0.75 mm (ordering size code 2; POD-PQFN-004-X03225-002)",
+ "pinout": [
+  {
+   "pin": "1",
+   "name": "OE",
+   "type": "input"
+  },
+  {
+   "pin": "2",
+   "name": "GND",
+   "type": "ground"
+  },
+  {
+   "pin": "3",
+   "name": "OUT",
+   "type": "output"
+  },
+  {
+   "pin": "4",
+   "name": "VDD",
+   "type": "power_in"
+  }
+ ],
+ "land_pattern": {
+  "package": "SiTime 4-pad PQFN 3.2 x 2.5 x 0.75 mm, POD-PQFN-004-X03225-002 rev A04 (01-APR-2019), drawing and recommended land p11",
+  "pad_count": 4,
+  "pitch_mm": 1.9,
+  "pad_size_mm": [
+   1.4,
+   1.2
+  ],
+  "row_spacing_mm": 2.2,
+  "pin1": "1",
+  "notes": "SiTime SiT1602B PQFN-4 3.2 x 2.5 mm, POD-PQFN-004-X03225-002 p11 land. Top view (Fig 1 p2): 1 and 2 share a long side, e 2.1 apart along the 3.2 axis. pads: portrait, 3.2 along y.",
+  "pads": [
+   {
+    "number": "1",
+    "at_mm": [
+     -0.95,
+     -1.1
+    ],
+    "size_mm": [
+     1.2,
+     1.4
+    ],
+    "source": "datasheet Fig 1 p2 (top view) and land p11"
+   },
+   {
+    "number": "2",
+    "at_mm": [
+     -0.95,
+     1.1
+    ],
+    "size_mm": [
+     1.2,
+     1.4
+    ],
+    "source": "datasheet Fig 1 p2 (top view) and land p11"
+   },
+   {
+    "number": "3",
+    "at_mm": [
+     0.95,
+     1.1
+    ],
+    "size_mm": [
+     1.2,
+     1.4
+    ],
+    "source": "datasheet Fig 1 p2 (top view) and land p11"
+   },
+   {
+    "number": "4",
+    "at_mm": [
+     0.95,
+     -1.1
+    ],
+    "size_mm": [
+     1.2,
+     1.4
+    ],
+    "source": "datasheet Fig 1 p2 (top view) and land p11"
+   }
+  ]
+ }
+}

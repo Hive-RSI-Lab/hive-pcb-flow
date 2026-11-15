@@ -462,8 +462,13 @@ verbs:
         tier: sonnet/high
         why: "fills the schema; --validate rejects a bad extraction with paths"
       - do: "scripts/fp_verify.py --footprint {ws}/lib/aiee.pretty/{lcsc}.kicad_mod --datasheet-json {ws}/parts/{lcsc}.json --svg {reports}/{lcsc}-fp.svg"
-        why: "pad count / pin 1 / pitch are errors; pad size + missing courtyard
-              are warnings. The SVG overlay is for the human, not the gate."
+        why: "pad count / pin 1 / pitch are errors, and so is a pad carrying the
+              wrong pin against land_pattern.pads; pad size, missing courtyard,
+              a record pin on a pad numbered as another (pad_numbering_tied,
+              e.g. a SOT-223 tab tied to pin 2) and clockwise (bottom-view)
+              numbering without pads are warnings; numbering that runs against
+              the record's land_pattern.numbering is an error. The SVG overlay
+              is for the human, not the gate."
       - agent: librarian
         tier: sonnet/medium
         why: "only for residue the scripts flag (plated pegs, DIP switches,

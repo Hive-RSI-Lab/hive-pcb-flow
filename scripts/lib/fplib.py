@@ -11,6 +11,7 @@ fp_verify.py (land-pattern diff). Everything is millimetres.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,7 +38,8 @@ def _kid(n, name: str):
 
 
 def _nums(n) -> list[float]:
-    return [float(x) for x in n[1:] if isinstance(x, (int, float))]
+    """The numbers of node `n` ([] for None)."""
+    return [float(x) for x in n[1:] if isinstance(x, (int, float))] if n else []
 
 
 def _layer_tokens(node) -> list[str]:
@@ -72,10 +74,52 @@ class Pad:
     # KiCad 10.0.6's DRC and connectivity saw only a stroked gr_circle's centre
     # line (#1133), and gr_poly / gr_rect are likely the same
     stroked_prims: list[str] = field(default_factory=list)
+    # centre of the pad's copper bounding box, footprint frame: `at` for a
+    # plain pad; a custom pad's primitives move it (a ring drawn round a port
+    # off its anchor). None means `at`.
+    copper_xy: tuple[float, float] | None = None
+    # that bounding box's (w, h) along the footprint axes, rotation applied
+    copper_wh: tuple[float, float] | None = None
+    # (roundrect_rratio R): corner radius over the shorter side
+    rratio: float = 0.25
+    # a custom pad's anchor shape, (options (anchor rect|circle))
+    anchor: str = "rect"
+    # (drill ... (offset X Y)): the copper's offset from the hole (`at`) in
+    # the pad's own frame; KiCad draws the shape there, the hole at `at`
+    drill_offset: tuple[float, float] = (0.0, 0.0)
 
     @property
     def center(self) -> tuple[float, float]:
         return (self.at[0], self.at[1])
+
+    @property
+    def anchor_center(self) -> tuple[float, float]:
+        """Where the pad's shape (a custom pad's anchor) is: `at` moved by
+        the drill offset, turned with the pad."""
+        ox, oy = self.drill_offset
+        if not ox and not oy:
+            return self.center
+        r = math.radians(self.at[2])
+        c, s = math.cos(r), math.sin(r)
+        return (self.at[0] + ox * c + oy * s, self.at[1] - ox * s + oy * c)
+
+    @property
+    def anchor_size(self) -> tuple[float, float]:
+        """That shape's bounding box (w, h) along the footprint's x and y
+        (a custom pad's anchor only, without its primitives)."""
+        shape = self.anchor if self.shape == "custom" else self.shape
+        return _turned_wh(shape, self.size[0], self.size[1], self.at[2],
+                          self.rratio)
+
+    @property
+    def copper_center(self) -> tuple[float, float]:
+        """Where the pad's copper is: the centre of its bounding box."""
+        return self.copper_xy if self.copper_xy is not None else self.anchor_center
+
+    @property
+    def copper_size(self) -> tuple[float, float]:
+        """The copper bounding box (w, h) along the footprint's x and y."""
+        return self.copper_wh if self.copper_wh is not None else self.anchor_size
 
     @property
     def is_copper(self) -> bool:
@@ -153,12 +197,150 @@ def _parse_pad(node) -> Pad | None:
     # fp_verify's annulus uses `drill_xy` per axis.
     drill = _kid(node, "drill")
     dn = _nums(drill) if drill is not None else []
+    off = _xy(_kid(drill, "offset")) if drill is not None else None
+    off = off or (0.0, 0.0)
+    rr = _nums(_kid(node, "roundrect_rratio")) or [0.25]
+    anchor = _kid(_kid(node, "options"), "anchor")
+    copper_xy = copper_wh = None
+    box = _custom_bbox(node, sn[0], sn[1]) if shape == "custom" else None
+    if box is not None:
+        x0, y0, x1, y1 = box
+        copper_xy, copper_wh = _place_bbox(
+            (x0 + off[0], y0 + off[1], x1 + off[0], y1 + off[1]), an[0], an[1], rot)
     return Pad(number=number, ptype=ptype, shape=shape,
                at=(an[0], an[1], rot), size=(sn[0], sn[1]),
                layers=[str(_tok(t)) for t in (_kid(node, "layers") or [None])[1:]],
                drill=max(dn) if dn else None,
                drill_xy=((dn[0], dn[1] if len(dn) > 1 else dn[0]) if dn else None),
-               stroked_prims=_stroked_prims(node))
+               stroked_prims=_stroked_prims(node),
+               copper_xy=copper_xy, copper_wh=copper_wh, rratio=rr[0],
+               anchor=str(_tok(anchor[1])) if anchor is not None and len(anchor) > 1
+               else "rect", drill_offset=off)
+
+
+def _xy(node) -> tuple[float, float] | None:
+    n = _nums(node) if node is not None else []
+    return (n[0], n[1]) if len(n) >= 2 else None
+
+
+def _turned_wh(shape: str, w: float, h: float, rot: float,
+               rratio: float = 0.25) -> tuple[float, float]:
+    """The axis-aligned (w, h) of a w x h pad shape turned `rot` degrees:
+    exact for circle, oval (a stadium), rect and roundrect; any other shape
+    (trapezoid, chamfered) by its rectangle."""
+    r = math.radians(rot)
+    c, s = abs(math.cos(r)), abs(math.sin(r))
+    if shape == "circle":
+        return (w, w)
+    if shape == "oval":
+        a = abs(w - h) / 2.0              # half the straight part
+        if w >= h:
+            return (2 * a * c + h, 2 * a * s + h)
+        return (2 * a * s + w, 2 * a * c + w)
+    if shape == "roundrect":
+        rad = min(max(rratio, 0.0), 0.5) * min(w, h)
+        iw, ih = w - 2 * rad, h - 2 * rad
+        return (iw * c + ih * s + 2 * rad, iw * s + ih * c + 2 * rad)
+    return (w * c + h * s, w * s + h * c)
+
+
+def _arc_extent(a, m, b) -> list[tuple[float, float]]:
+    """Points bounding the arc a -> m -> b: its ends plus every axis extreme
+    the sweep passes (the circle's left/right/top/bottom)."""
+    (x1, y1), (x2, y2), (x3, y3) = a, m, b
+    d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+    if abs(d) < 1e-12:
+        return [a, m, b]
+    cx = ((x1**2 + y1**2) * (y2 - y3) + (x2**2 + y2**2) * (y3 - y1)
+          + (x3**2 + y3**2) * (y1 - y2)) / d
+    cy = ((x1**2 + y1**2) * (x3 - x2) + (x2**2 + y2**2) * (x1 - x3)
+          + (x3**2 + y3**2) * (x2 - x1)) / d
+    r = math.hypot(x1 - cx, y1 - cy)
+    t1, t2, t3 = (math.atan2(y - cy, x - cx) for x, y in (a, m, b))
+    tau = 2 * math.pi
+
+    def sweep(frm, to):                   # angle from `frm` to `to`, increasing
+        return (to - frm) % tau
+
+    span = sweep(t1, t3)
+    if sweep(t1, t2) > span:              # the mid point is on the other way
+        t1, span = t3, tau - span
+    pts = [a, b]
+    for k in range(4):
+        t = k * math.pi / 2
+        if sweep(t1, t) <= span:
+            pts.append((cx + r * math.cos(t), cy + r * math.sin(t)))
+    return pts
+
+
+def _custom_bbox(node, w: float, h: float):
+    """A custom pad's copper bounding box (x0, y0, x1, y1) in its own frame:
+    the anchor (`size`, centred on the pad origin) and every gr_* primitive,
+    strokes included. None when the pad has no primitives."""
+    prims = _kid(node, "primitives")
+    if prims is None:
+        return None
+    pts: list[tuple[float, float, float]] = [(-w / 2, -h / 2, 0.0), (w / 2, h / 2, 0.0)]
+    for n in prims[1:]:
+        if not _is_node(n):
+            continue
+        kind = _head(n)
+        wn = _kid(n, "width")
+        if wn is None and _kid(n, "stroke") is not None:
+            wn = _kid(_kid(n, "stroke"), "width")
+        half = (_nums(wn)[0] if wn is not None and _nums(wn) else 0.0) / 2.0
+        if kind == "gr_circle":
+            c, e = _xy(_kid(n, "center")), _xy(_kid(n, "end"))
+            if c and e:
+                r = math.hypot(e[0] - c[0], e[1] - c[1])
+                pts += [(c[0] - r, c[1] - r, half), (c[0] + r, c[1] + r, half)]
+        elif kind in ("gr_line", "gr_rect"):
+            for k in ("start", "end"):
+                q = _xy(_kid(n, k))
+                if q:
+                    pts.append((q[0], q[1], half))
+        elif kind == "gr_arc":
+            a, m, b = (_xy(_kid(n, k)) for k in ("start", "mid", "end"))
+            ang = _nums(_kid(n, "angle"))
+            if a and b and not m and ang:
+                # KiCad 5: (start) is the centre, (end) where the arc
+                # begins, (angle A) its sweep, clockwise on screen
+                c, a = a, b
+                vx, vy = a[0] - c[0], a[1] - c[1]
+
+                def turn(t):                  # KiCad's RotatePoint by t deg
+                    t = math.radians(t)
+                    return (c[0] + vx * math.cos(t) + vy * math.sin(t),
+                            c[1] + vy * math.cos(t) - vx * math.sin(t))
+                m, b = turn(-ang[0] / 2), turn(-ang[0])
+            if a and m and b:
+                pts += [(x, y, half) for x, y in _arc_extent(a, m, b)]
+        elif kind in ("gr_poly", "gr_curve"):
+            ptsn = _kid(n, "pts")
+            for q in (ptsn[1:] if ptsn is not None else []):
+                if not _is_node(q):
+                    continue
+                if _head(q) == "xy" and _xy(q):
+                    pts.append((*_xy(q), half))
+                elif _head(q) == "arc":
+                    a, m, b = (_xy(_kid(q, k)) for k in ("start", "mid", "end"))
+                    if a and m and b:
+                        pts += [(x, y, half) for x, y in _arc_extent(a, m, b)]
+    return (min(x - e for x, _, e in pts), min(y - e for _, y, e in pts),
+            max(x + e for x, _, e in pts), max(y + e for _, y, e in pts))
+
+
+def _place_bbox(box, ax: float, ay: float, rot: float):
+    """A pad-frame box placed in the footprint: the centre turned by the pad
+    angle (KiCad: positive turns counter-clockwise on screen, y down) and the
+    turned box's axis-aligned (w, h)."""
+    x0, y0, x1, y1 = box
+    px, py = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    r = math.radians(rot)
+    c, s = math.cos(r), math.sin(r)
+    w, h = x1 - x0, y1 - y0
+    centre = (ax + px * c + py * s, ay - px * s + py * c)
+    return centre, (w * abs(c) + h * abs(s), w * abs(s) + h * abs(c))
 
 
 def _strip_lib_prefix(name: str) -> str:

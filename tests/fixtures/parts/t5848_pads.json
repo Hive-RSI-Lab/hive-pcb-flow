@@ -1,0 +1,155 @@
+{
+ "mpn": "MMICT5848-00-012",
+ "package": "bottom-port MEMS microphone, 8-terminal LGA",
+ "pinout": [
+  {
+   "pin": "1",
+   "name": "WS",
+   "type": "input"
+  },
+  {
+   "pin": "2",
+   "name": "LR",
+   "type": "input"
+  },
+  {
+   "pin": "3",
+   "name": "GND",
+   "type": "ground"
+  },
+  {
+   "pin": "4",
+   "name": "WAKE",
+   "type": "output"
+  },
+  {
+   "pin": "5",
+   "name": "THSEL",
+   "type": "input"
+  },
+  {
+   "pin": "6",
+   "name": "SCK",
+   "type": "clock"
+  },
+  {
+   "pin": "7",
+   "name": "VDD",
+   "type": "power_in"
+  },
+  {
+   "pin": "8",
+   "name": "SD",
+   "type": "tristate"
+  }
+ ],
+ "land_pattern": {
+  "package": "TDK T5848 8-terminal LGA_CAV 3.5 x 2.65 x 0.98 mm (outline Fig 35 p39; land Fig 33 p37)",
+  "pad_count": 8,
+  "pitch_mm": 0.82,
+  "pin1": "1",
+  "pad_size_mm": [
+   0.522,
+   0.6
+  ],
+  "notes": "TDK T5848 LGA-8 3.5 x 2.65 mm, land Fig 33 p37; numbers from the top view Fig 3 p10, turned so the port is on the right. Ring 3 is the GND ring round the port.",
+  "pads": [
+   {
+    "number": "7",
+    "at_mm": [
+     -1.364,
+     -0.9
+    ],
+    "size_mm": [
+     0.522,
+     0.6
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   },
+   {
+    "number": "8",
+    "at_mm": [
+     -1.364,
+     0.0
+    ],
+    "size_mm": [
+     0.522,
+     0.6
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   },
+   {
+    "number": "1",
+    "at_mm": [
+     -1.364,
+     0.9
+    ],
+    "size_mm": [
+     0.522,
+     0.6
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   },
+   {
+    "number": "6",
+    "at_mm": [
+     -0.544,
+     -0.9
+    ],
+    "size_mm": [
+     0.522,
+     0.6
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   },
+   {
+    "number": "2",
+    "at_mm": [
+     -0.544,
+     0.9
+    ],
+    "size_mm": [
+     0.522,
+     0.6
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   },
+   {
+    "number": "5",
+    "at_mm": [
+     1.473,
+     -1.05
+    ],
+    "size_mm": [
+     0.3,
+     0.3
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   },
+   {
+    "number": "4",
+    "at_mm": [
+     1.473,
+     1.05
+    ],
+    "size_mm": [
+     0.3,
+     0.3
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   },
+   {
+    "number": "3",
+    "at_mm": [
+     0.708,
+     0.0
+    ],
+    "size_mm": [
+     1.625,
+     1.625
+    ],
+    "source": "Fig 3 p10 (top view), land Fig 33 p37; turned so the port is on the right"
+   }
+  ]
+ }
+}
