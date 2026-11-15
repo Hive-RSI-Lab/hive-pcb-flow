@@ -224,6 +224,12 @@ diodes); 5 before 6.
     drawn backwards).
 
 11. **Load against a source's limit.** pdlc-2, in training.
+   - Rule 32 `source_limit` (`rail_over`, `ldo_heat`, `gpio_over`,
+     `gpio_total_over`, `vbus_over`) checks the loads a
+     reference/source_limits.yaml row names against a regulator's rated
+     output and heat, an MCU's pin and total limits, and a USB port's
+     default current. pdlc-2 stays missed: its load is the off-board
+     panel's capacitance, which no netlist states.
 
 12. **Footprint geometry vs the maker's drawing** (new, round 3). The
     footprint matches the package name but not the part:

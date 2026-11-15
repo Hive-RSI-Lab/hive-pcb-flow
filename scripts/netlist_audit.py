@@ -223,6 +223,23 @@ schematic-level structural problems BEFORE board work starts:
    on STM32G0/C0 PA14 is BOOT0 too). Class 6 of docs/miss-taxonomy.md;
    facts pin_role_parts_checked, protector_cell_sides_checked,
    debug_mcus_checked.
+ - rail_over / ldo_heat / gpio_over (error), gpio_total_over / vbus_over
+   (warning; vbus_over an error on a port with no CC pins): a load against
+   its source's limit, from reference/source_limits.yaml rows (cited,
+   verified by part_rows.py). rail_over: the loads a row names on a
+   regulator's output (through 0 ohm links; a downstream LDO passes its
+   own load up; a resistor + LED to ground whose value gives its Vf) ask
+   more than its iout_max (flexgrid's 200 mA TPS7A03 feeding an
+   ESP32-S3-WROOM-1 that wants a 500 mA supply). ldo_heat: (Vin - Vout)
+   x the continuous load (a row marked peak, a radio's burst, is not
+   heat) x its best package's theta_ja + 25 degC past tj_max. gpio_over:
+   an MCU pin driving or sinking an LED through a resistor past pin_max;
+   the pins together past total_max warn. vbus_over: a USB connector's
+   VBUS loads past 500 mA (900 mA with SuperSpeed pins) and no
+   power-delivery controller on the board. A rail with loads no row
+   covers, an LED with no Vf in its value, or volts the net names don't
+   give is not judged, never guessed. Class 11 of docs/miss-taxonomy.md;
+   fact source_limits_checked.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -3117,6 +3134,367 @@ def _mcu_i2c_swaps(nets: dict, comps: dict,
     return out, checked
 
 
+SOURCE_LIMITS = HERE.parent / "reference" / "source_limits.yaml"
+# a part that takes no supply current worth counting, or passes the rail
+# through (passives, test points, jumpers, mounting holes, fiducials)
+_SL_PASSIVE_RE = re.compile(r"^(R|RN|C|L|FB|D|LED|TP|JP|SJ|H|MH|FID|SW|F|"
+                            r"Y|X|Q|NT)\d")
+_SL_LED_RE = re.compile(r"LED", re.I)
+_SL_VF_RE = re.compile(r"(?<![\d.])(\d(?:\.\d+)?)\s*V(?![A-Za-z0-9])")
+# a USB power-delivery or charger-detect controller: the port may give more
+# than the default current, so the VBUS budget is not judged
+_SL_PD_RE = re.compile(r"^(STUSB45|FUSB30|TPS2575|TPS6598|CYPD|HUSB23|CH22[14]|"
+                       r"IP272|AP3377|RT1715|TCPP0|PTN5110|BQ2589|BQ2560|"
+                       r"MAX7748|TUSB32)", re.I)
+_SL_SS_RE = re.compile(r"^(SSTX|SSRX|TX\d?[+-]|RX\d?[+-]|STDA_SS|SSTX[+-]|"
+                       r"SS_?[TR]X)", re.I)
+_SL_CC_RE = re.compile(r"^CC\d?$", re.I)
+
+
+def load_source_limits(path: Path = SOURCE_LIMITS) -> dict:
+    """reference/source_limits.yaml as {regulators, loads, gpio, usb}."""
+    import yaml  # noqa: PLC0415
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise checklib.CheckError(f"source limits {path}: {exc}") from exc
+    return {"regulators": doc.get("regulators") or [],
+            "loads": doc.get("loads") or [],
+            "gpio": doc.get("gpio") or [],
+            "usb": doc.get("usb") or {"usb2_a": 0.5, "usb3_a": 0.9}}
+
+
+def _sl_row(rows: list[dict], comp: dict) -> dict | None:
+    if comp.get("dnp"):
+        return None
+    return next((r for r in rows if _spec_matches(r, comp)), None)
+
+
+def _sl_led_vf(comp: dict) -> float | None:
+    """An LED's forward voltage, only when its value says it (2.65V)."""
+    m = _SL_VF_RE.search(comp.get("value") or "")
+    return float(m.group(1)) if m else None
+
+
+def _sl_is_led(ref: str, comp: dict) -> bool:
+    return bool(re.match(r"^(D|LED)\d", ref) and _SL_LED_RE.search(
+        (comp.get("value") or "") + " "
+        + (comp.get("libsource") or ("", ""))[1]))
+
+
+def _sl_led_chains(net: str, nets: dict, comps: dict,
+                   comp_pins: dict[str, dict[str, str]], rails: dict
+                   ) -> list[dict]:
+    """Resistor + LED chains from NET to a net of known volts: NET-R-LED-far
+    or NET-LED-R-far. Each: {r, led, ohms, vf (or None), far, far_v}."""
+    out = []
+    for m in nets.get(net, []):
+        a = m["ref"]
+        pins = comp_pins.get(a, {})
+        if len(pins) != 2 or comps.get(a, {}).get("dnp"):
+            continue
+        mid = next((n for p, n in pins.items() if p != m["pin"]), None)
+        if not mid or mid == net:
+            continue
+        for m2 in nets.get(mid, []):
+            b = m2["ref"]
+            if b == a or len(comp_pins.get(b, {})) != 2 \
+                    or comps.get(b, {}).get("dnp"):
+                continue
+            far = next((n for p, n in comp_pins[b].items()
+                        if p != m2["pin"]), None)
+            if far is None or far == mid or far not in rails:
+                continue
+            kinds = {_part_kind(a), _part_kind(b)}
+            led = a if _sl_is_led(a, comps[a]) else (
+                b if _sl_is_led(b, comps[b]) else None)
+            r = b if led == a else a
+            if led is None or _part_kind(r) != "R" or "R" not in kinds:
+                continue
+            ohms = engcalc.parse_value(comps[r].get("value"))
+            if not ohms:
+                continue
+            out.append({"r": r, "led": led, "ohms": float(ohms),
+                        "vf": _sl_led_vf(comps[led]), "far": far,
+                        "far_v": rails[far]})
+    return out
+
+
+def _sl_rail_load(net: str, nets: dict, comps: dict,
+                  comp_pins: dict[str, dict[str, str]], table: dict,
+                  rails: dict, skip: set[str], _depth: int = 0) -> dict:
+    """What hangs on rail NET (and the nets one 0 ohm resistor away): the
+    current its known loads draw (peak: every row; cont: rows not marked
+    peak, LED chains, downstream LDOs' own continuous load), the parts it
+    can't tell, and the rows the sum rests on."""
+    res = {"peak": 0.0, "cont": 0.0, "known": [], "unknown": [],
+           "rows": []}
+    reach = _zero_ohm_reach(net, nets, comps, comp_pins)
+    seen = set(skip)
+    v_rail = next((rails[n] for n in reach if n in rails), None)
+    for n in reach:
+        for m in nets.get(n, []):
+            ref = m["ref"]
+            comp = comps.get(ref, {})
+            if not ref or ref in seen or comp.get("dnp"):
+                continue
+            func = _norm_pin(m.get("pinfunction"))
+            reg = _sl_row(table["regulators"], comp)
+            if reg and re.search(reg["in"], func, re.I):
+                seen.add(ref)
+                outs = {nn for p, nn in comp_pins.get(ref, {}).items()
+                        if re.search(reg["out"], _norm_pin(
+                            _pin_func(nets, ref, p, nn)), re.I)}
+                if reg.get("kind") != "ldo" or not outs or _depth > 3:
+                    res["unknown"].append(f"{ref} ({comp.get('value')})")
+                    continue
+                sub = _sl_rail_load(sorted(outs)[0], nets, comps, comp_pins,
+                                    table, rails, seen | {ref}, _depth + 1)
+                seen |= {ref}
+                res["peak"] += sub["peak"]
+                res["cont"] += sub["cont"]
+                res["rows"] += [reg] + sub["rows"]
+                res["unknown"] += sub["unknown"]
+                if sub["peak"]:
+                    res["known"].append(
+                        f"{ref} ({comp.get('value')}) passing on "
+                        f"{sub['peak']:.3g} A")
+                continue
+            load = _sl_row(table["loads"], comp)
+            if load and re.search(load["supply"], func, re.I):
+                seen.add(ref)
+                i = float(load["i_supply"])
+                res["peak"] += i
+                if not load.get("peak"):
+                    res["cont"] += i
+                res["rows"].append(load)
+                res["known"].append(f"{ref} ({comp.get('value')}) "
+                                    f"{i * 1000:g} mA")
+                continue
+            if _base_type(m.get("pintype")) == "power_out" or reg:
+                continue
+            if _SL_PASSIVE_RE.match(ref):
+                continue
+            if _CONNECTOR_RE.match(ref) or _base_type(
+                    m.get("pintype")) == "power_in":
+                seen.add(ref)
+                res["unknown"].append(f"{ref} ({comp.get('value')})")
+        if v_rail is None:
+            continue
+        for ch in _sl_led_chains(n, nets, comps, comp_pins, rails):
+            if ch["r"] in seen or ch["led"] in seen or ch["far_v"] != 0:
+                continue
+            seen |= {ch["r"], ch["led"]}
+            if ch["vf"] is None:
+                res["unknown"].append(f"{ch['led']} (an LED with no Vf "
+                                      f"in its value)")
+                continue
+            i = max(0.0, (v_rail - ch["vf"]) / ch["ohms"])
+            res["peak"] += i
+            res["cont"] += i
+            res["known"].append(f"{ch['led']} via {ch['r']} "
+                                f"{i * 1000:.3g} mA")
+    return res
+
+
+def _pin_func(nets: dict, ref: str, pin: str, net: str) -> str:
+    return next((m.get("pinfunction") or "" for m in nets.get(net, [])
+                 if m["ref"] == ref and m["pin"] == pin), "")
+
+
+def _sl_judged(rows: list[dict]) -> bool:
+    return all(r.get("verified") is True for r in rows)
+
+
+def _sl_src(rows: list[dict]) -> str:
+    seen = []
+    for r in rows:
+        s = " ".join(str(r.get("source", r.get("mpn"))).split())
+        if s not in seen:
+            seen.append(s)
+    return "; ".join(seen)
+
+
+def _source_limits(nets: dict, comps: dict,
+                   comp_pins: dict[str, dict[str, str]], table: dict,
+                   rails: dict):
+    """Rule 32's findings: (kind, sev, net, refs, msg, rows, extra) and
+    ("not_judged", msg) notes, then ("checked", n)."""
+    from check_ratings import reg_out_volts  # noqa: PLC0415
+    checked = 0
+    # rail_over / ldo_heat
+    for ref in sorted(comps):
+        comp = comps[ref]
+        reg = _sl_row(table["regulators"], comp)
+        if not reg:
+            continue
+        pins = comp_pins.get(ref, {})
+        outs = sorted({n for p, n in pins.items() if re.search(
+            reg["out"], _norm_pin(_pin_func(nets, ref, p, n)), re.I)})
+        ins = sorted({n for p, n in pins.items() if re.search(
+            reg["in"], _norm_pin(_pin_func(nets, ref, p, n)), re.I)})
+        if not outs or outs[0].startswith("unconnected-"):
+            continue
+        checked += 1
+        out = outs[0]
+        ld = _sl_rail_load(out, nets, comps, comp_pins, table, rails, {ref})
+        lim = float(reg["iout_max"])
+        rows = [reg] + ld["rows"]
+        val = comp.get("value")
+        unk = (f"; it can't tell {len(ld['unknown'])} more "
+               f"({', '.join(ld['unknown'][:4])}"
+               f"{', ...' if len(ld['unknown']) > 4 else ''})"
+               if ld["unknown"] else "")
+        if ld["peak"] > lim + 1e-9:
+            yield ("rail_over", "error", out, [ref], (
+                f"{ref} ({val}) is rated for {lim * 1000:g} mA out, but "
+                f"the loads on '{out}' it can name ask "
+                f"{ld['peak'] * 1000:.3g} mA: {', '.join(ld['known'])}"
+                f"{unk}. Fit a regulator rated for the sum, or split the "
+                f"rail [{_sl_src(rows)}]"),
+                rows, {"limit_a": lim, "load_a": round(ld["peak"], 4)})
+        elif ld["unknown"]:
+            yield ("not_judged",
+                   f"rail_over on {out}: {ref} ({val}) is rated "
+                   f"{lim * 1000:g} mA; the loads with a datasheet row ask "
+                   f"{ld['peak'] * 1000:.3g} mA, and "
+                   f"{len(ld['unknown'])} load(s) have no current row "
+                   f"({', '.join(ld['unknown'][:4])})")
+        vout = rails.get(out, reg_out_volts(str(val or "")))
+        vin = next((rails[n] for n in ins if n in rails), None)
+        if not ld["cont"]:
+            continue
+        if vin is None or vout is None:
+            yield ("not_judged",
+                   f"ldo_heat on {out}: {ref} ({val}) passes "
+                   f"{ld['cont'] * 1000:.3g} mA continuous, but its "
+                   f"{'input' if vin is None else 'output'} volts can't "
+                   f"be read from the net names")
+            continue
+        p = max(0.0, vin - vout) * ld["cont"]
+        tj = 25 + p * float(reg["theta_ja"])
+        if tj > float(reg["tj_max"]):
+            yield ("ldo_heat", "error", out, [ref], (
+                f"{ref} ({val}) drops {vin:g} V to {vout:g} V at "
+                f"{ld['cont'] * 1000:.3g} mA continuous "
+                f"({', '.join(ld['known'])}): {p:.3g} W, which at its "
+                f"best package's {float(reg['theta_ja']):g} °C/W puts the "
+                f"junction at {tj:.0f} °C from 25 °C ambient, past its "
+                f"{float(reg['tj_max']):g} °C. Drop the input volts, use a "
+                f"switcher, or cut the load [{_sl_src(rows)}]"),
+                rows, {"power_w": round(p, 3), "tj_c": round(tj, 1)})
+    # gpio_over
+    for ref in sorted(comps):
+        comp = comps[ref]
+        row = _sl_row(table["gpio"], comp)
+        if not row:
+            continue
+        pins = comp_pins.get(ref, {})
+        vio = next((rails[n] for p, n in pins.items() if n in rails
+                    and rails[n] > 0 and re.search(
+                        row["supply"], _norm_pin(_pin_func(nets, ref, p, n)),
+                        re.I)), None)
+        if vio is None:
+            continue
+        checked += 1
+        src_sum = sink_sum = 0.0
+        hits, vague = [], []
+        for p, n in sorted(pins.items()):
+            func = _norm_pin(_pin_func(nets, ref, p, n))
+            if not re.search(row["pins"], func, re.I):
+                continue
+            for ch in _sl_led_chains(n, nets, comps, comp_pins, rails):
+                sink = ch["far_v"] > 0
+                drive = ch["far_v"] if sink else vio
+                hi = drive / ch["ohms"]
+                i = (None if ch["vf"] is None
+                     else max(0.0, (drive - ch["vf"]) / ch["ohms"]))
+                if i is None:
+                    vague.append((func, ch, hi))
+                    i_low = 0.0
+                else:
+                    i_low = i
+                if sink:
+                    sink_sum += i_low
+                else:
+                    src_sum += i_low
+                pmax = row.get("pin_max")
+                if pmax is None:
+                    continue
+                if i is not None and i > float(pmax) + 1e-9:
+                    hits.append((func, n, ch, i))
+                elif i is None and hi > float(pmax) + 1e-9:
+                    yield ("not_judged",
+                           f"gpio_over on {n}: {ref} {func} drives "
+                           f"{ch['led']} through {ch['r']} "
+                           f"({ch['ohms']:g} ohm), up to "
+                           f"{hi * 1000:.3g} mA against "
+                           f"{float(pmax) * 1000:g} mA, but the LED's Vf "
+                           f"isn't in its value")
+        src = " ".join(row["source"].split())
+        for func, n, ch, i in hits:
+            yield ("gpio_over", "error", n, [ref, ch["r"], ch["led"]], (
+                f"{ref} ({comp.get('value')}) {func} drives {ch['led']} "
+                f"through {ch['r']} ({ch['ohms']:g} ohm) at "
+                f"{i * 1000:.3g} mA, past the {row['pin_max'] * 1000:g} mA "
+                f"one pin may carry. Raise {ch['r']} or drive the LED "
+                f"through a transistor [{src}]"),
+                [row], {"pin": func, "current_a": round(i, 4)})
+        tmax = row.get("total_max")
+        for what, s in (("source", src_sum), ("sink", sink_sum)):
+            if tmax is not None and s > float(tmax) + 1e-9:
+                yield ("gpio_total_over", "warning", None, [ref], (
+                    f"{ref} ({comp.get('value')})'s pins {what} "
+                    f"{s * 1000:.3g} mA into LEDs together, past the "
+                    f"{float(tmax) * 1000:g} mA the part allows in all. "
+                    f"Fine only if they are never all on at once; "
+                    f"otherwise raise the resistors [{src}]"),
+                    [row], {"current_a": round(s, 4)})
+    # vbus_over
+    if any(_SL_PD_RE.match(c.get("value") or "")
+           for c in comps.values() if not c.get("dnp")):
+        yield ("checked", checked)
+        return
+    usb = table.get("usb") or {}
+    for ref in sorted(comps):
+        comp = comps[ref]
+        if not _CONNECTOR_RE.match(ref) or comp.get("dnp") or not re.search(
+                "USB", (comp.get("value") or "") + " "
+                + (comp.get("libsource") or ("", ""))[1], re.I):
+            continue
+        pins = comp_pins.get(ref, {})
+        funcs = {p: _norm_pin(_pin_func(nets, ref, p, n))
+                 for p, n in pins.items()}
+        vb = sorted({pins[p] for p, f in funcs.items()
+                     if re.match(r"^VBUS", f, re.I)
+                     and not pins[p].startswith("unconnected-")})
+        if not vb:
+            continue
+        checked += 1
+        ss = any(_SL_SS_RE.match(f) for f in funcs.values())
+        typec = any(_SL_CC_RE.match(f) for f in funcs.values())
+        lim = float(usb.get("usb3_a" if ss else "usb2_a",
+                            0.9 if ss else 0.5))
+        ld = _sl_rail_load(vb[0], nets, comps, comp_pins, table, rails,
+                           {ref})
+        if ld["peak"] > lim + 1e-9:
+            more = (" A Type-C source may offer 1.5 A or 3 A on CC without "
+                    "PD, so this holds only on a default-current port"
+                    if typec else "")
+            yield ("vbus_over", "warning" if typec else "error", vb[0],
+                   [ref], (
+                       f"'{vb[0]}' from {ref} feeds loads that ask "
+                       f"{ld['peak'] * 1000:.3g} mA "
+                       f"({', '.join(ld['known'])}), past the "
+                       f"{lim * 1000:g} mA a USB {'3' if ss else '2'} port "
+                       f"gives with no power-delivery controller on the "
+                       f"board.{more} [USB 2.0 7.2.1, USB 3.2 11.4.1; "
+                       f"{_sl_src(ld['rows'])}]"),
+                   ld["rows"], {"limit_a": lim,
+                                "load_a": round(ld["peak"], 4)})
+    yield ("checked", checked)
+
+
 def audit(parsed: dict, constraints: dict,
           decoupling: dict | None,
           pin_requirements: list[dict] | None = None,
@@ -3129,7 +3507,8 @@ def audit(parsed: dict, constraints: dict,
           bus_load: dict | None = None,
           stock_symbols: Path | str | None = None,
           pin_abs_max: dict | None = None,
-          part_pinouts: list[dict] | None = None
+          part_pinouts: list[dict] | None = None,
+          source_limits: dict | None = None
           ) -> tuple[list[dict], dict]:
     """stock_symbols: KiCad's stock symbol dir for the pin-map rule;
     None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off.
@@ -4233,6 +4612,21 @@ def audit(parsed: dict, constraints: dict,
            f"Bring {sig} to a header or pad [{src}]",
            mcu=ref, signal=sig, part=row["mpn"])
 
+    # 32. a load against its source's limit (reference/source_limits.yaml;
+    # class 11 of docs/miss-taxonomy.md; errata corpus: flexgrid's 200 mA
+    # TPS7A03 feeding an ESP32-S3 module that wants 500 mA)
+    sl_table = (load_source_limits() if source_limits is None
+                else source_limits)
+    sl_checked = 0
+    for hit in _source_limits(nets, comps, comp_pins, sl_table, pl_rails):
+        if hit[0] == "checked":
+            sl_checked = hit[1]
+        elif hit[0] == "not_judged":
+            not_judged.append(hit[1])
+        else:
+            kind, sev, net, refs, msg, rows, extra = hit
+            vt(_sl_judged(rows), sev, kind, net, refs, msg, **extra)
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -4272,6 +4666,7 @@ def audit(parsed: dict, constraints: dict,
         "pin_role_parts_checked": role_checked,
         "protector_cell_sides_checked": cell_checked,
         "debug_mcus_checked": dbg_checked,
+        "source_limits_checked": sl_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged

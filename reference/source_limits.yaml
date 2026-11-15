@@ -1,0 +1,194 @@
+# What each power source can give, and what each load asks of it, for
+# netlist_audit.py's source_limit rule (class 11 of docs/miss-taxonomy.md:
+# a load against its source's limit).
+#
+# regulators: a linear regulator's rated output and its heat limit.
+#   match      regex tried against the part's Value, then its symbol name
+#              (case-insensitive)
+#   kind       ldo (input current = output current)
+#   out / in   regex on the output / input pin function
+#   iout_max   A: the most output current the datasheet rates the part for
+#              (recommended operating conditions, or a guaranteed figure)
+#   tj_max     degC: the operating junction temperature limit
+#   theta_ja   degC/W: the lowest junction-to-ambient thermal resistance
+#              of any package the datasheet lists, so a heat finding holds
+#              whichever package is fitted
+# loads: a part's demand on the rail its supply pins are on.
+#   supply     regex on the supply pin function
+#   i_supply   A: the current the datasheet says the supply must be able to
+#              deliver
+#   peak       true when that is a peak the part draws in bursts (a radio's
+#              transmit): it counts against iout_max but not as heat
+# gpio: an MCU's limits on current from its I/O pins.
+#   pins       regex on the I/O pin functions the limits cover
+#   supply     regex on the supply pin whose rail drives the pins
+#   pin_max    A: the most one pin may source or sink
+#   total_max  A: the most all the covered pins together may source (or
+#              sink)
+# usb: what a USB port gives with no power-delivery negotiation (USB 2.0
+#   section 7.2.1 and USB 3.2 section 11.4.1: one unit load after
+#   configuration is 100 mA for USB 2, 150 mA for USB 3; a high-power port
+#   gives five units, 500 mA, or six, 900 mA).
+#
+# cite / verified as in io_levels.yaml: `bin/hwde part_rows --verify`
+# checks each quote is on its page and each cited number is in the quote.
+# A finding only an unverified row makes is reported as not judged.
+#
+# Seeded from the corpus survey for #1168: every LDO the training and
+# holdout boards use that has a datasheet in hand, the ESP32 modules on
+# those LDOs' rails, and the MCUs that drive LEDs.
+
+usb:
+  usb2_a: 0.5
+  usb3_a: 0.9
+
+regulators:
+- mpn: TPS7A03
+  match: ^TPS7A03
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.2
+  tj_max: 125
+  theta_ja: 179.1
+  source: TI SBVS371 (TPS7A03), 7.3 Recommended Operating Conditions, 7.4 Thermal Information
+  cite:
+  - {doc: tps7a03.pdf, sha256: 380a29471a259514a129855475f0c3761eefb59a1c1d849fe7a70076e47cf9eb, page: 5, table: '', quote: 'IOUT Output current 0 200 mA', fields: [iout_max]}
+  - {doc: tps7a03.pdf, sha256: 380a29471a259514a129855475f0c3761eefb59a1c1d849fe7a70076e47cf9eb, page: 5, table: '', quote: 'TJ Operating junction temperature –40 125 °C', fields: [tj_max]}
+  - {doc: tps7a03.pdf, sha256: 380a29471a259514a129855475f0c3761eefb59a1c1d849fe7a70076e47cf9eb, page: 5, table: '', quote: 'RθJA Junction-to-ambient thermal resistance 179.1 181.9 201.1 °C/W', fields: [theta_ja]}
+- mpn: TPS7A05
+  match: ^TPS7A05
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.2
+  tj_max: 125
+  theta_ja: 144.1
+  source: TI SBVS286 (TPS7A05), 7.3 Recommended Operating Conditions, 7.4 Thermal Information
+  cite:
+  - {doc: tps7a05.pdf, sha256: 4e552a784da45faa63f0104e7fd2ebee4cc080adfa070e78acd6a162886b9a65, page: 6, table: '', quote: 'IOUT Output current (1) 0 200 mA', fields: [iout_max]}
+  - {doc: tps7a05.pdf, sha256: 4e552a784da45faa63f0104e7fd2ebee4cc080adfa070e78acd6a162886b9a65, page: 6, table: '', quote: 'TJ Operating junction temperature –40 125 °C', fields: [tj_max]}
+  - {doc: tps7a05.pdf, sha256: 4e552a784da45faa63f0104e7fd2ebee4cc080adfa070e78acd6a162886b9a65, page: 6, table: '', quote: 'RθJA Junction-to-ambient thermal resistance 267.3 185.6 144.1 198.0 °C/W', fields: [theta_ja]}
+- mpn: TPS7A20
+  match: ^TPS7A20
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.3
+  tj_max: 125
+  theta_ja: 166.1
+  source: TI SBVS338 (TPS7A20), 6.3 Recommended Operating Conditions, 6.4 Thermal Information
+  cite:
+  - {doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 5, table: '', quote: 'IOUT Output current 0 300 mA', fields: [iout_max]}
+  - {doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 5, table: '', quote: 'TJ Operating junction temperature –40 125 °C', fields: [tj_max]}
+  - {doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 6, table: '', quote: 'RθJA Junction-to-ambient thermal resistance 187.1 166.1 199.6 201.4 °C/W', fields: [theta_ja]}
+- mpn: TLV755
+  match: ^TLV755
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.5
+  tj_max: 125
+  theta_ja: 60.3
+  source: TI SBVS320 (TLV755P), 6.3 Recommended Operating Conditions, 6.4 Thermal Information
+  cite:
+  - {doc: tlv755.pdf, sha256: 3b41288e9288966d0d96e835efc1a50ac1194dc828dba94c7261b2c558aa343e, page: 4, table: '', quote: 'IOUT Output current 0 500 mA', fields: [iout_max]}
+  - {doc: tlv755.pdf, sha256: 3b41288e9288966d0d96e835efc1a50ac1194dc828dba94c7261b2c558aa343e, page: 4, table: '', quote: 'TJ Junction temperature –40 125 °C', fields: [tj_max]}
+  - {doc: tlv755.pdf, sha256: 3b41288e9288966d0d96e835efc1a50ac1194dc828dba94c7261b2c558aa343e, page: 5, table: '', quote: 'RθJA Junction-to-ambient thermal resistance 60.3 N/A 100.8 N/A', fields: [theta_ja]}
+- mpn: MIC5504
+  match: ^MIC5504
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.3
+  tj_max: 125
+  theta_ja: 250
+  source: Microchip DS20005698 (MIC5501/2/3/4), Features, Operating Ratings
+  cite:
+  - {doc: mic5504.pdf, sha256: ccd7fb69d16512749dfc3ddae750c3e763932df514742ec780bc87accc03a1f7, page: 1, table: '', quote: '300 mA Guaranteed Output Current', fields: [iout_max]}
+  - {doc: mic5504.pdf, sha256: ccd7fb69d16512749dfc3ddae750c3e763932df514742ec780bc87accc03a1f7, page: 5, table: '', quote: 'Operating Junction Temperature Range TJ –40 — +125 °C', fields: [tj_max]}
+  - {doc: mic5504.pdf, sha256: ccd7fb69d16512749dfc3ddae750c3e763932df514742ec780bc87accc03a1f7, page: 5, table: '', quote: 'JA — 250 — °C/W', fields: [theta_ja]}
+- mpn: AMS1117
+  match: ^AMS1117
+  verified: true
+  kind: ldo
+  out: ^V?OUT$|^VO$
+  in: ^V?IN$|^VI$
+  iout_max: 1.0
+  tj_max: 125
+  theta_ja: 46
+  source: Advanced Monolithic Systems AMS1117 datasheet, Features, Absolute Maximum Ratings (SOT-223 46 to over 90 degC/W by mounting)
+  cite:
+  - {doc: ams1117.pdf, sha256: 189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0, page: 1, table: '', quote: 'designed to provide up to1A output current', fields: [iout_max]}
+  - {doc: ams1117.pdf, sha256: 189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0, page: 2, table: '', quote: 'Power Transistor -40 °C to 125 °C', fields: [tj_max]}
+  - {doc: ams1117.pdf, sha256: 189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0, page: 2, table: '', quote: '46 °C/W to >90 °C/W depending on mounting technique', fields: [theta_ja]}
+- mpn: AP2112
+  match: ^AP2112
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.6
+  tj_max: 150
+  theta_ja: 114
+  source: Diodes DS39724 Rev. 2-2 (AP2112), Absolute Maximum Ratings, Electrical Characteristics (no operating TJ is given; the absolute TJ stands in)
+  cite:
+  - {doc: ap2112.pdf, sha256: ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f, page: 4, table: '', quote: 'IOUT(MAX) Maximum Output Current VIN = 2.5V, VOUT = 1.182V to 1.218V 600 — — mA', fields: [iout_max]}
+  - {doc: ap2112.pdf, sha256: ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f, page: 3, table: '', quote: 'TJ Operating Junction Temperature Range +150 °C', fields: [tj_max]}
+  - {doc: ap2112.pdf, sha256: ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f, page: 3, table: '', quote: 'SO-8 114', fields: [theta_ja]}
+
+loads:
+- mpn: ESP32-S3-WROOM-1
+  match: ESP32-S3-WROOM-1
+  verified: true
+  supply: ^3V3$
+  i_supply: 0.5
+  peak: true
+  source: Espressif ESP32-S3-WROOM-1 datasheet, Recommended Operating Conditions
+  cite:
+  - {doc: esp32s3wroom1.pdf, sha256: 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435, page: 27, table: '', quote: 'IV DD Current delivered by external power supply 0.5 — — A', fields: [i_supply]}
+- mpn: ESP32-C3-WROOM-02
+  match: ESP32-C3-WROOM-02
+  verified: true
+  supply: ^3V3$
+  i_supply: 0.5
+  peak: true
+  source: Espressif ESP32-C3-WROOM-02 datasheet, Recommended Operating Conditions
+  cite:
+  - {doc: esp32c3wroom02.pdf, sha256: 622db737a711a75e89185aed850f3854c77d515c32ddf0ba9886653663cfdabe, page: 21, table: '', quote: 'IV DD Current delivered by external power supply 0.5 — — A', fields: [i_supply]}
+- mpn: ESP32-C6-MINI-1
+  match: ESP32-C6-MINI-1
+  verified: true
+  supply: ^3V3$
+  i_supply: 0.5
+  peak: true
+  source: Espressif ESP32-C6-MINI-1 datasheet, Recommended Operating Conditions
+  cite:
+  - {doc: esp32c6mini1.pdf, sha256: 26691033f31cbebf623842c16624e61151b152533c13a850c091c8e858c510a2, page: 26, table: '', quote: 'IV DD Current delivered by external power supply 0.5 — — A', fields: [i_supply]}
+
+gpio:
+- mpn: RP2040
+  match: ^RP2040$
+  verified: true
+  pins: ^(GPIO|QSPI)
+  supply: ^IOVDD
+  total_max: 0.05
+  source: RP2040 Datasheet (build 2024-10), 5.5.3 Pin Specifications, Table 625
+  cite:
+  - {doc: rp2040.pdf, sha256: be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c, page: 617, table: '', quote: 'IIOVDD_MAX 50 mA Sum of all current', fields: [total_max]}
+- mpn: ATmega328PB
+  match: ATmega328PB
+  verified: true
+  pins: ^P[BCDE]\d
+  supply: ^VCC
+  pin_max: 0.04
+  total_max: 0.1
+  source: Microchip DS40001906 (ATmega328PB), 33.1 Absolute Maximum Ratings and 33.2 DC Characteristics notes 3 and 4
+  cite:
+  - {doc: atmega328pb.pdf, sha256: 3fecad6c2b7954a10b0df4d3a096354599bff2e4aaad766b616f2340d6e998ca, page: 350, table: '', quote: 'DC Current per I/O Pin 40.0mA', fields: [pin_max]}
+  - {doc: atmega328pb.pdf, sha256: 3fecad6c2b7954a10b0df4d3a096354599bff2e4aaad766b616f2340d6e998ca, page: 350, table: '', quote: 'DC Current VCC and GND Pins 100.0mA', fields: [total_max]}
