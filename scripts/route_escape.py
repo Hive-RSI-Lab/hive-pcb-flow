@@ -1163,7 +1163,8 @@ def fine_cap_row(n_copper: int) -> dict | None:
 
 def free_filled_via_layers() -> set[int]:
     """Layer counts whose filled, capped vias the fab charges nothing for."""
-    return bgalib.free_fill_layers()
+    import order_quote
+    return bgalib.free_fill_layers(order_quote.load_pricing(order_quote.PRICING))
 
 
 def plane_ball_specs(bg, refs: list[str], nets: list[str]) -> list[str]:

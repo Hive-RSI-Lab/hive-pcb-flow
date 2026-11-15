@@ -236,12 +236,10 @@ def fine_via(bga: Bga, n_copper: int, cap: dict | None,
             "hole_clearance": FINE_VIA_HOLE_CLEARANCE_MM}
 
 
-def free_fill_layers() -> set[int]:
+def free_fill_layers(pricing: dict) -> set[int]:
     """Layer counts whose filled, capped vias the fab charges nothing for
-    (jlc_pricing.yaml options.via_fill_epoxy priced 0)."""
-    import order_quote
-    table = (order_quote.load_pricing(order_quote.PRICING).get("options")
-             or {}).get("via_fill_epoxy") or {}
+    (pricing: order_quote.load_pricing(); options.via_fill_epoxy priced 0)."""
+    table = (pricing.get("options") or {}).get("via_fill_epoxy") or {}
     return {int(k) for k, v in table.items() if float(v or 0) == 0}
 
 

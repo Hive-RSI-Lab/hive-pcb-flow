@@ -777,7 +777,9 @@ def test_fine_via_budget_clearance_is_hole_clearance_less_ring():
 
 
 def test_the_real_jlc_rows_give_0_25_0_15_from_6_layers():
-    assert re_.free_filled_via_layers() == bgalib.free_fill_layers()
+    assert bgalib.free_fill_layers({"options": {"via_fill_epoxy": {
+        4: 30.0, 6: 0, 8: 0.0}}}) == {6, 8}
+    assert bgalib.free_fill_layers({}) == set()
     for n in (6, 8):
         fv = bgalib.fine_via(_bga(0.5, 0.25), n, re_.fine_cap_row(n),
                              re_.free_filled_via_layers())

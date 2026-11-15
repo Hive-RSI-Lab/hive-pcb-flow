@@ -461,7 +461,11 @@ def bga_rules(bg, cap: dict, stackup: dict | None = None
     if hdi:
         add_hdi(hdilib.via_type_rules(stackup, caps))
     bgas = bgalib.find_bgas(bg)
-    free = bgalib.free_fill_layers() if bgas and not hdi else set()
+    free = set()
+    if bgas and not hdi:
+        import order_quote
+        free = bgalib.free_fill_layers(
+            order_quote.load_pricing(order_quote.PRICING))
     for b in bgas:
         fv = None if hdi else bgalib.fine_via(b, len(bg.copper_layers),
                                               cap, free)
