@@ -127,6 +127,7 @@ TOUCH = 1e-3   # mm: copper this close is one piece (as net_islands has it)
 NEAR = 0.05    # mm: a neighbour query's reach, past every rule's tol
 REPRUNE = 3    # peels after a refill, at most (#1140)
 CUT_MIN = 0.01  # mm: a dead end cut back leaves this much track, at least
+LOST_NEAR = 1.0  # mm: how near what cut a pour back from copper is named
 CUT_CAP = 4     # cuts of one track in one peel, at most
 RIP_FILE = "01-rip.route_edit.json"
 PLACE_FILE = "02-place.place_edit.json"
@@ -687,6 +688,146 @@ def _dead_on(pcb: Path, bg, nets) -> set:
     return set(_dangling(pcb, bg, nets, cuts=cuts)[0]) | set(cuts)
 
 
+def _core(it) -> tuple:
+    """A geom Track's or Via's centre line or point, its copper's reach
+    past that, and the copper layers it is on."""
+    if isinstance(it, geom.Track):
+        return it.shape, it.width / 2.0, (it.layer,)
+    return Point(it.at), it.diameter / 2.0, tuple(it.layers)
+
+
+def _joins(g, it) -> set:
+    """What of its net meets track or via `it` on board g, pours left out:
+    tracks and vias by uuid, pads as REF.NUM."""
+    core, r, layers = _core(it)
+    tol = route_cleanup.TOL
+    out = set()
+    for t in g.tracks_of(net=it.net):
+        if t.uuid != it.uuid and t.layer in layers \
+                and t.shape.distance(core) <= r + t.width / 2.0 + tol:
+            out.add(t.uuid)
+    for v in g.vias_of(net=it.net):
+        if v.uuid != it.uuid and set(v.layers) & set(layers) \
+                and Point(v.at).distance(core) <= r + v.diameter / 2.0 + tol:
+            out.add(v.uuid)
+    for p in g.pads_of(net=it.net):
+        if set(p.layers) & set(layers) and p.poly.distance(core) <= r + tol:
+            out.add(f"{p.ref}.{p.number}")
+    return out
+
+
+def _pour_cut(bg0, bg, uuids, made, cache: dict) -> dict:
+    """(#1140) Of the tracks and vias `uuids` (what a prune of bg would
+    take or cut back), those that were on the base board bg0, not made by
+    this run, met a pour of their net there on a layer whose pour on bg no
+    longer meets them, and still meet all else of their net they met
+    there: the refill cut the pour back from them, and the run took none
+    of what they hung on. They are live design copper, not copper the run
+    left hanging, so the prune leaves them and the gate counts what that
+    costs. uuid -> (the item on bg, the layers it lost). `cache` keeps
+    each board's pours."""
+    tol = route_cleanup.TOL
+
+    def fill(g, net, layer):
+        k = (id(g), net, layer)
+        if k not in cache:
+            cache[k] = shapely.union_all([
+                z.fill_on(layer) for z in g.zones_of(net, layer)
+                if not z.teardrop])
+        return cache[k]
+
+    def meets(g, it, layer):
+        core, r, _ = _core(it)
+        f = fill(g, it.net, layer)
+        return not f.is_empty and f.distance(core) <= r + tol
+
+    want = {u for u in uuids if u and u not in made}
+    if not want:
+        return {}
+    was = {it.uuid: it for it in bg0.tracks_of() + bg0.vias_of()
+           if it.uuid in want}
+    out = {}
+    for it in bg.tracks_of() + bg.vias_of():
+        a = was.get(it.uuid)
+        if a is None:
+            continue
+        lost = [ly for ly in _core(a)[2]
+                if ly in _core(it)[2] and meets(bg0, a, ly)
+                and not meets(bg, it, ly)]
+        if lost and _joins(bg0, a) <= _joins(bg, it):
+            out[it.uuid] = (it, lost)
+    return out
+
+
+def _xy(p) -> str:
+    return f"({_r(p[0])}, {_r(p[1])})"
+
+
+def _pour_note(bg, it, lost, adds, refs) -> str:
+    """A note on board copper `it` whose pour on the `lost` layers the
+    refill cut back (_pour_cut): what of the run's did it, the nearest add
+    of another net (`adds`, route_edit ops on the board) or pad of a
+    moved part (`refs`) on such a layer within LOST_NEAR, and the pad of
+    its net it sits on."""
+    core, r, layers = _core(it)
+    cu = list(bg.copper_layers)
+    best = None
+    for op in adds:
+        if op.get("net") == it.net:
+            continue
+        if op["op"] == "add_via" and set(_via_layers(op, cu)) & set(lost):
+            g = Point(op["at"]).buffer(float(op["size"]) / 2.0)
+            what = f"the new via of {op['net']} at {_xy(op['at'])}"
+        elif op["op"] == "add_track" and op["layer"] in lost:
+            g = LineString([op["start"], op["end"]]).buffer(
+                float(op["width"]) / 2.0)
+            what = (f"the new track of {op['net']} from"
+                    f" {_xy(op['start'])} to {_xy(op['end'])}")
+        else:
+            continue
+        d = g.distance(core) - r
+        if d <= LOST_NEAR and (best is None or d < best[0]):
+            best = (d, what)
+    for ref in refs:
+        for p in bg.pads_of(ref=ref):
+            if p.net != it.net and set(p.layers) & set(lost):
+                d = p.poly.distance(core) - r
+                if d <= LOST_NEAR and (best is None or d < best[0]):
+                    best = (d, f"{ref}.{p.number} in its new place")
+    on = next((f" on {p.ref}.{p.number}" for p in bg.pads_of(net=it.net)
+               if set(p.layers) & set(layers)
+               and p.poly.distance(core) <= r + route_cleanup.TOL), "")
+    kind = _kind(it)
+    where = (f"at {_xy(it.at)}" if kind == "via" else
+             f"from {_xy(it.shape.coords[0])} to {_xy(it.shape.coords[-1])}")
+    pours = " and ".join(lost) + (" pours" if len(lost) > 1 else " pour")
+    return (f"{best[1] + ' cuts' if best else 'the refill cuts'} the {pours}"
+            f" of {it.net} back from {kind} {it.uuid[:8]} {where}{on}: the"
+            f" {kind} stays (it met the pour on the base board) and the gate"
+            " counts what that costs")
+
+
+def _peel(pcb: Path, bg0, bg, nets, *, made, adds_on, refs, anchors: set,
+          notes: list, **kw) -> tuple[list, list, dict]:
+    """_dangling(pcb, bg, nets, **kw), but the board copper whose pour the
+    refill cut back (_pour_cut against the base board bg0) stays: it joins
+    `anchors` (grown in place), with a note each in `notes` (`adds_on`,
+    the add ops on bg, and `refs` name what cut it), and the peel runs
+    again. Returns _dangling's removals and adds removed, and its cuts."""
+    cache: dict = {}
+    while True:
+        cuts: dict = {}
+        dead, trim = _dangling(pcb, bg, nets, anchors=anchors, cuts=cuts,
+                               **kw)
+        hit = _pour_cut(bg0, bg, [u for u in list(dead) + list(cuts)
+                                  if not u.startswith("+")], made, cache)
+        if not hit:
+            return dead, trim, cuts
+        anchors |= set(hit)
+        notes += [_pour_note(bg, it, lost, adds_on, refs)
+                  for it, lost in hit.values()]
+
+
 def _set_ends(uuid: str, was, new) -> list:
     """route_edit set_point ops that move track uuid's ends from where Seg
     was has them to where Seg new has them (the same track, cut back)."""
@@ -1142,9 +1283,11 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     seed = repair_area(reach, adds, ripped + [by_uuid[u] for u in pushed
                                               if u in by_uuid])
     anchors = _dead_on(base, bg0, nets)
-    cuts: dict = {}
-    pruned, trim = _dangling(work, bgw, nets, gone=pushed, adds=adds,
-                             seed=seed, anchors=anchors, cuts=cuts)
+    # board copper a moved pad cut its pour back from stays (_peel)
+    pruned, trim, cuts = _peel(work, bg0, bgw, nets, made={}, adds_on=(),
+                               refs=refs, anchors=anchors,
+                               notes=payload["notes"], gone=pushed,
+                               adds=adds, seed=seed)
     payload["pruned"] = list(pruned)
     payload["trimmed"] = [adds[i] for i in trim]
     # a dead tail the prune can't remove without splitting a net is cut
@@ -1209,9 +1352,12 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         if extra:
             late_anchors |= _dead_on(base, bg0, extra)
             seen |= extra
-        late: dict = {}
-        dead = _dangling(work, bg1, late_nets, seed=area,
-                         anchors=late_anchors, cuts=late)[0]
+        # board copper the run's routes cut its pour back from stays
+        dead, _, late = _peel(
+            work, bg0, bg1, late_nets, made=made,
+            adds_on=[op for i, op in enumerate(kept) if i not in drop | dup],
+            refs=refs, anchors=late_anchors, notes=payload["notes"],
+            seed=area)
         if not dead and not late:
             break
         if npass == REPRUNE:

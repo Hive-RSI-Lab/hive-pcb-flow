@@ -401,6 +401,61 @@ def test_dangling_counts_pours_not_teardrops(tmp_path):
         == {"b0", "b1", "b2"}
 
 
+def _bpour(net, x0, y0, x1, y1, uid):
+    pts = f"(xy {x0} {y0}) (xy {x1} {y0}) (xy {x1} {y1}) (xy {x0} {y1})"
+    return (f'(zone (net "{net}") (net_name "{net}") (layer "B.Cu")'
+            f' (uuid "{uid}")\n (polygon (pts {pts}))\n'
+            f' (filled_polygon (layer "B.Cu") (pts {pts})))\n')
+
+
+VIA_P = ('(via (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu")'
+         ' (net "P") (uuid "vP"))\n')
+
+
+def test_peel_keeps_board_copper_whose_pour_the_refill_cut_back(tmp_path):
+    """#1140: a via in U9's pad met P's B.Cu pour on the base board; on the
+    work board a new via of Q cuts that pour back from it, so it meets the
+    pad alone and dangles. It was live design copper: it stays, with a
+    note on what cut the pour, and the gate counts what that costs. A via
+    of the run's own, or one whose track the run took, goes."""
+    part = _fp("U9", 0, 0, "P", 0.8)
+    base = _board(tmp_path, part + VIA_P + _bpour("P", -2, -2, 2, 2, "zP")
+                  + _seg((0, 0), (-1.5, 0), "P", "tP", "B.Cu"), "base")
+    work = _board(tmp_path, part + VIA_P + _bpour("P", 0.6, -2, 2, 2, "zP"),
+                  "work")
+    bg0, bg1 = (geom.BoardGeom.from_file(p) for p in (base, work))
+    seed = box(-1, -1, 1, 1)
+    assert pr._dangling(work, bg1, {"P"}, seed=seed) == (["vP"], [])
+    add = {"op": "add_via", "net": "Q", "at": [0.0, 0.9], "size": 0.4,
+           "drill": 0.2}
+    tail = (" the B.Cu pour of P back from via vP at (0.0, 0.0) on U9.1: the"
+            " via stays (it met the pour on the base board) and the gate"
+            " counts what that costs")
+    # tP on the base board too: the run took what vP hung on, so it goes
+    anchors, notes = set(), []
+    assert pr._peel(work, bg0, bg1, {"P"}, made={}, adds_on=[add],
+                    refs=[], anchors=anchors, notes=notes, seed=seed) \
+        == (["vP"], [], {})
+    assert anchors == set() and notes == []
+    base = _board(tmp_path, part + VIA_P + _bpour("P", -2, -2, 2, 2, "zP"),
+                  "base2")
+    bg0 = geom.BoardGeom.from_file(base)
+    assert pr._peel(work, bg0, bg1, {"P"}, made={}, adds_on=[add],
+                    refs=[], anchors=anchors, notes=notes, seed=seed) \
+        == ([], [], {})
+    assert anchors == {"vP"}
+    assert notes == ["the new via of Q at (0.0, 0.9) cuts" + tail]
+    # no add of another net near: the refill did it
+    notes = []
+    assert pr._peel(work, bg0, bg1, {"P"}, made={}, adds_on=[], refs=[],
+                    anchors=set(), notes=notes, seed=seed) == ([], [], {})
+    assert notes == ["the refill cuts" + tail]
+    # a via the run made goes
+    assert pr._peel(work, bg0, bg1, {"P"}, made={"vP": 0}, adds_on=[add],
+                    refs=[], anchors=set(), notes=[], seed=seed) \
+        == (["vP"], [], {})
+
+
 PATCH_A = ('(zone (net "A") (net_name "A") (layer "F.Cu") (uuid "zA")'
            ' (name "PATCH_A")\n (polygon (pts (xy -3 -1) (xy -1 -1) (xy -1 1)'
            ' (xy -3 1)))\n (filled_polygon (layer "F.Cu") (pts (xy -3 -1)'
