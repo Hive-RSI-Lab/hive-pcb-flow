@@ -119,7 +119,17 @@ The cache is $HWDE_EASYEDA_CACHE, else <parts.json dir>/easyeda (made on the
 first fetch - commit it), else ~/.cache/hwde/easyeda (env.easyeda_cache), which
 is also read when the board's has no copy; --offline (or HWDE_EASYEDA_OFFLINE=1)
 never fetches.
-Exit 0 every part verified / 1 a part is wrong or unverified / 2 error.
+--vendor (default: the workspace's chosen vendor, else JLC) names the
+assembler, whose profile's assembly.rotation says what a CPL rotation means
+(#1068, convention()): `jlc` is all of the above; `kicad` (PCBWay, Aisler,
+Seeed, Eurocircuits) is KiCad's own rotation as exported, so each row's
+position, side and rotation must be its board footprint's (verify_vendor,
+`basis: kicad`, no LCSC model; an unpolarised two-pad part either way round),
+and a profile's `zero_orientation` (Eurocircuits' IEC 61188-7 zero) leaves
+the parts of three or more pads `not_judged`; a fab with no assembly table
+(OSH Park, Advanced Circuits) judges no row: status `not_judged`.
+Exit 0 every part verified / 1 a part is wrong or unverified / 2 error /
+3 not judged (no convention for the vendor).
 In a board workspace each part's `footprint` fact goes into its ledger.json
 (record_footprints, lib/ledgerlib.py) - from dfm's placement leg too.
 """
@@ -150,7 +160,8 @@ OFFSET_WARN_MM = 0.5
 OFFSET_PITCH_FRAC = 0.4   # an offset past this share of the pad pitch is a failure
 ROT_TOL_DEG = 1.0
 FAIL_VERDICTS = ("wrong_rotation", "wrong_polarity", "no_model", "no_fit",
-                 "fetch_failed", "wrong_offset")
+                 "fetch_failed", "wrong_offset", "wrong_side",
+                 "wrong_position")
 # Not in FAIL_VERDICTS, and not "ok": the CPL meets a convention, not a model.
 FOOTPRINT_MATCH = "footprint_match"
 # Not a failure either: the pads land, but by geometry, not by number (#1024).
@@ -1015,6 +1026,151 @@ def read_cpl(path: Path) -> dict[str, dict]:
     return read_placement(path)[1]
 
 
+# ------------------------------------------- the assembler's convention
+
+# A CPL's rotation means what the assembler it goes to says it means
+# (#1068): JLC places by its own LCSC model (everything above), the KiCad
+# shops (PCBWay, Aisler, Seeed, Eurocircuits) take KiCad's own position,
+# side and rotation as exported, and a fab with no assembly service has no
+# convention to judge a CPL by at all.
+KICAD_BASIS = "kicad"
+NOT_JUDGED = "not_judged"
+POS_TOL_MM = 0.01   # vendor.py writes the pos file's mm to 4 places
+ZERO_NOTE = ("{name} places from {zero}, so a KiCad rotation of a part with "
+             "more than two pads can be 90 degrees off its zero: not judged "
+             "here; check each in its placement review (ORDER.md)")
+
+
+def convention(vendor: str | None) -> dict:
+    """The vendor profile's assembly rotation convention: {"vendor", "name",
+    "rotation": "jlc" | "kicad" | None, "zero_orientation", "why"}. None
+    when the profile has no assembly table or no PCBA service (OSH Park,
+    Advanced Circuits): a CPL for it is not judged."""
+    import vendors
+    vid = vendor or vendors.DEFAULT
+    prof = vendors.load(vid)
+    meta = prof.get("meta") or {}
+    asm = prof.get("assembly") or {}
+    pcba = bool((meta.get("services") or {}).get("pcba"))
+    rot = asm.get("rotation") if pcba else None
+    name = meta.get("name") or vid
+    why = None
+    if rot not in ("jlc", KICAD_BASIS):
+        why = (f"{name} has no assembly table in its vendor profile "
+               f"(reference/vendors/{vid}.yaml): no rotation convention to "
+               f"judge a CPL by" if not (pcba and asm) else
+               f"{name}'s assembly.rotation is {rot!r}, not jlc or kicad")
+        rot = None
+    return {"vendor": vid, "name": name, "rotation": rot,
+            "zero_orientation": asm.get("zero_orientation") if rot else None,
+            "why": why}
+
+
+def read_vendor_cpl(path: Path) -> dict[str, dict]:
+    """A KiCad-convention vendor's CPL (vendor.py package, any of the
+    profiles' column sets, or KiCad's own pos file) -> {ref: {x, y (board
+    frame, y down), rot (as written: KiCad's, on either side), side}}."""
+    from vendor import meaning
+    out: dict[str, dict] = {}
+    with Path(path).open(newline="", encoding="utf-8-sig") as fh:
+        rd = csv.DictReader(fh)
+        col: dict[str, str] = {}
+        for h in rd.fieldnames or ():
+            m = meaning(h or "")
+            if m and m not in col:
+                col[m] = h
+        need = [m for m in ("designator", "x", "y", "rotation") if m not in col]
+        if need:
+            raise ValueError(f"{path}: no {', '.join(need)} column "
+                             f"(columns: {', '.join(rd.fieldnames or [])})")
+        for r in rd:
+            ref = str(r.get(col["designator"]) or "").strip()
+            if not ref:
+                continue
+            side = str(r.get(col.get("side", ""), "") or "top").strip().lower()
+            out[ref] = {
+                "x": float(r[col["x"]]), "y": -float(r[col["y"]]),
+                "rot": float(r[col["rotation"]]) % 360.0,
+                "side": ("bottom" if side in ("bottom", "back", "b",
+                                              "bottomlayer", "bot")
+                         else "top")}
+    return out
+
+
+def _kicad_row(fp: Footprint, row: dict, conv: dict) -> dict:
+    """One CPL row against its own board footprint, KiCad's way: the row's
+    position, side and rotation must be the footprint's."""
+    want = fp.rot % 360.0
+    out = {"ref": fp.ref, "footprint": fp.name, "basis": KICAD_BASIS,
+           "side": fp.side, "cpl_rot": round(row["rot"], 3),
+           "expected_rot": [round(want, 3)], "silk_mark": None}
+    off = math.hypot(row["x"] - fp.x, row["y"] - fp.y)
+    if row["side"] != fp.side:
+        out.update(verdict="wrong_side",
+                   why=f"the CPL puts it on the {row['side']}; the board has "
+                       f"it on the {fp.side}")
+    elif off > POS_TOL_MM:
+        out.update(verdict="wrong_position", offset_mm=round(off, 3),
+                   why=f"the CPL position is {off:.3f} mm from the board "
+                       f"footprint's ({fp.x:g}, {-fp.y:g})")
+    elif conv.get("zero_orientation") and len(fp.pads) > 2:
+        out.update(verdict=NOT_JUDGED, why=ZERO_NOTE.format(
+            name=conv["name"], zero=conv["zero_orientation"]))
+    elif _ang_eq(row["rot"], want):
+        out.update(verdict="ok")
+    elif (len(fp.pads) == 2 and not is_polar(fp) and not is_keyed(fp)
+          and _ang_eq(row["rot"], want + 180.0)):
+        # an unpolarised two-pad part is the same part either way round
+        out.update(verdict="ok", expected_rot=[round(want, 3),
+                                               round((want + 180) % 360, 3)])
+    else:
+        out.update(verdict="wrong_rotation",
+                   why=f"{conv['name']} takes KiCad's own rotation, "
+                       f"{want:g}; the CPL says {row['rot']:g}")
+    return out
+
+
+def verify_vendor(pcb: Path, cpl: dict[str, dict], conv: dict,
+                  fps: dict[str, Footprint] | None = None) -> dict:
+    """The placement check for a vendor that is not JLC: its convention
+    (convention()) decides. kicad: each row's position, side and rotation
+    against its own footprint's (no LCSC model; an IEC zero_orientation
+    leaves multi-pin parts not_judged). None: every row not_judged."""
+    fps = fps if fps is not None else board_footprints(pcb)
+    folded = {r.upper(): r for r in fps}
+    rows = []
+    for ref in sorted(cpl, key=_natural):
+        board_ref = ref if ref in fps else folded.get(ref.upper(), ref)
+        fp = fps.get(board_ref)
+        if conv["rotation"] is None:
+            rows.append({"ref": board_ref, "verdict": NOT_JUDGED,
+                         "silk_mark": None, "why": conv["why"]})
+        elif fp is None:
+            rows.append({"ref": ref, "verdict": "no_fit", "silk_mark": None,
+                         "why": "CPL designator is not on the board"})
+        else:
+            rows.append(_kicad_row(fp, cpl[ref], conv))
+    bad = [r for r in rows if r["verdict"] in FAIL_VERDICTS]
+    unjudged = [r["ref"] for r in rows if r["verdict"] == NOT_JUDGED]
+    return {"script": "cpl_verify", "board": Path(pcb).name,
+            "vendor": conv["vendor"], "basis": conv["rotation"] or NOT_JUDGED,
+            "ledger": None,
+            "status": ("violations" if bad else
+                       NOT_JUDGED if conv["rotation"] is None else "pass"),
+            "n_checked": len(rows), "n_failed": len(bad),
+            "failed": [r["ref"] for r in bad],
+            "not_judged": ({"refs": unjudged,
+                            "note": conv["why"] or next(
+                                r["why"] for r in rows
+                                if r["verdict"] == NOT_JUDGED)}
+                           if unjudged else None),
+            "bottom_preview": None, "footprint_basis": None,
+            "pin_numbers_differ": None, "silk_mark_wrong": [],
+            "silk_mark_missing": None, "offset_warnings": [],
+            "fetch_failed": [], "rate_limited": None, "cache_dir": None,
+            "parts": rows}
+
+
 def offline() -> bool:
     return os.environ.get("HWDE_EASYEDA_OFFLINE", "") not in ("", "0")
 
@@ -1209,11 +1365,29 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--offline", action="store_true",
                     help="never fetch: an uncached part is no_model")
     ap.add_argument("--visual", help="cpl_visual.json from the image pass")
+    ap.add_argument("--vendor", help="the assembler the CPL goes to "
+                    "(reference/vendors/<id>.yaml); its assembly.rotation "
+                    "decides how rotation is judged. Default: the "
+                    "workspace's chosen vendor (vendor.py choose), else JLC")
     ap.add_argument("--out", help="write JSON here instead of stdout")
     args = ap.parse_args(argv)
     try:
         pcb = Path(args.pcb)
         pj = Path(args.parts) if args.parts else None
+        vid = args.vendor
+        if not vid:
+            import ledgerlib
+            ws = ledgerlib.workspace_of(pcb)
+            vid = ledgerlib.chosen_vendor(ws) if ws else None
+        conv = convention(vid)
+        if conv["rotation"] != "jlc":
+            rep = verify_vendor(pcb, read_vendor_cpl(Path(args.cpl))
+                                if conv["rotation"] else
+                                read_placement(Path(args.cpl))[1], conv)
+            text = json.dumps(rep, indent=1)
+            (Path(args.out).write_text(text, encoding="utf-8") if args.out
+             else print(text))
+            return {"pass": 0, "violations": 1, NOT_JUDGED: 3}[rep["status"]]
         fmt, rows = read_placement(Path(args.cpl))
         rep = verify(pcb, rows, lcsc_map(pcb, pj),
                      Path(args.cache_dir) if args.cache_dir
