@@ -345,7 +345,9 @@ def test_dru_templates_exist_and_parse():
         p = REFERENCE / "design_rules" / f"{name}.kicad_dru"
         text = p.read_text("utf-8")
         assert text.startswith("(version 1)")
-        assert text.count("(rule ") == text.count(")\n(rule ") + 1  # each rule closes
+        lines = [ln for ln in text.splitlines() if not ln.startswith("#")]
+        opens = sum(ln.startswith("(rule ") for ln in lines)
+        assert opens and opens == lines.count(")")  # each rule closes
         assert "track_width" in text and "clearance" in text
 
 

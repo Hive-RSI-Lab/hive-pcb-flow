@@ -1,0 +1,14 @@
+{
+  "parts": [
+    {
+      "lcsc": "C991007",
+      "mpn": "ZEN1V8-AK",
+      "attributes": [
+        {
+          "name": "Pd - Power Dissipation",
+          "value": "10mW"
+        }
+      ]
+    }
+  ]
+}

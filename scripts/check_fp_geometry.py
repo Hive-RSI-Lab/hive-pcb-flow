@@ -41,7 +41,15 @@ Kinds (one per ref and source; the worst first):
                                     part's pad sits in the strip it leaves out
   fp_pin_order_vs_model    warning  the LCSC model's pads land only with
   fp_pads_vs_model         warning  numbers permuted / not at all
+  fp_pitch_vs_drawing      error    the pitch along a row of three or more
+  fp_pitch_vs_stock        warning  pads is not the drawing's, the stock
+  fp_pitch_vs_model        warning  footprint's or the LCSC model's, by more
+                                    than 0.03 mm (a pitch is a datasheet
+                                    fact no library varies; a short row a
+                                    step off stays inside the quarter-pitch
+                                    pad tolerance above)
   fp_pitch_vs_name         warning  no two pads at the pitch the name states
+                                    (_P1.27mm, or EasyEDA's -P1.27-)
   fp_pins_vs_name          warning  pins the name counts are missing
 
 Everything is in the footprint's own frame; a footprint on the bottom is
@@ -53,6 +61,9 @@ LCSC model (land patterns of one package differ in toe length).
 
 A footprint no source covers is listed in not_judged, by why, rather than
 passed: the land pattern was then checked against nothing.
+A part with an LCSC number whose model is not cached says so (the gate never
+fetches): fp_geometry_coverage --fill-cache fetches those into the shared
+cache, and counts each source's share per board.
 
 CLI: --pcb board.kicad_pcb [--live] [--easyeda-cache DIR] [--out report.json]
      --live fetches LCSC models not in the cache (else only cached ones are
@@ -384,7 +395,8 @@ def load_land_patterns(path: Path = LAND_PATTERNS) -> list[dict]:
     import yaml
     rows = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("parts") or []
     for r in rows:
-        r["_re"] = re.compile(r["match"], re.I)
+        r["_re"] = re.compile(r["match"], re.I) if r.get("match") else None
+        r["_fp"] = re.compile(r["footprint"]) if r.get("footprint") else None
     return rows
 
 
@@ -393,11 +405,20 @@ _PART_FIELDS = ("MPN", "Manufacturer Part Number", "MFR Part", "Part Number",
 
 
 def land_row(fp: FP, rows: list[dict]) -> dict | None:
+    """The row for this footprint: one matched by its part (regex on the
+    MPN/Value/LCSC field) first, else a package row (`footprint`: a regex
+    the whole footprint name, library aside, must match; a generic land
+    such as a maker's 0603 chip pattern, for parts with no MPN to go by)."""
     for r in rows:
+        if r.get("_re") is None or (r.get("_fp") and not r["_fp"].fullmatch(fp.name)):
+            continue
         for k in _PART_FIELDS:
             v = fp.fields.get(k, "")
             if v and r["_re"].search(v):
                 return r
+    for r in rows:
+        if r.get("_re") is None and r.get("_fp") and r["_fp"].fullmatch(fp.name):
+            return r
     return None
 
 
@@ -413,15 +434,83 @@ _COUNT = re.compile(
     r"QFN|DFN|VQFN|WQFN|UQFN|TQFN|LQFP|TQFP|QFP|VSON|WSON|SON|PLCC|HVQFN|"
     r"LFCSP|SOT|TSOT)-(\d+)(?=[_-]|$)")
 _GRID = re.compile(r"^(?:PinHeader|PinSocket|IDC-Header)_(\d+)x(\d+)_P")
-_PITCH = re.compile(r"_P(\d+(?:\.\d+)?)mm")
+_PITCH = re.compile(r"_P(\d+(?:\.\d+)?)mm|[-_]P(\d+\.\d+)(?=[-_]|$)")
+
+
+def row_gaps(centres: dict, tol: float = 0.02) -> list[float]:
+    """The smallest spacing between neighbours of each row of three or more
+    pads (pads sharing an x or a y), one per row."""
+    pts = list(centres.values())
+    rows = set()
+    for a in (0, 1):
+        for p in pts:
+            row = tuple(sorted(round(q[a], 3) for q in pts if abs(q[1 - a] - p[1 - a]) <= tol))
+            if len(row) >= 3:
+                rows.add((a, row))
+    out = []
+    for _, row in sorted(rows):
+        gaps = [y - x for x, y in zip(row, row[1:]) if y - x > 1e-3]
+        if gaps:
+            out.append(min(gaps))
+    return out
+
+
+def pin_run_gaps(centres: dict, tol: float = 0.02) -> list[float]:
+    """Neighbour spacings within runs of three or more pads in a row (same x
+    or same y) whose numbers count on by one along it: the pins of one side.
+    A centred exposed pad, a mounting tab or a missing pin breaks the run,
+    so only pin-to-pin spacings are returned."""
+    num = {k: int(k) for k in centres if k.isdigit()}
+    out = set()
+    for a in (0, 1):
+        seen = set()
+        for k in num:
+            row = sorted((centres[j][a], num[j]) for j in num
+                         if abs(centres[j][1 - a] - centres[k][1 - a]) <= tol)
+            key = tuple(n for _, n in row)
+            if len(row) < 3 or key in seen:
+                continue
+            seen.add(key)
+            i = 0
+            while i < len(row) - 1:
+                step = row[i + 1][1] - row[i][1]
+                j = i
+                while j < len(row) - 1 and row[j + 1][1] - row[j][1] == step and abs(step) == 1:
+                    j += 1
+                if j - i >= 2:
+                    out.update(round(row[t + 1][0] - row[t][0], 4) for t in range(i, j))
+                i = max(j, i + 1)
+    return sorted(out)
+
+
+def row_pitch(centres: dict, tol: float = 0.02) -> float | None:
+    """The smallest spacing between neighbours in a row of three or more
+    pads, or None with no such row. Rows, not any two pads: a library may
+    move a package's two rows closer or apart (toe length), never the pitch
+    along one."""
+    g = row_gaps(centres, tol)
+    return min(g) if g else None
+
+
+def pitch_off(ref: dict, got: dict) -> tuple[float, float] | None:
+    """(reference row pitch, board row pitch) when they differ by more than
+    PITCH_TOL_MM; None when they agree or either has no row of three."""
+    r, b = row_pitch(ref), row_pitch(got)
+    if r is None or b is None or abs(r - b) <= PITCH_TOL_MM:
+        return None
+    return r, b
 
 
 def name_findings(fp: FP, centres: dict) -> list[tuple[str, str, dict]]:
     """(kind, msg, extra) from what the footprint's own name states."""
     out = []
     m = _PITCH.search(fp.name)
-    if m and len(centres) >= 3:
-        want = float(m.group(1))
+    # only a footprint with a row of three or more pads holds its pitch
+    # between neighbours: a SOT-23-3 or SOT-89 names the lead pitch of a row
+    # with its middle pin left out (pins 1 and 3 sit two pitches apart), and
+    # a 4-pad land names a body dimension, not two pads
+    if m and len(centres) >= 3 and row_gaps(centres):
+        want = float(m.group(1) or m.group(2))
         pts = list(centres.values())
         d = [math.hypot(a[0] - b[0], a[1] - b[1]) for i, a in enumerate(pts) for b in pts[i + 1:]]
         # any two pads at the pitch: a footprint with a second, wider pitch
@@ -432,6 +521,15 @@ def name_findings(fp: FP, centres: dict) -> list[tuple[str, str, dict]]:
                         f"its name states a {want:g} mm pitch, but no two of its pads "
                         f"are {want:g} mm apart (the nearest spacing is {near:.3f} mm)",
                         {"name_pitch_mm": want, "nearest_mm": round(near, 3)}))
+        else:
+            # each run of pins numbered in order along a row holds the pitch:
+            # one side of a QFP drawn at another pitch while the others keep it
+            bad = [x for x in pin_run_gaps(centres) if abs(x - want) > PITCH_TOL_MM]
+            if bad:
+                out.append(("fp_pitch_vs_name",
+                            f"its name states a {want:g} mm pitch, but pins numbered in "
+                            f"order along a row are {bad[0]:.3f} mm apart",
+                            {"name_pitch_mm": want, "row_pitch_mm": round(bad[0], 3)}))
     n = None
     g = _GRID.search(fp.name)
     if g:
@@ -451,10 +549,25 @@ def name_findings(fp: FP, centres: dict) -> list[tuple[str, str, dict]]:
     return out
 
 
+def name_judges(fp: FP, centres: dict) -> bool:
+    """True when name_findings can judge something: a pitch with a row of
+    three pads to hold it, or a pin count (SOT counts are not judged)."""
+    if _PITCH.search(fp.name) and len(centres) >= 3 and row_gaps(centres):
+        return True
+    if _GRID.search(fp.name):
+        return True
+    c = _COUNT.search(fp.name)
+    return bool(c and c.group(1) not in ("SOT", "TSOT"))
+
+
 # ----------------------------------------------------------------- check
 
 def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
-          stock: Stock | None = None, rows: list[dict] | None = None):
+          stock: Stock | None = None, rows: list[dict] | None = None,
+          trace: list | None = None):
+    """(violations, judged by first source, not_judged by why). trace, if a
+    list, gets one row per footprint: every source it was judged against, or
+    why not (fp_geometry_coverage reads it)."""
     stock = stock or Stock(kicad_footprint_dir())
     rows = load_land_patterns() if rows is None else rows
     viols, judged, not_judged = [], Counter(), {}
@@ -469,7 +582,15 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
     fps = board_footprints(pcb)
     for fp in fps:
         got = _centres(fp.pads)
+        uncached = False  # its LCSC model was looked for and is not cached
+
+        def note(sources, why=None):
+            if trace is not None:
+                trace.append({"ref": fp.ref, "fpid": fp.fpid, "fields": dict(fp.fields),
+                              "lcsc": lcsc_of(fp), "pads": len(got), "sources": list(sources), "why": why,
+                              "model_uncached": uncached})
         if len(got) < 2:
+            note([], "under two numbered pads")
             continue
         sources, skip = [], None
         row = land_row(fp, rows)
@@ -490,6 +611,13 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                         f"against the land pattern of {row['part']} ({row['source']}): {how}. "
                         f"Fix: renumber or redraw the footprint to the drawing's top view",
                         drawing=row["source"], **{k: c[k] for k in ("worst_mm", "pad", "tol")})
+                elif off := pitch_off({k: ref[k] for k in common}, {k: got[k] for k in common}):
+                    add(fp, "error", "fp_pitch_vs_drawing",
+                        f"its pads are {off[1]:.3f} mm apart along a row where the land "
+                        f"pattern of {row['part']} ({row['source']}) has {off[0]:.3f} mm. "
+                        f"Fix: redraw the footprint to the drawing's pitch",
+                        drawing=row["source"], pitch_mm=round(off[0], 3),
+                        board_pitch_mm=round(off[1], 3))
         sp = stock.find(fp)
         if sp is not None:
             sources.append("stock")
@@ -531,6 +659,12 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                         f"named as KiCad's stock {sp.parent.stem}:{sp.stem}, but {how}. "
                         f"Fix: use the stock footprint, or rename the edited copy for what it is",
                         stock=str(sp.name), **{k: c[k] for k in ("worst_mm", "pad", "tol")})
+                elif off := pitch_off(r_, g_):
+                    add(fp, "warning", "fp_pitch_vs_stock",
+                        f"named as KiCad's stock {sp.parent.stem}:{sp.stem}, but its pads "
+                        f"are {off[1]:.3f} mm apart along a row where the stock one's are "
+                        f"{off[0]:.3f} mm", stock=str(sp.name), pitch_mm=round(off[0], 3),
+                        board_pitch_mm=round(off[1], 3))
                 else:
                     small, drill = _sizes(fp.pads, spads, common)
                     if small:
@@ -564,6 +698,7 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
             import cpl_verify
             import easyeda
             model = easyeda.get(lcsc, easyeda_cache, fetch=live)
+            uncached = model is None
             if model is not None and ({q.number for q in model.pads} - {""}) != (set(got) - {""}):
                 # the land numbers pins the part does not have (a Kelvin
                 # shunt land of a 2-terminal resistor): a different land,
@@ -587,6 +722,13 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                             f"the LCSC model of {lcsc} ({model.package}) lands on its pads "
                             f"only with the numbers permuted: check which pin is on which "
                             f"pad against the part's datasheet", lcsc=lcsc)
+                    elif a["verdict"] != "no_fit" and (off := pitch_off(
+                            _centres([q for q in model.pads if q.number]), got)):
+                        add(fp, "warning", "fp_pitch_vs_model",
+                            f"its pads are {off[1]:.3f} mm apart along a row where the LCSC "
+                            f"model of {lcsc} ({model.package}) has {off[0]:.3f} mm: check "
+                            f"the pitch against the datasheet", lcsc=lcsc,
+                            pitch_mm=round(off[0], 3), board_pitch_mm=round(off[1], 3))
                     elif a["verdict"] == "no_fit":
                         add(fp, "warning", "fp_pads_vs_model",
                             f"the LCSC model of {lcsc} ({model.package}) does not land on "
@@ -595,18 +737,23 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                             lcsc=lcsc)
         if skip:
             not_judged.setdefault(skip, []).append(fp.ref)
+            note(sources, skip)
             continue
         if not sources:
             for kind, msg, extra in name_findings(fp, got):
                 add(fp, "warning", kind, msg, **extra)
-            if _PITCH.search(fp.name) or _COUNT.search(fp.name) or _GRID.search(fp.name):
+            if name_judges(fp, got):
                 sources.append("name")
         if sources:
             judged[sources[0]] += 1
+            note(sources)
         else:
-            why = ("no land pattern row, stock footprint of its name, cached "
-                   "LCSC model or pitch in its name")
+            why = (("its LCSC model is not cached (not fetched yet, or "
+                    "EasyEDA has none: fp_geometry_coverage --fill-cache)") if lcsc and not fp.connector else
+                   "no land pattern row, stock footprint of its name, "
+                   "LCSC number or pitch in its name")
             not_judged.setdefault(why, []).append(fp.ref)
+            note(sources, why)
     return viols, dict(judged), not_judged
 
 

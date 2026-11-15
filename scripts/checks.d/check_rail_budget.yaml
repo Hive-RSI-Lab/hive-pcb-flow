@@ -1,0 +1,9 @@
+# check_rail_budget (#1118): a load's supply pin still gets its minimum after
+# the source's tolerance, the copper and the series beads on the way.
+# reference/rail_budget.yaml holds the sources and loads; constraints.json
+# rail_budget adds or overrides them and gives series parts their DCR.
+name: check_rail_budget
+needs: []
+args: []
+optional:
+  constraints: [--constraints, "{constraints}"]

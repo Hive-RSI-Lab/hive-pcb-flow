@@ -203,6 +203,29 @@ def test_committed_land_patterns_cite_a_drawing_and_judge_a_part(tmp_path, stock
     assert judged["drawing"] == 2
 
 
+def test_package_rows_judge_unnamed_chips_and_yield_to_a_part_row(tmp_path, stock):
+    rows = g.load_land_patterns()
+    two = lambda h: pads_of({"1": (-h, 0.0), "2": (h, 0.0)}, w=1.0, h=1.3)
+    pcb = board(tmp_path,
+                # the EasyEDA R0805 as drawn on the project boards: quiet
+                footprint("R1", "lcsc:R0805", two(1.0), props={"Value": "10k 1% 0805"}),
+                # a 1206's land under an 0805 name: 0.625 mm per pad off
+                footprint("R2", "lcsc:R0805", two(1.6), at=(70, 50)),
+                # the asymmetric PowerDI-123, numbered either way round
+                footprint("D1", "lcsc:POWERDI-123_L2.8-W1.8-LS3.7-RD",
+                          two(1.19), at=(90, 50)),
+                # not a package name the rows know: not judged
+                footprint("R3", "lcsc:R0805_custom", two(1.0), at=(110, 50)))
+    k, judged, nj = kinds(pcb, stock, rows)
+    assert k == [("R2", "fp_pads_vs_drawing")] and judged == {"drawing": 3}
+    assert sum(nj.values(), []) == ["R3"]
+    r = dict(_row(), footprint="R0805")
+    r["_re"], r["_fp"] = re.compile(r["match"], re.I), re.compile("R0805")
+    pkg = [x for x in rows if x.get("footprint") == "R0805"]
+    fp = g.FP("U1", "lcsc:R0805", "top", (0, 0), "F.Cu", {"MPN": "SiT1602BI-x"})
+    assert g.land_row(fp, pkg + [r]) is r  # a part row first, whatever the order
+
+
 def test_name_pitch_and_pins(tmp_path, stock):
     tight = {k: (x, y * 0.8) for k, (x, y) in SOIC.items()}  # 1.016 mm pitch
     seven = {k: v for k, v in SOIC.items() if k != "6"}
@@ -384,7 +407,165 @@ def test_model_compare_planted_and_kelvin_land_and_connector_quiet(tmp_path, sto
     assert k == [] and judged == {"stock": 1}
 
 
+HDR = "Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical"
+
+
+def header(step):
+    return "".join(pad(str(i + 1), 0, step * i, 1.7, 1.7, drill=1.0, kind="thru_hole")
+                   for i in range(3))
+
+
+def test_short_row_a_pitch_step_off_vs_stock(tmp_path, stock):
+    # a 1x3 row at 2.0 mm where the stock is 2.54: its end pads are 0.54 mm
+    # off, inside the quarter-pitch pad tolerance (0.635), so only the row's
+    # pitch shows it; the stock pitch 0.02 mm off (a rounded copy) is quiet
+    pcb = board(tmp_path, footprint("J1", HDR, header(2.0)),
+                footprint("J2", HDR, header(2.56), at=(80, 50)),
+                footprint("J3", HDR, header(2.54), at=(110, 50)))
+    k, judged, _ = kinds(pcb, stock)
+    assert k == [("J1", "fp_pitch_vs_stock")] and judged == {"stock": 3}
+
+
+def test_row_pitch_reads_rows_not_any_two_pads(tmp_path):
+    assert g.row_pitch(SOIC) == pytest.approx(1.27)
+    # a 2x2 land has no row of three: no pitch to hold it to
+    assert g.row_pitch({"1": (0, 0), "2": (1, 0), "3": (0, 1), "4": (1, 1)}) is None
+    # rows moved apart (toe length) leave the pitch alone
+    assert g.pitch_off(SOIC, {k: (x * 1.2, y) for k, (x, y) in SOIC.items()}) is None
+    assert g.pitch_off(SOIC, {k: (x, y * 0.8) for k, (x, y) in SOIC.items()}) == \
+        pytest.approx((1.27, 1.016))
+
+
+def test_easyeda_name_pitch(tmp_path, stock):
+    # EasyEDA names state the pitch as -P0.50- (no _P0.50mm)
+    name = "lcsc:SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL"
+    tight = {k: (x, y * 0.8) for k, (x, y) in SOIC.items()}
+    pcb = board(tmp_path, footprint("U1", name, pads_of(SOIC)),
+                footprint("U2", name, pads_of(tight), at=(80, 50)))
+    k, judged, _ = kinds(pcb, stock)
+    assert k == [("U2", "fp_pitch_vs_name")] and judged == {"name": 2}
+
+
+
+def test_name_pitch_of_a_row_with_its_middle_pin_left_out_is_not_judged(tmp_path, stock):
+    # a SOT-23-3 names the 0.95 mm lead pitch, but pins 1 and 2 sit 1.9 mm
+    # apart with pin 3 alone across: no row of three holds the pitch, so the
+    # name judges nothing (PCB-0025 D201-D208 were flagged before)
+    sot = {"1": (-1.1, -0.95), "2": (-1.1, 0.95), "3": (1.1, 0.0)}
+    name = "aiee:SOT-23-3_L3.0-W1.7-P0.95-LS2.9-BR"
+    pcb = board(tmp_path, footprint("D1", name, pads_of(sot, w=1.0, h=0.5)),
+                footprint("TP1", "lib:TP", pads_of({"1": (0, 0)}), at=(80, 50)))
+    k, judged, nj = kinds(pcb, stock)
+    assert k == [] and judged == {} and sum(map(len, nj.values())) == 1
+    trace = []  # a one-pad part is traced too
+    g.check(pcb, stock=stock, rows=[], trace=trace)
+    assert [t["why"] for t in trace if t["ref"] == "TP1"] == ["under two numbered pads"]
+
+def qfn(step_x=0.5, ep=True):
+    """A 16-pin quad, 4 a side at 0.5 mm, numbered anticlockwise from the
+    top left, with its exposed pad 17 in the middle; the top and bottom
+    sides at step_x."""
+    c = {}
+    for i in range(4):
+        c[str(1 + i)] = (-2.0, -0.75 + 0.5 * i)
+        c[str(5 + i)] = (-0.75 * step_x / 0.5 + step_x * i, 2.0)
+        c[str(9 + i)] = (2.0, 0.75 - 0.5 * i)
+        c[str(13 + i)] = (0.75 * step_x / 0.5 - step_x * i, -2.0)
+    if ep:
+        c["17"] = (0.0, 0.0)
+    return c
+
+
+def test_name_pitch_holds_on_every_side(tmp_path, stock):
+    # two sides at 0.4 under a P0.50 name: other sides still hold 0.5 so
+    # "any two pads at the pitch" passes; the numbered pin runs do not
+    name = "lcsc:QFN-16_L4.0-W4.0-P0.50-TL-EP"
+    pcb = board(tmp_path, footprint("U1", name, pads_of(qfn())),
+                footprint("U2", name, pads_of(qfn(0.4)), at=(80, 50)),
+                footprint("U3", name, pads_of(qfn(ep=False)), at=(110, 50)))
+    k, judged, _ = kinds(pcb, stock)
+    assert k == [("U2", "fp_pitch_vs_name")] and judged == {"name": 3}
+    # the exposed pad sits in a column with pins 7 and 15 (wrong numbers,
+    # far apart): not a run
+    assert g.pin_run_gaps(qfn()) == [0.5]
+
+
+def test_planted_faults_caught_and_a_cut_over_empty_board_quiet(tmp_path, stock, monkeypatch):
+    """fp_geometry_faults on a clean board: each planted fault is caught on
+    the footprint it was planted on, the board itself (the quiet twin) and
+    a courtyard cut with nothing in the strip stay quiet."""
+    import fp_geometry_faults as f
+    pcb = board(tmp_path,
+                footprint("U1", SO, pads_of(SOIC) + crt("F", -3.7, -2.7, 3.7, 2.7)),
+                footprint("R1", "x:R", pad("1", -0.5, 0, 0.5, 0.5) + pad("2", 0.5, 0, 0.5, 0.5),
+                          at=(70, 50)),
+                footprint("J1", HDR, header(2.54), at=(90, 50)))
+    assert kinds(pcb, stock)[0] == []
+    monkeypatch.setattr(g, "Stock", lambda root: stock)
+    monkeypatch.setattr(g, "load_land_patterns", lambda: [])
+    res = f.run([pcb], tmp_path / "out", per=2)
+    got = {(r["fault"], r["ref"]): (r["caught"], r["kinds"]) for r in res}
+    assert got[("pitch", "U1")] == (True, ["fp_pads_vs_stock"])
+    assert got[("pitch", "J1")] == (True, ["fp_pitch_vs_stock"])
+    assert got[("shrink", "U1")] == (True, ["fp_pad_small_vs_stock"])
+    assert got[("pin1", "U1")] == (True, ["fp_pin_order_vs_stock"])
+    assert got[("courtyard", "U1")] == (True, ["fp_courtyard_small_vs_stock"])
+    assert got[("crt_only", "U1")] == (False, [])
+
+
 def test_cli_and_registered(tmp_path):
     assert g.main(["--pcb", str(tmp_path / "none.kicad_pcb")]) == 2
     reg = HERE.parent / "scripts" / "checks.d" / "check_fp_geometry.yaml"
     assert reg.is_file() and "check_fp_geometry" in reg.read_text()
+
+
+def test_coverage_counts_an_uncached_model_and_fill_cache_waits_out_the_limit(
+        tmp_path, stock, monkeypatch):
+    # a custom 2-pad land with an LCSC number and no cached model is not
+    # judged, and says why; --fill-cache fetches it (a 403 first: wait, go
+    # on), and the recount judges it against the model
+    import urllib.error
+    import easyeda
+    import fp_geometry_coverage as cov
+    shared, cache = tmp_path / "shared", tmp_path / "cache"
+    monkeypatch.setattr(easyeda, "shared_cache", lambda: shared)
+    lc = {"LCSC": "C900777"}
+    land = pad("1", -1.48, 0, 1.2, 1.7) + pad("2", 1.48, 0, 1.2, 1.7)
+    pcb = board(tmp_path, footprint("R1", "Mine:Odd2", land, props=lc))
+    c = cov.coverage([pcb], easyeda_cache=cache, stock=stock)
+    assert c["judged"] == 0 and c["uncached_lcsc"] == {"C900777": 1}
+    assert [k for k in c["not_judged"]][0].startswith(cov.UNCACHED)
+    assert cov.share(c["per_board"][str(pcb)]) == 0.0
+    raw = {"title": "X", "dataStr": {"shape": []},
+           "packageDetail": {"title": "R1206", "dataStr": {
+               "head": {"x": 4000, "y": 3000},
+               "shape": ["PAD~RECT~3994.173~3000~4.7~6.7~1~~1~0~~0~a",
+                         "PAD~RECT~4005.827~3000~4.7~6.7~1~~2~0~~0~b"]}}}
+    calls, waits = [], []
+
+    def fetcher(x):
+        calls.append(x)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError("u", 403, "Forbidden", None, None)
+        if x == "C900778":
+            return {}
+        return raw
+    try:
+        f = cov.fill_cache(["C900777", "C900778"], pace_s=0, wait_min=0.01,
+                           cache=cache, fetcher=fetcher, sleep=waits.append)
+    finally:
+        easyeda.reset_rate_limit()
+    assert f == {"fetched": ["C900777"], "none": ["C900778"], "left": []}
+    assert len(waits) == 1 and calls == ["C900777", "C900777", "C900778"]
+    c = cov.coverage([pcb], easyeda_cache=cache, stock=stock)
+    assert c["judged_by_source"]["model"] == 1 and c["uncached_lcsc"] == {}
+    assert cov.share(c["per_board"][str(pcb)]) == 1.0
+    # out of budget, the rest is left for a rerun, not dropped
+    try:
+        f = cov.fill_cache(["C900779"], pace_s=0, wait_min=1, budget_min=0.5, cache=cache,
+                           fetcher=lambda x: (_ for _ in ()).throw(
+                               urllib.error.HTTPError("u", 429, "Too many", None, None)),
+                           sleep=waits.append)
+    finally:
+        easyeda.reset_rate_limit()
+    assert f["left"] == ["C900779"] and len(waits) == 1

@@ -23,3 +23,26 @@ mutants:
     expect:
       kind: sense_tap_off_pad
       refs: [C911, R911]
+  sense-pair-apart:
+    board: blinky2
+    script: mutations/sense_pair_apart.py
+    check: check_kelvin
+    defect: >-
+      MEASUREMENT fault: a shunt's two hand-routed sense lines into an amplifier's
+      IN+/IN- part 20 mm across, closing a loop of about 280 mm^2 that picks up the
+      field of every switching edge. No sense_pads entry or mark names them, so no
+      sense rule saw them; nets connect and widths are legal
+    expect:
+      kind: sense_pair_apart
+      refs: [R931, U931]
+  sense-line-unmarked:
+    board: blinky2
+    script: mutations/sense_line_unmarked.py
+    check: check_kelvin
+    defect: >-
+      ROUTING fault: a 3 A rail's shunt is read over 0.2 mm hand-routed sense lines
+      with no aiee_sensew mark, so the sense-width rule never covers them and DRC
+      holds them to the rail's width
+    expect:
+      kind: sense_line_unmarked
+      refs: [R931, U931]

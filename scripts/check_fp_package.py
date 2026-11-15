@@ -22,11 +22,19 @@ Where the part's record comes from, first found wins:
      that Value: first its ordering code, read from the maker's own table
      (reference/mpn_packages.yaml via lib/mpn_decode.py, offline too:
      SN74HC595PW is TSSOP-16, ATTINY85-20SU the 208 mil SOIC,
-     STM32F103C8T6 LQFP-48 7x7), else (--live) JLC's search, judged only
-     when every row whose model is that exact name gives the same package.
-     A Manufacturer field naming another maker than the table's leaves the
-     code undecoded. A Value-named part is reported as a warning: the
-     designer may mean a variant the Value does not spell (1N5819W).
+     STM32F103C8T6 LQFP-48 7x7, W25Q80DVSNIG the 150 mil SOIC-8), else
+     (--live) JLC's search for rows whose model is that exact name. A name
+     those rows give in several packages, or a generic JEDEC one (1N4007,
+     1N5819: registered DO-41, sold in SMA and SOD-123FL too), is judged
+     against each: it passes when the footprint fits exactly one, is a
+     warning when it fits none of them (live; offline only the registered
+     package is known, so a miss there is "not judged"), and is "not
+     judged" when it fits two or more. A Manufacturer field naming another
+     maker than the table's leaves the code undecoded, and a Value that
+     ends at a code starting a longer one (TPS2552D: TI's D, but DBV too)
+     is taken as cut short, not judged. A Value-named part is reported as
+     a warning: the designer may mean a variant the Value does not spell
+     (1N5819W).
   A code with no record, or a record whose package name is not read, falls
   back to the decoded MPN field, then to the record's own model.
   Neither read: "not judged", never a guess.
@@ -287,37 +295,86 @@ class Records:
                ) -> tuple[dict | None, str]:
         """(record, why not) for an exact model name: its ordering code
         read from the maker's own table (lib/mpn_decode.py), else (--live)
-        the JLC rows whose model is the name, judged only when they agree
-        on the package."""
+        the JLC rows whose model is the name. Rows that disagree on the
+        package, or a generic JEDEC name (an `open` table entry: 1N4007 is
+        registered DO-41 but sold in SMA and SOD-123FL too), give a record
+        with `candidates`, one per package, for check() to judge."""
         dec = decoded(mpn, maker)
-        if dec:
+        if dec and not dec.get("open"):
             return dec, ""
         if not self.live:
-            return None, "an MPN is looked up only with --live"
+            return (dec, "") if dec else (
+                None, "an MPN is looked up only with --live")
         try:
             rows = self._cached("mpn-" + _norm(mpn),
                                 lambda: self._search(mpn))
         except stocklib.SourceError as exc:
             self.errors.append(f"{mpn}: {exc}")
-            return None, f"JLC could not be asked ({exc})"
+            return (dec, "") if dec else (
+                None, f"JLC could not be asked ({exc})")
         exact = [r for r in rows if _norm(r["model"]) == _norm(mpn)
                  and r["package"]]
         if not exact:
-            return None, "JLC lists no part of that exact name"
+            return (dec, "") if dec else (
+                None, "JLC lists no part of that exact name")
         seen = {}
         for r in exact:
             d = pkgname.describe(r["package"])
             key = (d["mount"], d["family"], d["chip"], d["pins"])
             seen.setdefault(key, []).append(r)
-        if len(seen) > 1 or next(iter(seen))[1] is None \
-                and next(iter(seen))[2] is None:
-            pk = sorted({r["package"] for r in exact})
-            return None, f"JLC's parts of that name differ ({', '.join(pk)})" \
-                if len(seen) > 1 else f"package {pk[0]!r} not read"
-        r = exact[0]
-        codes = ", ".join(x["code"] for x in exact[:4])
-        return {**r, "source": f"JLC's parts named {mpn} ({codes})",
-                "rows": len(exact)}, ""
+        if len(seen) == 1 and not dec:
+            if next(iter(seen))[1] is None and next(iter(seen))[2] is None:
+                return None, f"package {exact[0]['package']!r} not read"
+            r = exact[0]
+            codes = ", ".join(x["code"] for x in exact[:4])
+            return {**r, "source": f"JLC's parts named {mpn} ({codes})",
+                    "rows": len(exact)}, ""
+        cands = [{"package": rs[0]["package"], "desc": None,
+                  "source": "JLC's " + ", ".join(x["code"] for x in rs[:3])}
+                 for rs in seen.values()]
+        if dec:
+            jd = dec["candidates"][0]["desc"]
+            if (jd["mount"], jd["family"], jd["chip"], jd["pins"]) \
+                    not in seen:
+                cands = [dec["candidates"][0]] + cands
+        pk = sorted({c["package"] for c in cands})
+        return {"package": " or ".join(pk), "description": "", "model": None,
+                "source": f"JLC's parts named {mpn}"
+                          + (f" and {dec['maker']}" if dec else ""),
+                "candidates": cands, "open": True, "rows": len(exact)}, ""
+
+
+def _candidates(rec: dict, foot: dict, pads) -> tuple[str, str]:
+    """A name sold in several packages against one footprint: ("ok", "")
+    when the footprint fits exactly one, ("hit", why) when it fits none
+    and every package was read (and, for a generic name offline, never:
+    other makers' bodies are not known), else ("skip", why)."""
+    if not (foot["mount"] or foot["family"]):
+        return "skip", "the footprint's name is not read"
+    fits, unread, why = [], [], []
+    for c in rec["candidates"]:
+        part = c.get("desc") or pkgname.describe(c["package"])
+        if not (part["family"] or part["chip"]):
+            unread.append(c["package"])
+            continue
+        bad = pkgname.compare(part, foot, pads)
+        if bad:
+            why.append(f"{c['package']}: {bad[0]}")
+        else:
+            fits.append(c["package"])
+    if len(fits) == 1 and not unread:
+        return "ok", ""
+    if len(fits) > 1:
+        return "skip", "the name is sold in several packages and the " \
+            "footprint fits more than one"
+    if fits:
+        return "skip", "the name is sold in several packages, some not read"
+    if unread:
+        return "skip", "the name is sold in several packages, some not read"
+    if rec.get("offline"):
+        return "skip", "a generic name sold in other packages too " \
+            "(--live asks JLC which)"
+    return "hit", "; ".join(why)
 
 
 def maker_of(fp: dict) -> str | None:
@@ -335,6 +392,15 @@ def decoded(mpn: str | None, maker: str | None = None) -> dict | None:
     dec = mpn_decode.decode(mpn)
     if not dec:
         return None
+    if dec.get("open"):
+        # a generic JEDEC name: any maker's, its registered package one
+        # candidate (offline the only one known)
+        cand = {"package": dec["package"], "desc": dec["desc"],
+                "source": dec["source"]}
+        return {"package": dec["package"], "description": "", "model": None,
+                "source": dec["source"], "maker": dec["maker"],
+                "candidates": [cand], "open": True, "offline": True,
+                "rows": 2}
     if maker:
         words = {w for w in re.split(r"[^a-z]+", dec["maker"].split()[0]
                                      .lower()) if len(w) > 2}
@@ -348,7 +414,8 @@ def decoded(mpn: str | None, maker: str | None = None) -> dict | None:
             return None
     return {"package": dec["package"], "desc": dec["desc"],
             "description": "", "model": None, "source": dec["source"],
-            "decoded": True, "rows": 2}
+            "maker": dec["maker"], "decoded": True, "cut": dec["cut"],
+            "rows": 2}
 
 
 def _mpn_field(fp: dict) -> str | None:
@@ -430,6 +497,10 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
                 "" if recs.live else " (--live asks JLC)")
         else:
             rec, why = recs.by_mpn(mpn, maker_of(fp))
+            if rec and rec.get("cut") and where == "Value":
+                # #1211: TPS2552D is TPS2552DBVR cut short, not TI's D SOIC
+                skip("the Value may be an ordering code cut short")
+                continue
         pkg = rec
         if code and (not rec or not _reads(rec["package"])):
             # no record of the code, or one whose package name is not
@@ -438,7 +509,7 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             for alt, src in ((_mpn_field(fp), "MPN field"),
                              ((rec or {}).get("model"), "record's model")):
                 dec = decoded(alt, maker_of(fp))
-                if dec:
+                if dec and not dec.get("open"):
                     pkg, mpn = dec, alt
                     where = f"{where}; package from the {src} {alt}"
                     break
@@ -446,10 +517,33 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             skip(why)
             continue
         rec = rec or pkg
-        part = pkg.get("desc") or pkgname.describe(pkg["package"])
         foot = pkgname.describe(fp["fpid"])
         if fp["pad_mount"]:
             foot["mount"] = fp["pad_mount"]
+        if pkg.get("candidates"):
+            verdict = _candidates(pkg, foot, fp["pads"])
+            if verdict[0] == "skip":
+                skip(verdict[1])
+                continue
+            judged.append({"ref": ref, "named": mpn, "from": where,
+                           "package": pkg["package"],
+                           "footprint": fp["fpid"],
+                           "ok": verdict[0] == "ok"})
+            if verdict[0] == "ok":
+                continue
+            viols.append(checklib.violation(
+                SCRIPT, "warning", fp["at"], fp["layer"], None, [ref],
+                f"{ref} is {mpn}, a part sold as {pkg['package']} "
+                f"({pkg['source']}; the part number from its {where}), but "
+                f"its footprint is {fp['fpid']}, which fits none of them: "
+                f"{verdict[1]}. Fix: the footprint of the package bought, "
+                "or put the LCSC number or maker's order code of a part "
+                "that fits these pads on it",
+                SCRIPT, kind="footprint_package_mismatch",
+                footprint=fp["fpid"], package=pkg["package"], part=mpn,
+                part_from=where, reasons=[verdict[1]]))
+            continue
+        part = pkg.get("desc") or pkgname.describe(pkg["package"])
         named = f"{code or mpn} ({rec['model']})" if rec.get("model") \
             and _norm(rec["model"]) != _norm(code or mpn) else (code or mpn)
         warn = where == "Value"

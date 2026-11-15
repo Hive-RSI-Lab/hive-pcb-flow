@@ -207,4 +207,39 @@ def test_sense_width_rule_only_for_declared_sense_lines():
     assert "A.NetName == 'KP'" in r.condition
     assert f"enclosedByArea('{rules_gen.SENSE_MARK}_*')" in r.condition
     assert facts == [{"net": "KP", "width_mm": CAP["min_trace_width_mm"],
-                      "rule": r.name, "sense_pads": ["R911.1"]}]
+                      "rule": r.name, "sense_pads": ["R911.1"],
+                      "marked": False}]
+
+
+def test_sense_width_rule_for_a_marked_hand_routed_line(tmp_path):
+    """#1077: a rail with no sense_pads whose track sense_mark.py marked
+    (a shunt's line into an amplifier) gets the rule too; its rail
+    tracks outside the mark do not make it a sense net."""
+    import sense_mark
+    pcb = tmp_path / "m.kicad_pcb"
+    seg = ('  (segment (start {} 5) (end {} 5) (width {}) (layer "F.Cu") '
+           '(net "A"))\n')
+    body = seg.format(5, 20, 2) + seg.format(20, 40, 0.2)
+    pcb.write_text(f"""(kicad_pcb (version 20260206) (generator "test")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup)
+{body})
+""", encoding="utf-8")
+    cons = {"power": [{"net": "A", "current_a": 3.0}]}
+    assert rules_gen.sense_width_rules(
+        cons, CAP, geom.BoardGeom.from_file(pcb)) == ([], [])
+    thin = [t for t in geom.BoardGeom.from_file(pcb).tracks_of(net="A")
+            if t.width < 1]
+    zones = ""
+    for a in sense_mark.mark_areas(thin, "U1_1"):
+        pts = " ".join(f"(xy {x} {y})" for x, y in a["poly"])
+        zones += (f'  (zone (net 0) (net_name "") (layer "F.Cu") '
+                  f'(name "{a['name']}") (hatch edge 0.5)\n'
+                  '    (keepout (tracks allowed) (vias allowed) (pads allowed) '
+                  '(copperpour allowed) (footprints allowed))\n'
+                  f'    (polygon (pts {pts})))\n')
+    pcb.write_text(pcb.read_text().replace(body, body + zones))
+    [r], [f] = rules_gen.sense_width_rules(
+        cons, CAP, geom.BoardGeom.from_file(pcb))
+    assert r.name == "aiee_sense_width_A" and f["marked"]

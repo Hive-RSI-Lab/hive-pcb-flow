@@ -25,6 +25,17 @@
 #   pin_max    A: the most one pin may source or sink
 #   total_max  A: the most all the covered pins together may source (or
 #              sink)
+# converters: a switching converter's output limits, for the
+#   switched_load_droop rule (a capacitive load the constraints declare,
+#   switched hard from the converter's output).
+#   kind       boost
+#   fb         regex on the feedback pin function: the divider on it gives
+#              the output volts (vref x (1 + top / bottom))
+#   vref       V: the feedback reference
+#   uv_pct     %: the FB-falling undervoltage threshold, of vref (PGOOD
+#              drops below it)
+#   ilim_min   A: the switch current limit's minimum
+#   hiccup_cycles  cycles of current limiting that start hiccup mode
 # usb: what a USB port gives with no power-delivery negotiation (USB 2.0
 #   section 7.2.1 and USB 3.2 section 11.4.1: one unit load after
 #   configuration is 100 mA for USB 2, 150 mA for USB 3; a high-power port
@@ -192,3 +203,35 @@ gpio:
   cite:
   - {doc: atmega328pb.pdf, sha256: 3fecad6c2b7954a10b0df4d3a096354599bff2e4aaad766b616f2340d6e998ca, page: 350, table: '', quote: 'DC Current per I/O Pin 40.0mA', fields: [pin_max]}
   - {doc: atmega328pb.pdf, sha256: 3fecad6c2b7954a10b0df4d3a096354599bff2e4aaad766b616f2340d6e998ca, page: 350, table: '', quote: 'DC Current VCC and GND Pins 100.0mA', fields: [total_max]}
+
+converters:
+- mpn: LM5158
+  match: ^LM5158(?!1)
+  verified: true
+  kind: boost
+  fb: ^FB$
+  vref: 1.0
+  uv_pct: 90
+  ilim_min: 3.26
+  hiccup_cycles: 64
+  source: TI SNVSBZ7 (LM5158x), 7.5 Electrical Characteristics
+  cite:
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'ILIM Internal MOSFET current limit LM5158 3.26 3.75 4.24 A', fields: [ilim_min]}
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'VREF FB reference 0.99 1 1.01 V', fields: [vref]}
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'VUVTH Undervoltage threshold FB falling (reference to VREF) 87% 90% 93%', fields: [uv_pct]}
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'Hiccup enable cycles 64 Cycles', fields: [hiccup_cycles]}
+- mpn: LM51581
+  match: ^LM51581
+  verified: true
+  kind: boost
+  fb: ^FB$
+  vref: 1.0
+  uv_pct: 90
+  ilim_min: 1.63
+  hiccup_cycles: 64
+  source: TI SNVSBZ7 (LM5158x), 7.5 Electrical Characteristics
+  cite:
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'Internal MOSFET current limit LM51581 1.63 1.875 2.12 A', fields: [ilim_min]}
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'VREF FB reference 0.99 1 1.01 V', fields: [vref]}
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'VUVTH Undervoltage threshold FB falling (reference to VREF) 87% 90% 93%', fields: [uv_pct]}
+  - {doc: lm5158.pdf, sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f, page: 8, table: '', quote: 'Hiccup enable cycles 64 Cycles', fields: [hiccup_cycles]}

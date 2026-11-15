@@ -75,6 +75,9 @@ page covers how an agent runs it inside the Hive.
   A part with no `parts/<lcsc>.json` is rated from pcb-flow's own library,
   `reference/extractions/<lcsc>.json`, when it has an entry (rules in its
   README: every number cited to a datasheet page).
+- A passive record with no rating rows (rating_unrated): `pcb-flow rating_fill
+  --parts boards/<name>/parts --write` reads the voltage, power, current and
+  temperature from its datasheet PDF, citing page and table (docs/playbook.md).
 - Every board with a netlist gets `pcb-flow sim_board --workspace boards/<name>
   --out boards/<name>/reports/sim_board.json`: ngspice over the board's own
   passives and discretes (KiCad 10's bundled libngspice, found by this
@@ -199,7 +202,10 @@ A board isn't ready to order (attest refuses, order-ready drops) while any
 fact is failed or unknown. Stock is good for 72 hours, so run
 `bin/pcb-flow stock_check --workspace <ws>` right before the order packet; the
 person's flow is "I order it, it arrives, I plug it in", with no surprise at
-JLC's BOM review.
+JLC's BOM review. A BOM bought by MPN (a US-sourced one, no LCSC column, no
+DigiKey or Mouser keys) is checked with `stock_check --mpn --bom <BOM.csv>`
+against the distributor pages that answer without a key; a row no page
+answers for is not judged and blocks, never "in stock".
 
 ## Checklists count without the person's sign-off
 

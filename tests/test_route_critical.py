@@ -1013,7 +1013,7 @@ def test_live_sense_line_at_3a_runs_thin_and_passes(rule, cli, krt_dir,
     import rules_gen
     if not rule:
         monkeypatch.setattr(rules_gen, "sense_width_rules",
-                            lambda c, cap: ([], []))
+                            lambda c, cap, bg=None: ([], []))
     pcb = _kp_board(tmp_path, True)
     cons_p = tmp_path / "constraints.json"
     cons = json.loads(cons_p.read_text(encoding="utf-8"))

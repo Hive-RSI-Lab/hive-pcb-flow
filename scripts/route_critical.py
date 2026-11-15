@@ -38,7 +38,9 @@ Critical-net sources (constraints.json, sidecar default like place_metrics):
               aiee_sense_width_<net> rule lets down to the fab minimum.
               After the final refill sense_verdicts walks each line
               (check_kelvin.sense_walk): a line that joins rail copper
-              before its tap is an error, sense_route_off_pad.
+              before its tap is an error, sense_route_off_pad. Marks it
+              did not lay (sense_mark.py's, on lines routed by hand, #1077)
+              are kept when it redraws its own.
 
 KRT facts this adapter encodes (all machine-verified against KRT 0.19.0):
   * KRT scripts are invoked as subprocesses of THIS python with
@@ -178,6 +180,7 @@ import geom  # noqa: E402
 import impedance as imp  # noqa: E402
 import kc  # noqa: E402
 import check_kelvin  # noqa: E402  (#1043 sense_walk / _pad_named)
+import sense_mark  # noqa: E402  (#1077 mark_areas)
 import mazeroute  # noqa: E402  (#1043 sense lines)
 import pairlaunch  # noqa: E402  (#546 pair stubs a coupled router can launch from)
 import route_edit  # noqa: E402  (width normalization ops)
@@ -2026,20 +2029,8 @@ def sense_keepout(bg: geom.BoardGeom, net: str, new_uuids: set[str], sense,
     tag = re.sub(r"[^A-Za-z0-9]+", "_", f"{sense.ref}_{sense.number}")
     # the sense-width mark (#1042): the line's own tracks, tap end and all,
     # grown by SENSE_MARK_MM; KiCad's enclosedByArea takes no wider track
-    marks: dict[str, list] = {}
-    for t in bg.tracks_of(net=net):
-        if t.uuid in new_uuids:
-            marks.setdefault(t.layer, []).append(t.poly.buffer(SENSE_MARK_MM))
-    for ly in sorted(marks):
-        shape = unary_union(marks[ly])
-        for k, poly in enumerate(q for q in getattr(shape, "geoms", [shape])
-                                 if q.geom_type == "Polygon"
-                                 and not q.is_empty):
-            pts = [[round(x, 4), round(y, 4)] for x, y in list(
-                poly.simplify(SENSE_MARK_MM / 10).exterior.coords)[:-1]]
-            areas.append({"name": f"{SENSE_MARK}_{tag}_{ly.replace('.', '_')}"
-                                  f"_{k}", "layers": [ly], "poly": pts,
-                          "tracks": False, "vias": False, "pours": False})
+    areas += sense_mark.mark_areas(
+        [t for t in bg.tracks_of(net=net) if t.uuid in new_uuids], tag)
     for ly in sorted(by_layer):
         shape = unary_union(by_layer[ly]).difference(cut)
         polys = getattr(shape, "geoms", [shape])
@@ -2049,11 +2040,37 @@ def sense_keepout(bg: geom.BoardGeom, net: str, new_uuids: set[str], sense,
                    for x, y in list(poly.simplify(0.005).exterior.coords)[:-1]]
             areas.append({"name": f"{SENSE_PREFIX}_{tag}_{k}", "layers": [ly],
                           "poly": pts, "tracks": False, "vias": False,
-                          "pours": True})
+                          "pours": True, "tag": tag})
     return areas
 
 
+def _kept_sense_areas(bg: geom.BoardGeom, areas: list[dict]) -> list[dict]:
+    """The board's aiee_sense*_ areas of lines not re-laid now (#1077):
+    sense_mark's marks on hand-routed lines, and an earlier run's keepouts
+    round a pre-routed line. set_rule_areas replaces every area under
+    SENSE_PREFIX, so these go back in as they are."""
+    tags = {a["tag"] for a in areas if a.get("tag")}
+    keep = []
+    for ra in bg.rule_areas:
+        name = str(ra.get("name") or "")
+        if not name.startswith(SENSE_PREFIX) or ra["outline"].is_empty:
+            continue
+        if any(name.startswith(f"{p}_{t}_") for t in tags
+               for p in (SENSE_PREFIX, SENSE_MARK)):
+            continue
+        f = ra.get("flags") or {}
+        keep.append({"name": name, "layers": list(ra["layers"]),
+                     "poly": [[round(x, 4), round(y, 4)] for x, y in
+                              list(ra["outline"].exterior.coords)[:-1]],
+                     **{k: f.get(w) == "not_allowed" for k, w in
+                        (("tracks", "tracks"), ("vias", "vias"),
+                         ("pours", "copperpour"), ("pads", "pads"),
+                         ("footprints", "footprints"))}})
+    return keep
+
+
 def _set_sense_keepouts(staged: Path, areas: list[dict]) -> dict:
+    areas = areas + _kept_sense_areas(geom.BoardGeom.from_file(staged), areas)
     cli = env.find_kicad_cli()
     bp = env.find_kicad_python(cli) if cli else None
     if bp is None:

@@ -131,3 +131,46 @@ def test_a_converter_with_a_current_limit_pin_is_still_judged():
     hits, facts = _audit(*_efuse(extra_pins=[("20", "SW"), ("21", "FB")]))
     assert [h["net"] for h in hits] == ["PGOOD"]
     assert facts["power_good_pins_checked"] == 1
+
+
+def _charger(pg_to_q1: bool):
+    """PCB-0021's BQ24074 (SLUS810): ILIM and TMR like an eFuse, but BAT,
+    ISET, TS and CHG make it a charger, whose PGOOD is judged (#1223).
+    As built, PGOOD drives Q1 (2N7002) at its source; the fault puts it on
+    an LED only."""
+    nets = _rails()
+    nets["VBUS"] = [_m("U1", "13", "IN", "power_in")]
+    nets["VBAT"] = [_m("U1", "2", "BAT", "power_out"),
+                    _m("U1", "3", "BAT", "power_out")]
+    nets["/ILIM"] = [_m("U1", "12", "ILIM"), _m("R2", "1")]
+    nets["/ISET"] = [_m("U1", "16", "ISET"), _m("R3", "1")]
+    nets["/TMR"] = [_m("U1", "14", "TMR"), _m("R4", "1")]
+    nets["/TS"] = [_m("U1", "1", "TS"), _m("R5", "1")]
+    nets["/CHG"] = [_m("U1", "9", "~{CHG}", "open_collector"), _m("R6", "1")]
+    comps = {"U1": "BQ24074", "R1": "2.2K", "R2": "1.1k", "R3": "1k",
+             "R4": "47k", "R5": "10k", "R6": "1k"}
+    if pg_to_q1:
+        nets["/PGOOD"] = [_m("U1", "7", "~{PGOOD}", "open_collector"),
+                          _m("R1", "1"), _m("Q1", "2", "S")]
+        nets["+3.3V"].append(_m("R1", "2"))
+        comps["Q1"] = "2N7002"
+    else:
+        nets["/PGOOD"] = [_m("U1", "7", "~{PGOOD}", "open_collector"),
+                          _m("R1", "2")]
+        nets["Net-(D2-K)"] = [_m("R1", "1"), _m("D2", "1", "K")]
+        nets["+12V"].append(_m("D2", "2", "A"))
+        comps["D2"] = "RED"
+    return comps, nets
+
+
+def test_a_charger_pgood_on_an_led_only_is_judged():
+    # Planted fault: ILIM and TMR no longer hide a charger's PGOOD (#1223).
+    hits, facts = _audit(*_charger(pg_to_q1=False))
+    assert [(h["net"], h["pg_pin"]) for h in hits] == [("/PGOOD", "U1.7")]
+    assert facts["power_good_pins_checked"] == 1
+
+
+def test_a_charger_pgood_into_a_fet_is_quiet():
+    # Quiet twin: PCB-0021 as wired, PGOOD into Q1.
+    hits, facts = _audit(*_charger(pg_to_q1=True))
+    assert hits == [] and facts["power_good_pins_checked"] == 1

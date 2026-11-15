@@ -49,6 +49,14 @@ another net touches one of the pads they produce (KiCad would carry that
 copper onto the pad's net when it saves): rip it first with route_edit,
 re-route after; part_repair.py does the three steps and checks them.
 
+delete removes placed parts by refdes ("ref": one or a list; #854, was the
+pinned boards' delete_parts.py + rip_dangling.py). rip_dangling: true also
+removes the copper the deletion leaves dangling on the parts' nets
+(board_update's orphan analysis, then extra rounds for what DRC still calls
+dangling). The staged copy is DRC'd before the swap: rolled back when it gains
+an error that is not unconnected or dangling, or, ripping, any dangling. A
+delete list holds only deletes; on a routed board it needs --allow-routed.
+
 Note: KiCad regenerates footprint/graphic UUIDs on every save, so two saves of
 the same placement are NOT byte-identical - compare parsed positions, never
 file hashes.
@@ -115,6 +123,11 @@ OP_FIELDS = {  # op -> (required, optional)
     "swap_fp": ({"ref", "footprint"}, {"fpid", "nets", "x", "y", "deg",
                                        "side"}),
     "renumber": ({"ref", "pads"}, {"nets"}),
+    # remove placed parts (#854; was pinned delete_parts.py + rip_dangling):
+    # "ref" one refdes or a list; rip_dangling also removes the copper the
+    # deletion leaves dangling (board_update's orphan analysis). An op list
+    # holding a delete holds only deletes.
+    "delete": ({"ref"}, {"rip_dangling"}),
 }
 TEXT_LAYERS = {"F.SilkS", "B.SilkS", "F.Fab", "B.Fab"}
 POS_TOL = 1e-3   # mm
@@ -122,7 +135,7 @@ ANG_TOL = 0.05   # deg
 REPAD_TOL = 0.005  # mm: a renumber `at` finds its pad within this
 REPAD_OPS = ("swap_fp", "renumber")
 # copper-relevant ops (refused on a routed board without --allow-routed)
-FOOTPRINT_OPS = {"place", "move", "rotate", "flip", *REPAD_OPS}
+FOOTPRINT_OPS = {"place", "move", "rotate", "flip", "delete", *REPAD_OPS}
 # ops that may not share an op list with a swap_fp/renumber of the same part
 # (a re-pad sets the part's pose and its pads' nets itself)
 REPAD_EXCLUSIVE = ("place", "move", "rotate", "flip", "set_pad")
@@ -169,10 +182,12 @@ def board_routed(pcb: Path) -> bool:
 def validate_ops(doc: dict) -> list[dict]:
     if not isinstance(doc, dict) or doc.get("version") != 1:
         raise CheckError("ops file must be {'version': 1, 'ops': [...]}")
-    ops = doc.get("ops")
+    ops = _expand_deletes(doc.get("ops"))
     if not isinstance(ops, list) or not ops:
         raise CheckError("ops list is empty")
     for i, op in enumerate(ops):
+        if not isinstance(op, dict):
+            raise CheckError(f"ops[{i}]: not an object")
         kind = op.get("op")
         if kind not in OP_FIELDS:
             raise CheckError(f"ops[{i}]: unknown op '{kind}'")
@@ -241,7 +256,46 @@ def validate_ops(doc: dict) -> list[dict]:
                 raise CheckError(f"ops[{i}]: region must be [x0, y0, x1, y1]"
                                  " mm with x0 < x1, y0 < y1")
     _validate_repad_list(ops)
+    _validate_delete_list(ops)
     return ops
+
+
+def _expand_deletes(ops):
+    """{"op": "delete", "ref": [A, B]} -> one delete op per refdes."""
+    if not isinstance(ops, list):
+        return ops
+    out = []
+    for op in ops:
+        if isinstance(op, dict) and op.get("op") == "delete" \
+                and isinstance(op.get("ref"), list):
+            if not op["ref"]:
+                raise CheckError("delete: ref list is empty")
+            out += [{**op, "ref": r} for r in op["ref"]]
+        else:
+            out.append(op)
+    return out
+
+
+def _validate_delete_list(ops: list[dict]) -> None:
+    dels = [op for op in ops if op["op"] == "delete"]
+    if not dels:
+        return
+    if len(dels) != len(ops):
+        raise CheckError("delete ops cannot share an op list with other ops "
+                         "(apply the deletes in a run of their own)")
+    refs = [op["ref"] for op in dels]
+    bad = [r for r in refs if not isinstance(r, str) or not r.strip()]
+    if bad:
+        raise CheckError(f"delete: ref must be a refdes string, got {bad[0]!r}")
+    dup = sorted({r for r in refs if refs.count(r) > 1})
+    if dup:
+        raise CheckError(f"delete: ref listed twice: {', '.join(dup)}")
+    rips = {op.get("rip_dangling", False) for op in dels}
+    if any(not isinstance(r, bool) for r in rips):
+        raise CheckError("delete: rip_dangling must be a boolean")
+    if len(rips) > 1:
+        raise CheckError("delete: rip_dangling must be the same on every "
+                         "delete op")
 
 
 def _is_num(v) -> bool:
@@ -379,8 +433,9 @@ def _expected_state(ops: list[dict]) -> dict[str, dict]:
     for op in ops:
         if op["op"] in TEXT_OPS:
             continue  # verified independently by _verify_texts
-        if op["op"] in ("silk_clear", "set_pad", "set_dnp", "renumber"):
-            continue  # moves nothing; _verify_parts/_verify_repad check pads
+        if op["op"] in ("silk_clear", "set_pad", "set_dnp", "renumber",
+                        "delete"):
+            continue  # delete: _apply_delete verifies its own  # moves nothing; _verify_parts/_verify_repad check pads
         w = want.setdefault(op["ref"], {})
         if op["op"] == "swap_fp":  # resolved: _pose/_locked (_resolve_repad)
             pose = op.get("_pose") or {}
@@ -1055,6 +1110,8 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
     bp = env.find_kicad_python(cli) if cli else None
     if bp is None:
         raise CheckError("KiCad bundled python not found (env.py)")
+    if ops and ops[0]["op"] == "delete":  # validate_ops: all or none
+        return _apply_delete(pcb, ops, cli, bp)
 
     stage = Path(tempfile.mkdtemp(prefix=".aiee_edit_", dir=pcb.parent))
     try:
@@ -1110,6 +1167,149 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
         return results
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+
+
+# ------------------------------------------------------------------ delete
+
+def _drc_tally(rep: dict) -> dict:
+    """Dangling / unconnected / other errors in one DRC report."""
+    t = {"dangling": 0, "unconnected": 0, "errors": 0}
+    for v in rep["violations"]:
+        if "dangling" in (v.get("check") or ""):
+            t["dangling"] += 1
+        elif (v.get("source") or "") == "unconnected":
+            t["unconnected"] += 1
+        elif v.get("severity") == "error":
+            t["errors"] += 1
+    return t
+
+
+def _verify_delete(staged: Path, before_bg, before_refs: set, refs: list,
+                   orphans: dict) -> list[str]:
+    """Read the staged copy back: the parts gone, every other part kept,
+    copper == before - the planned orphans, and (ripping) no copper on the
+    parts' nets that netconn now finds unanchored and did not before."""
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    import board_update as bu
+    import geom
+    problems = []
+    left = set(placelib.PlaceModel(staged).footprints)
+    for r in refs:
+        if r in left:
+            problems.append(f"delete {r}: still on the board")
+    lost = sorted(before_refs - set(refs) - left)
+    if lost:
+        problems.append(f"delete: other parts vanished: {', '.join(lost)}")
+    sbg = geom.BoardGeom.from_file(staged)
+    expect = bu._copper_inventory(before_bg)
+    for t in orphans["tracks"]:
+        expect[bu._item_key_track(t)] -= 1
+    for v in orphans["vias"]:
+        expect[bu._item_key_via(v)] -= 1
+    expect, got = +expect, +bu._copper_inventory(sbg)
+    for key in list(got - expect)[:5]:
+        problems.append(f"copper appeared: {key}")
+    for key in list(expect - got)[:5]:
+        problems.append(f"copper vanished: {key}")
+    for net in orphans["affected_nets"]:
+        if net not in set(sbg.nets):
+            continue
+        after = bu.copper_analysis(sbg, net, frozenset())
+        base = orphans["baselines"][net]
+        if any(bu._item_key_track(t) not in base["t"] for t in after["tracks"]) \
+                or any(bu._item_key_via(v) not in base["v"]
+                       for v in after["vias"]):
+            problems.append(f"delete left NEW dangling copper on {net}")
+    return problems
+
+
+def _apply_delete(pcb: Path, ops: list[dict], cli, bp) -> list[dict]:
+    """Remove footprints by refdes (#854) on a staged copy, through
+    board_update's worker and orphan analysis; DRC the staged copy before
+    the swap. Rolled back when a part survives, other copper changes, or
+    DRC gains an error that is not unconnected/dangling; with rip_dangling,
+    also when DRC finds more dangling copper than before."""
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    import board_update as bu
+    import geom
+    import kc
+    import routelib
+    refs = [op["ref"] for op in ops]
+    rip = bool(ops[0].get("rip_dangling"))
+    before_bg = geom.load_board(pcb, refresh=True)
+    before_refs = set(placelib.PlaceModel(pcb).footprints)
+    nets = {r: sorted({p.net for p in before_bg.pads_of(ref=r) if p.net})
+            for r in refs}
+    orphans = bu.plan_orphans(before_bg, refs) if rip else {
+        "tracks": [], "vias": [], "affected_nets": [], "baselines": {}}
+    drc_before = kc.run_drc(cli, pcb)
+    tb = _drc_tally(drc_before)
+    # netconn joins overlapping copper where KiCad joins only an end inside
+    # other copper, so a stub off a junction can pass the orphan analysis
+    # and still dangle in DRC: rip what DRC newly calls dangling on the
+    # parts' own nets and try again (board_update's DANGLE_ROUNDS)
+    for attempt in range(bu.DANGLE_ROUNDS + 1):
+        stage = Path(tempfile.mkdtemp(prefix=".aiee_edit_", dir=pcb.parent))
+        try:
+            staged = stage / pcb.name
+            shutil.copy2(pcb, staged)
+            for side in (".kicad_pro", ".kicad_dru", ".kicad_prl"):
+                sib = pcb.with_suffix(side)
+                if sib.is_file():
+                    shutil.copy2(sib, stage / sib.name)  # DRC rules
+            job = {"verb": "apply_update", "board": str(staged),
+                   "out": str(staged), "remove_refs": refs,
+                   "remove_uuids": [t.uuid for t in orphans["tracks"]]
+                   + [v.uuid for v in orphans["vias"]]}
+            result = routelib.run_worker(bp, job, stage, worker=bu.WORKER)
+            problems = _verify_delete(staged, before_bg, before_refs, refs,
+                                      orphans)
+            if problems:
+                raise CheckError("post-apply verify failed (rolled back): "
+                                 + "; ".join(problems[:10]))
+            if list(before_bg.zones_of()):  # the parts' pads shaped the fill
+                drc_after = kc.run_drc(cli, staged, refill=True,
+                                       save_board=True)
+            else:
+                drc_after = kc.run_drc(cli, staged)
+            ta = _drc_tally(drc_after)
+            if rip and ta["dangling"] > tb["dangling"]:
+                more = bu._ripped_danglers(
+                    drc_before, drc_after, staged, before_bg,
+                    {**orphans, "rip_nets": orphans["affected_nets"]})
+                if more and attempt < bu.DANGLE_ROUNDS:
+                    orphans = {**orphans,
+                               "tracks": orphans["tracks"] + [
+                                   x for x in more
+                                   if isinstance(x, geom.Track)],
+                               "vias": orphans["vias"] + [
+                                   x for x in more if isinstance(x, geom.Via)]}
+                    continue
+                raise CheckError(f"delete: DRC dangling {tb['dangling']} -> "
+                                 f"{ta['dangling']} after rip_dangling "
+                                 "(rolled back)")
+            if ta["errors"] > tb["errors"]:
+                raise CheckError(f"delete: DRC errors {tb['errors']} -> "
+                                 f"{ta['errors']} on the staged copy "
+                                 "(rolled back)")
+            os.replace(staged, pcb)
+            break
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+    summary = {"ripped": {"tracks": len(orphans["tracks"]),
+                          "vias": len(orphans["vias"]),
+                          "rounds": attempt + 1},
+               "removed_texts": result.get("removed_texts") or [],
+               "drc": {"before": tb, "after": ta}}
+    out = [{"ref": r, "deleted": True, "nets": nets[r]} for r in refs]
+    out[0]["delete"] = summary
+    if not rip and ta["dangling"] > tb["dangling"]:
+        out[0]["notes"] = [f"DRC dangling {tb['dangling']} -> "
+                           f"{ta['dangling']}: the parts' copper stays "
+                           "(rip_dangling: true removes it)"]
+    return out
 
 
 def load_ops(ops_file: str | None, inline: list[str]) -> list[dict]:

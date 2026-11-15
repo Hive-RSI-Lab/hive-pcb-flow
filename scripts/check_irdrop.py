@@ -615,6 +615,7 @@ def solve_grid(bg: geom.BoardGeom, entry: dict, net: str, layers: list[str],
         "sink_pads": sink_pad_count,
         "resistance_ohm": worst_sink_v / injected,
         "worst_sink": {"ref": worst_ref, "drop_v": worst_sink_v},
+        "sink_drops": dict(sinks),  # ref -> mean drop (V), check_rail_budget
         "worst_drop_v": float(drop[worst_node]),
         "jmax": jmax, "jmax_pos": jmax_pos, "jmax_layer": jmax_layer,
         "necks": necks,

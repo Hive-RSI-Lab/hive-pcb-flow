@@ -253,8 +253,11 @@ def compare(part: dict, fp: dict, fp_pads: int | None = None) -> list[str]:
     return why
 
 
+# SMA-K/J (bare or hyphened) and SMA-F/M (hyphened only) name coax
+# jacks; a bare "SMAF" is JLC's name for the flat-lead SMA diode body
+# (1N4007 is sold in it), so it is read as the SMA family.
 _RF = re.compile(r"CONN|COAX|JACK|PLUG|BWSMA|WIRELESS|EDGE|RF|"
-                 r"SMA-?(?:K|J|F|M)(?:W?E|HD|Y|B)?(?![A-Z])")
+                 r"SMA(?:-?(?:K|J)|-(?:F|M))(?:W?E|HD|Y|B)?(?![A-Z])")
 
 
 def _same_land(part: dict, fp: dict) -> bool:

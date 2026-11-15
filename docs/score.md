@@ -86,7 +86,17 @@ For every pinned board, a scratch copy goes through `erc`, `drc_routed`,
 shim in `bin/pcb-flow` is off (`HWDE_NO_SHIMS`), so a gate gets no help pcb-flow
 doesn't ship. The findings are each finding a gate fails on that no waiver
 covers (the board's own `reports/verify-waivers.json`, applied by the gate
-as always) and each warning no waiver in that file covers. One charge is:
+as always) and each warning no waiver in that file covers. An info note
+(severity `info`: a screen with no limit behind it, or a part of what a
+check left `not_judged`) is not a warning and is never charged, though the
+gate's result carries it among its `warnings`. A finding that says the
+check could not run, not that it judged wrongly, is set aside as not
+judged: dfm's `cpl_fetch_failed` (EasyEDA did not answer: a rate limit or
+the network). It costs nothing, is no catch, is never drafted into the
+ledger, and shows on the board's line as `not judged N (dfm: fetch failed
+<refs>, free)`. A part EasyEDA has no model for (`cpl_no_model`) is a
+finding and charges as before. The kinds are `NOT_JUDGED` in bin/score.py.
+One charge is:
 
 1. each finding the ledger holds **false**;
 2. each finding the ledger doesn't hold as judged (`?`, or not in it): an

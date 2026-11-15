@@ -11,6 +11,7 @@ fixed board isn't seeing the defect). The table goes to docs/errata-corpus.md.
     errata_corpus.py fetch [ID...]   sparse clones at the pinned commit
     errata_corpus.py run   [ID...]   run each catch on rev A and rev B
     errata_corpus.py sweep ID...     every check on rev A and rev B, blind
+    (a sealed round's boards only with --sealed N, from --sealed-cache)
     errata_corpus.py table           write docs/errata-corpus.md
 
 Two sets. `boards:` is the training set: most of its catches were written
@@ -29,7 +30,9 @@ constraints file, what hwde reads before anyone has written one:
 netlist_audit on the schematic, check_mate_pins and check_current on the
 board, check_straps on the board with the netlist kicad-cli exports from the
 schematic, check_connector_fit, check_silk and check_esd on the board (no
-parts/, so check_esd reads no victim's abs max), check_pinouts on the
+parts/, so check_esd reads no victim's abs max), check_ratings on the board
+(each pin rated from hwde's library extractions by its LCSC number, rails
+from net names: no parts/ and no power tree), check_pinouts on the
 schematic, check_bom_sync on the board with --live (the package of each LCSC part
 comes from JLC's record, as nothing in the foreign tree holds it),
 check_fp_package on the board with --live (each part's package from JLC's
@@ -74,6 +77,29 @@ def cache_root(arg: str | None) -> Path:
     if c == ROOT or ROOT in c.parents:
         raise SystemExit(f"cache {c} is inside the repo")
     return c
+
+
+def sealed_cache_root(arg: str | None, cache: Path) -> Path:
+    """Where sealed-round checkouts and their sweep reports live: apart
+    from the training cache, so a builder who globs that cache's `repos/`
+    never reaches a sealed board (default ~/.cache/hwde-holdout, or
+    HWDE_HOLDOUT_CACHE)."""
+    c = Path(arg or os.environ.get("HWDE_HOLDOUT_CACHE")
+             or Path.home() / ".cache" / "hwde-holdout").resolve()
+    if c == ROOT or ROOT in c.parents:
+        raise SystemExit(f"sealed cache {c} is inside the repo")
+    if c == cache or cache in c.parents or c in cache.parents:
+        raise SystemExit(f"sealed cache {c} overlaps the training cache {cache}")
+    return c
+
+
+def sealed_rounds(path: Path = MANIFEST) -> dict[str, int]:
+    """Board id -> round, for every board of a sealed round."""
+    out = {}
+    for n, f in sealed_files(path).items():
+        for b in yaml.safe_load(f.read_text(encoding="utf-8")).get("holdout") or []:
+            out[b["id"]] = n
+    return out
 
 
 def sealed_files(path: Path = MANIFEST) -> dict[int, Path]:
@@ -264,6 +290,20 @@ def _check_esd(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--constraints", str(empty), "--parts", str(empty.parent / "no-parts")]
 
 
+def _check_ratings(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """Each pin's rating against its net, rated from hwde's library
+    extractions only: --parts is an empty folder in the run dir (the foreign
+    repo's parts/ is not read, and check_ratings needs the folder to exist)
+    and --power-tree names no file, so a rail's volts come from its net name.
+    audit() runs it with HWDE_LEDGER_WRITE=0, so no ledger.json lands in the
+    cached repo."""
+    parts = empty.parent / "ratings-no-parts"
+    parts.mkdir(exist_ok=True)
+    return ["check_ratings.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--constraints", str(empty), "--parts", str(parts),
+            "--power-tree", str(empty.parent / "no-power-tree.md")]
+
+
 def _check_bom_sync(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_bom_sync.py", "--pcb", str(_pcb(b, rev, repo, empty)), "--live"]
 
@@ -337,6 +377,7 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
            "check_pinouts": _check_pinouts, "check_esd": _check_esd,
+           "check_ratings": _check_ratings,
            "check_wicking": _check_wicking,
            "check_mounting": _check_mounting,
            "dfm": _dfm}
@@ -383,9 +424,11 @@ def audit(cache: Path, b: dict, rev: str, script: str,
     empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
     cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b, rev), empty)
     try:
+        # nothing is written into the foreign tree (check_ratings' ledger)
         p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
                             "--out", str(out)],
-                           capture_output=True, text=True, timeout=900)
+                           capture_output=True, text=True, timeout=900,
+                           env={**os.environ, "HWDE_LEDGER_WRITE": "0"})
     except subprocess.TimeoutExpired as e:
         err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) \
             else e.stderr
@@ -537,9 +580,12 @@ round, pinned and swept before those rules are:
 2. Each goes in the round's own sealed file, `holdout/round-N.yaml`
    (a `holdout:` list), with `swept: {flow: SHA, date, round: N}`, SHA
    being main as it stands, and its defects with the designer's quote,
-   before anyone reads the findings. `errata_corpus.py sweep ID...` runs
-   every check on both revisions; `load` merges the sealed files, so
-   `run` and `table` see them too.
+   before anyone reads the findings. `errata_corpus.py sweep --sealed N
+   ID...` runs every check on both revisions; `load` merges the sealed
+   files, so `run` and `table` see them too. A sealed round's boards are
+   left out of `fetch`, `run` and `sweep` unless `--sealed N` asks for them,
+   and they live in their own cache (`--sealed-cache`, default
+   ~/.cache/hwde-holdout), apart from the training cache.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board
@@ -559,8 +605,12 @@ live only in the repo's top `holdout/` folder: `holdout/round-N.yaml`,
 `table`). It is outside `reference/` and `docs/`, so a grep there for a part
 or a check doesn't reach them. Rule builders open none of these, nor the round's
 boards or errata upstream, and their briefs quote only the taxonomy's
-Ranked table. Only the round's scorers read them. `tests/test_holdout_sealed.py`
-fails if a sealed defect id appears in any other tracked file. Unsealing a
+Ranked table. Only the round's scorers read them. A builder's own corpus
+sweep globs the training cache's `repos/` for training boards only, and
+never passes `--sealed` or opens the sealed cache. `tests/test_holdout_sealed.py`
+fails if a sealed defect id appears in any other tracked file, or if a
+sealed board is reachable from the default sweep or sits in the training
+cache. Unsealing a
 round (when a newer round replaces it as the blind test) moves its boards
 into `reference/errata_corpus.yaml` and its members into the taxonomy.
 """
@@ -629,11 +679,36 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("cmd", choices=["fetch", "run", "sweep", "table"])
     ap.add_argument("ids", nargs="*")
     ap.add_argument("--cache")
+    ap.add_argument("--sealed", type=int, action="append", default=[], metavar="N",
+                    help="also take sealed round N's boards (scorers only), "
+                         "from the sealed cache")
+    ap.add_argument("--sealed-cache")
     ap.add_argument("--manifest", default=str(MANIFEST))
     ap.add_argument("--out", default=str(DOC))
     a = ap.parse_args(argv)
     cache = cache_root(a.cache)
+    scache = sealed_cache_root(a.sealed_cache, cache)
     man = Path(a.manifest)
+    rounds = sealed_rounds(man)
+
+    def where(b: dict) -> Path:
+        return scache if b["id"] in rounds else cache
+
+    left_out = []
+
+    def wanted(b: dict) -> bool:
+        if a.ids and b["id"] not in a.ids:
+            return False
+        if b["id"] in rounds and rounds[b["id"]] not in a.sealed:
+            left_out.append(b["id"])
+            return False
+        return True
+
+    def note_left_out() -> None:
+        # a count, never the ids: this line reaches builders' logs
+        if left_out:
+            print(f"left out {len(left_out)} sealed-round board(s); "
+                  "scorers add --sealed N", file=sys.stderr)
     if a.cmd == "table":
         holdout = load(man, "holdout")
         sealed = set(sealed_files(man))
@@ -642,7 +717,7 @@ def main(argv: list[str] | None = None) -> int:
         for r in sorted(sealed):
             f = out.parent.parent / "holdout" / f"round-{r}-errata.md"
             f.parent.mkdir(exist_ok=True)
-            f.write_text(sealed_table(cache, holdout, r), encoding="utf-8")
+            f.write_text(sealed_table(scache, holdout, r), encoding="utf-8")
         return 0
     if a.cmd == "sweep":
         # unvalidated: a holdout board is fetched and swept before its
@@ -650,10 +725,10 @@ def main(argv: list[str] | None = None) -> int:
         raw = _raw(man, "holdout")
         pairs, errored = 0, []
         for b in raw:
-            if a.ids and b["id"] not in a.ids:
+            if not wanted(b):
                 continue
-            fetch(cache, b)
-            for script, r in sweep(cache, b).items():
+            fetch(where(b), b)
+            for script, r in sweep(where(b), b).items():
                 print(b["id"], script, *([f"crashed: {script}"] if "error" in r
                                          else []), json.dumps(r))
                 pairs += 1
@@ -662,14 +737,16 @@ def main(argv: list[str] | None = None) -> int:
         # a crashed check is a hole in the sweep, not a clean pass (#1189)
         print(f"sweep: {pairs} (board, check) pairs, {len(errored)} errored"
               + (": " + ", ".join(errored) if errored else ""))
+        note_left_out()
         return 0
-    boards = [b for b in load_all(man) if not a.ids or b["id"] in a.ids]
+    boards = [b for b in load_all(man) if wanted(b)]
+    note_left_out()
     bad = 0
     for b in boards:
         if a.cmd == "fetch":
-            fetch(cache, b)
+            fetch(where(b), b)
         else:
-            for did, r in run(cache, b).items():
+            for did, r in run(where(b), b).items():
                 print(did, (f"crashed: {r['crashed']} " if r.get("crashed")
                             else "") + json.dumps(r))
                 bad += r.get("ran", False) and (

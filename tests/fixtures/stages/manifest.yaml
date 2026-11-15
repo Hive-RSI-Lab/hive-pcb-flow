@@ -216,7 +216,7 @@ fixtures:
         sha256: 3b9c6ea6b1ab97a7b2c27f29ba33ba8b775fee82b3beba08e241a84ae2b0b01f
       dru:
         path: tests/fixtures/stages/pd_trigger/route/pd-trigger.kicad_dru
-        sha256: d8c96e0ddbb028bd451aadbde6060770ff612158f29562cce1e0405a3c56db68
+        sha256: 544830abc9ef6e74bf482cd77e26b59c4e8a79a76d6e5f8bbaebaee2b7914aa7
   golden_usbbuck4_route:
     stage: P7
     board: usbbuck4

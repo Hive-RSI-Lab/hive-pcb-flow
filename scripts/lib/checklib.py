@@ -145,6 +145,31 @@ def violation(check: str, severity: str, pos, layer, net, refs, msg: str,
     return v
 
 
+def zone_fill_facts(violations: list[dict], fill) -> dict:
+    """Report facts for a geom.fresh_board() fill note (None: nothing).
+    Refilled: a zone_fill fact says the board was judged on a refilled
+    scratch copy. Not refilled: the reason goes to not_judged, and an error
+    on a net with an unfilled zone (or on no net: a part's copper may be one
+    of those zones) is cut to a warning, its copper being undercounted."""
+    if not fill:
+        return {}
+    import geom  # noqa: E402  (lib/ is on sys.path for every check)
+    out = {"zone_fill": dict(fill, note=geom.fill_note_text(fill))}
+    if fill["refilled"]:
+        return out
+    nets = {z["net"] for z in fill["zones"]}
+    for v in violations:
+        if v.get("severity") == "error" and (v.get("net") is None
+                                             or v.get("net") in nets):
+            v["severity"] = "warning"
+            v["msg"] += ("; zone fill not current (unfilled zones on this "
+                         "board could not be refilled), copper undercounted")
+            for it in v.get("items", []):
+                it["msg"] = v["msg"]
+    out["not_judged"] = [out["zone_fill"]["note"]]
+    return out
+
+
 def summarize(violations: list[dict]) -> dict:
     counts = {"total": len(violations)}
     by_sev: dict[str, int] = {}

@@ -312,6 +312,31 @@ def test_check_current_catch_runs_on_the_board():
     assert any(d["id"] == "digits-1" for d in caught)
 
 
+def test_check_ratings_reads_the_library_not_the_foreign_parts(tmp_path):
+    """check_ratings on a foreign board: its parts/ is not read (the overvolt
+    fixture's U1.10 error comes only from its own extractions, which hwde's
+    library lacks), the run does not crash on the missing parts folder or
+    power tree, and no ledger.json lands in the cached repo even when it
+    looks like a workspace."""
+    import shutil
+    fix = ROOT / "tests" / "fixtures" / "ratings" / "overvolt"
+    b = {"id": "ratplant", "commit": "0" * 40,
+         "rev_a": {"name": "a", "pcb": "kicad/board.kicad_pcb"},
+         "rev_b": {"name": "b", "pcb": "kicad/board.kicad_pcb"},
+         "defects": []}
+    cache = tmp_path / "cache"
+    repo = ec.repo_dir(cache, b)
+    shutil.copytree(fix, repo)
+    (repo / "state.json").write_text("{}")
+    assert not (ROOT / "reference" / "extractions" / "C6186.json").exists()
+    viols = ec.audit(cache, b, "rev_a", "check_ratings")
+    assert "U1.10" not in [v.get("pin") for v in viols
+                           if v.get("severity") == "error"]
+    assert not (repo / "ledger.json").exists()
+    rep = cache / "runs" / "ratplant" / "rev_a-check_ratings.json"
+    assert rep.is_file()
+
+
 # ------------------------------------------- dfm on a revision's shipped CPL
 
 OASIS = ROOT / "tests" / "fixtures" / "stages" / "oasis_cpl"

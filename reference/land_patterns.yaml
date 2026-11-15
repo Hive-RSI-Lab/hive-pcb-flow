@@ -1,7 +1,8 @@
 # Land patterns read off makers' package drawings (Example Board Layout /
 # recommended land pattern), for check_fp_geometry. Top view, mm, origin at
 # the package centre, +y down (KiCad's convention); pads by number, centres
-# only. A row is matched by regex on the MPN/Value/LCSC field. Add a row only
+# only. A row is matched by regex on the MPN/Value/LCSC field (`match`), or
+# a package row by regex on the footprint name (`footprint`, see below). Add a row only
 # with the drawing in hand and its cite in source; no row means not_judged.
 parts:
   - part: DRV8434S HTSSOP-28 (PWP0028M)
@@ -102,3 +103,67 @@ parts:
       3: [-1.3, 0.95]
       4: [1.3, 0.95]
       5: [1.3, -0.95]
+  # Package rows: `footprint` is a regex the whole footprint name (library
+  # aside) must match; used when no part row matches. Generic lands from a
+  # maker's chip/package table, for parts with no MPN to go by. A 2-pad land
+  # is judged on its centre spacing only (a quarter of it is the tolerance).
+  - part: 0603 (1608) MLCC
+    source: "KEMET C1002_X7R datasheet (X7R Dielectric 6.3-250 VDC, 2026-09-01) p.12 Table 3 land patterns per IPC-7351, Density Level B, 0603: C 0.80, Y 0.95, X 1.00 (pad centres 2C = 1.60 apart)"
+    footprint: 'C0603'
+    pads:
+      1: [-0.8, 0.0]
+      2: [0.8, 0.0]
+  - part: 0805 (2012) MLCC
+    source: "KEMET C1002_X7R datasheet (2026-09-01) p.12 Table 3, Density Level B, 0805: C 0.90, Y 1.15, X 1.45 (centres 1.80 apart)"
+    footprint: 'C0805'
+    pads:
+      1: [-0.9, 0.0]
+      2: [0.9, 0.0]
+  - part: 1206 (3216) MLCC
+    source: "KEMET C1009_C0G_HV_SMD datasheet (High Voltage C0G 500-10,000 VDC, 12/16/2024) p.12 Table 3, Density Level B, 1206: C 1.50, Y 1.15, X 1.80 (centres 3.00 apart)"
+    footprint: 'C1206'
+    pads:
+      1: [-1.5, 0.0]
+      2: [1.5, 0.0]
+  - part: 1210 (3225) MLCC
+    source: "KEMET C1002_X7R datasheet (2026-09-01) p.12 Table 3, Density Level B, 1210 (the >= 22 uF row): C 1.40, Y 1.40, X 2.80 (centres 2.80 apart; the plain 1210 row has C 1.50)"
+    footprint: 'C1210'
+    pads:
+      1: [-1.4, 0.0]
+      2: [1.4, 0.0]
+  - part: 0603 (1608) chip resistor
+    source: "Vishay D/CRCW e3 datasheet, doc 20035 (14-Apr-2026) p.11 Recommended Solder Pad Dimensions, reflow, 0603: G 0.75, Y 0.75, X 1.00 (centres G+Y = 1.50 apart)"
+    footprint: 'R0603'
+    pads:
+      1: [-0.75, 0.0]
+      2: [0.75, 0.0]
+  - part: 0805 (2012) chip resistor
+    source: "Vishay D/CRCW e3 datasheet, doc 20035 (14-Apr-2026) p.11 Recommended Solder Pad Dimensions, reflow, 0805: G 1.00, Y 0.95, X 1.45 (centres G+Y = 1.95 apart)"
+    footprint: 'R0805'
+    pads:
+      1: [-0.975, 0.0]
+      2: [0.975, 0.0]
+  - part: SOD-323
+    source: "Nexperia SOD323 package information (9 Apr 2018, appended to the BZX384 datasheet) p.3 Fig. 2 Reflow soldering footprint for SOD323: pad centres 2.2 apart, copper about 0.6 x 0.6"
+    footprint: 'SOD-323(_L1\.7-W1\.3.*)?'
+    pads:
+      1: [-1.1, 0.0]
+      2: [1.1, 0.0]
+  - part: SOD-123
+    source: "Diodes Inc BAV16W/1N4148W datasheet DS30086 Rev. 32-2 p.4 Suggested Pad Layout SOD123: X 0.90, X1 4.05, Y 0.95 (centres X1 - X = 3.15 apart)"
+    footprint: 'SOD-123(_L2\.7-W1\.8.*)?'
+    pads:
+      1: [-1.575, 0.0]
+      2: [1.575, 0.0]
+  - part: PowerDI-123
+    source: "Diodes Inc DFLS160 datasheet DS30548 Rev. 9-2 (Aug 2022) p.4 Suggested Pad Layout PowerDI123: X 1.05 (anode), G 0.65, X1 2.40 (cathode), X2 4.10, Y 1.50; centres from the pad layout's middle: cathode +0.85, anode -1.525 (2.375 apart)"
+    footprint: 'POWERDI-123(_L2\.8-W1\.8.*)?'
+    pads:
+      1: [0.85, 0.0]
+      2: [-1.525, 0.0]
+  - part: SMC (DO-214AB)
+    source: "Diodes Inc B520C-B560C datasheet DS13012 Rev. 19-2 p.4 Suggested Pad Layout SMC: G 4.40, X 2.50, Y 3.30, X1 9.40 (centres G+X = 6.90 apart)"
+    footprint: 'SMC(_L7\.1-W6\.2.*)?'
+    pads:
+      1: [-3.45, 0.0]
+      2: [3.45, 0.0]

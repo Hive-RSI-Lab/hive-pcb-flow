@@ -72,6 +72,7 @@ sys.path.insert(0, str(SCRIPTS / "lib"))
 import check_current  # noqa: E402  (required_width_mm)
 import fabfloors  # noqa: E402  (the single source of fab minimums)
 import fabmaterial  # noqa: E402  (which laminate: floors + order)
+import fpwaivers  # noqa: E402  (vendor-geometry floors, #813)
 import impedance as imp  # noqa: E402
 
 REFERENCE = SCRIPTS.parent / "reference"
@@ -256,7 +257,7 @@ def neck_rules(bg, power_facts: list[dict], cap: dict
 SENSE_MARK = "aiee_sensew"  # route_critical.SENSE_MARK: its sense lines' marks
 
 
-def sense_width_rules(constraints: dict, cap: dict
+def sense_width_rules(constraints: dict, cap: dict, bg=None
                       ) -> tuple[list[Rule], list[dict]]:
     """The sense-line width rule (#1042). A power entry's sense_pads lines
     (route_critical lays each from its sense pad to its declared tap) carry
@@ -267,14 +268,28 @@ def sense_width_rules(constraints: dict, cap: dict
     the fab's minimum width: the rule holds a track of the net that lies
     wholly inside an aiee_sensew_* rule area, the mark route_critical draws
     a hair round each line it lays. A wider rail track is never enclosed.
+    A line routed by hand that no entry declares (#1077: a shunt's lines
+    into an amplifier) gets the rule too once sense_mark.py has marked it:
+    with the board, a power net with a track inside a mark is a sense net.
     Emitted after the power width and neck rules (the later rule wins).
     check_current still judges the rail: it skips only the declared sense
     pads' own path. Returns (rules, facts)."""
     rules: list[Rule] = []
     facts: list[dict] = []
     floor = round(float(cap["min_trace_width_mm"]), 4)
+    marked = set()
+    if bg is not None:
+        marks = [ra for ra in bg.rule_areas
+                 if str(ra.get("name") or "").startswith(SENSE_MARK + "_")
+                 and not ra["outline"].is_empty]
+        for entry in constraints.get("power", []) or []:
+            net = entry.get("net")
+            if net and any(ly in ra["layers"] and ra["outline"].covers(t.poly)
+                           for t in bg.tracks_of(net=net)
+                           for ly in [t.layer] for ra in marks):
+                marked.add(net)
     for entry in constraints.get("power", []) or []:
-        if not entry.get("sense_pads"):
+        if not entry.get("sense_pads") and entry.get("net") not in marked:
             continue
         net = entry["net"]
         name = f"aiee_sense_width_{_safe(net)}"
@@ -284,7 +299,8 @@ def sense_width_rules(constraints: dict, cap: dict
             f"{net}: its sense lines (route_critical's {SENSE_MARK}_* marks)"
             " carry microamps; a thin trace at the fab minimum")))
         facts.append({"net": net, "width_mm": floor, "rule": name,
-                      "sense_pads": sorted(entry["sense_pads"])})
+                      "sense_pads": sorted(entry.get("sense_pads") or {}),
+                      "marked": net in marked})
     return rules, facts
 
 
@@ -1296,13 +1312,21 @@ def build(constraints: dict, cap: dict, stackup: dict, baseline_only: bool,
     outer_oz = cap.get("outer_copper_oz", 1.0)
     cu_mm = CU_OZ_MM.get(outer_oz, 0.035)
     rules = baseline_rules(cap)
+    # a vendor footprint's own pads to its own pegs (#813): after the fab
+    # floors, before every design rule, so an HV or class rule still wins
+    waivers = fpwaivers.rules()
+    rules += [Rule(w["name"], w["constraint"], w["min_mm"], condition=w["condition"],
+                   comment=w["comment"]) for w in waivers]
     report: dict = {"power": [], "diff_pairs": [], "classes": [], "patterns": [],
-                    "hv_rules": [], "necks": []}
+                    "hv_rules": [], "necks": [],
+                    "footprint_waivers": [{k: w[k] for k in ("name", "footprint",
+                                                             "min_mm", "issue")}
+                                          for w in waivers]}
     if not baseline_only:
         pr, pf = power_rules(constraints, cu_mm)
         sr, sf, sw_warn = switch_node_rules(constraints, bg, pf, cu_mm)
         nr, nf = neck_rules(bg, pf, cap) if bg is not None else ([], [])
-        snr, snf = sense_width_rules(constraints, cap)
+        snr, snf = sense_width_rules(constraints, cap, bg)
         pairs = detect_diff_pairs(constraints)
         floor = float(cap.get("min_trace_width_mm", 0.0) or 0.0)
         bga_refs = _bga_refs(bg)
@@ -1504,6 +1528,7 @@ def main(argv: list[str] | None = None) -> int:
             "impedance": report.get("impedance", []),
             "stripline_layers": report.get("stripline_layers", {}),
             "hv_rules": report["hv_rules"],
+            "footprint_waivers": report["footprint_waivers"],
             "isolation_rules": report.get("isolation_rules", []),
             "package_rules": report.get("package_rules", []),
             "necks": report["necks"],

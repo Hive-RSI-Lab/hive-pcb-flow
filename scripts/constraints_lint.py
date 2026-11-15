@@ -83,6 +83,9 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
                      # check_pdn_z (pdnlib)
                      "voltage": "num", "pdn_target_mohm": "num",
                      "transient_a": "num", "ripple_pct": "num",
+                     # mlcc_dcbias (#1067): effective output-capacitance
+                     # floor, farads, judged on the derated parts
+                     "min_cout": "num",
                      "f_max_mhz": "num", "edge_ns": "num",
                      "package": "package", "vrm": "vrm"},
     },
@@ -138,6 +141,12 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
     "voltages": {
         "required": {"net": "str", "voltage": "num"},
         "optional": {"min": "num"},
+    },
+    # check_ratings (#1006): a connector pin's signal level where the
+    # net carries no voltage (an off-board interface)
+    "interface_levels": {
+        "required": {"ref": "str", "max": "num"},
+        "optional": {"min": "num", "pins": "str_list", "why": "str"},
     },
     "voltage_pairs": {
         "required": {"a": "str", "b": "str", "voltage": "num"},
@@ -323,7 +332,8 @@ SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
     "placement", "coating", "antennas", "pcb_antennas", "si", "cable_pf",
     "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
     "isolation", "mechanical", "transformers", "pinouts",
-    "design_intent"}
+    "design_intent", "switched_loads", "rail_budget",
+    "connector_pinouts"}
 PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
@@ -740,6 +750,23 @@ class _FileLint:
                              f"{path}: design_intent must be {{modules: "
                              "[{ref: U1, is: <part>, why: text}], "
                              "bus_unread: [{net: N, why: text}]}", path)
+            elif key == "connector_pinouts":
+                # netlist_audit rule 37 (#1217): a connector's own pin
+                # names where its symbol's are bare numbers - the pair's
+                # P/N and lane order are judged against them
+                if not (isinstance(val, list) and all(
+                        isinstance(e, dict)
+                        and isinstance(e.get("ref"), str) and e["ref"]
+                        and isinstance(e.get("pins"), dict) and e["pins"]
+                        and all(isinstance(n, str) and n.strip()
+                                for n in e["pins"].values())
+                        and isinstance(e.get("source", ""), str)
+                        and not set(e) - {"ref", "pins", "source"}
+                        for e in val)):
+                    self.add("error", "bad_type",
+                             f"{path}: connector_pinouts must be a list of "
+                             "{ref: J3, pins: {pin: name}, source?: text}",
+                             path)
             elif key == "pinouts":
                 # check_pinouts (#1027): an off-board connector held to a row
                 # of reference/connector_pinouts.yaml
@@ -770,6 +797,34 @@ class _FileLint:
                              f"{path}: testpoints must be an object of "
                              f"{', '.join(sorted(nums))} (numbers), fixture "
                              "(bool), nets (globs)", path)
+            elif key == "switched_loads":
+                # netlist_audit switched_load_droop (#1093): a capacitive
+                # load a bridge or switch steps, against its converter
+                if not (isinstance(val, list) and all(
+                        isinstance(e, dict)
+                        and (isinstance(e.get("net"), str) or (
+                            isinstance(e.get("nets"), list) and all(
+                                isinstance(n, str) for n in e["nets"])))
+                        and isinstance(e.get("capacitance_f"), (int, float))
+                        and not isinstance(e.get("capacitance_f"), bool)
+                        for e in val)):
+                    self.add("error", "bad_type",
+                             f"{path}: switched_loads must be a list of "
+                             "{nets: [a, b] | net: x, capacitance_f}", path)
+            elif key == "rail_budget":
+                # check_rail_budget (#1118): sources, series parts and loads
+                # by refdes, each an object of its terms
+                ok = isinstance(val, dict) and all(
+                    k in ("sources", "series", "loads", "note", "notes")
+                    for k in val) and all(
+                    isinstance(val.get(sec) or {}, dict) and all(
+                        isinstance(e, dict)
+                        for e in (val.get(sec) or {}).values())
+                    for sec in ("sources", "series", "loads"))
+                if not ok:
+                    self.add("error", "bad_type",
+                             f"{path}: rail_budget must be {{sources|series|"
+                             "loads: {ref: {...}}}}", path)
             elif key == "rf_match":
                 # check_rf_match (#488) validates its entries itself (exit 2)
                 if not (isinstance(val, (list, dict))):

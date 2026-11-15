@@ -400,6 +400,12 @@ def build(job: dict) -> dict:
             notes.append(f"SetFPID {comp['ref']}: {exc}")
         fp.SetReference(comp["ref"])
         fp.SetValue(comp.get("value", ""))
+        # The symbol it came from (#563): KiCad's multichannel tools, the
+        # parity check and place_replicate match by this path.
+        if comp.get("path"):
+            fp.SetPath(pcbnew.KIID_PATH(comp["path"]))
+            fp.SetSheetname(comp.get("sheetname", "/"))
+            fp.SetSheetfile(comp.get("sheetfile", ""))
         # Custom symbol fields (LCSC, MPN, ...) must exist on the footprint or
         # `drc --schematic-parity` warns footprint_symbol_field_mismatch.
         for fname, fval in (comp.get("fields") or {}).items():

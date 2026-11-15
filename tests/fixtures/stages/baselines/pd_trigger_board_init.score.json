@@ -15,7 +15,7 @@
    "/VIND": 0.2,
    "/VDD": 0.2
   },
-  "rule_count": 19,
+  "rule_count": 20,
   "pro_floor_failures": 0
  },
  "metrics_live": {
@@ -23,23 +23,23 @@
   "components": 30,
   "nets": 29,
   "fab_profile": "2layer_2oz",
-  "setup_violations": 4,
+  "setup_violations": 0,
   "transient_silk": 0,
   "parity_count": 0,
-  "clean": false
+  "clean": true
  },
  "penalties": {
-  "setup_violations": 4.0,
-  "not_clean": 1.0,
+  "setup_violations": 0.0,
+  "not_clean": 0.0,
   "transient_silk": 0.0,
   "pro_floor_failures": 0.0
  },
- "composite": 35.0,
+ "composite": 100.0,
  "composite_inputs": "full",
  "known_answer": null,
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-05",
+  "created": "2026-11-15",
   "kicad_version": "10.0.6"
  }
 }

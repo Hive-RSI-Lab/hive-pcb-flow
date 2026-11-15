@@ -7,7 +7,10 @@ asked for more than it can give. No DRC sees this class; it is a respin.
 
 Inputs (pure Python, no KiCad run):
  - the board (--pcb): footprint refs, their `LCSC` / `LCSC Part` property,
-   and the net on every pad;
+   and the net on every pad. A footprint with no LCSC code is keyed by its
+   MPN (#1119: the `MPN` property, else the parts.json line naming its ref)
+   when parts/<MPN>.json or a parts.json line with that mpn exists, as on a
+   US-sourced board; its findings carry `part_key` "MPN <mpn>";
  - the parts directory (--parts, default <ws>/parts beside <ws>/kicad):
    parts.json (the P3 BOM, per-part `attributes`) and the per-part
    extraction <LCSC>.json that datasheet_extract.py validates (pinout +
@@ -234,8 +237,12 @@ def _kids(n, name):
     return [c for c in n[1:] if isinstance(c, list) and c and _t(c[0]) == name]
 
 
+MPN_PROPS = ("MPN", "Manufacturer Part Number", "Manufacturer_Part_Number",
+             "Part Number", "PN")
+
+
 def load_parts_on_board(pcb: Path) -> list[dict]:
-    """[{ref, lcsc, pads{number: net}}] from the .kicad_pcb text."""
+    """[{ref, lcsc, mpn, pads{number: net}}] from the .kicad_pcb text."""
     try:
         root = sexpdata.loads(pcb.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
@@ -269,6 +276,8 @@ def load_parts_on_board(pcb: Path) -> list[dict]:
                     "in_bom": not (attrs & {"exclude_from_bom", "board_only"}),
                     "lcsc": (props.get("LCSC") or props.get("LCSC Part")
                              or "").strip(),
+                    "mpn": next((props[k].strip() for k in MPN_PROPS
+                                 if (props.get(k) or "").strip()), ""),
                     "value": props.get("Value", ""),
                     "footprint": str(fp[1]) if len(fp) > 1 else "",
                     "pads": pads, "fns": fns, "nums": sorted(nums)})
@@ -276,6 +285,52 @@ def load_parts_on_board(pcb: Path) -> list[dict]:
 
 
 # --- net voltages -------------------------------------------------------------
+
+def _safe_name(key: str) -> bool:
+    return bool(key) and not re.search(r"[/\\]|^\.", key)
+
+
+def key_by_mpn(board: list[dict], bom: list[dict], parts_dir: Path,
+               bom_by_lcsc: dict) -> dict[str, str]:
+    """#1119: give a footprint with no LCSC code its MPN as the part key
+    when a record is found under it - parts/<MPN>.json (or the library's),
+    or a parts.json line with that mpn and no lcsc, which then joins
+    bom_by_lcsc under the MPN. The MPN is the footprint's MPN property,
+    else the mpn of the parts.json line that lists its ref. {ref: mpn}."""
+    from mpn_decode import norm
+    by_ref = {r: p for p in bom for r in (p.get("refs") or [])
+              if isinstance(r, str)}
+    by_mpn = {norm(p["mpn"]): p for p in bom
+              if p.get("mpn") and not str(p.get("lcsc") or "").strip()}
+    keyed = {}
+    for b in board:
+        if b["lcsc"]:
+            continue
+        mpn = b.get("mpn") or str((by_ref.get(b["ref"]) or {}).get("mpn")
+                                  or "").strip()
+        if not mpn:
+            continue
+        line = by_mpn.get(norm(mpn))
+        # the record's file name: the MPN as written, knowledgelib's safe
+        # name ('#' and '/' made '-'), or that with '.' made '-' too, as
+        # hand-made records are named (ABM8G-24.000MHZ-18-D2Y-T is stored
+        # as ABM8G-24-000MHZ-18-D2Y-T.json)
+        stems = [x for x in (mpn, re.sub(r"[^A-Za-z0-9._-]", "-", mpn),
+                             re.sub(r"[^A-Za-z0-9_-]", "-", mpn))
+                 if _safe_name(x)]
+        if not stems:
+            continue
+        on_disk = next((s for s in stems for d in (parts_dir, LIBRARY_DIR)
+                        if (d / f"{s}.json").is_file()), None)
+        if not (on_disk or line):
+            continue
+        mpn = on_disk or stems[0]
+        b["lcsc"] = mpn
+        if line is not None:
+            bom_by_lcsc.setdefault(mpn, line)
+        keyed[b["ref"]] = mpn
+    return keyed
+
 
 def base_net(net: str) -> str:
     return net.rsplit("/", 1)[-1].upper()
@@ -906,8 +961,66 @@ def _supply_rail(b: dict, ext: dict | None, volts: dict,
     return min(vals), max(vals)
 
 
+# A connector pin's interface level when the board states none: USB 2.0
+# D+/D- signal at most 3.6 V, Type-C CC at most 5.5 V (VCONN). Matched on the
+# pin's own name (the extraction's, else the footprint's pinfunction) on a
+# connector whose value, footprint or MPN says USB (#1006).
+USB_LEVELS = ((re.compile(r"^(?:USB_?)?D(?:[PN]|[+-])\d?$|^D\d[+-]$"), 3.6,
+               "USB 2.0 D+/D- signal level"),
+              (re.compile(r"^CC\d?$"), 5.5, "USB Type-C CC level"))
+USB_RE = re.compile(r"USB|TYPE.?C", re.I)
+
+
+def connector_levels(board: list[dict], exts: dict,
+                     constraints: dict | None) -> dict:
+    """{(ref, pad): (lo, hi, why)} for connector pins whose level is
+    declared: constraints interface_levels[] ({ref, max, min?, pins?}), then
+    a USB connector's D+/D- and CC pins by name. A pin with neither stays
+    unknown: the far side is off the board (#1006)."""
+    out: dict[tuple, tuple] = {}
+    by_ref = {b["ref"]: b for b in board}
+    for e in (constraints or {}).get("interface_levels") or []:
+        b = by_ref.get(e.get("ref"))
+        hi = e.get("max")
+        if b is None or not isinstance(hi, (int, float)):
+            continue
+        lo = e.get("min", 0.0)
+        pins = e.get("pins")
+        for pad in b["pads"]:
+            if pins is None or pad in pins:
+                out[(b["ref"], pad)] = (float(lo), float(hi),
+                                        f"constraints interface_levels {b['ref']}")
+    for b in board:
+        if not INPUT_CONN_RE.match(b["ref"]):
+            continue
+        ext = exts.get(b["lcsc"]) or {}
+        if not USB_RE.search(" ".join(str(x) for x in (
+                b.get("value"), b.get("footprint"), ext.get("mpn")))):
+            continue
+        names = {p["pin"]: p["name"] for p in ext.get("pinout") or []}
+        for pad in b["pads"]:
+            name = str(names.get(pad) or (b.get("fns") or {}).get(pad) or "")
+            name = name.upper().replace(" ", "")
+            for rx, hi, why in USB_LEVELS:
+                if rx.match(name):
+                    out.setdefault((b["ref"], pad), (0.0, hi, f"{b['ref']} {why}"))
+    return out
+
+
+def _out_amps(ext: dict | None, pad: str) -> tuple[float, str] | None:
+    """The current a driver's pin is rated to source or sink: its abs-max
+    current row, else its recommended one."""
+    rows = part_ratings(ext).get(pad, {}) if ext else {}
+    for level in ("abs", "rec"):
+        for r in rows.get(("current", level), []):
+            if isinstance(r["hi"], float) and r["hi"] != 0:
+                return abs(r["hi"]), r["src"]
+    return None
+
+
 def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
-                        volts: dict) -> tuple[dict, dict]:
+                        volts: dict, levels: dict | None = None,
+                        not_judged: list | None = None) -> tuple[dict, dict]:
     """(bounds, clamp_power) for nets with no stated voltage.
 
     bounds[net] = (lo, hi, why, makers): the voltage the net can reach, and
@@ -927,7 +1040,14 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
     in K - Vz .. K + a diode drop, K in A - a diode drop .. A + Vz (#868).
     Bounded nets feed each other, so the passes repeat until nothing moves.
     clamp_power[ref] = (watts the clamp can dissipate, its Pd): a clamp is
-    judged by the power it can carry, not against the bound it makes."""
+    judged by the power it can carry, not against the bound it makes. On a
+    driven net that power is the current the driver's pin is rated for
+    times what the clamp holds, when the driver's rail reaches past the
+    clamp; a rail inside the clamp's window puts nothing through it. With no
+    current row it is not judged (noted in not_judged) (#1006).
+    levels: connector_levels(); a connector pin with a declared level acts
+    as a push-pull driver of that level."""
+    levels = levels or {}
     floor = min([0.0, *volts.values()])
     ceil = max([0.0, *volts.values()])
     on: dict[str, list] = {}
@@ -943,6 +1063,10 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
         feeds, cl, drv, ok = [], [], [], True
         for b, pad in pins:
             ref, ext = b["ref"], exts.get(b["lcsc"])
+            if (ref, pad) in levels:
+                lo_l, hi_l, _ = levels[(ref, pad)]
+                drv.append((ref, "output", (lo_l, hi_l), pad, None))
+                continue
             if ref in clamps:
                 cl.append(b)
                 continue
@@ -967,7 +1091,22 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
             if rail is None:
                 ok = False
                 break
-            drv.append((ref, ptype, rail))
+            drv.append((ref, ptype, rail, pad, ext))
+        # a connector's declared level and a part on the board whose rail
+        # reaches past it (a PD controller's CC pin on a VBUS-fed supply):
+        # its rail says what it is fed from, not what it drives the line
+        # to, so the net is left unbounded rather than given that rail
+        lv = [d for d in drv if (d[0], d[3]) in levels]
+        past = sorted({f"{d[0]}.{d[3]}" for d in drv if d not in lv and any(
+            d[2][0] < l[2][0] - EPS or d[2][1] > l[2][1] + EPS for l in lv)})
+        if ok and lv and past:
+            ok = False
+            if not_judged is not None:
+                not_judged.append(
+                    f"{net}: {', '.join(past)} sits on a rail past "
+                    f"{lv[0][0]}.{lv[0][3]}'s {_fmt(lv[0][2][1])} V level "
+                    f"({levels[(lv[0][0], lv[0][3])][2]}), so the net was "
+                    "not bounded")
         # a bare hull of the board's rails proves nothing
         if ok and ((feeds and cl) or drv):
             info[net] = (feeds, cl, drv)
@@ -1002,6 +1141,10 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
                 use += known
                 why = "driven by " + ", ".join(sorted({d[0] for d in drv})) \
                     + " from its rail"
+                lv = sorted({levels[(d[0], d[3])][2] for d in drv
+                             if (d[0], d[3]) in levels})
+                if lv:
+                    why += " (" + "; ".join(lv) + ")"
                 if known:
                     why += " and feed resistors"
             else:
@@ -1043,8 +1186,8 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
 
     clamp_power: dict[str, tuple] = {}
     for net, (feeds, cl, drv) in info.items():
-        if net not in bounds or drv:
-            continue    # no resistor limits what a driver forces through it
+        if net not in bounds:
+            continue
         for c in cl:  # the clamp's own evidence excludes itself
             kpin, vz = clamps[c["ref"]]
             pd = _watts(_attr(bom_by_lcsc.get(c["lcsc"]), PD_ATTR_RE))
@@ -1052,13 +1195,48 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
             if far == net:
                 far = other_pad(c, kpin)
             s = span(far) if far != net else None
-            if pd is None or s is None:
+            if s is None:
+                continue
+            if drv:
+                # what the drivers force through the clamp: K on the net
+                # conducts below A - a drop and above A + Vz; A on it, below
+                # K - Vz and above K + a drop
+                k_side = c["pads"][kpin] == net
+                lo_ok, hi_ok = ((s[1] - DIODE_DROP_V, s[0] + vz) if k_side
+                                else (s[1] - vz, s[0] + DIODE_DROP_V))
+                watts, why, src = 0.0, [], []
+                for d in drv:
+                    r_lo, r_hi = d[2]
+                    if r_lo >= lo_ok - EPS and r_hi <= hi_ok + EPS:
+                        continue
+                    amps = _out_amps(d[4], d[3])
+                    if amps is None:
+                        why.append(f"{d[0]}.{d[3]}")
+                        continue
+                    held = vz if (r_hi > hi_ok + EPS) == k_side else DIODE_DROP_V
+                    watts += amps[0] * held
+                    src.append(f"{d[0]}.{d[3]} at its rated "
+                               f"{amps[0] * 1000:.3g} mA [{amps[1]}]")
+                if why:
+                    if not_judged is not None:
+                        not_judged.append(
+                            f"{c['ref']}: a clamp on {net} that "
+                            f"{', '.join(why)} drives past its "
+                            f"{_fmt(vz)} V, with no current rating on that "
+                            "pin, so its power was not judged")
+                    continue
+                if watts == 0.0 or pd is not None:
+                    clamp_power[c["ref"]] = (
+                        watts, pd if pd is not None else float("inf"),
+                        "from " + ", ".join(src) if src else "from its drivers")
+                continue
+            if pd is None:
                 continue
             amps = 0.0
             for r, o in feeds:
                 f = span(o) or (floor, ceil)
                 amps += max(abs(x - y) for x in s for y in f) / r
-            clamp_power[c["ref"]] = (amps * vz, pd)
+            clamp_power[c["ref"]] = (amps * vz, pd, "from its feed")
     return bounds, clamp_power
 
 
@@ -1081,6 +1259,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     trusted = set(trusted or ())
     bom_by_lcsc = {str(p.get("lcsc") or "").strip(): p for p in bom
                    if p.get("lcsc")}
+    by_mpn = key_by_mpn(board, bom, parts_dir, bom_by_lcsc)
     exts: dict[str, dict] = {}
     for lcsc in {b["lcsc"] for b in board if b["lcsc"]}:
         if (ext := load_extraction(parts_dir, lcsc)) is not None:
@@ -1137,6 +1316,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     checked_pins = 0
 
     def emit(kind, sev, ref, net, msg, **extra):
+        if ref in by_mpn:
+            extra.setdefault("part_key", f"MPN {by_mpn[ref]}")
         out.append(violation(SCRIPT, sev, None, None, net, [ref], msg, SCRIPT,
                              kind=kind, **extra))
 
@@ -1157,7 +1338,10 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     diodes = {b["ref"]: d for b in board
               if (d := diode_reverse(b, exts.get(b["lcsc"]),
                                      bom_by_lcsc.get(b["lcsc"]), netfns))}
-    bounds, clamp_power = unstated_net_bounds(board, exts, bom_by_lcsc, volts)
+    clamp_not_judged: list[str] = []
+    bounds, clamp_power = unstated_net_bounds(
+        board, exts, bom_by_lcsc, volts,
+        connector_levels(board, exts, constraints), clamp_not_judged)
     power_judged: set[str] = set()
     for b in sorted(board, key=lambda x: x["ref"]):
         ref, pads = b["ref"], b["pads"]
@@ -1208,6 +1392,9 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
 
         def ref_volts(name):
             hits = idx.get(str(name).upper()) or []
+            if not hits:  # a name aliases() drops: a passive's "2" (rating_fill)
+                hits = [q for q in ext.get("pinout") or []
+                        if str(name) in (q["pin"], q["name"])]
             if not hits and str(name).upper() in ("VS", "V+"):
                 hits = idx.get("V+") or []
             if not hits and str(name).upper().startswith("V"):
@@ -1219,6 +1406,17 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
             vs = [volts[pads[h["pin"]]] for h in hits
                   if h["pin"] in pads and pads[h["pin"]] in volts]
             return max(vs) if vs else None
+
+        gnd_all = {pads[q["pin"]] for q in ext.get("pinout") or []
+                   if q["type"] == "ground" and q["pin"] in pads}
+        # a rating that names no reference is measured from the part's own
+        # ground: 0 V, unless all its ground pins sit on one negative rail
+        # (#1006); a part with a 0 V ground too keeps 0 V
+        gnd_nets = sorted(gnd_all) if gnd_all and all(
+            volts.get(n, 0.0) < -EPS for n in gnd_all) and len(
+            {volts[n] for n in gnd_all}) == 1 else []
+        gnd_v = volts[gnd_nets[0]] if gnd_nets else 0.0
+        gnd_rel = f" vs its ground {gnd_nets[0]}" if gnd_nets else ""
 
         def resolve(bound):
             if bound is None or isinstance(bound, float):
@@ -1311,7 +1509,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                         # is judged, against that supply rating
                         if v is not None and vsrc[net] != "pull-up":
                             for hi, hi_name, src in sup:
-                                vr = ref_volts(hi_name) if hi_name else 0.0
+                                vr = ref_volts(hi_name) if hi_name else gnd_v
                                 if vr is None:
                                     continue
                                 if v - vr > hi + EPS:
@@ -1353,7 +1551,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                         if clamp_power[ref][0] > clamp_power[ref][1]:
                             emit("rating_over_current", "warning", ref, net,
                                  f"{label} is a clamp that can carry "
-                                 f"{clamp_power[ref][0]:.2g} W from its feed, "
+                                 f"{clamp_power[ref][0]:.2g} W {clamp_power[ref][2]}, "
                                  f"over its {clamp_power[ref][1]:.2g} W "
                                  "power rating", pin=f"{ref}.{pin}")
                         checked_pins += 1
@@ -1367,14 +1565,14 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                     continue
                 judged = True
                 for r in vabs:
-                    vr = ref_volts(r["ref"]) if r["ref"] else 0.0
+                    vr = ref_volts(r["ref"]) if r["ref"] else gnd_v
                     lo, _ = resolve(r["lo"])
                     hi, _ = resolve(r["hi"])
                     if vr is None or isinstance(r["lo"], tuple) \
                             or isinstance(r["hi"], tuple):
                         judged = False
                         continue
-                    rel = f" vs {r['ref']}" if r["ref"] else ""
+                    rel = f" vs {r['ref']}" if r["ref"] else gnd_rel
                     span = f"{_fmt(lo_n)}..{_fmt(hi_n)} V ({bwhy})"
                     base = dict(pin=f"{ref}.{pin}", rating=r["src"],
                                 bound_v=[lo_n, hi_n])
@@ -1406,7 +1604,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
             hit_abs = False
             for level, lst in (("abs", vabs), ("rec", vrec)):
                 for r in lst:
-                    vp, rel = v, ""
+                    vp, rel = v - gnd_v, gnd_rel
                     if r["ref"]:
                         vr = ref_volts(r["ref"])
                         if vr is None and ref in clamp_power \
@@ -1415,7 +1613,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                         if vr is None and ref in clamp_power:
                             emit("rating_over_current", "warning", ref, net,
                                  f"{label} is a clamp that can carry "
-                                 f"{clamp_power[ref][0]:.2g} W from its feed, "
+                                 f"{clamp_power[ref][0]:.2g} W {clamp_power[ref][2]}, "
                                  f"over its {clamp_power[ref][1]:.2g} W "
                                  "power rating", pin=f"{ref}.{pin}")
                             continue
@@ -1577,6 +1775,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         board, exts, bom_by_lcsc, read_from, held_back, rated_by_ref, trusted,
         emit, out)
     facts = {"parts_on_board": len(board), "extractions": sorted(exts),
+             "keyed_by_mpn": by_mpn,
              "net_volts": {n: {"v": volts[n], "src": vsrc[n]}
                            for n in sorted(volts)},
              "pins_checked": checked_pins,
@@ -1587,7 +1786,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                  f"{net}: no known voltage, so {len(pins)} supply pin(s) were "
                  f"not compared ({', '.join(pins[:6])}"
                  f"{' ...' if len(pins) > 6 else ''})"
-                 for net, pins in sorted(unknown_rails.items())],
+                 for net, pins in sorted(unknown_rails.items())]
+             + clamp_not_judged,
              "nothing_to_judge": None if checked_by_ref else
              "no rating could be compared with a known voltage",
              "ambient": amb, "fuses": fuse_facts,

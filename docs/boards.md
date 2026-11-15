@@ -61,7 +61,9 @@ them as `stand_in` scripts of their pins:
   clearance or refill zones (`kicad/gen/refill.py`); it refills with
   `--refill` now, and takes the rip/renet/add-path/rename ECOs and
   place_edit the pad/DNP ones that `kicad/gen/rip*.py`, `add_*.py`,
-  `rename_net.py`, `pad_*.py` and `set_dnp.py` did by hand; no pcb-flow script draws
+  `rename_net.py`, `pad_*.py` and `set_dnp.py` did by hand (and
+  `delete_parts.py` + `rip_dangling.py` are place_edit's `delete` with
+  `rip_dangling`, #854); no pcb-flow script draws
   a copper keep-out (`kicad/gen/keepout.py`, the ESP32 antenna and the NPTH
   pegs); stitch_vias' hole-to-hole misses (`kicad/gen/fix_holes.py`).
 - **lite-main: footprints by hand.** The stacked RCA's courtyard and pegs

@@ -50,6 +50,11 @@ built as asked and the report says the size did not come from the placement
 (`build_mode.fixed_outline_override`, a worker note): the usual route is
 `--outline auto`, place, then `board_edit --outline fit`.
 
+A footprint listed in reference/footprint_waivers.yaml (#813: the MC-311D
+USB-C's pads sit 0.18 mm from its own pegs, under KiCad's 0.25 mm default)
+gets its cited floor merged into the board's .kicad_dru before the setup DRC,
+scoped to that footprint's own pads and pegs (lib/fpwaivers.py).
+
 Self-check acceptance (SPEC S8): schematic parity == 0 (every part+net imported
 correctly) AND zero setup DRC violations, EXCLUDING unconnected_items (the board
 is unrouted by design), AND the written project's floors >= the fab profile.
@@ -88,6 +93,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS / "lib"))
 from lib import env  # noqa: E402
 from lib import fabfloors  # noqa: E402
+from lib import fpwaivers  # noqa: E402
 import fabmaterial  # noqa: E402
 from lib import statelib  # noqa: E402
 import kc  # noqa: E402
@@ -145,8 +151,33 @@ def _comp_fields(comp) -> dict[str, str]:
     return fields
 
 
+def _comp_sheet(comp) -> dict:
+    """The footprint's place in the hierarchy, as KiCad's "Update PCB from
+    Schematic" writes it (#563): path "/<sheet uuid>.../<symbol uuid>"
+    (root uuid left out), sheetname the human sheet path ("/ch2/", "/" on
+    the root), sheetfile the sheet's file. {} for a netlist without
+    tstamps (hand-written test netlists)."""
+    ts = _find1(comp, "tstamps")
+    if not ts or len(ts) < 2:
+        return {}
+    sym = str(_sym(ts[1]))      # multi-unit: one uuid per unit, the first
+    sp = _find1(comp, "sheetpath")
+    names, stamps = "/", "/"
+    if sp:
+        n, s = _find1(sp, "names"), _find1(sp, "tstamps")
+        names = str(_sym(n[1])) if n and len(n) > 1 else "/"
+        stamps = str(_sym(s[1])) if s and len(s) > 1 else "/"
+    out = {"path": stamps.rstrip("/") + "/" + sym, "sheetname": names}
+    for pr in _find(comp, "property"):
+        nm, val = _find1(pr, "name"), _find1(pr, "value")
+        if nm and val and len(val) > 1 and _sym(nm[1]) == "Sheetfile":
+            out["sheetfile"] = str(_sym(val[1]))
+    return out
+
+
 def parse_netlist(path: Path) -> tuple[list[dict], dict]:
-    """kicadsexpr netlist -> ([{ref, value, fp, dnp, exclude_from_bom, fields}], {"REF.PAD": net})."""
+    """kicadsexpr netlist -> ([{ref, value, fp, dnp, exclude_from_bom,
+    fields, path, sheetname, sheetfile}], {"REF.PAD": net})."""
     data = sexpdata.loads(path.read_text(encoding="utf-8"))
     components: list[dict] = []
     netmap: dict[str, str] = {}
@@ -169,7 +200,8 @@ def parse_netlist(path: Path) -> tuple[list[dict], dict]:
                                    "dnp": "dnp" in props,
                                    "exclude_from_bom":
                                        "exclude_from_bom" in props,
-                                   "fields": _comp_fields(comp)})
+                                   "fields": _comp_fields(comp),
+                                   **_comp_sheet(comp)})
         elif _head(section) == "nets":
             for net in _find(section, "net"):
                 nm = _sym(_find1(net, "name")[1])
@@ -278,6 +310,22 @@ SETUP_IGNORE_SOURCES = {"unconnected"}  # unrouted board -> unconnected expected
 # A SINGLE-footprint silk violation (own silk over own pad) is a library
 # defect and still fails (S14 finding: easyeda2kicad ships such footprints).
 _TRANSIENT_SILK_CHECKS = {"silk_overlap", "silk_over_copper"}
+
+
+def write_waivers(dru_path: Path, footprints: list[str]) -> list[str]:
+    """Merge the footprint waivers (#813) for the board's footprints into its
+    .kicad_dru, so the setup DRC holds a vendor footprint's own pads to its own
+    pegs at the cited floor and not at KiCad's 0.25 mm default. Only the
+    aiee_fpwaive_* rules are rewritten: a rules_gen .kicad_dru from an
+    earlier run keeps every other rule. Returns the rule names written."""
+    rules = fpwaivers.rules(footprints=footprints)
+    old = dru_path.read_text(encoding="utf-8") if dru_path.is_file() else None
+    if old is None and not rules:
+        return []
+    new = fpwaivers.merge_dru(old, rules)
+    if new != old:
+        dru_path.write_text(new, encoding="utf-8")
+    return [r["name"] for r in rules]
 
 
 def _rejects_unconnected_nets(check: dict) -> bool:
@@ -700,6 +748,8 @@ def main(argv: list[str] | None = None) -> int:
                 shutil.copy(args.schematic, sch_dst)
             has_sch = True
 
+        waivers = write_waivers(out_dir / f"{args.name}.kicad_dru",
+                                [c["fp"] for c in components])
         check = self_check(cli, pcb_path, has_sch)
         unconnected_nets_skipped = False
         if _rejects_unconnected_nets(check):
@@ -740,6 +790,7 @@ def main(argv: list[str] | None = None) -> int:
             "origin_source": origin_source,
             "aux_origin": worker.get("aux_origin"),
             "cutouts": worker.get("cutouts", []),
+            "footprint_waivers": waivers,
             "self_check": check, "worker_notes": worker_notes,
             "unconnected_nets_skipped": unconnected_nets_skipped,
         }

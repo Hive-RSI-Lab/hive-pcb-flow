@@ -30,3 +30,8 @@
 	(constraint text_thickness (min 0.1500mm))
 	(condition "A.Type == 'text' && (A.Layer == 'F.Silkscreen' || A.Layer == 'B.Silkscreen')")
 )
+# *:USB-C-SMD_MC-311D's own pads to its own NPTH pegs (#813): vendor geometry, reference/footprint_waivers.yaml
+(rule "aiee_fpwaive_hole_clearance_USB_C_SMD_MC_311D"
+	(constraint hole_clearance (min 0.1800mm))
+	(condition "A.memberOfFootprint('*:USB-C-SMD_MC-311D') && B.memberOfFootprint('*:USB-C-SMD_MC-311D') && (A.Pad_Type == 'NPTH, mechanical' || B.Pad_Type == 'NPTH, mechanical')")
+)

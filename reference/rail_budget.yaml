@@ -1,0 +1,122 @@
+# What scripts/check_rail_budget.py needs from the datasheets for a rail's
+# DC budget (#1118): how low a source's output can sit, and how low a load's
+# supply pin may go.
+#
+# sources: a regulator's output at its low limit.
+#   match         regex tried against the part's Value (case-insensitive)
+#   out           regex on the output pin function
+#   vout_tol_pct  %: the output's worst tolerance band (over line, load and
+#                 temperature where the datasheet gives that), so the low
+#                 limit is nominal * (1 - vout_tol_pct / 100); the nominal is
+#                 read from the rail's net name (+3V3) or set in constraints
+#   vout_min_pct  %: the same as a fraction of nominal, when the datasheet
+#                 writes it that way (AP2112's "*98.5%")
+#   vout_min_v    V: the low limit itself, for a fixed-voltage part whose
+#                 datasheet gives it in volts (one row per voltage)
+#   vout_from_v   V: the lowest nominal output the band holds for; below it
+#                 the datasheet gives an absolute band this row does not
+#                 carry, and the source is not judged
+# loads: a part's supply pins and the lowest voltage they may see.
+#   supply        regex on the supply pin function
+#   vmin          V: the minimum of the recommended operating supply range
+#   (the current a load draws comes from source_limits.yaml's loads rows,
+#   i_supply, or from constraints.json rail_budget.loads)
+#
+# Load regulation is not added to the tolerance where a datasheet gives it
+# separately (TPS7A03, AP2112): a computed margin is an upper bound, a
+# shortfall is real.
+#
+# cite / verified as in source_limits.yaml: `bin/hwde part_rows --verify`
+# checks each quote is on its page and each cited number is in the quote.
+# A finding only an unverified row makes is reported as not judged.
+#
+# Seeded from the LDOs and ESP32 modules of source_limits.yaml (#1168's
+# corpus survey), the datasheets already cited there.
+
+sources:
+- mpn: TPS7A03
+  match: ^TPS7A03
+  verified: true
+  out: ^V?OUT$
+  vout_tol_pct: 1.5
+  vout_from_v: 1.5
+  source: TI SBVS371 (TPS7A03), 7.5 Electrical Characteristics, accuracy over temperature
+  cite:
+  - {doc: tps7a03.pdf, sha256: 380a29471a259514a129855475f0c3761eefb59a1c1d849fe7a70076e47cf9eb, page: 6, table: '', quote: 'Accuracy over temperature VOUT ≥ 1.5 V TJ = –40°C to +125°C –1.5 1.5 %', fields: [vout_tol_pct, vout_from_v]}
+- mpn: TPS7A05
+  match: ^TPS7A05
+  verified: true
+  out: ^V?OUT$
+  vout_tol_pct: 3
+  vout_from_v: 1.0
+  source: TI TPS7A05, Electrical Characteristics, nominal accuracy over temperature
+  cite:
+  - {doc: tps7a05.pdf, sha256: 4e552a784da45faa63f0104e7fd2ebee4cc080adfa070e78acd6a162886b9a65, page: 7, table: '', quote: 'VOUT ≥ 1.0 V –3% 3%', fields: [vout_tol_pct, vout_from_v]}
+- mpn: TPS7A20
+  match: ^TPS7A20
+  verified: true
+  out: ^V?OUT$
+  vout_tol_pct: 1.5
+  vout_from_v: 2.8
+  source: TI TPS7A20, Electrical Characteristics, output voltage tolerance (the DBV package's band, from 2.8 V, so the row holds for any package)
+  cite:
+  - {doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 6, table: '', quote: 'IOUT = 1 mA to 300 mA, VOUT ≥ 2.8 V (DBV package) -1.5 1.5', fields: [vout_tol_pct, vout_from_v]}
+- mpn: TLV755
+  match: ^TLV755
+  verified: true
+  out: ^V?OUT$
+  vout_tol_pct: 1.5
+  vout_from_v: 1.0
+  source: TI TLV755P, Electrical Characteristics, output accuracy over temperature
+  cite:
+  - {doc: tlv755.pdf, sha256: 3b41288e9288966d0d96e835efc1a50ac1194dc828dba94c7261b2c558aa343e, page: 5, table: '', quote: 'VOUT ≥ 1V −1.5 1.5 %', fields: [vout_tol_pct, vout_from_v]}
+- mpn: MIC5504
+  match: ^MIC5504
+  verified: true
+  out: ^V?OUT$
+  vout_tol_pct: 3.0
+  source: Microchip MIC5501-4, Electrical Characteristics, output voltage accuracy -40 to 125 degC
+  cite:
+  - {doc: mic5504.pdf, sha256: ccd7fb69d16512749dfc3ddae750c3e763932df514742ec780bc87accc03a1f7, page: 3, table: '', quote: '–3.0 — 3.0 Variation from nominal VOUT; –40°C to +125°C', fields: [vout_tol_pct]}
+- mpn: AP2112
+  match: ^AP2112
+  verified: true
+  out: ^V?OUT$
+  vout_min_pct: 98.5
+  source: Diodes AP2112, Electrical Characteristics (3.3 V version; every version has the same band)
+  cite:
+  - {doc: ap2112.pdf, sha256: ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f, page: 8, table: '', quote: 'VOUT Output Voltage VIN = 4.3V, 1mA ≤ IOUT ≤ 30mA VOUT *98.5% 3.3', fields: [vout_min_pct]}
+- mpn: AMS1117-3.3
+  match: ^AMS1117-3\.3
+  verified: true
+  out: ^V?OUT$|^VO$
+  vout_min_v: 3.201
+  source: Advanced Monolithic Systems AMS1117, Electrical Characteristics, output voltage over the full operating range
+  cite:
+  - {doc: ams1117.pdf, sha256: 189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0, page: 2, table: '', quote: 'AMS1117-3.3 V IN = 4.8V 3.251 3.201', fields: [vout_min_v]}
+
+loads:
+- mpn: ESP32-S3-WROOM-1
+  match: ESP32-S3-WROOM-1
+  verified: true
+  supply: ^3V3$
+  vmin: 3.0
+  source: Espressif ESP32-S3-WROOM-1 datasheet, Recommended Operating Conditions
+  cite:
+  - {doc: esp32s3wroom1.pdf, sha256: 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435, page: 27, table: '', quote: 'VDD33 Power supply voltage 3.0 3.3 3.6 V', fields: [vmin]}
+- mpn: ESP32-C3-WROOM-02
+  match: ESP32-C3-WROOM-02
+  verified: true
+  supply: ^3V3$
+  vmin: 3.0
+  source: Espressif ESP32-C3-WROOM-02 datasheet, Recommended Operating Conditions
+  cite:
+  - {doc: esp32c3wroom02.pdf, sha256: 622db737a711a75e89185aed850f3854c77d515c32ddf0ba9886653663cfdabe, page: 21, table: '', quote: 'VDD33 Power supply voltage 3.0 3.3 3.6 V', fields: [vmin]}
+- mpn: ESP32-C6-MINI-1
+  match: ESP32-C6-MINI-1
+  verified: true
+  supply: ^3V3$
+  vmin: 3.0
+  source: Espressif ESP32-C6-MINI-1 datasheet, Recommended Operating Conditions
+  cite:
+  - {doc: esp32c6mini1.pdf, sha256: 26691033f31cbebf623842c16624e61151b152533c13a850c091c8e858c510a2, page: 26, table: '', quote: 'VDD33 Power supply voltage 3.0 3.3 3.6 V', fields: [vmin]}

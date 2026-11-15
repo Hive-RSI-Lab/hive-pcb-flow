@@ -19,12 +19,27 @@ With --workspace the report goes to <ws>/reports/stock_check.json unless
 (ledger.json, lib/ledgerlib.py) as `stock`, `part_match` and `lifecycle`
 facts, each with its source and time.
 
+--mpn checks a BOM keyed by MPN instead (a US-sourced one: an MPN or
+Manufacturer Part Number column, Designator(s), Buy), against the
+distributor pages that answer without an API key (lib/keyless_stock.py):
+a row is ok only when one authorized distributor holds the whole need
+(--country US: in that country's stock; --brokers: brokers count too),
+short when none does, not_found when the page lists no offer with that
+exact MPN, and not_judged, blocking, when no page answers (reason
+"throttled" when the page kept saying "not now"). Answers are kept a day
+(HWDE_STOCK_CACHE, default ~/.cache/hwde/keyless_stock; 0 turns it off).
+Rows marked
+Buy=no or Assembly Class dnp/board_feature are skipped. No ledger facts
+are written in this mode (the ledger keys stock by LCSC code).
+
 CLI:
   stock_check.py --bom fab/BOM.csv [--parts parts/] [--boards 5]
                  [--workspace WS] [--jobs 6] [--out report.json]
+  stock_check.py --mpn --bom fab/out/BOM-US.csv [--boards 5]
+                 [--country US] [--brokers] [--out report.json]
 Exit 0 every row ok / 1 a row blocks the order / 2 error (no BOM, no
-LCSC column). HWDE_STOCK_OFFLINE=1 refuses (exit 2): this check is live
-or it is nothing.
+LCSC column, or with --mpn no MPN column). HWDE_STOCK_OFFLINE=1 refuses
+(exit 2): this check is live or it is nothing.
 """
 from __future__ import annotations
 
@@ -32,6 +47,7 @@ import argparse
 import concurrent.futures as cf
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -70,6 +86,73 @@ def read_bom(path: Path, ws: Path | None = None) -> list[dict]:
                     "Footprint": r.get("Footprint", ""),
                     "LCSC": (r.get(col) or "").strip(), "refs": refs})
     return out
+
+
+MPN_COLS = ("MPN", "Manufacturer Part Number", "Mfr Part Number",
+            "Manufacturer_Part_Number", "Mfr. Part #")
+SKIP_CLASSES = ("dnp", "board_feature")
+
+
+def read_mpn_bom(path: Path) -> list[dict]:
+    """An MPN-keyed BOM's bought rows: {mpn, refs, qty, value}."""
+    with Path(path).open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    col = next((c for c in MPN_COLS if rows and c in rows[0]), None)
+    if col is None:
+        raise ValueError(f"{path}: no MPN column (one of "
+                         f"{', '.join(MPN_COLS)})")
+    out = []
+    for r in rows:
+        if str(r.get("Buy") or "yes").strip().lower().startswith("no"):
+            continue
+        if (r.get("Assembly Class") or "").strip().lower() in SKIP_CLASSES:
+            continue
+        refs = [x for x in re.split(r"[,\s]+", str(
+            r.get("Designators") or r.get("Designator") or "")) if x]
+        mpn = (r.get(col) or "").strip()
+        try:
+            qty = int(str(r.get("Qty") or r.get("Quantity") or "").strip())
+        except ValueError:
+            qty = None
+        out.append({"mpn": mpn, "refs": refs, "qty": qty or len(refs),
+                    "value": r.get("Value") or r.get("Comment") or ""})
+    return out
+
+
+def check_mpn_rows(rows: list[dict], boards: int = DEFAULT_BOARDS,
+                   fetch=None, jobs: int = 6, country: str | None = None,
+                   brokers: bool = False) -> dict:
+    """check_rows' report for MPN rows, judged by lib/keyless_stock."""
+    import keyless_stock
+    # a live run keeps each part's answer a day (#1241); a test's fetcher not
+    cache = keyless_stock.cache_dir() if fetch is None else None
+    fetch = fetch or keyless_stock.http_text
+
+    def one(r):
+        need = (len(r["refs"]) or r["qty"] or 1) * boards
+        if not r["mpn"]:
+            v = {"mpn": "", "need": need, "status": "not_judged",
+                 "why": "the row names no MPN"}
+        else:
+            v = keyless_stock.judge(r["mpn"], need, fetch=fetch,
+                                    country=country, brokers=brokers,
+                                    cache=cache)
+        return {**v, "refs": r["refs"], "comment": r["value"]}
+
+    with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
+        verdicts = list(ex.map(one, rows))
+    counts: dict[str, int] = {}
+    for v in verdicts:
+        counts[v["status"]] = counts.get(v["status"], 0) + 1
+    blocking = [v for v in verdicts
+                if v["status"] in keyless_stock.BLOCKING]
+    return {"status": "fail" if blocking else "pass", "boards": boards,
+            "mode": "mpn", "country": country, "brokers": brokers,
+            "checked_at": stocklib.now(), "counts": counts,
+            "rows": verdicts,
+            "blocking": [{"lcsc": "", "mpn": v["mpn"], "refs": v["refs"],
+                          "status": v["status"], "why": v["why"]}
+                         for v in blocking]}
 
 
 def mpn_index(parts_dir: Path | None) -> dict[str, dict]:
@@ -131,6 +214,13 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"boards in the build (default {DEFAULT_BOARDS})")
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--out", help="write the JSON report here too")
+    ap.add_argument("--mpn", action="store_true",
+                    help="the BOM is keyed by MPN: ask the keyless "
+                    "distributor pages (lib/keyless_stock.py)")
+    ap.add_argument("--country", help="with --mpn: count only stock held "
+                    "in this country (two letters, e.g. US)")
+    ap.add_argument("--brokers", action="store_true",
+                    help="with --mpn: count brokers' stock too")
     args = ap.parse_args(argv)
     ws = Path(args.workspace) if args.workspace else None
     try:
@@ -142,6 +232,15 @@ def main(argv: list[str] | None = None) -> int:
         if bom is None or not bom.is_file():
             raise FileNotFoundError(f"no BOM: {bom} (give --bom or "
                                     "--workspace)")
+        if args.mpn:
+            res = check_mpn_rows(read_mpn_bom(bom), boards=args.boards,
+                                 jobs=args.jobs, country=args.country,
+                                 brokers=args.brokers)
+            res = {"script": SCRIPT, "bom": str(bom), **res}
+            if ws is not None and not args.out:
+                args.out = str(ws / "reports" / "stock_check_mpn.json")
+                Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+            return _finish(res, args.out)
         parts = Path(args.parts) if args.parts else (
             ws / "parts" if ws else bom.resolve().parent.parent / "parts")
         res = check_rows(read_bom(bom, ws), boards=args.boards,
@@ -161,12 +260,17 @@ def main(argv: list[str] | None = None) -> int:
         (Path(args.out).write_text(text, encoding="utf-8") if args.out
          else print(text))
         return 2
+    return _finish(res, args.out)
+
+
+def _finish(res: dict, out: str | None) -> int:
     text = json.dumps(res, indent=1, ensure_ascii=False)
-    if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
+    if out:
+        Path(out).write_text(text, encoding="utf-8")
     print(text)
     for b in res["blocking"]:
-        print(f"stock_check: BLOCKS {','.join(b['refs'])} {b['lcsc']} "
+        print(f"stock_check: BLOCKS {','.join(b['refs'])} "
+              f"{b['lcsc'] or b.get('mpn', '')} "
               f"[{b['status']}]: {b['why']}", file=sys.stderr)
     return 1 if res["blocking"] else 0
 

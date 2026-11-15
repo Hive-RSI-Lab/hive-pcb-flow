@@ -20,6 +20,11 @@ after) -> final `kicad-cli pcb drc --schematic-parity --all-track-errors`.
 Existing copper is protected by construction: the DSN exporter emits existing
 tracks/vias as guide wires which Freerouting echoes back "(type protect)" -
 pre-routed critical nets (route_critical.py) survive without an explicit lock.
+The maze finisher below works on the board itself, so it gets the same
+copper (matched by geometry) as uuids it must not rip, and the run ends with
+an audit: any via or track from before routing the routed board lacks is
+listed by net and position (facts.preexisting.lost), with a warning and a
+non-pass status (#655).
 Zones export as "(plane NET ...)"; Freerouting connects pads to planes itself
 (including dropping stitch vias to reach an inner/back plane).
 
@@ -618,6 +623,74 @@ def route_probe(pcb: Path, *, passes: int = 4, timeout_s: int = 180,
     return facts
 
 
+# copper on the board before routing (route_critical's nets, a BGA's via
+# array) is the designer's: the maze finisher's error rip must leave it, and
+# whatever still goes is reported by net and position (#655). Matched by
+# geometry, not uuid: the SES round trip may give an echoed item a new one.
+PRE_TOL = 0.005   # mm; Freerouting's SES coordinates round under this
+
+
+def _preexisting(bg) -> dict:
+    return {"vias": [(v.net, v.at, v.drill) for v in bg.vias_of()],
+            "tracks": [(t.net, t.layer, t.shape) for t in bg.tracks_of()]}
+
+
+def _pre_index(pre: dict) -> dict:
+    import shapely
+    by: dict = {}
+    for net, layer, line in pre["tracks"]:
+        by.setdefault((net, layer), []).append(line)
+    return {k: shapely.union_all(v).buffer(PRE_TOL) for k, v in by.items()}
+
+
+def _protect_uuids(pre: dict, bg) -> set[str]:
+    """uuids of the board's tracks and vias that were there before routing."""
+    vias = {}
+    for net, at, drill in pre["vias"]:
+        vias.setdefault(net, []).append((at, drill))
+    out = set()
+    for v in bg.vias_of():
+        if v.uuid and any(abs(v.at[0] - a[0]) <= PRE_TOL
+                          and abs(v.at[1] - a[1]) <= PRE_TOL
+                          and abs(v.drill - d) <= PRE_TOL
+                          for a, d in vias.get(v.net, ())):
+            out.add(v.uuid)
+    idx = _pre_index(pre)
+    for t in bg.tracks_of():
+        area = idx.get((t.net, t.layer))
+        if t.uuid and area is not None and area.covers(t.shape):
+            out.add(t.uuid)
+    return out
+
+
+def _lost_preexisting(pre: dict, bg) -> list[dict]:
+    """Copper from before routing the routed board no longer has: a via with
+    no via of its net at its place, a track whose centreline its net's
+    tracks on that layer no longer cover."""
+    import shapely
+    lost = []
+    have: dict = {}
+    for v in bg.vias_of():
+        have.setdefault(v.net, []).append(v.at)
+    for net, at, _drill in pre["vias"]:
+        if not any(abs(a[0] - at[0]) <= PRE_TOL and abs(a[1] - at[1]) <= PRE_TOL
+                   for a in have.get(net, ())):
+            lost.append({"kind": "via", "net": net,
+                         "at": [round(at[0], 4), round(at[1], 4)]})
+    by: dict = {}
+    for t in bg.tracks_of():
+        by.setdefault((t.net, t.layer), []).append(t.shape)
+    now = {k: shapely.union_all(v).buffer(PRE_TOL) for k, v in by.items()}
+    for net, layer, line in pre["tracks"]:
+        area = now.get((net, layer))
+        if area is None or not area.covers(line):
+            (x1, y1), (x2, y2) = line.coords[0], line.coords[-1]
+            lost.append({"kind": "track", "net": net, "layer": layer,
+                         "start": [round(x1, 4), round(y1, 4)],
+                         "end": [round(x2, 4), round(y2, 4)]})
+    return lost
+
+
 def run(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pcb", required=True)
@@ -684,6 +757,7 @@ def run(argv: list[str] | None = None):
     bg = geom.BoardGeom.from_file(staged)
     routable = _routable_nets(bg)
     tracks_before = len(bg.tracks_of())
+    pre = _preexisting(bg)
 
     # 2. DSN export (plane layers marked power)
     if args.power_layers == "auto":
@@ -904,6 +978,7 @@ def run(argv: list[str] | None = None):
         maze_facts = route_finish.finish_staged(
             cli, staged, drc, parity=sch.is_file(), refill=has_zones,
             rip_errors=True,
+            protect_uuids=_protect_uuids(pre, geom.BoardGeom.from_file(staged)),
             layers=(",".join(ly for ly in bg.copper_layers
                              if ly not in power_layers)
                     if power_layers else "auto"))
@@ -925,7 +1000,9 @@ def run(argv: list[str] | None = None):
     completion = (1.0 - len(unrouted_nets) / len(routable)) if routable else 1.0
     fully_routed = not unrouted_nets
     clean = drc["counts"]["total"] == 0
-    status = "pass" if (fully_routed and clean) else "violations"
+    lost = _lost_preexisting(pre, bg2)
+    status = ("pass" if (fully_routed and clean and not lost)
+              else "violations")
     adjust_request = None
     if unrouted_nets:
         adjust_request = _placement_adjust_request(bg2, unrouted_nets,
@@ -961,6 +1038,15 @@ def run(argv: list[str] | None = None):
             "work_dir": str(work),
         },
     }
+    payload["facts"]["preexisting"] = {"vias": len(pre["vias"]),
+                                       "tracks": len(pre["tracks"]),
+                                       "lost": lost}
+    if lost:
+        nv = sum(it["kind"] == "via" for it in lost)
+        payload["warnings"] = [
+            f"{nv} via(s) and {len(lost) - nv} track(s) placed before routing"
+            " are gone from the routed board (facts.preexisting.lost); put "
+            "them back or confirm they were meant to go"]
     if adjust_request:
         payload["facts"]["placement_adjust_request"] = adjust_request
     return payload, args.out_report

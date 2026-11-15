@@ -102,6 +102,19 @@ Consumers per key (script -> phase):
     "net": "+5V", "current_a": 2.0,
     "sense_pads": {"R113.1": "C114.1"}
   }, {
+    // Output-capacitance floor (#1067, mlcc_dcbias). "min_cout" is the
+    // EFFECTIVE capacitance, in farads, the rail must keep at its DC: the
+    // regulator datasheet's minimum Cout for stability (TPS7A20 SBVS338H:
+    // "Effective output capacitance of 0.47 uF minimum"), or a hold-up
+    // budget. mlcc_dcbias derates every ceramic to ground on the net
+    // (lib/mlcc.py, typical and low curves) and sums them: under the floor
+    // on the typical curve is an error, only on the low curve a warning,
+    // and each part keeping less than floor / the nominal total is named.
+    // Without it, a regulator's verified pin_requirements row with
+    // `effective: true` gives the floor; a regulator-fed rail with
+    // neither is listed under not_judged. --min-c NET=F overrides both.
+    "net": "+1V8", "current_a": 0.2, "min_cout": 15e-6
+  }, {
     // width-only entry: "pdn": false opts a net OUT of check_pdn's
     // decoupling inventory. Use for nets declared solely so rules_gen sizes
     // their trace (e.g. the raw-input stub BEFORE a reverse-polarity
@@ -363,6 +376,14 @@ Consumers per key (script -> phase):
   // io_high drives the IC's I/O at its highest supply.
   // `--io-supply U101=VDDD` does the same.
   "io_supply": {"U101": "VDDD"},
+  // interface_levels (check_ratings, #1006): the signal level an
+  // off-board connector's pins carry, where the net has no stated
+  // voltage. Each listed pin (all its pins without `pins`) drives its
+  // net between min (default 0) and max, so a part on the net rated
+  // below the level is flagged. USB D+/D- (3.6 V) and CC (5.5 V) pins on
+  // a USB connector are bounded without an entry.
+  "interface_levels": [{"ref": "J3", "max": 5.0, "pins": ["2", "3"],
+                        "why": "RS-232 receiver side clamps to 5 V"}],
   // voltage_pairs (T2): explicit net-PAIR differential that node voltages
   // cannot express (bridge/AC inputs - two 57 V taps carry 114 V between
   // them). Overrides the derived difference for that pair; a pair declared
@@ -465,6 +486,38 @@ Consumers per key (script -> phase):
   // each connector, for its phase margin. A connector not named gets 1000 pF
   // (10 m of audio cable at ~100 pF/m); a board-to-board header is ~20.
   "cable_pf": {"J3": 1000, "J7": 20},
+
+  // netlist_audit switched_load_droop (#1093): a capacitive load a bridge
+  // or switch steps (a PDLC film, a piezo, an LCD segment), in farads. nets
+  // [a, b] for a load across two bridge legs, net for one leg to ground; the
+  // step charge is judged against its converter's current limit and output
+  // capacitance (reference/source_limits.yaml converters).
+  "switched_loads": [{"nets": ["/PANEL_A", "/PANEL_B"], "capacitance_f": 1.4e-7}],
+  // check_rail_budget (P8, #1118): a load's supply pin against its minimum
+  // after the source's low limit, each net's copper drop and each series
+  // part's DCR x current. All by refdes, each merged over its row of
+  // reference/rail_budget.yaml. sources: pins (output pin function or pad
+  // number regex), vout_v (the nominal, else read from the net name),
+  // vout_min_v (the low limit itself). series: dcr_max_ohm, the datasheet's
+  // max DC resistance (a bead's value string is never read as DCR); beads
+  // FB* and inductors L* are followed without an entry, and are a warning
+  // until they have one. loads: pins, vmin_v, current_a (else
+  // source_limits.yaml's i_supply).
+  "rail_budget": {"sources": {"U2": {"pins": "VOUT", "vout_v": 1.8,
+                                     "vout_min_v": 1.782}},
+                  "series": {"FB2": {"dcr_max_ohm": 0.25}},
+                  "loads": {"U5": {"pins": "VDDA", "vmin_v": 1.71,
+                                   "current_a": 0.13}}},
+
+  // netlist_audit pair_polarity_swap / pair_split / pair_lane_order
+  // (#1217): a connector's pinout where its symbol's pins are bare numbers
+  // (a generic header, a magjack drawn as Conn_01x12). Each pin's name is
+  // read like a symbol's: USB D+/D-, TD+/RD-, BI_DA+, LVDS RXIN0+/CLK-,
+  // HDMI/DSI D0P/CLKN, E1 TTIP/RRING. A connector neither this nor its
+  // symbol names is reported not_judged, never guessed.
+  "connector_pinouts": [{"ref": "J4", "pins": {"1": "TD+", "2": "TD-",
+                         "3": "RD+", "6": "RD-"},
+                         "source": "HR911105A datasheet pin table"}],
 
   // check_thermal (P8), place_anneal spreading term (P6)
   "thermal": [{"ref": "U2", "power_w": 0.8, "net": "GND", "dt_c": 40,

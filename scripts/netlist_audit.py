@@ -254,6 +254,19 @@ schematic-level structural problems BEFORE board work starts:
    covers, an LED with no Vf in its value, or volts the net names don't
    give is not judged, never guessed. Class 11 of docs/miss-taxonomy.md;
    fact source_limits_checked.
+ - switched_load_droop (error): a capacitive load the constraints declare
+   (`switched_loads: [{nets: [a, b] | net: x, capacitance_f}]`, as no
+   schematic carries a panel's or cable's capacitance) that a FET switches
+   hard from a converter's output. The rail's volts come from the
+   constraints or the converter's FB divider (converters rows: vref,
+   uv_pct, ilim_min, hiccup_cycles); each edge moves C_load x the swing
+   (V on one leg, 2V across a bridge's two legs), and the output
+   capacitors fall C_load x swing / (C_out + C_load), an error past the
+   converter's undervoltage threshold unless a series resistor holds the
+   edge current under ilim_min (pdlc v1: 12.3 uF of panel on a bare
+   bridge from an LM5158's 105 uF at 61 V falls 21%; it hiccups). A load
+   fed through an inductor, or a rail no converters row covers, is not
+   judged. Fact switched_loads_checked.
  - polarity_mismatch (error; a warning for interrupts and for a reset or
    power-good into an enable), polarity_net_name (warning),
    idle_pull_asserted (error): a
@@ -269,6 +282,15 @@ schematic-level structural problems BEFORE board work starts:
    open-drain pull above or below a receiver's limits; a receiver with
    no row is not_judged. Class 15 of the gaps list; fact
    io_domain_pairs_checked.
+ - pair_polarity_swap (error for USB 2.0 and LVDS, else a warning),
+   pair_split (error), pair_lane_order (error): a differential line's
+   P/N, or an LVDS lane's place, across a connector against the
+   connector's stated pinout (constraints connector_pinouts, its pin
+   names, or the USB / Type-C / 8P8C standard pinout for its footprint),
+   followed through series parts to the first part naming the pair. A
+   common-mode choke or transformer that names no pins, an Ethernet
+   crossover, and a chip pair on a connector nothing names are
+   not_judged. lib/pair_order.py (#1217); fact connector_pairs_checked.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -294,6 +316,7 @@ Exit 0/1/2 per SPEC section 6.
 from __future__ import annotations
 
 import argparse
+import itertools
 import re
 import sys
 import tempfile
@@ -772,6 +795,12 @@ def _pin_states(nets: dict, comps: dict,
                         name, ref, pnum, nets, comps, comp_pins, rails, own)
                     allow, forbid = (set(rule.get("allow") or ()),
                                      set(rule.get("forbid") or ()))
+                    if any(m["ref"] != ref and _base_type(m.get(
+                            "pintype")) == "output"
+                           for m in nets.get(name, [])):
+                        # a push-pull output holds the net; a pull beside
+                        # it only loads the driver (#1228)
+                        forbid -= {"pulled_up", "pulled_down"}
                     problem = None
                     if forbid & st:
                         problem = f"is {'/'.join(sorted(forbid & st))}"
@@ -1590,6 +1619,12 @@ _NOT_A_READER_RE = re.compile(r"^(R|RN|C|L|FB|D|LED|TP|JP|SJ|H|MH)\d")
 # or leave it floating." Such a PG is a status output and is not judged.
 _LOAD_SWITCH_PIN_RE = re.compile(r"^(DVDT|IMON|ILIM|TIMER)$")
 _REGULATOR_PIN_RE = re.compile(r"^(SW\d*|LX\d*|PH|FB|VFB|FB\d|BOOT|BST|CB)$")
+# A battery charger has a current-limit pin too (BQ24074 ILIM, TMR) and no
+# converter pin, but it brings BAT into regulation and its PGOOD says the
+# input is good (#1223). A cell pin or a charge-set pin marks it: BQ24074
+# (SLUS810) BAT, ISET, ITERM, TS, CHG; MCP73831 PROG, STAT; TP4056 PROG.
+_CHARGER_PIN_RE = re.compile(
+    r"^(V?BAT\d*|BATT|ISET\d*|ITERM|ICHG|PROG|TS|CHG|STAT\d*)$")
 
 
 def _pg_unused(nets: dict, comps: dict,
@@ -1606,7 +1641,8 @@ def _pg_unused(nets: dict, comps: dict,
                 _norm_pin(m.get("pinfunction")))
     switches = {r for r, fs in funcs.items()
                 if any(_LOAD_SWITCH_PIN_RE.match(f) for f in fs)
-                and not any(_REGULATOR_PIN_RE.match(f) for f in fs)}
+                and not any(_REGULATOR_PIN_RE.match(f) for f in fs)
+                and not any(_CHARGER_PIN_RE.match(f) for f in fs)}
     for net, members in sorted(nets.items()):
         if net.startswith("unconnected-") or net in rails:
             continue
@@ -3244,6 +3280,12 @@ def _constraint_nets(constraints: dict) -> dict[str, list[str]]:
     for i, ent in enumerate(constraints.get("diff_pairs", []) or []):
         add(ent.get("p"), f"diff_pairs[{i}].p")
         add(ent.get("n"), f"diff_pairs[{i}].n")
+    for i, ent in enumerate(constraints.get("switched_loads", []) or []):
+        if not isinstance(ent, dict):
+            continue
+        add(ent.get("net"), f"switched_loads[{i}].net")
+        for j, n in enumerate(ent.get("nets") or []):
+            add(n, f"switched_loads[{i}].nets[{j}]")
     return where
 
 
@@ -3590,7 +3632,8 @@ _SL_CC_RE = re.compile(r"^CC\d?$", re.I)
 
 
 def load_source_limits(path: Path = SOURCE_LIMITS) -> dict:
-    """reference/source_limits.yaml as {regulators, loads, gpio, usb}."""
+    """reference/source_limits.yaml as {regulators, loads, gpio,
+    converters, usb}."""
     import yaml  # noqa: PLC0415
     try:
         doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
@@ -3599,6 +3642,7 @@ def load_source_limits(path: Path = SOURCE_LIMITS) -> dict:
     return {"regulators": doc.get("regulators") or [],
             "loads": doc.get("loads") or [],
             "gpio": doc.get("gpio") or [],
+            "converters": doc.get("converters") or [],
             "usb": doc.get("usb") or {"usb2_a": 0.5, "usb3_a": 0.9}}
 
 
@@ -3751,6 +3795,228 @@ def _sl_src(rows: list[dict]) -> str:
         if s not in seen:
             seen.append(s)
     return "; ".join(seen)
+
+
+_SW_FET_RE = re.compile(r"^Q\d")
+
+
+def _sw_ch(func: str | None) -> str | None:
+    """A FET pin's channel side: D or S (None for a gate or other pin)."""
+    f = _norm_pin(func)
+    return {"D": "D", "DRAIN": "D", "S": "S", "SOURCE": "S"}.get(f)
+
+
+def _sw_node(net: str, nets: dict, comps: dict,
+             comp_pins: dict[str, dict[str, str]]) -> set[str]:
+    """NET and the nets a FET's same-side channel pins tie it to (a FET
+    whose drain pins were drawn on two nets)."""
+    node, todo = {net}, [net]
+    while todo:
+        n = todo.pop()
+        for m in nets.get(n, []):
+            ref, ch = m["ref"], _sw_ch(m.get("pinfunction"))
+            if not ch or not _SW_FET_RE.match(ref) \
+                    or comps.get(ref, {}).get("dnp"):
+                continue
+            for p, nn in comp_pins.get(ref, {}).items():
+                if nn not in node and not nn.startswith("unconnected-") \
+                        and _sw_ch(_pin_func(nets, ref, p, nn)) == ch:
+                    node.add(nn)
+                    todo.append(nn)
+    return node
+
+
+def _sw_high_side(node: set[str], nets: dict, comps: dict,
+                  comp_pins: dict[str, dict[str, str]], rails: dict
+                  ) -> list[tuple[str, str]]:
+    """(fet, rail) for each FET with a channel pin on NODE whose other
+    channel pin sits on a net outside it that is not 0 V."""
+    out = []
+    for n in sorted(node):
+        for m in nets.get(n, []):
+            ref, ch = m["ref"], _sw_ch(m.get("pinfunction"))
+            if not ch or not _SW_FET_RE.match(ref) \
+                    or comps.get(ref, {}).get("dnp"):
+                continue
+            for p, nn in sorted(comp_pins.get(ref, {}).items()):
+                other = _sw_ch(_pin_func(nets, ref, p, nn))
+                if other and other != ch and nn not in node \
+                        and not nn.startswith("unconnected-") \
+                        and rails.get(nn) != 0 \
+                        and (ref, nn) not in out:
+                    out.append((ref, nn))
+    return out
+
+
+def _sw_drive(net: str, nets: dict, comps: dict,
+              comp_pins: dict[str, dict[str, str]], rails: dict
+              ) -> tuple[str, str, str | None, float] | str:
+    """How load net NET is switched: (fet, rail, series resistor or None,
+    its ohms), or a note saying why it can't tell."""
+    hs = _sw_high_side(_sw_node(net, nets, comps, comp_pins), nets, comps,
+                       comp_pins, rails)
+    if hs:
+        return hs[0][0], hs[0][1], None, 0.0
+    through, r_hits = [], []
+    for m in nets.get(net, []):
+        ref = m["ref"]
+        pins = comp_pins.get(ref, {})
+        if len(pins) != 2 or comps.get(ref, {}).get("dnp"):
+            continue
+        far = next((n for p, n in pins.items() if p != m["pin"]), None)
+        kind = _part_kind(ref)
+        if not far or far == net or kind not in ("R", "L"):
+            continue
+        if kind == "L":
+            through.append(f"{ref} ({comps[ref].get('value')})")
+            continue
+        hs = _sw_high_side(_sw_node(far, nets, comps, comp_pins), nets,
+                           comps, comp_pins, rails)
+        ohms = engcalc.parse_value(comps[ref].get("value"))
+        if hs and ohms:
+            r_hits.append((hs[0][0], hs[0][1], ref, float(ohms)))
+    if through:   # an inductor's own current rises at V/L, not an edge
+        return ("it is driven through " + ", ".join(through)
+                + ", not switched hard from a rail")
+    if r_hits:
+        return min(r_hits, key=lambda h: h[3])
+    return "no FET switches it from a rail"
+
+
+def _sw_converter(rail: str, nets: dict, comps: dict,
+                  comp_pins: dict[str, dict[str, str]], rows: list[dict],
+                  rails: dict) -> tuple[str, dict, float | None] | None:
+    """(converter ref, its row, volts its FB divider sets) for the
+    converter with a source_limits converters row that regulates RAIL:
+    an FB pin whose divider's top resistor is on RAIL."""
+    for ref in sorted(comps):
+        row = _sl_row(rows, comps[ref])
+        if not row:
+            continue
+        for p, fbn in comp_pins.get(ref, {}).items():
+            if not re.search(row["fb"], _norm_pin(
+                    _pin_func(nets, ref, p, fbn)), re.I):
+                continue
+            top = bot = None
+            for m in nets.get(fbn, []):
+                r = m["ref"]
+                pins = comp_pins.get(r, {})
+                if _part_kind(r) != "R" or len(pins) != 2 \
+                        or comps.get(r, {}).get("dnp"):
+                    continue
+                far = next((n for pp, n in pins.items() if pp != m["pin"]),
+                           None)
+                ohms = engcalc.parse_value(comps[r].get("value"))
+                if far == rail and ohms:
+                    top = float(ohms)
+                elif far is not None and rails.get(far) == 0 and ohms:
+                    bot = float(ohms)
+            if top is not None:
+                v = (float(row["vref"]) * (1 + top / bot) if bot else None)
+                return ref, row, v
+    return None
+
+
+def _sw_cap_on(rail: str, nets: dict, comps: dict,
+               comp_pins: dict[str, dict[str, str]], rails: dict) -> float:
+    """Farads of the capacitors from RAIL to a 0 V net."""
+    tot = 0.0
+    for m in nets.get(rail, []):
+        ref = m["ref"]
+        pins = comp_pins.get(ref, {})
+        if _part_kind(ref) != "C" or len(pins) != 2 \
+                or comps.get(ref, {}).get("dnp"):
+            continue
+        far = next((n for p, n in pins.items() if p != m["pin"]), None)
+        f = engcalc.parse_value(comps[ref].get("value"))
+        if far is not None and rails.get(far) == 0 and f:
+            tot += float(f)
+    return tot
+
+
+def _switched_loads(nets: dict, comps: dict,
+                    comp_pins: dict[str, dict[str, str]], table: dict,
+                    rails: dict, loads: list):
+    """switched_load_droop findings for constraints `switched_loads`, in
+    _source_limits's form, then ("checked", n)."""
+    checked = 0
+    rows = table.get("converters") or []
+    for i, ent in enumerate(loads or []):
+        if not isinstance(ent, dict):
+            continue
+        lnets = ent.get("nets") or ([ent["net"]] if ent.get("net") else [])
+        c_l = ent.get("capacitance_f")
+        lnets = [n for n in lnets if isinstance(n, str) and n in nets]
+        if not lnets or not isinstance(c_l, (int, float)) or c_l <= 0:
+            continue
+        where = " / ".join(lnets)
+        drives = [_sw_drive(n, nets, comps, comp_pins, rails)
+                  for n in lnets]
+        notes = [d for d in drives if isinstance(d, str)]
+        if notes:
+            yield ("not_judged",
+                   f"switched_load_droop on {where}: {notes[0]}, so the "
+                   f"{c_l * 1e6:.3g} uF load is not judged against a "
+                   f"converter's limit")
+            continue
+        rail_set = {d[1] for d in drives}
+        if len(rail_set) != 1:
+            yield ("not_judged",
+                   f"switched_load_droop on {where}: the load nets are "
+                   f"switched from different rails ({', '.join(sorted(rail_set))})")
+            continue
+        rail = rail_set.pop()
+        conv = _sw_converter(rail, nets, comps, comp_pins, rows, rails)
+        if conv is None:
+            yield ("not_judged",
+                   f"switched_load_droop on {where}: no converters row in "
+                   f"reference/source_limits.yaml regulates '{rail}', so "
+                   f"its limits are not known")
+            continue
+        cref, row, v_fb = conv
+        v = rails.get(rail, v_fb)
+        c_out = _sw_cap_on(rail, nets, comps, comp_pins, rails)
+        if not v or v <= 0 or not c_out:
+            yield ("not_judged",
+                   f"switched_load_droop on {where}: '{rail}' has "
+                   f"{'no volts hwde can read' if not v else 'no output capacitance'}")
+            continue
+        checked += 1
+        swing = v * len(lnets)          # a bridge across two legs: -V to +V
+        rs = sum(d[3] for d in drives)
+        ilim = float(row["ilim_min"])
+        droop = c_l * swing / (c_out + c_l) / v
+        uv = 1 - float(row["uv_pct"]) / 100
+        if droop <= uv or (rs and swing / rs <= ilim):
+            continue
+        fets = sorted({d[0] for d in drives})
+        q = c_l * swing
+        how = ("the constraints" if rail in rails
+               else f"{cref}'s FB divider")
+        series = ("" if not rs else
+                  f" Its {rs:g} ohm series resistance lets {swing / rs:.3g} "
+                  f"A through, past the limit.")
+        yield ("switched_load_droop", "error", rail,
+               [cref] + fets, (
+                   f"{', '.join(fets)} switch the {c_l * 1e6:.3g} uF load "
+                   f"on '{where}' (capacitance_f in the constraints) from "
+                   f"'{rail}' ({v:.3g} V by {how}), {swing:.3g} V "
+                   f"each edge{' (a bridge: -V to +V)' if len(lnets) > 1 else ''}: it takes {q * 1e3:.3g} mC, "
+                   f"and the {c_out * 1e6:.3g} uF on '{rail}' falls "
+                   f"{droop * 100:.0f}%, past the {uv * 100:.0f}% drop at "
+                   f"which {cref} ({comps[cref].get('value')}) takes its "
+                   f"output as undervoltage. Refilling that charge at its "
+                   f"{ilim:g} A minimum switch current limit takes at least "
+                   f"{q / ilim * 1e6:.3g} us in current limit, and "
+                   f"{row['hiccup_cycles']} cycles there start hiccup."
+                   f"{series} Put at least {swing / ilim:.3g} ohm in "
+                   f"series with the load, add output capacitance, or "
+                   f"drive it with a current-limited stage "
+                   f"[{_sl_src([row])}]"),
+               [row], {"droop_pct": round(droop * 100, 1),
+                       "load_f": c_l, "cout_f": round(c_out, 9),
+                       "rail_v": round(v, 3)})
+    yield ("checked", checked)
 
 
 def _source_limits(nets: dict, comps: dict,
@@ -3931,6 +4197,73 @@ def _source_limits(nets: dict, comps: dict,
                    ld["rows"], {"limit_a": lim,
                                 "load_a": round(ld["peak"], 4)})
     yield ("checked", checked)
+
+
+def _pair_rules(v, not_judged, violations, nets, comps, comp_pins, rails,
+                stated):
+    """Report lib/pair_order.py's findings; connector pairs checked."""
+    import pair_order as po  # noqa: PLC0415
+    h = {"part_kind": _part_kind, "is_ground": _is_ground_name}
+    swapped_nets = {x.get("net") for x in violations
+                    if x.get("kind") == "pin_net_swap"}
+    why = {"usb": "USB 2.0 receivers take the pair as wired: the host "
+                  "reads J for K and the device never enumerates "
+                  "[USB 2.0 spec 7.1.7]",
+           "lvds": "an LVDS receiver has no polarity correction, so every "
+                   "bit of that lane arrives inverted",
+           "eth": "most PHYs correct a reversed pair (10BASE-T and "
+                  "1000BASE-T autopolarity; 100BASE-TX's MLT-3 doesn't "
+                  "care), but check this PHY's datasheet before relying "
+                  "on it",
+           "mdi": "1000BASE-T PHYs correct a reversed pair, but check "
+                  "this PHY's datasheet before relying on it",
+           "e1": "AMI is polarity-free, but a framer counting bipolar "
+                 "violations or a B8ZS/HDB3 substitution reads them "
+                 "inverted on a crossed TIP/RING",
+           "lane": "some bridges can swap a lane's polarity in a "
+                   "register; without that the lane reads inverted"}
+    checked = 0
+    for hit in po.pair_order(nets, comps, comp_pins, rails, h, stated):
+        if "checked" in hit:
+            checked = hit["checked"]
+            continue
+        if "not_judged" in hit:
+            not_judged.append(hit["not_judged"])
+            continue
+        if swapped_nets & set(hit["walked"]):
+            continue  # rule 8 already names the crossed pin
+        c, f, lab = hit["conn"], hit["far"], hit["label"]
+        fv = comps.get(f, {}).get("value")
+        fp, fn_ = hit["far_funcs"], hit["far_pins"]
+        refs = [c, f]
+        if hit["rule"] == "pair_polarity_swap":
+            v(hit["sev"], "pair_polarity_swap", hit["p_net"], refs,
+              f"{c}'s {lab} (named by {hit['how']}) meets {f} ({fv}) the "
+              f"other way round: {c} pin {hit['p_pin']} (+) on "
+              f"'{hit['p_net']}' reaches {f} {fp['P']} (pin {fn_['P']}), "
+              f"and pin {hit['n_pin']} (-) on '{hit['n_net']}' reaches "
+              f"{fp['N']} (pin {fn_['N']}). {why[hit['family']]}. Swap "
+              f"the two lines at one end",
+              connector=c, part=f, family=hit["family"], nets=hit["nets"])
+        elif hit["rule"] == "pair_split":
+            v("error", "pair_split", hit["p_net"], refs,
+              f"{c}'s {lab} (named by {hit['how']}) is split at {f} "
+              f"({fv}): its + line '{hit['p_net']}' reaches {fp['P']} "
+              f"(pin {fn_['P']}) and its - line '{hit['n_net']}' reaches "
+              f"{fp['N']} (pin {fn_['N']}), halves of two different "
+              f"pairs. Neither pair is a pair any more: the twist and the "
+              f"far end's termination no longer carry one signal. Wire "
+              f"both lines of the pair to one pair of {f}",
+              connector=c, part=f, family=hit["family"], nets=hit["nets"])
+        elif hit["rule"] == "pair_lane_order":
+            v("error", "pair_lane_order", hit["p_net"], refs,
+              f"{c}'s {lab} (named by {hit['how']}) reaches {f} ({fv})'s "
+              f"{hit['far_key']} pair ({fp['P']}/{fp['N']}): the lanes "
+              f"are out of order, and an LVDS serializer sends each bit "
+              f"on a fixed lane, so the panel reads the wrong bits. Put "
+              f"lane {hit['key']} on {f}'s {hit['key']} pins",
+              connector=c, part=f, family=hit["family"], nets=hit["nets"])
+    return checked
 
 
 def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
@@ -4889,11 +5222,11 @@ def audit(parsed: dict, constraints: dict,
     # TI SLVA139 Fig 3: a P-FET's drain on the input, its gate to ground;
     # a high-side P-FET's source on the supply, a low-side N-FET's on
     # ground, or the body diode carries the load with the FET off)
-    sw_checked, sw_nj = 0, {}
+    ps_checked, sw_nj = 0, {}
     for ref, ch, case, sup, other in _power_switches(nets, comps, comp_pins,
                                                      pl_rails):
         if ref == "checked":
-            sw_checked, sw_nj = ch, case
+            ps_checked, sw_nj = ch, case
             continue
         d_s = "source to drain" if ch == "N" else "drain to source"
         val = comps.get(ref, {}).get("value")
@@ -5254,8 +5587,16 @@ def audit(parsed: dict, constraints: dict,
     sl_table = (load_source_limits() if source_limits is None
                 else source_limits)
     sl_checked = 0
-    for hit in _source_limits(nets, comps, comp_pins, sl_table, pl_rails):
-        if hit[0] == "checked":
+    sw_checked = 0
+    for hit in itertools.chain(
+            _source_limits(nets, comps, comp_pins, sl_table, pl_rails),
+            (("sw_" + h[0], h[1]) if h[0] == "checked" else h
+             for h in _switched_loads(
+                 nets, comps, comp_pins, sl_table, pl_rails,
+                 constraints.get("switched_loads") or []))):
+        if hit[0] == "sw_checked":
+            sw_checked = hit[1]
+        elif hit[0] == "checked":
             sl_checked = hit[1]
         elif hit[0] == "not_judged":
             not_judged.append(hit[1])
@@ -5342,6 +5683,14 @@ def audit(parsed: dict, constraints: dict,
           f"table: OE low enables, DIR sets the way]",
           oe_net=oe_net, dir_net=dir_net)
 
+    # 37. a differential or paired line's P/N and pair order across a
+    # connector, against the connector's stated pinout or a standard one
+    # (lib/pair_order.py, #1217; built from the USB, Type-C and IEEE 802.3
+    # pin tables and planted faults)
+    pairs_checked = _pair_rules(v, not_judged, violations, nets, comps,
+                                comp_pins, pl_rails,
+                                constraints.get("connector_pinouts") or [])
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -5369,7 +5718,7 @@ def audit(parsed: dict, constraints: dict,
         "io_drive_pins_checked": iolv_checked,
         "power_good_pins_checked": pg_checked,
         "power_path_fets_checked": pp_checked,
-        "power_switches_checked": sw_checked,
+        "power_switches_checked": ps_checked,
         "power_switches_not_judged": sw_nj,
         "battery_protectors_checked": prot_checked,
         "unverified_findings": len(not_judged),
@@ -5384,11 +5733,13 @@ def audit(parsed: dict, constraints: dict,
         "protector_cell_sides_checked": cell_checked,
         "debug_mcus_checked": dbg_checked,
         "source_limits_checked": sl_checked,
+        "switched_loads_checked": sw_checked,
         "polarity_pins_checked": pol_pins,
         "io_domain_pairs_checked": dom_pairs,
         "bus_groups_checked": bus_checked,
         "uart_parts_checked": uart_checked,
         "transceivers_checked": xcvr_checked,
+        "connector_pairs_checked": pairs_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged
