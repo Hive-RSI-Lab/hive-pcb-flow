@@ -107,7 +107,16 @@ PASSIVE_VALUE = re.compile(r"^(SW_|SW$|Button|Switch|TestPoint)", re.I)
 
 def load_kb(path: Path = RESET_YAML) -> dict:
     doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    rows = {r["family"]: r for r in doc.get("mcus") or []}
     for row in doc.get("mcus") or []:
+        # `like: FAMILY`: a board or module that is that chip (a Pico, an
+        # ESP-12F) takes every field it doesn't set from the chip's row
+        base = rows.get(row.get("like") or "")
+        if base is not None:
+            for k, v in base.items():
+                if k not in row and k not in ("family", "match", "cite",
+                                              "source", "verified"):
+                    row[k] = v
         row["_match"] = re.compile(row["match"], re.I)
         if row.get("vdd_pins"):
             row["_vdd_pins"] = re.compile(row["vdd_pins"], re.I)
@@ -469,7 +478,9 @@ def mcu_pins(board: Board, mcu: dict) -> dict[str, str]:
     out = {}
     for pin, meta in board.pins[mcu["ref"]].items():
         for tok in re.split(r"[/,]", meta["name"]):
-            tok = re.sub(r"^GPIO(\d+)$", r"IO\1", tok.strip())
+            # GPIO12, GP12 and a Pico's GPIO26_ADC0 are all IO12 / IO26
+            tok = re.sub(r"^(?:GPIO|GP)(\d+)(?:_.*)?$", r"IO\1",
+                         tok.strip().upper())
             tok = aliases.get(tok, tok)
             out.setdefault(tok, pin)
     return out
@@ -529,6 +540,7 @@ def check_mcu(board, kb, mcu, bg) -> tuple[list, list]:
         fact = {"mcu": mcu["ref"], "strap": strap, "pin": pin,
                 "net": board.label(g), "want": want, "vdd": vdd}
         bad = {}
+        floating = False
         unknown = []
         for event in EVENTS:
             st = res.state(g, event, skip={(mcu["ref"], pin)}, vdd=vdd,
@@ -541,6 +553,16 @@ def check_mcu(board, kb, mcu, bg) -> tuple[list, list]:
                 want == "defined" and st["state"] in ("high", "low"))
             if not ok:
                 bad[event] = st["text"]
+                floating = floating or st["state"] == "floating"
+        if bad and floating and row.get("onboard") == "unknown":
+            # a module that may pull this strap itself (an ESP-12F): left
+            # floating by the board, its level is the module's, which no
+            # datasheet here gives
+            fact["not_judged"] = (
+                f"{strap} is left floating by the board and {mcu['value']} "
+                "may pull it on the module; reset_states.yaml doesn't know "
+                "the module's own strap resistors")
+            bad = {}
         facts.append(fact)
         pos = pad_pos(bg, mcu["ref"], pin)
         if bad:
@@ -875,6 +897,10 @@ def check(pcb: Path, netlist: Path | None = None, kb: dict | None = None):
             "mcus_unknown": sorted(unknown),
             "straps": straps, "reset_pulls": pulls,
             "expander_pins": ios, "net_ties": ties}
+    left = [f"{f['mcu']} {f['strap']}: {f['not_judged']}" for f in straps
+            if f.get("not_judged")]
+    if left:
+        seen["not_judged"] = left
     if not mcus and not ios:
         seen["nothing_to_judge"] = mcu_verdict(mcus, unknown)
     return viols, seen
@@ -894,8 +920,8 @@ def run(argv=None):
         raise checklib.CheckError(f"netlist not found: {nl}")
     viols, seen = check(pcb, nl)
     return checklib.report(SCRIPT, pcb, viols, checked=[seen],
-                           nothing_to_judge=seen.get("nothing_to_judge")
-                           ), args.out
+                           nothing_to_judge=seen.get("nothing_to_judge"),
+                           not_judged=seen.get("not_judged")), args.out
 
 
 def main(argv=None) -> int:

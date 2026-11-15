@@ -29,7 +29,7 @@
 # mcu_like: part Values that are an MCU, known here or not. A board with one
 # the `mcus` rows don't match has had nothing judged, and check_straps says so
 # (mcu_unknown) rather than passing.
-mcu_like: '^(STM32|STM8|GD32|CH32|CH5[0-9]|AT32|APM32|HC32|MM32|PY32|N32|ESP32|ESP8266|ESP8285|ESP8684|RP2040|RP2350|NRF5|NRF9|ATMEGA|ATTINY|ATSAM|AT90|SAM[DEL][0-9]|PIC1[0268]|PIC24|PIC32|DSPIC|MSP430|MSPM0|TM4C|TMS320|LPC[0-9]|MK[LEVWS][0-9]|MIMX|MCIMX|EFM32|EFR32|R7FA|R5F|CY8C|XMC[0-9]|LGT8|W80[0-9]|BL60[0-9]|AM62[035]|OSD62[035])'
+mcu_like: '^(ESP-?(01|07|12)[A-Z]?\b|ESP-WROOM-02|ESP-M[0-9]?\b|(Raspberry_?Pi_?)?Pico\b|MDBT[0-9]|STM32|STM8|GD32|CH32|CH5[0-9]|AT32|APM32|HC32|MM32|PY32|N32|ESP32|ESP8266|ESP8285|ESP8684|RP2040|RP2350|NRF5|NRF9|ATMEGA|ATTINY|ATSAM|AT90|SAM[DEL][0-9]|PIC1[0268]|PIC24|PIC32|DSPIC|MSP430|MSPM0|TM4C|TMS320|LPC[0-9]|MK[LEVWS][0-9]|MIMX|MCIMX|EFM32|EFR32|R7FA|R5F|CY8C|XMC[0-9]|LGT8|W80[0-9]|BL60[0-9]|AM62[035]|OSD62[035])'
 
 mcus:
   - family: ESP32
@@ -163,6 +163,98 @@ mcus:
     source: ESP32-C6 datasheet v1.x §3 Boot Configurations and the IO MUX reset column
     verified: false
 
+  # ESP8266EX / ESP8285 and the modules that are the chip and its flash
+  # with no strap resistors of their own (ESP-WROOM-02: its schematic, p.17,
+  # has R1, the 12 k bias, and R3, the 200 R in SD_CLK, nothing else). The
+  # boot mode is latched from MTDO (GPIO15), GPIO0 and GPIO2: flash boot is
+  # 0 1 1. Module pads are named IO15, IO2, IO0, EN, TXD, RXD, RST.
+  - family: ESP8266
+    match: '^(ESP8266|ESP8285|ESP-WROOM-02(?![DU]))'
+    vdd: 3.3
+    vil: 0.25
+    vih: 0.75
+    pull_ohm: 45000   # not given by Espressif; the ESP32's nominal
+    enable: [EN, CHIP_EN, CHIP_PU, CH_PD, CH_PU]
+    aliases: &esp8266_aliases
+      {MTDO: IO15, MTDI: IO12, MTMS: IO14, MTCK: IO13, U0TXD: IO1,
+       TXD0: IO1, TXD: IO1, U0RXD: IO3, RXD0: IO3, RXD: IO3,
+       CHIP_EN: EN, CHIP_PU: EN, CH_PD: EN, CH_PU: EN, CH_PD/EN: EN,
+       CH_EN: EN}
+    straps: &esp8266_straps
+      IO15: {pull: none, want: low, severity: error,
+             why: "MTDO (GPIO15) must be low at power-on: high boots the SDIO mode, not the flash"}
+      IO0: {pull: up, want: high, severity: error,
+            why: "GPIO0 = 0 boots the UART download mode instead of the flash"}
+      IO2: {pull: up, want: high, severity: error,
+            why: "GPIO2 must be high for both flash boot and UART download"}
+      EN: {pull: none, want: defined, severity: error,
+           why: "CHIP_EN cannot be left floating (high runs the chip, low holds it off)"}
+    cite:
+      - {doc: 0a-esp8266ex_datasheet_en.pdf, sha256: 3a038e2fd3040ad06d95d41b16afc8292090339e9f8e728ce46a83db439cecf1, page: 11, table: '', quote: 'GPIO2, GPIO0, and MTDO are used to select booting mode and the SDIO mode;', fields: []}
+      - {doc: 0a-esp8266ex_datasheet_en.pdf, sha256: 3a038e2fd3040ad06d95d41b16afc8292090339e9f8e728ce46a83db439cecf1, page: 24, table: '', quote: 'VIH 0.75 VIO', fields: [vih]}
+      - {doc: 0a-esp8266ex_datasheet_en.pdf, sha256: 3a038e2fd3040ad06d95d41b16afc8292090339e9f8e728ce46a83db439cecf1, page: 24, table: '', quote: '0.25 VIO', fields: [vil]}
+      - {doc: esp8266_hardware_design_guidelines_en.pdf, sha256: ff98aeeed7fd07e2fac43cdeca9b0170e03de395b0c79d28a35a40408a16638c, page: 16, table: '', quote: 'GPIO15, the strapping pin of ESP8266EX, needs to be at low-voltage level when the chip is powered on.', fields: []}
+      - {doc: esp8266_hardware_design_guidelines_en.pdf, sha256: ff98aeeed7fd07e2fac43cdeca9b0170e03de395b0c79d28a35a40408a16638c, page: 13, table: '', quote: 'cannot be left', fields: []}
+      - {doc: 0c-esp-wroom-02_datasheet_en.pdf, sha256: 092893b04e97d5a8e5c224f03d02062ca5e9523ff86bdc8b689b0c6ba0668750, page: 9, table: '', quote: 'Floating (internal pull-up) or pull up.', fields: []}
+      - {doc: 0c-esp-wroom-02_datasheet_en.pdf, sha256: 092893b04e97d5a8e5c224f03d02062ca5e9523ff86bdc8b689b0c6ba0668750, page: 9, table: '', quote: 'UART download: pull down.', fields: []}
+      - {doc: 0a-esp8285_datasheet_en.pdf, sha256: dce7d19cb67c8ef99d820888f08cc02e1ee75f878676837df953b2f5f3e06d9d, page: 11, table: '', quote: 'GPIO2, GPIO0, and MTDO are used to select booting mode and the SDIO mode;', fields: []}
+    source: Espressif ESP8266EX datasheet p.11 (GPIO2, GPIO0, MTDO select the boot mode) and p.24 (VIL 0.25, VIH 0.75 VIO); ESP8266 Hardware Design Guidelines 2024.10 p.13 (CHIP_EN cannot be left floating), p.16 (GPIO15 low at power-on); ESP-WROOM-02 datasheet p.9 Table 2-1 (IO15 pull down, IO2 floating (internal pull-up) or pull up, IO0 floating or pull up for flash boot) and p.17 module schematic (no strap resistors); ESP8285 datasheet p.11
+    verified: true    # read 2026-11-15
+
+  # ESP8266 modules from other makers (Ai-Thinker ESP-01/07/12E/F/S, the
+  # WROOM-02D/U, Doit ESP-M): the same chip and straps, but each may carry
+  # strap resistors of its own that no datasheet here gives (onboard:
+  # unknown). A strap the board leaves floating is then not judged (the
+  # module may pull it); one the board pulls to the wrong level still is.
+  - family: ESP8266 module
+    match: '^(ESP-?(01|07|12)[A-Z]?\b|ESP-WROOM-02[DU]|ESP-M[0-9]?\b)'
+    like: ESP8266
+    onboard: unknown
+    source: as the ESP8266 row; the module's own strap resistors are unknown
+    verified: true    # read 2026-11-15 (the chip's rows)
+
+  # ESP32-S2 and its modules (ESP32-S2-WROOM(-I), -WROVER(-I), -SOLO,
+  # -MINI-1): flash and PSRAM at 3.3 V, so GPIO45 = 1 (VDD_SPI 1.8 V)
+  # stops the module booting.
+  - family: ESP32-S2
+    match: '^ESP32-S2'
+    vdd: 3.3
+    vil: 0.25
+    vih: 0.75
+    pull_ohm: 45000
+    enable: [EN, CHIP_PU, CHIP_EN]
+    aliases: {BOOT: IO0, U0TXD: IO43, TXD0: IO43, U0RXD: IO44, RXD0: IO44,
+              CHIP_PU: EN, CHIP_EN: EN}
+    straps:
+      IO0: {pull: up, want: high, severity: error,
+            why: "GPIO0 = 0 boots the download mode instead of the flash"}
+      IO45: {pull: down, want: low, severity: error,
+             why: "GPIO45 = 1 sets VDD_SPI to 1.8 V; 3.3 V flash then fails (unless the eFuse overrides it)"}
+      IO46: {pull: down, want: low, severity: warning,
+             why: "GPIO46 = 1 with GPIO0 = 0 is an invalid boot combination; download needs it low"}
+    cite:
+      - {doc: esp32-s2_datasheet_en.pdf, sha256: 7c0c54f11e79cc77b09ae070221f056e2c21a3746a8f3a23a0371c4efcf8e02d, page: 29, table: 'Default Configuration of Strapping Pins', quote: 'GPIO0 Weak pull-up 1', fields: []}
+      - {doc: esp32-s2_datasheet_en.pdf, sha256: 7c0c54f11e79cc77b09ae070221f056e2c21a3746a8f3a23a0371c4efcf8e02d, page: 29, table: 'Default Configuration of Strapping Pins', quote: 'GPIO45 Weak pull-down 0', fields: []}
+      - {doc: esp32-s2_datasheet_en.pdf, sha256: 7c0c54f11e79cc77b09ae070221f056e2c21a3746a8f3a23a0371c4efcf8e02d, page: 29, table: 'Default Configuration of Strapping Pins', quote: 'GPIO46 Weak pull-down 0', fields: []}
+      - {doc: esp32-s2-wroom_esp32-s2-wroom-i_datasheet_en.pdf, sha256: ee6d88b23241323c7ea8f833ea00ff522696daf2a32a51ca8cfefb755c8d2ca7, page: 11, table: '', quote: 'Chip boot mode – GPIO0 and GPIO46', fields: []}
+    source: ESP32-S2 Series Datasheet v1.9 p.29 Table 3-1 (GPIO0 weak pull-up, GPIO45 and GPIO46 weak pull-down; GPIO45 VDD_SPI, GPIO0/GPIO46 boot mode); ESP32-S2-WROOM datasheet p.11 §3.3
+    verified: true    # read 2026-11-15
+
+  # Nordic nRF52840 and modules on it (Raytac MDBT50Q-1MV2/-P1MV2): no
+  # strapping pins ("the device will always start independently of the
+  # levels present on any of the GPIOs"), so there is nothing to latch;
+  # the row is here so the part is judged, not mcu_unknown.
+  - family: nRF52840
+    match: '^(NRF52840|MDBT50Q-(P|X)?1MV2)'
+    vdd: 3.3
+    enable: []
+    straps: {}
+    cite:
+      - {doc: nRF52840_PS_v1.5.pdf, sha256: 0ce32d92af358ebd4daf2a9d50c56219468b9e988628f0d512e3feaee96709de, page: 45, table: '', quote: 'independently of the levels present on any of the GPIOs.', fields: []}
+      - {doc: MDBT50Q-1MV2_spec_L.pdf, sha256: 61fec8c0c9f8c33175be2237a8ebba73c6cfc0a3572fe3835fd341079c103d03, page: 4, table: '', quote: 'designed based on Nordic nRF52840 SoC solution', fields: []}
+    source: Nordic nRF52840 Product Specification v1.5 p.45 §4.5.1.4 PSELRESET (no GPIO level decides the start); Raytac MDBT50Q-1MV2 spec version L p.4 (built on the nRF52840)
+    verified: true    # read 2026-11-15
+
 # Parts whose pins pull or drive a net at reset.
 #   kind: expander  - every IO pin (pins: regex on the pin name) is an input
 #                     at power-on with the internal `pull`; registers are
@@ -248,6 +340,21 @@ mcus:
       SWD: {pull: up, why: "SWD's pull-up is on from reset"}
     source: RP2040 datasheet build 2025-02-20 (3184e62) Pinout section Reset State column (GPIO pull-down, QSPI_CSn/SWCLK/SWD/RUN pull-up, TESTEN pull-down), PADS_BANK0 GPIOn register, IO electrical table (VIH 2 V, VIL 0.8 V at 3.3 V, RPU/RPD 50-80 k), bootrom "Check if SPI CS pin is tied low", section 1.4.3 "TESTEN Factory test mode pin. Tie to GND."
     verified: true
+
+  # Raspberry Pi Pico and Pico W: an RP2040 board whose header pins are
+  # the chip's GPIOs (named GPIOn, GPn or GPIOn_ADCm on the symbols) and its
+  # RUN pin. The RP2040's straps (QSPI_SS, TESTEN) don't reach the header,
+  # so what is judged is the reset pull-downs on the GPIOs (a load they
+  # switch on). Not the Pico 2 (RP2350).
+  - family: Raspberry Pi Pico
+    match: '^(Raspberry_?Pi_?)?Pico(_?W|_?H|_?WH)?(?![0-9 ]?2(\b|W))\b'
+    like: RP2040
+    cite:
+      - {doc: pico-datasheet.pdf, sha256: 757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb, page: 20, table: '', quote: 'The Pico exposes 26 of the 30 possible RP2040 GPIO pins by routing them straight out to Pico header pins.', fields: []}
+      - {doc: pico-datasheet.pdf, sha256: 757ff485227493b9fcc0c2c96c4dea9de020e1d8b2b11e2aa4f9ee8b25aa89eb, page: 9, table: '', quote: 'RUN is the RP2040 enable pin, and has an internal (on-chip) pull-up resistor to 3.3 V of about ~50 kΩ.', fields: []}
+      - {doc: pico-w-datasheet.pdf, sha256: ba8649ba98437301b9f1621504569a27f1d2ba6111795b4df76783adb08de7c5, page: 14, table: '', quote: 'Pico W exposes 26 of the 30 possible RP2040 GPIO pins by routing them straight out to Pico W header pins.', fields: []}
+    source: Raspberry Pi Pico datasheet p.9 (RUN, on-chip pull-up) and p.20 (GPIOs routed straight to the header); Pico W datasheet p.14; the RP2040 row for the pulls
+    verified: true    # read 2026-11-15
 
   # TI AM62x (AM625, AM623, AM620) and Octavo's OSD62x SiPs built on it,
   # whose symbols name the AM62x's own balls. BOOTMODE[15:0] share the
