@@ -1,0 +1,62 @@
+{
+  "mpn": "LDO-LEADS-REVERSED",
+  "lcsc": "C9900843",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "2",
+      "name": "VOUT",
+      "type": "power_out"
+    },
+    {
+      "pin": "3",
+      "name": "VIN",
+      "type": "power_in"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "Input voltage VIN",
+      "value": 15,
+      "unit": "V"
+    }
+  ],
+  "land_pattern": {
+    "pad_count": 4,
+    "source": "planted fault",
+    "pads": [
+      {
+        "number": "1",
+        "at_mm": [
+          -3.15,
+          2.3
+        ]
+      },
+      {
+        "number": "2",
+        "at_mm": [
+          -3.15,
+          0.0
+        ]
+      },
+      {
+        "number": "3",
+        "at_mm": [
+          -3.15,
+          -2.3
+        ]
+      },
+      {
+        "number": "2",
+        "at_mm": [
+          3.15,
+          0.0
+        ]
+      }
+    ]
+  }
+}

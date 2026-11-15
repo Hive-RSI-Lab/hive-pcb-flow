@@ -157,8 +157,8 @@ def test_power_tree_range_and_tolerance_cells(tmp_path):
 
 def _ws(tmp_path: Path, fps: list[tuple], parts: dict, bom=None,
         tree: str | None = None) -> Path:
-    """fps: (ref, lcsc, {pad: net}[, footprint[, value]]); parts: {lcsc:
-    extraction}."""
+    """fps: (ref, lcsc, {pad: net or (net, x, y)}[, footprint[, value]]);
+    parts: {lcsc: extraction}."""
     ws = tmp_path / "ws"
     (ws / "kicad").mkdir(parents=True)
     (ws / "parts").mkdir()
@@ -170,7 +170,11 @@ def _ws(tmp_path: Path, fps: list[tuple], parts: dict, bom=None,
                      + (f' (property "Value" "{fp[1]}")' if len(fp) > 1
                         else ""))
         for num, net in pads.items():
-            lines.append(f'    (pad "{num}" smd rect (net "{net}"))')
+            at = ""
+            if isinstance(net, tuple):  # (net, x, y): a placed pad
+                net, x, y = net
+                at = f" (at {x} {y})"
+            lines.append(f'    (pad "{num}" smd rect{at} (net "{net}"))')
         lines.append("  )")
     lines.append(")")
     (ws / "kicad" / "board.kicad_pcb").write_text("\n".join(lines))
@@ -3869,3 +3873,69 @@ def test_a_driver_on_a_rail_past_the_usb_level_leaves_the_net_unbounded(
     # a 3.3 V rail stays inside the level: the net is bounded at 3.6 V
     hit = _over(run("b", "+3V3"))
     assert hit and hit[0]["bound_v"] == [0.0, 3.6]
+
+
+# ---------------------------------------- pins by where the copper puts them
+
+# A regulator whose land drawing has a post (pin 4) off the row, so only one
+# turn fits: pins 1 VIN, 2 GND, 3 VOUT in a row, 4 the post above pin 2
+REG = {"mpn": "TESTREG", "pinout": [
+    {"pin": "1", "name": "VIN", "type": "power_in"},
+    {"pin": "2", "name": "GND", "type": "ground"},
+    {"pin": "3", "name": "VOUT", "type": "power_out"},
+    {"pin": "4", "name": "NC", "type": "no_connect"}],
+    "abs_max": [
+        {"param": "Voltage on VIN", "value": "-0.3 to 20", "unit": "V"},
+        {"param": "Voltage on VOUT", "value": "-0.3 to 6", "unit": "V"}],
+    "land_pattern": {"pads": [
+        {"number": "1", "at_mm": [-2.0, 0.0]},
+        {"number": "2", "at_mm": [0.0, 0.0]},
+        {"number": "3", "at_mm": [2.0, 0.0]},
+        {"number": "4", "at_mm": [0.0, -3.0]}]}}
+
+
+def test_pins_follow_the_copper_not_the_numbers(tmp_path):
+    """#843. The quiet twin: symbol and footprint numbered mirrored alike
+    (hifi-receiver's PLR237), so pad 3 is the copper under the datasheet's
+    VIN and carries +12V. By number that was VOUT on 12 V; by place it is
+    VIN, and quiet. The planted fault: the numbers agree with the
+    datasheet, but the footprint's pad 1 (on +12V) sits where the drawing
+    has VOUT."""
+    twin = _ws(tmp_path, [("U1", "C7", {"3": ("+12V", -2.0, 0.0),
+                                        "2": ("GND", 0.0, 0.0),
+                                        "1": ("+5V", 2.0, 0.0),
+                                        "4": ("", 0.0, -3.0)})], {"C7": REG})
+    p = _run(twin)
+    assert _errors(p) == []
+    assert p["pins_by_position"] == {"U1": {"1": "3", "3": "1"}}
+    by_number = json.loads(json.dumps(REG))
+    del by_number["land_pattern"]
+    p = _run(_ws(tmp_path / "n", [("U1", "C7", {"3": ("+12V", -2.0, 0.0),
+                                                "2": ("GND", 0.0, 0.0),
+                                                "1": ("+5V", 2.0, 0.0)})],
+                 {"C7": by_number}))
+    assert [e["pin"] for e in _errors(p)] == ["U1.3"]   # the old false error
+    fault = _ws(tmp_path / "f", [("U1", "C7", {"1": ("+12V", 2.0, 0.0),
+                                               "2": ("GND", 0.0, 0.0),
+                                               "3": ("+5V", -2.0, 0.0),
+                                               "4": ("", 0.0, -3.0)})],
+                {"C7": REG})
+    errs = _errors(_run(fault))
+    assert [(e["kind"], e["pin"], e["board_pad"]) for e in errs] == \
+        [("rating_over_voltage", "U1.3", "1")]
+    assert "the footprint's pad 1" in errs[0]["msg"]
+
+
+def test_a_row_with_no_fixed_turn_keeps_the_numbers(tmp_path):
+    """Three pins in a row fit at 0 and 180 degrees with different pins:
+    nothing says which, so pins stay matched by number, and the facts
+    say why."""
+    row = json.loads(json.dumps(REG))
+    row["land_pattern"]["pads"] = row["land_pattern"]["pads"][:3]
+    p = _run(_ws(tmp_path, [("U1", "C7", {"3": ("+12V", -2.0, 0.0),
+                                          "2": ("GND", 0.0, 0.0),
+                                          "1": ("+5V", 2.0, 0.0)})],
+                 {"C7": row}))
+    assert p["pins_by_position"] == {}
+    assert "more than one turn" in p["pins_by_number_why"]["U1"]
+    assert [e["pin"] for e in _errors(p)] == ["U1.3"]
