@@ -45,6 +45,34 @@ Findings, one per pair or part, kind:
                     judges where the front stands against the drawing.
   body_unjudged     warning, one per board: connectors (J, CN, X, P) with no
                     readable model, so nothing here judged them.
+  body_under_module error: a module plugged into 2.54 mm female headers (or
+                    given a standoff) and a part that reaches its underside
+                    share material: a neighbour or a part under it is taller
+                    than the gap (#1187).
+
+Raised parts (#1187). KiCad draws a socketed DIP and a module on female
+headers as if they sat on the board; reference/socket_heights.yaml holds the
+cited heights.
+  A DIP-n_W..._Socket footprint: a chip model (its file name doesn't say
+  socket) is lifted so its underside sits on the socket's top (the socket
+  model's, else dip_socket_seat_mm). With no socket model a socket body is
+  drawn: the insulator width (dip_socket_width_300_mm, wider by the row
+  spacing past 7.62 mm), the pad rows plus a pitch long, seat-high. A socket
+  model with no chip in it is not_judged (not_judged_why says so).
+  A module: a footprint (not itself a pin strip) with SOCKET_MIN_PINS or more
+  through-hole pins within SOCKET_PIN_MM of a PinSocket_*_P2.54mm_Vertical
+  footprint's pins on the same side. Its PCB's underside stands at the socket
+  model's top (else female_header_mm) plus male_header_base_mm. A model drawn
+  with its PCB below half that height is lifted; one drawn already raised is
+  left. With no model, its courtyard is drawn as an underside slab
+  MODULE_SLAB_MM thick at that height (not checked against its own courtyard,
+  the outline or holes). The module and its sockets aren't compared.
+  constraints `mechanical.module_standoff`: [{refs: [U1], height_mm: 11.0,
+  why: "..."}] states the underside's height above the board and overrides
+  the sockets; 0 says it is soldered flat.
+  A plug-in looking footprint (PLUG_IN: Module: library, Arduino, Pico, ...)
+  with through-hole pins, no socket and no stated standoff is judged as drawn
+  and listed in standoff_unstated. Report: raised, raised_dips.
 
 A part with no model can't be judged, and the report's not_judged says which.
 Deliberate nesting (a battery in its holder, a part under a shield) goes in
@@ -105,6 +133,33 @@ EDGE_PART = re.compile(
 EDGE_REFS = re.compile(r"^(J|CN|X|P|USB|ANT|SW|S)\d", re.I)
 CONNECTOR_REFS = re.compile(r"^(J|CN|X|P)\d", re.I)
 SKIP_UNJUDGED = re.compile(r"^(TP|FID|H|MH|LOGO|NT|REF|G)\d*$", re.I)
+# raised parts (#1187): a DIP in a socket, a module on 2.54 mm female headers
+HEIGHTS_YAML = HERE.parent / "reference" / "socket_heights.yaml"
+DIP_SOCKET = re.compile(r"DIP-\d+_W(\d+(?:\.\d+)?)mm.*Socket", re.I)
+PIN_SOCKET = re.compile(r"PinSocket_\d+x\d+_P2\.54mm_Vertical", re.I)
+PIN_STRIP = re.compile(r"Pin(Socket|Header)_", re.I)
+# a footprint that looks like a plug-in board: its standoff matters
+PLUG_IN = re.compile(r"(^Module:|Arduino|Pico|DevKit|NodeMCU|Wemos|Teensy"
+                     r"|Feather|Daisy|Maple_Mini|Pro_?Micro|Breakout)", re.I)
+SOCKET_PIN_MM = 0.3        # a module pin this close to a socket pin is in it
+SOCKET_MIN_PINS = 4        # pins in sockets that make it plugged in
+DRAWN_LOW = 0.5            # PCB found below half the standoff: drawn at the board
+MODULE_SLAB_MM = 0.5       # a module with no model: its underside, this thick
+LIFT_MIN_MM = 0.3          # a lift smaller than this is the model's own error
+PITCH_MM = 2.54            # 0.1" pin pitch: a socket body is one pitch past its end pins
+
+
+def socket_heights(path: Path = HEIGHTS_YAML) -> dict[str, float]:
+    """name -> value (mm) from reference/socket_heights.yaml, each cited."""
+    import yaml
+    doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    out = {}
+    for k, row in doc.items():
+        if not (isinstance(row, dict) and row.get("source") and row.get("url")):
+            raise checklib.CheckError(f"{path.name}: {k} needs a value, "
+                                      "source and url")
+        out[k] = float(row["value"])
+    return out
 
 
 def _triangles(faces) -> np.ndarray:
@@ -130,6 +185,7 @@ class Body:
     vox: float = VOX_MM
     org: tuple = (0, 0, 0)
     cells: np.ndarray | None = None
+    synthetic: bool = False     # drawn here from a cited height, not a model
 
     def height(self, thickness: float) -> float:
         """Standing height from the part's own side."""
@@ -335,15 +391,41 @@ def _past(points: np.ndarray, region):
 
 # ------------------------------------------------------------ the board
 
-def bodies(pcb: Path, thickness: float, model_dirs=()):
-    """(Body per footprint with a readable shown model, facts). A path that
-    doesn't resolve is looked up by name in the workspace's lib/*.3dshapes, as
-    render does, then in `model_dirs`."""
+def _box_tris(x0, y0, z0, x1, y1, z1) -> np.ndarray:
+    """A closed box as 12 triangles (footprint frame)."""
+    p = [(x, y, z) for z in (z0, z1) for y in (y0, y1) for x in (x0, x1)]
+    quads = [(0, 1, 3, 2), (4, 5, 7, 6), (0, 1, 5, 4), (2, 3, 7, 6),
+             (0, 2, 6, 4), (1, 3, 7, 5)]
+    return _triangles([[p[i] for i in q] for q in quads])
+
+
+def _underside(t: np.ndarray) -> float | None:
+    """The lowest height at which the model covers more than
+    half its own silhouette: a module's PCB. None for an empty model."""
+    lo, hi = t.reshape(-1, 3).min(0), t.reshape(-1, 3).max(0)
+    b = Body("?", False, (0, 0), t.astype(np.float32),
+             tuple(float(v) for v in (*lo, *hi)))
+    rasterise(b, 0.4)
+    full = b.cells.any(axis=2).sum()
+    if not full:
+        return None
+    for k in range(b.cells.shape[2]):
+        z = (k + b.org[2]) * b.vox
+        if b.cells[:, :, k].sum() > full / 2:
+            return z
+    return None
+
+
+def _models_local(pcb: Path, model_dirs=()):
+    """ref -> (pos, angle, back, pads, [(model file name, tris in the
+    footprint frame)]), and facts. A path that doesn't resolve is looked up by
+    name in the workspace's lib/*.3dshapes, as render does, then in
+    `model_dirs`."""
     resolve = cmf.resolver(pcb)
     libs = [*kc.model_libs(pcb.resolve().parent), *map(Path, model_dirs)]
     facts = {"models_missing": {}, "unreadable": {}, "hidden_only": []}
-    out, mesh_tris = [], {}
-    for ref, pos, angle, back, _pads, models in cmf.footprints(pcb):
+    out, mesh_tris, seen = {}, {}, {}
+    for ref, pos, angle, back, pads, models in cmf.footprints(pcb):
         parts, shown = [], False
         for path, offset, scale, rotate, hidden in models:
             if hidden:
@@ -370,22 +452,191 @@ def bodies(pcb: Path, thickness: float, model_dirs=()):
                 mesh_tris[key] = None if mesh is None else _triangles(
                     modelgeom.place(mesh, offset, scale, rotate, back))
             if mesh_tris[key] is not None and len(mesh_tris[key]):
-                parts.append(mesh_tris[key])
-        if not parts:
-            if models and not shown:
-                facts["hidden_only"].append(ref)
-            continue
-        t = np.concatenate(parts).astype(np.float64)
-        a = math.radians(angle)
-        c, s = math.cos(a), math.sin(a)
-        x = pos[0] + t[..., 0] * c + t[..., 1] * s
-        y = pos[1] - t[..., 0] * s + t[..., 1] * c
-        z = (-thickness - t[..., 2]) if back else t[..., 2]
-        w = np.stack([x, y, z], axis=-1).astype(np.float32)
-        box = tuple(float(v) for v in (*w.reshape(-1, 3).min(0),
-                                       *w.reshape(-1, 3).max(0)))
-        out.append(Body(ref, back, pos, w, box))
+                parts.append((Path(path).name, mesh_tris[key]))
+        if not parts and models and not shown:
+            facts["hidden_only"].append(ref)
+        seen[ref] = seen.get(ref, 0) + 1
+        out[(ref, seen[ref])] = (pos, angle, back, pads, parts)
+    # a reference several footprints share (KiCad's REF** on logos and
+    # holes) keeps each body, keyed ref#n, and none is matched to a courtyard
+    # or a constraint by that reference, since it can't say whose it is
+    return {(r if seen[r] == 1 else f"{r}#{n}"): v
+            for (r, n), v in out.items()}, facts
+
+
+def _placed(ref, pos, angle, back, t, thickness, synthetic=False) -> Body:
+    """Footprint-frame triangles (Z up from the part's own side) placed on
+    the board."""
+    t = t.astype(np.float64)
+    a = math.radians(angle)
+    c, s = math.cos(a), math.sin(a)
+    x = pos[0] + t[..., 0] * c + t[..., 1] * s
+    y = pos[1] - t[..., 0] * s + t[..., 1] * c
+    z = (-thickness - t[..., 2]) if back else t[..., 2]
+    w = np.stack([x, y, z], axis=-1).astype(np.float32)
+    box = tuple(float(v) for v in (*w.reshape(-1, 3).min(0),
+                                   *w.reshape(-1, 3).max(0)))
+    return Body(ref, back, pos, w, box, synthetic=synthetic)
+
+
+def bodies(pcb: Path, thickness: float, model_dirs=(), local=None):
+    """(Body per footprint with a readable shown model, facts)."""
+    if local is None:
+        local, facts = _models_local(pcb, model_dirs)
+    else:
+        local, facts = local
+    out = []
+    for ref, (pos, angle, back, _pads, parts) in local.items():
+        if parts:
+            t = np.concatenate([p for _, p in parts])
+            out.append(_placed(ref, pos, angle, back, t, thickness))
     return out, facts
+
+
+def _standoffs(constraints: dict | None) -> dict[str, tuple[float, str]]:
+    """ref -> (module_standoff height_mm, why) from constraints."""
+    out = {}
+    mech = (constraints or {}).get("mechanical") or {}
+    for e in mech.get("module_standoff") or []:
+        refs, why, h = e.get("refs") or [], e.get("why") or "", e.get("height_mm")
+        if not refs or not why or not (
+                isinstance(h, (int, float)) and not isinstance(h, bool)
+                and h >= 0):
+            raise checklib.CheckError(
+                "mechanical.module_standoff entries need refs, height_mm >= 0"
+                f" and a why: {e}")
+        for r in refs:
+            out[r] = (float(h), why)
+    return out
+
+
+def _pad_xy(fp) -> list[tuple[float, float]]:
+    """Board positions of a placelib footprint's through-hole pads."""
+    return [fp.to_abs(p.local) for p in fp.pads if p.through]
+
+
+def raise_parts(local: dict, place, constraints: dict | None,
+                heights: dict[str, float]):
+    """Lift what KiCad draws at the board but stands higher (#1187), in
+    `local` (footprint frame, before placing). (synthetic refs, raised
+    {ref: why}, exempt pairs, facts)."""
+    stated = _standoffs(constraints)
+    raised, synthetic, exempt = {}, set(), set()
+    dip_facts, mod_facts, why_not, unstated = {}, {}, {}, []
+
+    def top(ref) -> float | None:
+        parts = (local.get(ref) or (None,) * 5)[4]
+        if not parts:
+            return None
+        return float(max(p.reshape(-1, 3)[:, 2].max() for _, p in parts))
+
+    # a DIP in a socket footprint
+    for ref, fp in place.footprints.items():
+        m = DIP_SOCKET.search(fp.fpid)
+        if not m or ref not in local:
+            continue
+        pos, angle, back, pads, parts = local[ref]
+        sock = [(n, p) for n, p in parts if "socket" in n.lower()]
+        chip = [(n, p) for n, p in parts if "socket" not in n.lower()]
+        if sock and not chip:
+            why_not[ref] = ("a socket footprint whose model is the socket "
+                            "alone: the chip in it isn't drawn")
+            continue
+        if not chip:
+            continue
+        seat = max(float(p.reshape(-1, 3)[:, 2].max()) for _, p in sock) \
+            if sock else heights["dip_socket_seat_mm"]
+        # the chip's underside (its body, not its leads) goes to the seat
+        low = _underside(np.concatenate([p for _, p in chip]))
+        lift = seat - low if low is not None and low < seat - LIFT_MIN_MM \
+            else 0.0
+        new = list(sock)
+        if not sock:
+            xy = [pl.centroid.coords[0] for _, th, pl in pads if th]
+            if len(xy) >= 4:
+                xs, ys = [a for a, _ in xy], [b for _, b in xy]
+                w = float(m.group(1))
+                across = heights["dip_socket_width_300_mm"] + (w - 7.62)
+                cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+                sx, sy = max(xs) - min(xs), max(ys) - min(ys)
+                if abs(sx - w) <= abs(sy - w):      # rows apart along x
+                    hx, hy = across / 2, (sy + PITCH_MM) / 2
+                else:
+                    hx, hy = (sx + PITCH_MM) / 2, across / 2
+                new.append(("(socket)", _box_tris(cx - hx, cy - hy, 0.0,
+                                                  cx + hx, cy + hy, seat)))
+        for n, p in chip:
+            q = p.copy()
+            q[..., 2] += lift
+            new.append((n, q))
+        local[ref] = (pos, angle, back, pads, new)
+        dip_facts[ref] = {"seat_mm": round(seat, 2), "lift_mm": round(lift, 2),
+                          "socket": "model" if sock else "drawn from "
+                          "socket_heights.yaml"}
+
+    # a module on 2.54 mm female headers
+    sockets = {r: f for r, f in place.footprints.items()
+               if PIN_SOCKET.search(f.fpid)}
+    sock_pads = {r: _pad_xy(f) for r, f in sockets.items()}
+    for ref, fp in place.footprints.items():
+        if PIN_STRIP.search(fp.fpid) or DIP_SOCKET.search(fp.fpid):
+            continue
+        mine = _pad_xy(fp)
+        if len(mine) < SOCKET_MIN_PINS and ref not in stated:
+            continue
+        under, n_in = [], 0
+        for sr, pts in sock_pads.items():
+            if sockets[sr].side != fp.side:
+                continue
+            k = sum(1 for x, y in mine if any(
+                math.hypot(x - a, y - b) <= SOCKET_PIN_MM for a, b in pts))
+            if k:
+                under.append(sr)
+                n_in += k
+        if ref in stated:
+            dz, src = stated[ref][0], "constraints mechanical.module_standoff"
+            if dz == 0:
+                continue
+        elif n_in >= SOCKET_MIN_PINS:
+            tops = [t for t in (top(r) for r in under) if t is not None]
+            sock_top = max(tops) if tops else heights["female_header_mm"]
+            dz = sock_top + heights["male_header_base_mm"]
+            src = ("socket model" if tops else "socket_heights.yaml "
+                   "female_header_mm") + " + male_header_base_mm"
+        else:
+            if PLUG_IN.search(fp.fpid) and mine:
+                unstated.append(ref)
+            continue
+        exempt.update(frozenset((ref, r)) for r in under)
+        pos, angle, back, pads, parts = local.get(
+            ref, (fp.pos, fp.angle, fp.side == "back", [], []))
+        if parts:
+            t = np.concatenate([p for _, p in parts])
+            low = _underside(t)
+            lift = dz - low if low is not None and low < dz * DRAWN_LOW \
+                else 0.0
+            if lift > LIFT_MIN_MM:
+                parts = [(n, p.copy()) for n, p in parts]
+                for _, p in parts:
+                    p[..., 2] += lift
+            mod_facts[ref] = {"standoff_mm": round(dz, 2),
+                              "lift_mm": round(max(lift, 0.0), 2),
+                              "sockets": sorted(under), "from": src}
+        else:
+            cy = fp.courtyard_local
+            b = cy.bounds if cy is not None else fp.extents_local().bounds
+            parts = [("(module underside)", _box_tris(
+                b[0], b[1], dz, b[2], b[3], dz + MODULE_SLAB_MM))]
+            synthetic.add(ref)
+            mod_facts[ref] = {"standoff_mm": round(dz, 2), "lift_mm": 0.0,
+                              "sockets": sorted(under), "from": src,
+                              "drawn": "its courtyard, at the standoff "
+                              "(no model)"}
+        local[ref] = (pos, angle, back, pads, parts)
+        raised[ref] = f"stands {dz:.2f} mm up ({src})"
+    facts = {"raised_dips": dip_facts, "raised": mod_facts,
+             "standoff_unstated": sorted(unstated)}
+    return synthetic, raised, exempt, why_not, facts
 
 
 def holes(pcb: Path) -> list[tuple]:
@@ -501,9 +752,14 @@ def check(pcb: Path, constraints: dict | None = None, model_dirs=(),
     off_ok = allowed_off_board(constraints)
     values = _values(pcb)
     drawn = drawn_edges(pcb, parts_dir)
-    parts, facts = bodies(pcb, thickness, model_dirs)
-    viols: list[dict] = []
     place = placelib.PlaceModel(pcb)
+    local = _models_local(pcb, model_dirs)
+    synthetic, raised, exempt, why_not, raise_facts = raise_parts(
+        local[0], place, constraints, socket_heights())
+    parts, facts = bodies(pcb, thickness, model_dirs, local)
+    for b in parts:
+        b.synthetic = b.ref in synthetic
+    viols: list[dict] = []
 
     def tall(b: Body) -> bool:
         return b.height(thickness) >= TALL_MM
@@ -518,7 +774,8 @@ def check(pcb: Path, constraints: dict | None = None, model_dirs=(),
             if b.box[0] > a.box[3] + TIGHT_MM:
                 break
             if all(a.box[k] <= b.box[k + 3] + TIGHT_MM
-                   and b.box[k] <= a.box[k + 3] + TIGHT_MM for k in (1, 2)):
+                   and b.box[k] <= a.box[k + 3] + TIGHT_MM for k in (1, 2)) \
+                    and frozenset((a.ref, b.ref)) not in exempt:
                 pairs.append((a, b))
     for b in parts:
         rasterise(b)
@@ -527,16 +784,18 @@ def check(pcb: Path, constraints: dict | None = None, model_dirs=(),
             fine, coarse = (a, b) if a.vox < b.vox else (b, a)
             keep = (fine.cells, fine.org, fine.vox, fine.sealed)
             rasterise(fine, coarse.vox)
-            _pair(a, b, thickness, allow, used_allow, tall, viols)
+            _pair(a, b, thickness, allow, used_allow, tall, viols, raised)
             fine.cells, fine.org, fine.vox, fine.sealed = keep
         else:
-            _pair(a, b, thickness, allow, used_allow, tall, viols)
+            _pair(a, b, thickness, allow, used_allow, tall, viols, raised)
 
     # own courtyard, the outline, the holes
     import shapely
     outline = bg.outline
     screw = holes(pcb)
     for b in parts:
+        if b.synthetic:            # drawn from a height, not the part's shape
+            continue
         lo, hi = (b.box[2], -thickness - SEAT_MM) if b.back \
             else (SEAT_MM, b.box[5])
         pts = silhouette(b, lo, hi)
@@ -609,6 +868,7 @@ def check(pcb: Path, constraints: dict | None = None, model_dirs=(),
     no_model = [r for r, f in sorted(place.footprints.items())
                 if r not in judged and not SKIP_UNJUDGED.match(r)
                 and "board_only" not in f.attrs and f.pads]
+    no_model = sorted({*no_model, *why_not})
     connectors = [r for r in no_model if CONNECTOR_REFS.match(r)]
     if connectors:
         viols.append(checklib.violation(
@@ -625,12 +885,15 @@ def check(pcb: Path, constraints: dict | None = None, model_dirs=(),
         "tallest_mm": round(max((b.height(thickness) for b in parts),
                                 default=0.0), 2),
         "not_judged": no_model,
+        **({"not_judged_why": why_not} if why_not else {}),
+        **{k: v for k, v in raise_facts.items() if v},
         **({"drawn_edges": {r: d["overhang_mm"] for r, d in drawn.items()}}
            if parts_dir is not None else {}),
     }
 
 
-def _pair(a, b, thickness, allow, used_allow, tall, viols) -> None:
+def _pair(a, b, thickness, allow, used_allow, tall, viols,
+          raised=None) -> None:
     got = overlap(a, b)
     key = frozenset((a.ref, b.ref))
     layer = "B.Cu" if a.back and b.back else "F.Cu"
@@ -657,6 +920,21 @@ def _pair(a, b, thickness, allow, used_allow, tall, viols) -> None:
                 if key in allow and (allow[key][1] is None
                                      or depth <= allow[key][1] + vox):
                     used_allow[f"{a.ref}+{b.ref}"] = allow[key][0]
+                    return
+                up = [r for r in (a.ref, b.ref) if r in (raised or {})]
+                if up:
+                    m, other = up[0], b.ref if up[0] == a.ref else a.ref
+                    viols.append(checklib.violation(
+                        SCRIPT, "error", pos, layer, None, [a.ref, b.ref],
+                        f"{m} {raised[m]}, and {other} reaches into it: they "
+                        f"share material {depth:.2f} mm thick at x "
+                        f"{where['x']}, y {where['y']}, z {where['z']} above "
+                        "the board. KiCad draws a plugged-in module at the "
+                        "board, so its courtyard can't show this. Fix: move "
+                        f"{other} out from under {m}, use a lower part, or "
+                        "taller sockets",
+                        SCRIPT, kind="body_under_module", depth_mm=depth,
+                        overlap=where))
                     return
                 viols.append(checklib.violation(
                     SCRIPT, "error", pos, layer, None, [a.ref, b.ref],

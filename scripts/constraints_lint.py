@@ -665,6 +665,22 @@ class _FileLint:
                     self.add("error", "bad_type",
                              f"{path}: mechanical.allow_off_board must be a "
                              "list of {refs: [A, ...], why: text}", path)
+                so = val.get("module_standoff", []) \
+                    if isinstance(val, dict) else None
+                if not isinstance(so, list) or not all(
+                        isinstance(e, dict) and isinstance(e.get("why"), str)
+                        and e["why"].strip()
+                        and isinstance(e.get("refs"), list) and e["refs"]
+                        and isinstance(e.get("height_mm"), (int, float))
+                        and not isinstance(e["height_mm"], bool)
+                        and e["height_mm"] >= 0
+                        for e in so):
+                    # check_body_clash (#1187): how high a plug-in module
+                    # stands off the board
+                    self.add("error", "bad_type",
+                             f"{path}: mechanical.module_standoff must be a "
+                             "list of {refs: [A, ...], height_mm: number >= 0,"
+                             " why: text}", path)
                 mnt = val.get("mounting") if isinstance(val, dict) else None
                 if mnt is not None and not (
                         isinstance(mnt, dict)

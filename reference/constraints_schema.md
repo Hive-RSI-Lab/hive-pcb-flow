@@ -259,7 +259,15 @@ Consumers per key (script -> phase):
     // part's models (default the first shown). Off by more than tol_mm:
     // model_mount_height, error. Unlisted parts are not judged.
     "mount_heights": {"U1": {"height_mm": 16.0, "datum": "body_underside",
-                             "tol_mm": 0.3, "source": "README: 16 mm printed standoff"}}},
+                             "tol_mm": 0.3, "source": "README: 16 mm printed standoff"}},
+    // check_body_clash (#1187): how high a plug-in module or daughterboard
+    // stands, its underside above the board, in mm. Modules found on
+    // PinSocket_*_P2.54mm_Vertical strips are lifted without this (socket
+    // height + its own pin header's base, reference/socket_heights.yaml).
+    // A Module:/dev-board footprint on no socket and no entry here is listed
+    // in standoff_unstated and judged as drawn. height_mm 0: soldered flat.
+    "module_standoff": [{"refs": ["U1"], "height_mm": 11.0,
+                         "why": "Pico on 8.5 mm female headers"}]},
 
   // netlist_audit rules 34-35 (#1137): design intent no design file holds.
   // modules: a part drawn with another part's symbol, by what it really is
