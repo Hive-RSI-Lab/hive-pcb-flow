@@ -930,6 +930,10 @@ def check_holes(fab, rules, vios: list, cast=(), bg=None,
                           cast_abs if cast_abs is not None else cast_hh, cast_hh)
 
     check_hole_to_inner(fab, rules, vios)
+    # a board with no vias: every plated hole is a pad hole
+    check_hole_to_track(fab, rules, vios, is_via or (
+        (lambda h: False) if bg is not None else None), cast,
+        _npth_matcher(bg))
 
     lo_he = rules.get("min_hole_to_edge_mm")
     outline = fab.outline
@@ -986,6 +990,127 @@ def check_hole_to_inner(fab, rules, vios: list) -> None:
                 distance_mm=checklib.rnd(d), min_mm=lo))
 
 
+def check_hole_to_track(fab, rules, vios: list, is_via=None,
+                        cast=(), is_npth=None) -> None:
+    """A drill or routed slot to outer copper it isn't joined to (#454),
+    from JLC's capabilities page (read 2026-11-15): 'Via hole to Track
+    0.2mm', 'PTH to Track 0.28mm 0.35mm is recommended', 'NPTH to Track
+    0.2mm', 'Copper clearance from routed slots: >=0.2 mm'. The wall is the
+    edge a fab measures to, so a track can be clear of a pad and still too
+    near its drill. Copper the hole lands in (its pad, a plane tied to it)
+    is its own conductor and not measured; castellated holes are the
+    castellation family's. is_via: _via_matcher(bg); with no board every
+    plated hole gets the via figure, the lowest, so nothing is called a pad
+    hole that may be a via. is_npth: _npth_matcher(bg). KiCad's drill file
+    is merged, and a non-plated hole the same size as a plated one shares
+    its diameter, so the file alone reads it as plated (a USB-C peg at 0.65
+    mm beside 0.65 mm pad holes); the board's np_thru_hole pads settle it."""
+    hard_p, lo_p = _floors(rules, "min_pth_to_track_mm")
+    lo_v = rules.get("min_via_to_track_mm")
+    lo_n = rules.get("min_npth_to_track_mm")
+    if lo_p is None and lo_v is None and lo_n is None:
+        return
+    lo_v = lo_v if lo_v is not None else lo_p
+    drilled = []   # (shape, pos, what, hard, lo)
+    for h in fab.holes:
+        if _castellated_at(cast, h.x, h.y):
+            continue
+        if not h.plated or (is_npth is not None and is_npth(h)):
+            what, hard, lo = "non-plated hole", lo_n, lo_n
+        elif is_via is None or is_via(h):
+            what, hard, lo = "via hole", lo_v, lo_v
+        else:
+            what, hard, lo = "plated hole", hard_p, lo_p
+        if lo is not None:
+            drilled.append((Point(h.x, h.y).buffer(h.diameter / 2.0, quad_segs=16),
+                            (h.x, h.y), what, hard, lo))
+    for sl in getattr(fab, "slots", None) or []:
+        c = sl.line.centroid
+        if _castellated_at(cast, c.x, c.y, sl.line.length / 2.0):
+            continue
+        what, hard, lo = (("plated slot", hard_p, lo_p) if sl.plated
+                          else ("non-plated slot", lo_n, lo_n))
+        if lo is not None:
+            drilled.append((sl.poly, (c.x, c.y), what, hard, lo))
+    names = getattr(fab, "copper_layer_names", None)
+    if not drilled or names is None:   # a drill-only fab: no copper to measure
+        return
+    reach = max(d[4] for d in drilled)
+    band: list = []
+    for name in names():
+        if name not in ("F.Cu", "B.Cu"):
+            continue
+        lg = fab.copper(name)
+        if lg is None:
+            continue
+        comps = lg.components()
+        if not comps:
+            continue
+        tree = STRtree(comps)
+        for shape, pos, what, hard, lo in drilled:
+            near = [comps[int(i)] for i in tree.query(shape.buffer(reach))]
+            gaps = [c.distance(shape) for c in near if not c.intersects(shape)]
+            if not gaps:
+                continue
+            d = min(gaps)
+            if _below(d, hard):
+                vios.append(checklib.violation(
+                    CHECK, "error", pos, name, None, [],
+                    f"{what} {d:.4f} mm from copper on {name}, JLC minimum "
+                    f"{hard} mm", SOURCE, kind="dfm_hole_to_track",
+                    distance_mm=checklib.rnd(d), min_mm=hard, hole=what))
+            elif _below(d, lo):
+                band.append((d, pos, name))
+    if lo_p is not None and hard_p is not None:
+        _band_warning(vios, band, "dfm_hole_to_track",
+                      "plated holes near copper", hard_p, lo_p)
+
+
+def check_slots(fab, rules, vios: list) -> None:
+    """Routed slot sizes (#454), JLC's capabilities page (read 2026-11-15):
+    'Min. Plated Slots Width 2-layer: 0.5mm Multi-layer: 0.35mm', 'Min.
+    Non-Plated Slots 1.0mm' (errors) and 'The length of the slot should be
+    at least 2 times of the width' (a warning: 'should'). A slot of no
+    length is a round hole KiCad wrote as a route (gerblib.Slot), so it has
+    no slot to judge."""
+    lo_p = rules.get("min_plated_slot_width_mm")
+    lo_n = rules.get("min_npth_slot_width_mm")
+    ratio = rules.get("min_plated_slot_length_ratio")
+    if lo_p is None and lo_n is None and ratio is None:
+        return
+    short = []
+    for sl in getattr(fab, "slots", None) or []:
+        run_mm = sl.line.length
+        if run_mm < 0.01:
+            continue
+        c = sl.line.centroid
+        w, length = sl.diameter, run_mm + sl.diameter
+        lo = lo_p if sl.plated else lo_n
+        what = "plated" if sl.plated else "non-plated"
+        if lo is not None and _below(w, lo):
+            vios.append(checklib.violation(
+                CHECK, "error", (c.x, c.y), None, None, [],
+                f"{what} slot {w:.4f} mm wide, JLC minimum {lo} mm",
+                SOURCE, kind="dfm_slot_size", width_mm=checklib.rnd(w),
+                length_mm=checklib.rnd(length), min_mm=lo,
+                plated=sl.plated))
+        elif sl.plated and ratio is not None and _below(length, ratio * w):
+            short.append((length, w, c))
+    if short:
+        length, w, c = min(short, key=lambda t: t[0] / t[1])
+        v = checklib.violation(
+            CHECK, "warning", (c.x, c.y), None, None, [],
+            f"{len(short)} plated slots shorter than {ratio:g}x their width "
+            f"(shortest {length:.4f} x {w:.4f} mm): JLC asks for at least "
+            f"{ratio:g}x", SOURCE, kind="dfm_slot_size_preferred",
+            count=len(short), length_mm=checklib.rnd(length),
+            width_mm=checklib.rnd(w), ratio=ratio)
+        v["items"] = [{"msg": f"slot {t[0]:.4f} x {t[1]:.4f} mm",
+                       "pos": [checklib.rnd(t[2].x), checklib.rnd(t[2].y)]}
+                      for t in short]
+        vios.append(v)
+
+
 def _via_holes(bg) -> list[tuple[float, float, float]]:
     """(x, y, drill) of every via on the board: the drill file has no
     via/component split gerbonara reads, the board does."""
@@ -1009,6 +1134,29 @@ def _via_matcher(bg):
                 return True
         return False
     return is_via
+
+
+def _npth_matcher(bg):
+    """-> is_npth(hole): a drill hit on a board np_thru_hole pad's hole,
+    same centre and size (None with no board or no such pad)."""
+    pads_of = getattr(bg, "pads_of", None)
+    if pads_of is None:
+        return None
+    pads = [(p.center[0], p.center[1], p.drill[0]) for p in pads_of()
+            if p.kind == "np_thru_hole" and p.drill
+            and abs(p.drill[0] - p.drill[1]) < 1e-3]
+    if not pads:
+        return None
+    tree = STRtree([Point(x, y) for x, y, _ in pads])
+
+    def is_npth(h) -> bool:
+        for idx in tree.query(Point(h.x, h.y).buffer(0.01)):
+            x, y, d = pads[int(idx)]
+            if abs(x - h.x) < 0.01 and abs(y - h.y) < 0.01 \
+                    and abs(d - h.diameter) < 0.02:
+                return True
+        return False
+    return is_npth
 
 
 # A breakaway tab's row of holes, as JLC asks for it: 0.5-0.8 mm, 0.2-0.3 mm
@@ -1373,10 +1521,28 @@ def _pad_at(bg, x: float, y: float, side: str):
     return best[1] if best else None
 
 
-def check_mask_dam(fab, rules, vios: list) -> None:
+def mask_dam_floor(rules, by_color: dict | None,
+                   color: str | None) -> float | None:
+    """The mask dam floor for a mask colour (#454): the row's figure, or
+    the colour's if higher. JLC's capabilities page (read 2026-11-15):
+    'Min. pad spacing: 0.10 mm (green, red, yellow, blue, purple) ... 0.13
+    mm (black, white) 2oz: ... 0.20 mm (any color)'; the 2 oz figure is the
+    2 oz rows' own. No colour or one the table doesn't name: green's."""
     lo = rules.get("min_solder_mask_dam_mm")
     if lo is None:
+        return None
+    by = {str(k).strip().lower(): float(v) for k, v in (by_color or {}).items()}
+    return max(lo, by.get(str(color or "").strip().lower(), lo))
+
+
+def check_mask_dam(fab, rules, vios: list, by_color: dict | None = None,
+                   color: str | None = None) -> None:
+    """by_color: the board section's solder_mask_dam_by_color_mm; color: the
+    board's F.Mask colour (fabmaterial.board_stackup_facts)."""
+    lo = mask_dam_floor(rules, by_color, color)
+    if lo is None:
         return
+    shade = {"mask_color": str(color).lower()} if color else {}
     for side in ("F", "B"):
         mask = fab.mask(side)
         if mask is None:
@@ -1394,7 +1560,7 @@ def check_mask_dam(fab, rules, vios: list) -> None:
                 f"{len(thin)} solder-mask dams below {lo} mm "
                 f"(narrowest {d:.4f} mm) on {side}.Mask", SOURCE,
                 kind="dfm_mask_dam", dam_mm=checklib.rnd(d), min_mm=lo,
-                count=len(thin)))
+                count=len(thin), **shade))
 
 
 def check_pad_tented(fab, vios: list) -> None:
@@ -2012,7 +2178,8 @@ DFM_FAMILIES = {
     "copper_to_edge": ("dfm_copper_to_edge",),
     "zone_fill": ("dfm_stale_zone_fill",),
     "drill": ("dfm_hole_size", "dfm_hole_to_hole", "dfm_annular_ring",
-              "dfm_hole_to_inner_copper"),
+              "dfm_hole_to_inner_copper", "dfm_hole_to_track",
+              "dfm_slot_size"),
     "hole_to_edge": ("dfm_hole_to_edge",),
     "silk": ("dfm_silk_width", "dfm_silk_over_pad", "dfm_mask_dam",
              "dfm_pad_tented"),
@@ -2169,6 +2336,7 @@ def run(pcb: Path, fab_dir: Path | None = None, copper_oz: float | None = None,
                             "abs_min_hole_to_hole_mm"))
             check_annular_ring(fab, rules, vios, cast, bg=bg, spans=hdi_stack)
             check_via_sizes(rules, vios, bg)
+            check_slots(fab, rules, vios)
         if "teardrop" not in skip:
             facts["teardrop"] = check_teardrops(pcb, caps, vios)
         if "castellation" not in skip and "castellated" not in caps:
@@ -2190,7 +2358,11 @@ def run(pcb: Path, fab_dir: Path | None = None, copper_oz: float | None = None,
             facts.update(cfacts)
         if "silk" not in skip:
             check_silk(fab, rules, vios, bg=bg)
-            check_mask_dam(fab, rules, vios)
+            mask_color = fabmaterial.board_stackup_facts(pcb)["mask_color"]
+            facts["mask_color"] = mask_color
+            check_mask_dam(fab, rules, vios,
+                           (caps.get("board") or {}).get(
+                               "solder_mask_dam_by_color_mm"), mask_color)
             check_pad_tented(fab, vios)
 
         netlist_skipped = None
