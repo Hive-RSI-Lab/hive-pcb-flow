@@ -568,6 +568,20 @@ def test_sweep_lists_coverage_notes_apart(tmp_path, monkeypatch):
     assert "coverage_gone_on_rev_b" not in r["check_silk"]
 
 
+def test_ratings_not_judged_kinds_are_coverage(tmp_path, monkeypatch):
+    """Every ratings kind that only says a limit wasn't judged is coverage,
+    whatever its severity; a finding of a limit broken stays in triage."""
+    notes = [{"kind": k, "net": None, "refs": ["U1"]} for k in (
+        "rating_datasheet_unassessed", "rating_regulator_output_unjudged",
+        "rating_no_attributes")]
+    fault = {"kind": "rating_regulator_output", "net": "/3V3", "refs": ["U1"]}
+    found = {"rev_a": notes + [fault], "rev_b": []}
+    monkeypatch.setattr(ec, "audit", lambda c, b, rev, s: found[rev])
+    r = ec.sweep(tmp_path, {"id": "h", "rev_a": {}, "rev_b": {}})["check_ratings"]
+    assert r["gone_on_rev_b"] == [fault]
+    assert r["coverage_gone_on_rev_b"] == notes
+
+
 def test_sweep_output_labels_the_crash(tmp_path, monkeypatch, capsys):
     cache = _planted(tmp_path, monkeypatch, CRASH)
     monkeypatch.setattr(ec, "fetch", lambda c, b: None)
