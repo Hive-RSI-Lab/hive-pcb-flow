@@ -1,6 +1,7 @@
 """The real-errata corpus: its manifest, its matcher, and the three
 netlist_audit rules its rev-A boards needed (ground_island, pin_net_swap,
 sot23_pinout), each on a netlist shaped like the board it came from."""
+import json
 import re
 import sys
 from pathlib import Path
@@ -455,6 +456,74 @@ def test_a_pre_kicad6_board_is_upgraded_once_into_the_run_dir(tmp_path, monkeypa
     assert len(calls) == 3
 
 
+def _pins_repo(tmp_path, monkeypatch, renet=None):
+    """blinky2 (no pin names on its pads) as a checkout, with a schematic
+    whose netlist names U2's pins; `renet` moves pads to other nets, as a
+    schematic that is not this board's would."""
+    import shutil
+    from test_pin_backfill import AMS1117, BLINKY2, _netlist
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shutil.copyfile(BLINKY2, repo / "b.kicad_pcb")
+    (repo / "b.kicad_sch").write_text("(kicad_sch)")
+    net = tmp_path / "b.net"
+    net.write_text(_netlist(BLINKY2, {"U2": AMS1117}, renet=renet))
+    calls = []
+    monkeypatch.setattr(ec, "_netlist", lambda *a: calls.append(a) or net)
+    b = {"id": "x", "rev_a": {"pcb": "b.kicad_pcb", "sch": "b.kicad_sch"}}
+    empty = tmp_path / "run" / "constraints.json"
+    empty.parent.mkdir()
+    return repo, b, empty, calls
+
+
+def test_the_sweep_reads_a_board_with_its_schematics_pin_names(tmp_path,
+                                                               monkeypatch):
+    # hwde-holdout-3: 11 of 25 blind boards carry no pin names, so every
+    # check that finds a pin by name judged them from constraints alone
+    import pin_backfill as pb
+    repo, b, empty, calls = _pins_repo(tmp_path, monkeypatch)
+    before = (repo / "b.kicad_pcb").read_bytes()
+    got = ec._pcb(b, "rev_a", repo, empty)
+    assert got == empty.parent / "rev_a-pins.kicad_pcb"
+    u2 = {p["num"]: p["fn"] for fp in pb.footprints(got.read_text("utf-8"))
+          if fp["ref"] == "U2" for p in fp["pads"]}
+    assert u2["2"] == "VOUT" and u2["3"] == "VIN"
+    assert (repo / "b.kicad_pcb").read_bytes() == before   # checkout untouched
+    rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
+    assert rep["status"] == "written"
+    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 1
+    (repo / "b.kicad_sch").write_text("(kicad_sch (changed))")
+    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 2
+
+
+def test_a_schematic_that_is_not_the_boards_names_nothing(tmp_path,
+                                                          monkeypatch):
+    import pin_backfill as pb
+    from test_pin_backfill import BLINKY2
+    fps = pb.footprints(BLINKY2.read_text("utf-8"))
+    renet = {f'{fp["ref"]}.{p["num"]}': "OTHER" for fp in fps
+             for p in fp["pads"]}
+    repo, b, empty, calls = _pins_repo(tmp_path, monkeypatch, renet)
+    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    assert not (empty.parent / "rev_a-pins.kicad_pcb").exists()
+    rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
+    assert rep["status"] == "mismatch"
+    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    assert len(calls) == 1                       # the verdict is kept too
+
+
+def test_a_board_whose_netlist_will_not_export_is_read_as_it_is(tmp_path,
+                                                                monkeypatch):
+    repo, b, empty, _ = _pins_repo(tmp_path, monkeypatch)
+
+    def fail(*a):
+        raise SystemExit("export failed")
+    monkeypatch.setattr(ec, "_netlist", fail)
+    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
+    assert rep["status"] == "no_netlist"
+
+
 def test_a_check_that_writes_no_report_keeps_its_stderr(tmp_path, monkeypatch):
     # #1189: the sweep scored a crashed check as "no finding"
     def crash(c, b, rev, s):
@@ -597,3 +666,103 @@ def test_run_cli_counts_a_crash_as_bad(tmp_path, monkeypatch):
     monkeypatch.setattr(ec, "load_all", lambda m: [{"id": "p", "rev_a": {}, "rev_b": {},
                                                     "defects": [d]}])
     assert ec.main(["run", "p", "--cache", str(cache)]) == 1
+
+
+def test_check_current_reads_a_shipped_constraints_json(tmp_path):
+    """check_current takes the board's own constraints.json where the project
+    ships one, the same lookup on every board; with none, the empty file."""
+    repo = tmp_path / "repo"
+    (repo / "hw").mkdir(parents=True)
+    pcb = repo / "hw" / "b.kicad_pcb"
+    pcb.write_text("(kicad_pcb (version 20240108))")
+    b = {"id": "x", "rev_a": {"pcb": "hw/b.kicad_pcb"}}
+    empty = tmp_path / "constraints.json"
+    empty.write_text("{}")
+    args = ec._check_current(b, "rev_a", repo, empty)
+    assert args[args.index("--constraints") + 1] == str(empty)
+    (repo / "constraints.json").write_text('{"power": []}')
+    args = ec._check_current(b, "rev_a", repo, empty)
+    assert args[args.index("--constraints") + 1] == str(repo / "constraints.json")
+    (repo / "hw" / "constraints.json").write_text('{"power": []}')
+    args = ec._check_current(b, "rev_a", repo, empty)
+    assert args[args.index("--constraints") + 1] == str(repo / "hw" / "constraints.json")
+    # a catch's own constraints win over the board's
+    stated = tmp_path / "constraints-c1.json"
+    stated.write_text('{"power": [{"net": "/5V"}]}')
+    args = ec._check_current(b, "rev_a", repo, stated)
+    assert args[args.index("--constraints") + 1] == str(stated)
+
+
+def test_coverage_reads_judged_nothing_and_not_judged():
+    assert ec.coverage({"status": "pass", "nothing_to_judge": "no MCU"}) == {
+        "status": "nothing_to_judge", "reason": "no MCU", "not_judged": 0}
+    assert ec.coverage({"status": "pass", "not_judged": ["a", "b"]}) == {
+        "status": "judged", "not_judged": 2}
+    assert ec.coverage({"not_judged": {"r1": ["C1", "C2"], "r2": 3}}) == {
+        "status": "judged", "not_judged": 5}
+    assert ec.coverage({"status": "pass"}) == {"status": "judged", "not_judged": 0}
+
+
+NOTHING = ("import json, sys\n"
+           "out = sys.argv[sys.argv.index('--out') + 1]\n"
+           "json.dump({'status': 'pass', 'violations': [],"
+           " 'nothing_to_judge': 'no part of its kind'}, open(out, 'w'))\n")
+
+
+def test_sweep_prints_a_coverage_line_per_check(tmp_path, monkeypatch, capsys):
+    cache = _planted(tmp_path, monkeypatch, NOTHING)
+    monkeypatch.setattr(ec, "fetch", lambda c, b: None)
+    monkeypatch.setattr(ec, "_raw", lambda m, w: [
+        {"id": "p", "rev_a": {}, "rev_b": {}}, {"id": "q", "rev_a": {}, "rev_b": {}}])
+    ec.main(["sweep", "p", "q", "--cache", str(cache)])
+    out = capsys.readouterr().out
+    assert ("coverage planted: judged 0, nothing_to_judge 2, judged nothing "
+            "(unsaid) 0, with not_judged items 0, crashed 0") in out
+    r = ec.sweep(cache, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
+    assert r["coverage"]["status"] == "nothing_to_judge"
+
+
+def test_coverage_line_counts_a_crash():
+    rows = [("a", "c", {"error": "boom"}),
+            ("b", "c", {"coverage": {"status": "judged", "not_judged": 1}})]
+    assert ec.coverage_line(rows) == [
+        "coverage c: judged 1, nothing_to_judge 0, judged nothing (unsaid) 0, "
+        "with not_judged items 1, crashed 1"]
+
+
+def test_coverage_counts_judged_only_on_evidence():
+    """A check that says nothing_to_judge only when it finds no part of its
+    kind is judged only when its report shows it judged something."""
+    assert ec.coverage({"checked": []}, "check_current")["status"] == "judged_nothing"
+    assert ec.coverage({"checked": [{"net": "/5V"}]}, "check_current")["status"] == "judged"
+    # a finding is a judgement; a can't-judge note is not
+    assert ec.coverage({"violations": [{"kind": "rating_unrated"}],
+                        "pins_checked": 0}, "check_ratings")["status"] == "judged_nothing"
+    assert ec.coverage({"violations": [{"kind": "rating_over"}],
+                        "pins_checked": 0}, "check_ratings")["status"] == "judged"
+    assert ec.coverage({"violations": [{"kind": "mcu_unknown"}],
+                        "checked": [{"mcus": []}]}, "check_straps")["status"] == "judged_nothing"
+    assert ec.coverage({"checked": [{"mcus": ["U1"]}]}, "check_straps")["status"] == "judged"
+    assert ec.coverage({"coverage": {"ran": []}}, "dfm")["status"] == "judged_nothing"
+    assert ec.coverage({"pins_connected": 0, "i2c_buses_checked": 1},
+                       "netlist_audit")["status"] == "judged"
+    # nothing_to_judge still wins, and a check with no evidence rule keeps the default
+    assert ec.coverage({"nothing_to_judge": "x", "checked": []},
+                       "check_current")["status"] == "nothing_to_judge"
+    assert ec.coverage({}, "planted")["status"] == "judged"
+
+
+def test_coverage_counts_footprint_parts():
+    geo = ec.coverage({"judged": {"stock": 5, "model": 2},
+                       "not_judged": {"why": ["R1", "R2"]}}, "check_fp_geometry")
+    assert (geo["status"], geo["parts_judged"], geo["parts_not_judged"]) == ("judged", 7, 2)
+    pkg = ec.coverage({"judged": 0, "not_judged": {"a": 3, "b": 1}}, "check_fp_package")
+    assert (pkg["status"], pkg["parts_judged"], pkg["parts_not_judged"]) == (
+        "judged_nothing", 0, 4)
+    rows = [("a", "check_fp_package", {"coverage": pkg}),
+            ("b", "check_fp_package", {"coverage": {**pkg, "status": "judged",
+                                                    "parts_judged": 6}})]
+    assert ec.coverage_line(rows) == [
+        "coverage check_fp_package: judged 1, nothing_to_judge 0, judged nothing "
+        "(unsaid) 1, with not_judged items 2, crashed 0; parts judged 6, "
+        "parts not_judged 8"]

@@ -2,7 +2,8 @@
 mask dam by solder-mask colour, from JLC's capabilities page read
 2026-11-15 (https://jlcpcb.com/capabilities/pcb-capabilities):
 
-- 'Via hole to Track 0.2mm', 'PTH to Track 0.28mm 0.35mm is recommended,
+- 'Via hole to Track 0.2mm' (a warning: JLC's own smallest via at its
+  minimum spacing reads under it), 'PTH to Track 0.28mm 0.35mm is recommended,
   minimum 0.28mm', 'NPTH to Track 0.2mm', 'Copper clearance from routed
   slots: >=0.2 mm';
 - 'Min. Plated Slots Width 2-layer: 0.5mm Multi-layer: 0.35mm', 'The length
@@ -191,6 +192,65 @@ def test_a_row_without_the_keys_is_silent():
     assert _track_vios(_fab([_pad(h), _track(h, 0.05)], [h]), rules=hf) == []
 
 
+def test_a_via_under_the_via_figure_only_warns_once_for_the_board():
+    """glasgow: 0.3/0.2 vias at 0.11 mm copper spacing read 0.16 mm from the
+    drill. JLC's own smallest via (0.15/0.25) at its 0.10 mm spacing reads
+    0.15 mm, so 'Via hole to Track 0.2mm' is advice, not a floor."""
+    a, b = _hole(), _hole(x=20.0)
+    copper = [_pad(a, 0.05), _track(a, 0.16), _pad(b, 0.05), _track(b, 0.17)]
+    vios = _track_vios(_fab(copper, [a, b]), is_via=lambda h: True)
+    assert [(v["kind"], v["severity"], v["count"]) for v in vios] == [
+        ("dfm_via_hole_to_track", "warning", 2)]
+    assert vios[0]["distance_mm"] == pytest.approx(0.16, abs=1e-3)
+
+
+def test_the_same_track_by_a_pad_hole_still_fails():
+    h = _hole()
+    vios = _track_vios(_fab([_pad(h, 0.05), _track(h, 0.16)], [h]))
+    assert [(v["kind"], v["severity"]) for v in vios] == [
+        ("dfm_hole_to_track", "error")]
+
+
+def _hole_vios(copper, holes, same_net):
+    vios: list = []
+    dfm_check.check_hole_to_track(_fab(copper, holes), R2, vios,
+                                  lambda h: False, (), None, same_net)
+    return vios
+
+
+def test_copper_of_the_holes_own_net_apart_from_its_pad_is_not_measured():
+    """glasgow's GND via with its F.Cu pad bare beside the GND pour: the
+    gerber shows two pieces, the board says one net."""
+    h = _hole()
+    copper = [_pad(h), _track(h, 0.1)]
+    assert _hole_vios(copper, [h], lambda pos, comp, layer: True) == []
+    assert [v["kind"] for v in _hole_vios(
+        copper, [h], lambda pos, comp, layer: False)] == ["dfm_hole_to_track"]
+
+
+def _net_board(vias=(), pads=(), tracks=(), zones=()):
+    on = lambda xs, layer: [x for x in xs if layer is None or x.layer == layer]
+    return SimpleNamespace(
+        vias_of=lambda net=None, layer=None: list(vias),
+        pads_of=lambda net=None, layer=None, ref=None: list(pads),
+        tracks_of=lambda net=None, layer=None: on(tracks, layer),
+        zones_of=lambda net=None, layer=None: list(zones))
+
+
+def test_the_same_net_matcher_reads_nets_from_the_board():
+    via = SimpleNamespace(at=(10.0, 10.0), net="GND", drill=0.2,
+                          poly=Point(10, 10).buffer(0.15))
+    gnd = SimpleNamespace(net="GND", layer="F.Cu",
+                          poly=box(10.3, 0, 10.5, 20))
+    sig = SimpleNamespace(net="SIG", layer="F.Cu",
+                          poly=box(9.0, 0, 9.7, 20))
+    same = dfm_check._same_net_matcher(_net_board([via], tracks=[gnd, sig]))
+    assert same((10.0, 10.0), box(10.3, 0, 10.5, 20), "F.Cu")
+    assert not same((10.0, 10.0), box(9.0, 0, 9.7, 20), "F.Cu")
+    assert not same((30.0, 10.0), box(10.3, 0, 10.5, 20), "F.Cu")
+    assert dfm_check._same_net_matcher(None) is None
+
+
 # ------------------------------------------------------------------ slots
 
 def _slot(w, run, plated=True):
@@ -308,3 +368,55 @@ def test_a_mask_only_non_plated_pad_on_a_parsed_board_gets_npth_figure(tmp_path)
     is_npth = dfm_check._npth_matcher(bg)
     assert is_npth(SimpleNamespace(x=10.0, y=10.0, diameter=HOLE_D))
     assert not is_npth(SimpleNamespace(x=12.0, y=10.0, diameter=HOLE_D))
+
+
+# ------------------------------------------- non-plated hole to a pour
+def _npth_vios(copper, pour_at):
+    h = _hole(plated=False)
+    vios: list = []
+    dfm_check.check_hole_to_track(_fab(copper(h), [h]), R2, vios,
+                                  lambda h: False, (), None, None, pour_at)
+    return vios
+
+
+def test_a_pour_near_a_non_plated_hole_only_warns_pour_pullback():
+    """bedlift's J9 pegs: a GND pour 0.15 mm from a bare 1.02 mm hole, on a
+    board JLC built."""
+    vios = _npth_vios(lambda h: [_track(h, 0.15)], lambda pt, layer: True)
+    assert [(v["kind"], v["severity"], v.get("reason"), v["count"])
+            for v in vios] == [("dfm_hole_to_track", "warning",
+                                "pour_pullback", 1)]
+    assert vios[0]["distance_mm"] == pytest.approx(0.15, abs=2e-3)
+
+
+def test_a_track_near_a_non_plated_hole_still_fails_beside_a_pour():
+    """The pour at 0.12 on the left is advice; the track at 0.16 on the
+    right is an error, and the error gives the track's distance."""
+    def copper(h):
+        x1 = h.x - h.diameter / 2 - 0.12
+        return [box(x1 - 1, 0, x1, 20), _track(h, 0.16)]
+    vios = _npth_vios(copper, lambda pt, layer: pt.x < 10.0)
+    assert [(v["kind"], v["severity"], v.get("reason")) for v in vios] == [
+        ("dfm_hole_to_track", "error", None)]
+    assert vios[0]["distance_mm"] == pytest.approx(0.16, abs=2e-3)
+
+
+def test_a_pour_by_a_plated_hole_is_not_excused():
+    h = _hole()
+    vios: list = []
+    dfm_check.check_hole_to_track(_fab([_pad(h, 0.05), _track(h, 0.16)], [h]),
+                                  R2, vios, lambda h: False, (), None, None,
+                                  lambda pt, layer: True)
+    assert [(v["kind"], v["severity"]) for v in vios] == [
+        ("dfm_hole_to_track", "error")]
+
+
+def test_the_pour_matcher_reads_fills_and_drawn_copper_from_the_board():
+    track = SimpleNamespace(net="SIG", layer="F.Cu", poly=box(5, 0, 5.2, 20))
+    zone = SimpleNamespace(net="GND", filled=True,
+                           fill_on=lambda layer: box(0, 0, 4, 20))
+    pour_at = dfm_check._pour_matcher(_net_board(tracks=[track], zones=[zone]))
+    assert pour_at(Point(4, 10), "F.Cu")
+    assert not pour_at(Point(5, 10), "F.Cu")
+    assert not pour_at(Point(9, 10), "F.Cu")
+    assert dfm_check._pour_matcher(None) is None

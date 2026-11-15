@@ -84,9 +84,13 @@ currents, FB-set voltages with their tolerance spread, RC corners, EN
 delays, crystal loads. `known_unknowns` lists what the tool could not
 decide (parts it did not model, a regulator Vref it does not know or has
 not verified, a MOSFET with no Vgs rating, assumed I2C bus capacitance) -
-the review takes those to a datasheet. This is a screen with ideal ICs, not
-a sign-off: digital pin drive, regulator dynamics and switching are not in
-it (docs/playbook.md "Sim legs").
+the review takes those to a datasheet. An engine failure (ngspice errors,
+times out, or leaves no vectors) is no crash: the passes that need no
+operating point still run, and `not_judged` says what was left out; a
+board with nothing to simulate says so in `nothing_to_judge`. A crystal
+with a 0 F load cap gets no load figure and a `not_judged` line. This is a
+screen with ideal ICs, not a sign-off: digital pin drive, regulator
+dynamics and switching are not in it (docs/playbook.md "Sim legs").
 
 Rail ranges: a constraints.json `voltages` entry may carry `min` (volts),
 the lowest the rail runs at - a USB-PD VBUS at its lowest allowed
@@ -199,9 +203,11 @@ def norm_fn(fn: str, pin: str) -> list[str]:
 
 
 def load_board(net_path: Path) -> dict:
-    parsed = simlib.parse_netlist(net_path)
+    parsed = simlib.parse_netlist(net_path, fields=True)
     comps = {r: {"ref": r, "value": c.get("value") or "",
-                 "footprint": c.get("footprint") or "", "pins": {}}
+                 "footprint": c.get("footprint") or "", "pins": {},
+                 "mpn": next((c["fields"][k] for k in check_ratings.MPN_PROPS
+                              if (c.get("fields") or {}).get(k)), "")}
              for r, c in parsed["components"].items()}
     for net, nodes in parsed["nets"].items():
         if net.startswith("unconnected-"):
@@ -220,12 +226,23 @@ def load_board(net_path: Path) -> dict:
                                             for p in c["pins"].values()})}
 
 
-def load_parts(parts_dir: Path | None) -> dict[str, dict]:
-    """parts.json rows by refdes, attributes flattened to {name: value}."""
+def _mpn_key(mpn: str) -> str:
+    return re.sub(r"[\s\-_/.]", "", mpn or "").upper()
+
+
+def load_parts(parts_dir: Path | None, board: dict | None = None,
+               unmatched: list | None = None) -> dict[str, dict]:
+    """parts.json rows by refdes, attributes flattened to {name: value}.
+    A row with no `refdes` falls back to its `mpn`: given the board, every
+    comp whose netlist MPN field is the same part (case, spaces, dashes,
+    slashes and dots aside) gets the row, unless a refdes row already names that comp
+    (#1260). Such a row that matches no comp goes on `unmatched` as
+    {mpn, why}."""
     out: dict[str, dict] = {}
     pj = parts_dir / "parts.json" if parts_dir else None
     if not pj or not pj.is_file():
         return out
+    by_mpn: list[tuple[str, dict]] = []
     for p in checklib.load_json(pj, "parts.json").get("parts") or []:
         attrs = {a.get("name", ""): str(a.get("value", ""))
                  for a in p.get("attributes") or []}
@@ -233,6 +250,21 @@ def load_parts(parts_dir: Path | None) -> dict[str, dict]:
                p.get("description") or "", "attrs": attrs}
         for r in p.get("refdes") or []:
             out[r] = row
+        if not p.get("refdes") and _mpn_key(row["mpn"]):
+            by_mpn.append((_mpn_key(row["mpn"]), row))
+    if board is None:
+        return out
+    comps: dict[str, list[str]] = {}
+    for ref, c in sorted(board["comps"].items()):
+        if c.get("mpn"):
+            comps.setdefault(_mpn_key(c["mpn"]), []).append(ref)
+    for key, row in by_mpn:
+        refs = [r for r in comps.get(key, []) if r not in out]
+        for r in refs:
+            out[r] = {**row, "matched_by": "mpn"}
+        if not comps.get(key) and unmatched is not None:
+            unmatched.append({"mpn": row["mpn"], "why": "parts.json row with "
+                              "no refdes and no netlist comp with that MPN"})
     return out
 
 
@@ -1149,7 +1181,17 @@ def analyze(board: dict, parts: dict, rails: dict, opts: dict) -> tuple:
     decks = [circuit(model, r, "op", d) for _, r, d in runs]
     if ens:
         decks.append(circuit(model, rails, "tran", ramp_s=ramp, tstop=tstop))
-    plots, version = run_engine(decks, opts["dll"], opts["timeout"])
+    if not model["elems"]:
+        # nothing to put in a deck: ngspice answers an empty .op with "no
+        # vectors" (#1261)
+        return (model, None, None, scen, ens, [], [], {}, None,
+                "no passive or modelled device to simulate")
+    try:
+        plots, version = run_engine(decks, opts["dll"], opts["timeout"])
+    except checklib.CheckError as exc:
+        # an engine failure loses the operating point, not the board: the
+        # passes that need no simulation still run (#1261)
+        return model, None, None, scen, ens, [], [], {}, None, str(exc)
     ops = {}
     for (name, r, drive), plot in zip(runs, plots):
         view = op_view(plot, model)
@@ -1293,7 +1335,8 @@ def analyze(board: dict, parts: dict, rails: dict, opts: dict) -> tuple:
         sc: {n: checklib.rnd(v, 4) for n, v in sorted(o["v"].items())
              if n in o["driven"] and n not in rails and n not in grounds}
         for sc, o in ops.items()}
-    return model, ops, tran, scen, ens, vios, unknowns, facts, version
+    return (model, ops, tran, scen, ens, vios, unknowns, facts, version,
+            None)
 
 
 # The generic screen below is lib/mlcc.py's +-25 % class-II curve and a
@@ -1941,7 +1984,8 @@ def element_tol(board, parts, e) -> tolerance.Param | None:
         footprint=e.get("footprint") or "", nom=e["value"], name=e["ref"])
 
 
-def passive_facts(board, rails, model, facts, parts=None):
+def passive_facts(board, rails, model, facts, parts=None,
+                  not_judged=None):
     caps_to_gnd: dict[str, list] = {}
     for e in model["elems"]:
         if e["kind"] == "C":
@@ -1959,6 +2003,10 @@ def passive_facts(board, rails, model, facts, parts=None):
                     or src in model["grounds"]:
                 continue
             c = sum(x["value"] for x in caps_to_gnd[n])
+            if not c > 0:
+                # a 0 F (or unparsed) cap has no corner: not an RC network
+                # (#1261)
+                continue
             fc = engcalc.rc_corner_hz(e["value"], c)
             row = {"type": "low-pass", "r": e["ref"],
                    "c": [x["ref"] for x in caps_to_gnd[n]],
@@ -1969,7 +2017,8 @@ def passive_facts(board, rails, model, facts, parts=None):
             rp = element_tol(board, parts or {}, e)
             cps = [element_tol(board, parts or {}, x)
                    for x in caps_to_gnd[n]]
-            if rp is not None and all(cps):
+            if rp is not None and all(cps) \
+                    and rp.lo > 0 and sum(p.lo for p in cps) > 0:
                 # fc falls with R and every C: the corners are R and C all
                 # high (min) and all low (max)
                 c_lo = sum(p.lo for p in cps)
@@ -1990,6 +2039,13 @@ def passive_facts(board, rails, model, facts, parts=None):
         if len(sides) == 2:
             c1, c2 = (sum(x["value"] for x in caps_to_gnd[n]) * 1e12
                       for n in sides)
+            if not (c1 > 0 and c2 > 0):
+                # a 0 F load cap (unfitted or a placeholder value) leaves no
+                # load to work out (#1261)
+                (not_judged if not_judged is not None else []).append(
+                    f"{c['ref']}: crystal load not worked out, a load cap "
+                    f"is 0 F")
+                continue
             xtals.append({"ref": c["ref"], "value": c["value"],
                           "c1_pf": c1, "c2_pf": c2, "stray_pf_assumed":
                           engcalc.CRYSTAL_STRAY_PF,
@@ -2043,7 +2099,8 @@ def run(a) -> dict:
             "no ngspice shared library found - install KiCad 10 with its "
             "simulator or set HWDE_NGSPICE_DLL")
     board = load_board(inp["net"])
-    parts = load_parts(inp["parts"])
+    unmatched: list[dict] = []
+    parts = load_parts(inp["parts"], board, unmatched)
     cons = checklib.load_json(inp["constraints"], "constraints") \
         if inp["constraints"] else None
     rails = resolve_rails(board, parts, cons, inp["power_tree"],
@@ -2062,19 +2119,30 @@ def run(a) -> dict:
     opts["cap_floors"] = mlcc_dcbias.floors_for(
         board, parts, cons, {}, mlcc_dcbias.load_pin_requirements())
     (model, ops, tran, scen, ens, vios, unknowns, facts,
-     version) = analyze(board, parts, rails, opts)
+     version, sim_error) = analyze(board, parts, rails, opts)
+    not_judged = []
+    nothing = sim_error if not model["elems"] else None
+    if sim_error and not nothing:
+        not_judged.append(
+            f"operating point and enable transient not simulated "
+            f"({sim_error}), so resistor, capacitor, device and timing "
+            f"findings are not judged")
     regulator_findings(board, parts, rails, model, opts, vios, unknowns, facts)
-    device_findings(board, parts, rails, model, ops, scen, vios, unknowns,
-                    facts, opts.get("pin_modes"))
-    timing_findings(board, rails, model, ops, tran, ens, opts, vios, facts)
+    if ops is not None:
+        device_findings(board, parts, rails, model, ops, scen, vios, unknowns,
+                        facts, opts.get("pin_modes"))
+        timing_findings(board, rails, model, ops, tran, ens, opts, vios,
+                        facts)
     i2c_findings(board, rails, model, opts, vios, unknowns, facts)
-    passive_facts(board, rails, model, facts, parts)
+    passive_facts(board, rails, model, facts, parts, not_judged)
     unknowns += [{"ref": "", "what": f"{n} not a rail",
                   "why": "named like a rail but only passives on this "
                          "sheet-local net: left to the network (give "
                          "--rail if it is one)"}
                  for n in sorted(_passive_only_nets(board))
                  if n not in rails and check_ratings.volts_from_name(n)]
+    unknowns += [{"ref": "", "what": f"parts.json row {u['mpn']}",
+                  "why": u["why"]} for u in unmatched]
     ics = sorted(u["ref"] for u in model["unmodelled"]
                  if u["why"].startswith("IC/"))
     return checklib.report(
@@ -2084,7 +2152,8 @@ def run(a) -> dict:
         rails={n: {"volts": v, "source": s} for n, (v, s) in
                sorted(rails.items())},
         modelled=len(model["elems"]), left_open=ics,
-        known_unknowns=unknowns, **facts)
+        known_unknowns=unknowns, not_judged=not_judged,
+        nothing_to_judge=nothing, **facts)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -569,15 +569,19 @@ def test_cli_exit_codes(tmp_path_factory, plane_fed_bg):
     assert payload["status"] == "violations"
     assert payload["counts"]["by_severity"] == {"warning": 6}
     assert payload["checked"][0]["plane_fed"] is True
-    # error: net not on board -> exit 2
+    # a file whose only net is not on the board belongs to another revision:
+    # constraints_mismatch, listed as not judged, not a crash
     cons2 = plane_fed_bg.path.parent / "ghost.json"
     cons2.write_text(json.dumps(
         {"power": [{"net": "/GHOST", "current_a": 1.0}]}), encoding="utf-8")
     proc2 = subprocess.run(
         [PYTHON, str(script), "--pcb", str(plane_fed_bg.path),
          "--constraints", str(cons2)], capture_output=True, text=True)
-    assert proc2.returncode == 2
-    assert json.loads(proc2.stdout)["status"] == "error"
+    out2 = json.loads(proc2.stdout)
+    assert proc2.returncode == 0 and out2["status"] == "pass"
+    assert out2["constraints_missing_nets"] == ["/GHOST"]
+    assert "constraints_mismatch" in out2
+    assert any(n.startswith("constraints_mismatch") for n in out2["not_judged"])
 
 
 # ---- pad-exit necks (PCB-0019-A SW_L1/SW_L2 class) -------------------------
@@ -1024,7 +1028,10 @@ def test_leaf_with_unbounded_part_keeps_budget(tmp_path_factory):
 
 def test_leaf_with_second_path_keeps_budget(tmp_path_factory):
     """A track from the leg back to the main block makes the leg a possible
-    bypass of the neck: no bound, the findings stay at 2 A."""
+    bypass of the neck: no bound, the findings stay at 2 A. The loop's own
+    tracks are bounded at R1 (#1168): the leg and loop hold no source, so
+    all their current comes in through the main block and none of it can
+    exceed what R1 draws."""
     track = (
         '  (segment (start 9.9 8) (end 14.5 8) (width 0.3) (layer "F.Cu") (net "PWR"))\n'
         '  (segment (start 14.5 8) (end 14.5 5.2) (width 0.3) (layer "F.Cu") (net "PWR"))\n')
@@ -1032,7 +1039,8 @@ def test_leaf_with_second_path_keeps_budget(tmp_path_factory):
     vs, facts = check_current.check_net(bg, ENTRY_PWR)
     assert _kinds(vs, "pour_neckdown")
     assert len(_kinds(vs, "insufficient_transition_vias")) == 2
-    assert "leaf_branches" not in facts
+    assert {b["kind"] for b in facts.get("leaf_branches", [])} \
+        <= {"undersized_track"}
 
 
 def test_leaf_reaching_real_load_still_fails(tmp_path_factory):
@@ -1274,6 +1282,7 @@ def test_switch_node_cli_warns_without_constraints(tmp_path_factory):
     v = payload["violations"][0]
     assert v["inferred"] is True and v["from_part"] == "U1"
     assert "U1" in v["refs"] and "constraints.json" in v["msg"]
+    assert "no declared load; judged at the part's rated current" in v["msg"]
 
 
 
@@ -1289,6 +1298,200 @@ def test_switch_node_judged_with_no_constraints_file(tmp_path_factory):
                if c["name"] == "check_current")
     assert row["needs"] == [] and row["args"]({"pcb": "x"}) == []
     assert row["args"]({"constraints": "c.json"}) == ["--constraints", "c.json"]
+
+# ---- switch nodes judged at the board's declared load ----------------------
+# A TPS563201-class buck: U1 SW on net SWN, routed to L1 pad 1 at `width`;
+# L1 pad 2 is the output rail `out`. Rated 3 A in switch_nodes.yaml.
+
+def _buck_out(width: float, value: str = "TPS563201DDCR",
+              out: str = "+3V3") -> str:
+    return f"""  (footprint "t:SOT-23-6" (at 4 5)
+    (layer "F.Cu")
+    (property "Reference" "U1" (at 0 0 0))
+    (property "Value" "{value}" (at 0 0 0))
+    (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "/pwr/SWN")
+      (pinfunction "SW")))
+  (footprint "t:L" (at 14 5)
+    (layer "F.Cu")
+    (property "Reference" "L1" (at 0 0 0))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "/pwr/SWN"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net "{out}")))
+  (segment (start 4 5) (end 14 5) (width {width}) (layer "F.Cu")
+    (net "/pwr/SWN"))
+"""
+
+
+def _sw_run(tmp_path_factory, name, body, cons=None):
+    bg = _board(tmp_path_factory, name, body)
+    argv = ["--pcb", str(bg.path)]
+    if cons is not None:
+        cf = bg.path.parent / f"{name}.json"
+        cf.write_text(json.dumps(cons), encoding="utf-8")
+        argv += ["--constraints", str(cf)]
+    return check_current.run(argv)[0]
+
+
+def test_switch_node_planted_fault_lumina_sw33(tmp_path_factory):
+    # lumina PCB-0004 U21 /pwr/SW33: 0.2 mm, +3V3 declared at 1.0 A - real
+    p = _sw_run(tmp_path_factory, "swlumina", _buck_out(0.2),
+                {"power": [{"net": "+3V3", "current_a": 1.0}]})
+    [v] = [v for v in p["violations"] if v["kind"] == "undersized_track"]
+    assert v["severity"] == "warning" and v["from_part"] == "U1"
+    assert v["load_source"] == "+3V3 power entry (L1 output)"
+    assert "declared load 1 A" in v["msg"]
+    assert not any("no_declared_load" in n for n in p.get("not_judged", []))
+
+
+def test_switch_node_quiet_twin_lite_main_tps54302(tmp_path_factory):
+    # lite-main U2 TPS54302: 0.4 mm, +5V declared at 0.8 A - quiet
+    p = _sw_run(tmp_path_factory, "swlite",
+                _buck_out(0.4, "TPS54302", "+5V"),
+                {"power": [{"net": "+5V", "current_a": 0.8}]})
+    assert p["violations"] == []
+    [c] = [c for c in p["checked"] if c.get("inferred")]
+    assert c["load_source"] == "+5V power entry (L1 output)"
+
+
+def test_switch_node_screen_twin_small_declared_load(tmp_path_factory):
+    # the screen's quiet twin: 0.25 mm on a 3 A part with a stated 0.3 A load
+    p = _sw_run(tmp_path_factory, "swscreentwin", _buck_out(0.25),
+                {"power": [{"net": "+3V3", "current_a": 0.3}]})
+    assert p["violations"] == []
+
+
+def test_switch_node_screen_without_load(tmp_path_factory):
+    # same node, nothing stated: the screen keeps it, at the rating
+    p = _sw_run(tmp_path_factory, "swscreen", _buck_out(0.25))
+    [v] = p["violations"]
+    assert v["severity"] == "warning"
+    assert "no declared load; judged at the part's rated current" in v["msg"]
+
+
+def test_switch_node_block_iout_is_a_declared_load(tmp_path_factory):
+    blk = {"blocks": [{"block": "B3", "name": "U1 TPS563201 3.3 V",
+                       "operating_point": {"iout_a": 0.3}}]}
+    p = _sw_run(tmp_path_factory, "swblock", _buck_out(0.25, out="VX"), blk)
+    assert p["violations"] == []
+    [c] = [c for c in p["checked"] if c.get("inferred")]
+    assert c["load_source"] == "block 'B3' iout_a"
+
+
+def test_switch_node_wide_without_load_is_not_judged(tmp_path_factory):
+    # 0.3 mm fails 3 A at dT=60C but is wider than signal width: not judged
+    p = _sw_run(tmp_path_factory, "swwide", _buck_out(0.3))
+    assert p["violations"] == []
+    [n] = p["no_declared_load"]
+    assert n["net"] == "/pwr/SWN" and n["from_part"] == "U1"
+    assert any(s.startswith("no_declared_load: U1") for s in p["not_judged"])
+
+
+def test_switch_node_small_part_without_load_is_not_judged(tmp_path_factory):
+    bg = _board(tmp_path_factory, "swsmall", _buck_out(0.1))
+    entry = {"net": "/pwr/SWN", "current_a": 0.8, "dt_c": 60.0,
+             "inferred": True, "from_part": "U1", "part": "X"}
+    vs, facts, nl = check_current.judge_switch_node(bg, entry, {})
+    assert vs == [] and nl["kinds"] == ["undersized_track"]
+    assert facts["not_judged"] == "no_declared_load"
+
+
+# ---- constraints for a state_snapshots/ copy, and a file that only partly
+# matches the board (hwde-reroute-tools, a03cb 2026-11-15) ------------------
+# usb-buck PCB-0002 keeps copies under state_snapshots/<tag>/kicad/; the
+# board's own kicad/constraints.json states +3V3 at 0.1 A.
+
+def _snapshot_tree(tmp_path_factory, name, cons):
+    root = tmp_path_factory.mktemp(name)
+    board = root / "PCB-0002-A_usb-buck"
+    snap = board / "state_snapshots" / "pre-dm-vbus-fix" / "kicad"
+    snap.mkdir(parents=True)
+    if cons is not None:
+        (board / "kicad").mkdir()
+        (board / "kicad" / "constraints.json").write_text(
+            json.dumps(cons), encoding="utf-8")
+    bg = _board(tmp_path_factory, name + "b", _buck_out(0.2))
+    pcb = snap / "usb-buck.kicad_pcb"
+    pcb.write_text(bg.path.read_text(encoding="utf-8"), encoding="utf-8")
+    return board, pcb
+
+
+def _run_found(pcb):
+    from lib import checklib
+    cf = checklib.find_constraints(pcb)
+    argv = ["--pcb", str(pcb)] + (["--constraints", str(cf)] if cf else [])
+    return cf, check_current.run(argv)[0]
+
+
+def test_snapshot_walks_up_to_its_boards_constraints(tmp_path_factory):
+    # the two usb-buck snapshot false alarms: the board states 0.1 A - quiet
+    board, pcb = _snapshot_tree(tmp_path_factory, "snapup",
+                                {"power": [{"net": "+3V3", "current_a": 0.1}]})
+    cf, p = _run_found(pcb)
+    assert cf == (board / "kicad" / "constraints.json").resolve()
+    assert p["violations"] == []
+    [c] = [c for c in p["checked"] if c.get("inferred")]
+    assert c["load_source"] == "+3V3 power entry (L1 output)"
+
+
+def test_snapshot_with_no_file_above_keeps_the_screen(tmp_path_factory):
+    # twin: the walk finds nothing, so the screen still judges the node
+    _, pcb = _snapshot_tree(tmp_path_factory, "snapnone", None)
+    cf, p = _run_found(pcb)
+    assert cf is None
+    [v] = p["violations"]
+    assert "no declared load; judged at the part's rated current" in v["msg"]
+
+
+def test_ordinary_board_does_not_walk_up(tmp_path_factory):
+    # outside a snapshot folder only the sibling file counts
+    from lib import checklib
+    root = tmp_path_factory.mktemp("nowalk")
+    (root / "constraints.json").write_text("{}", encoding="utf-8")
+    (root / "kicad").mkdir()
+    pcb = root / "kicad" / "b.kicad_pcb"
+    pcb.write_text("", encoding="utf-8")
+    assert checklib.find_constraints(pcb) is None
+
+
+def test_snapshot_file_of_another_revision_is_a_mismatch(tmp_path_factory):
+    # none of the file's power nets is on the copy: not judged, not screened
+    _, pcb = _snapshot_tree(tmp_path_factory, "snapmis",
+                            {"power": [{"net": "+5V_OLD", "current_a": 0.1}]})
+    _, p = _run_found(pcb)
+    assert p["violations"] == []
+    assert p["constraints_missing_nets"] == ["+5V_OLD"]
+    [m] = p["constraints_mismatch"]
+    assert m["net"] == "/pwr/SWN" and m["from_part"] == "U1"
+    assert any(s.startswith("constraints_mismatch:") for s in p["not_judged"])
+
+
+def test_file_naming_one_missing_net_uses_the_rest(tmp_path_factory):
+    # one stale entry no longer drops the file: +3V3 still sets the load
+    p = _sw_run(tmp_path_factory, "swpartial", _buck_out(0.2),
+                {"power": [{"net": "GHOST", "current_a": 2.0},
+                           {"net": "+3V3", "current_a": 1.0}]})
+    [v] = [v for v in p["violations"] if v["kind"] == "undersized_track"]
+    assert v["load_source"] == "+3V3 power entry (L1 output)"
+    assert p["constraints_missing_nets"] == ["GHOST"]
+    assert "constraints_mismatch" not in p
+    assert any(s.startswith("constraints_missing_net: power entry GHOST")
+               for s in p["not_judged"])
+
+
+def test_gate_passes_the_walked_up_file(tmp_path_factory, monkeypatch):
+    import gate
+    import verify_all
+    board, pcb = _snapshot_tree(tmp_path_factory, "snapgate",
+                                {"power": [{"net": "+3V3", "current_a": 0.1}]})
+    seen = {}
+
+    def fake(argv):
+        seen["argv"] = argv
+        return {"status": "pass", "checks": {}}, None
+    monkeypatch.setattr(verify_all, "run", fake)
+    gate.run_verify(pcb)
+    i = seen["argv"].index("--constraints")
+    assert Path(seen["argv"][i + 1]) == (board / "kicad" / "constraints.json").resolve()
+
 
 # ---- per-load current: branch vias of a star (#676, #650) -------------------
 # U1 feeds a 2 mm F.Cu trunk (x=10, y 2..8); three single vias 3 mm apart each
@@ -2289,3 +2492,135 @@ def test_short_steps_to_an_unbounded_part_keep_budget(tmp_path_factory):
     vs, facts = check_current.check_net(bg, ENTRY_PWR)
     found = _kinds(vs, "undersized_track")
     assert found and {v["current_a"] for v in found} == {2.0}
+
+
+# ---- block-cut bound (#1168) -------------------------------------------------
+# Two bridges the end-cap split can't cut. A: a 0.56 x 0.30 mm stub from a
+# via to R1's pad, whose start cap already reaches the pad. The pads are
+# wider than the stubs, so neither is a pad-exit neck. B: a stub from
+# U2's pad whose onward track (to R1) also overlaps that pad. Both feed only
+# R1, so both carry at most R1's current, not the rail's 2 A.
+
+_PLANE_B = """  (zone (net "PWR") (layer "B.Cu")
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10)))
+    (filled_polygon (layer "B.Cu")
+      (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10))))
+"""
+
+
+def _r1_at(x: float, y: float, ref: str = "R1", value: str = "10k",
+           lib: str = "t:R0402") -> str:
+    """A small part (10k R1 by default) whose 0.6 mm pad 1 (on PWR) is
+    centred at (x, y)."""
+    return f"""  (footprint "{lib}" (at {x + 0.4} {y})
+    (layer "F.Cu")
+    (property "Reference" "{ref}" (at 0 0 0))
+    (property "Value" "{value}" (at 0 0 0))
+    (pad "1" smd rect (at -0.4 0) (size 0.6 0.7) (layers "F.Cu") (net "PWR"))
+    (pad "2" smd rect (at 0.45 0) (size 0.3 0.7) (layers "F.Cu") (net "SIG")))
+"""
+
+
+_CASE_A = _PLANE_B + """  (via (at 3 5) (size 0.3) (drill 0.15) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (segment (start 3 5) (end 3.3 5) (width 0.56) (layer "F.Cu") (net "PWR"))
+""" + _r1_at(3.57, 5) + _U1_ON_PLANE
+
+_U2_PAD6 = """  (footprint "t:U" (at 10 5)
+    (layer "F.Cu")
+    (property "Reference" "U2" (at 0 0 0))
+    (pad "6" smd rect (at 0 0) (size 0.55 0.4) (layers "F.Cu") (net "PWR")))
+  (segment (start 10.8 5) (end 12 5) (width 1.0) (layer "F.Cu") (net "PWR"))
+  (via (at 12 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "PWR"))
+"""
+_CASE_B = _PLANE_B + _U2_PAD6 + """  (segment (start 10 5) (end 9.625 5) (width 0.3) (layer "F.Cu") (net "PWR"))
+  (segment (start 9.625 5) (end 8.775 5.85) (width 0.3) (layer "F.Cu") (net "PWR"))
+""" + _r1_at(8.775, 5.85)
+
+def _stub(vs, facts, x0, y0):
+    hit = [v for v in _kinds(vs, "undersized_track")
+           if v["segment"]["start"] == [x0, y0]]
+    leaf = [b for b in facts.get("leaf_branches", [])
+            if b["kind"] == "undersized_track" and b["loads"] == ["R1"]]
+    return hit, leaf
+
+
+def test_end_cap_split_fails_on_both_cases(tmp_path_factory):
+    """The shapes #1168 is about: track_sides can't cut either stub."""
+    for name, body, start in (("bca0", _CASE_A, (3, 5)),
+                              ("bcb0", _CASE_B, (10, 5))):
+        bg = _board(tmp_path_factory, name, body)
+        [t] = [t for t in bg.tracks_of("PWR")
+               if tuple(t.shape.coords[0]) == start]
+        assert check_current.track_sides(bg, "PWR", t) is None
+        sides = check_current.block_sides(bg, "PWR", t, None)
+        assert sides == [{"R1"}]
+
+
+def test_short_wide_stub_to_lone_pad_takes_its_bound(tmp_path_factory):
+    """#1168 A: shorter than wide, its start cap reaches R1's pad; the
+    block-cut tree still sees R1 as all that lies past it."""
+    bg = _board(tmp_path_factory, "bca", _CASE_A)
+    hit, leaf = _stub(*check_current.check_net(bg, ENTRY_PWR), 3, 5)
+    assert hit == [] and leaf
+
+
+def test_stub_whose_far_track_touches_near_pad_takes_its_bound(
+        tmp_path_factory):
+    """#1168 B: the onward track overlaps U2's pad too, so with the stub
+    dropped the copper is one piece; the block holding the stub hangs off
+    U2's pad and holds only R1."""
+    bg = _board(tmp_path_factory, "bcb", _CASE_B)
+    hit, leaf = _stub(*check_current.check_net(bg, ENTRY_PWR), 10, 5)
+    assert hit == [] and leaf
+
+
+@pytest.mark.parametrize("name,body,start", [
+    ("bca2", _CASE_A.replace(_r1_at(3.57, 5), _r1_at(3.57, 5, "U3", "LDO",
+                                                     "t:U")), (3, 5)),
+    ("bcb2", _CASE_B.replace(_r1_at(8.775, 5.85),
+                             _r1_at(8.775, 5.85, "U3", "LDO", "t:U")),
+     (10, 5))])
+def test_unbounded_part_past_the_stub_keeps_budget(tmp_path_factory, name,
+                                                   body, start):
+    """Quiet twins: the same stubs with an unbounded part (U3, possibly a
+    source) where R1 was get no bound and are judged at the rail's 2 A."""
+    bg = _board(tmp_path_factory, name, body)
+    [t] = [t for t in bg.tracks_of("PWR")
+           if tuple(t.shape.coords[0]) == start]
+    assert check_current.block_sides(bg, "PWR", t, None) is None
+    vs, _facts = check_current.check_net(bg, ENTRY_PWR)
+    hit = [v for v in _kinds(vs, "undersized_track")
+           if v["segment"]["start"] == list(start)]
+    assert hit and hit[0]["current_a"] == 2.0
+
+
+def test_loop_to_another_pin_of_the_feeding_part_keeps_budget(
+        tmp_path_factory):
+    """A track from R1's pad to U2's pin 7 (also PWR) gives the piece past
+    the stub a second way in through U2 itself: no bound."""
+    pin7 = _U2_PAD6.replace(
+        '(net "PWR")))',
+        '(net "PWR"))\n    (pad "7" smd rect (at 0 1.2) (size 0.55 0.2) '
+        '(layers "F.Cu") (net "PWR")))', 1)
+    loop = ('  (segment (start 8.775 5.85) (end 8.775 6.2) (width 0.2) '
+            '(layer "F.Cu") (net "PWR"))\n'
+            '  (segment (start 8.775 6.2) (end 10 6.2) (width 0.2) '
+            '(layer "F.Cu") (net "PWR"))\n')
+    bg = _board(tmp_path_factory, "bcb3",
+                _CASE_B.replace(_U2_PAD6, pin7) + loop)
+    [t] = [t for t in bg.tracks_of("PWR")
+           if tuple(t.shape.coords[0]) == (10, 5)
+           and tuple(t.shape.coords[-1]) == (9.625, 5)]
+    assert check_current.block_sides(bg, "PWR", t, None) is None
+
+
+def test_block_sides_refuses_a_piece_holding_a_source(tmp_path_factory):
+    """With the rail's sources known, a piece that holds one is not past
+    the track: the bound is refused even if every other part is bounded."""
+    bg = _board(tmp_path_factory, "bcsrc", _CASE_B)
+    [t] = [t for t in bg.tracks_of("PWR")
+           if tuple(t.shape.coords[0]) == (10, 5)]
+    assert check_current.block_sides(bg, "PWR", t, ({"R1"}, set(), set())) \
+        is None
+    assert check_current.block_sides(
+        bg, "PWR", t, ({"U2"}, {"U2"}, set())) == [{"R1"}]

@@ -694,6 +694,60 @@ def test_ldo_mutant_twin_is_quiet(tmp_path):
         assert bool(hit) is bad
 
 
+_MPN_NET = """(export (version "E") (components
+ (comp (ref "J1") (value "CONN") (footprint "Conn"))
+ (comp (ref "C1") (value "22uF") (footprint "C_0805_2012Metric")
+  (fields (field (name "MPN") "GRM21BR60G226ME39L"))))
+ (nets (net (code "1") (name "+3V3")
+  (node (ref "J1") (pin "1") (pinfunction "VCC") (pintype "passive"))
+  (node (ref "C1") (pin "1") (pinfunction "") (pintype "passive")))
+ (net (code "2") (name "GND")
+  (node (ref "J1") (pin "2") (pinfunction "GND") (pintype "passive"))
+  (node (ref "C1") (pin "2") (pinfunction "") (pintype "passive")))))
+"""
+
+
+def _mlcc_by_mpn(tmp_path, row_mpn):
+    """C1 says only "22uF" on the board; its MPN is a netlist field. The
+    parts.json row has no refdes: only an MPN (written lower case) with a
+    4 V rating and X5R. A 10 uF floor on +3V3 at 3.3 V (#1260)."""
+    net = tmp_path / "b.net"
+    net.write_text(_MPN_NET, encoding="utf-8")
+    parts = tmp_path / "parts"
+    parts.mkdir(exist_ok=True)
+    (parts / "parts.json").write_text(json.dumps({"parts": [
+        {"mpn": row_mpn, "attributes": [
+            {"name": "Voltage Rated", "value": "4V"},
+            {"name": "Dielectric", "value": "X5R"}]}]}))
+    cons = tmp_path / "c.json"
+    cons.write_text(json.dumps({"power": [
+        {"net": "+3V3", "current_a": 0.5, "voltage": 3.3,
+         "min_cout": 10e-6}]}))
+    return _mlcc("--net", net, "--parts", parts, "--constraints", cons)
+
+
+def test_mlcc_row_matched_by_mpn_finds_the_4v_cap(tmp_path):
+    # planted: a 4 V 22 uF X5R at 3.3 V keeps well under 10 uF; the row
+    # reaches C1 only through its MPN, so before #1260 it went unread
+    p = _mlcc_by_mpn(tmp_path, "grm21br60g226me39l")
+    assert ("rail_c_below_min", "warning") in _kinds(p)
+    assert ("cap_dc_bias_low", "warning") in _kinds(p)
+    c1 = next(c for c in p["capacitors"] if c["ref"] == "C1")
+    assert c1["rated_v"] == 4.0
+    assert not any("parts.json row" in k["what"] for k in p["known_unknowns"])
+
+
+def test_mlcc_row_with_an_mpn_on_no_part_stays_quiet_and_is_listed(tmp_path):
+    # the twin: the same row under an MPN no part carries reaches nothing;
+    # C1 is judged on the generic curve (no finding) and the row is named
+    p = _mlcc_by_mpn(tmp_path, "NOPE123")
+    assert not _kinds(p, "error") and not _kinds(p, "warning")
+    c1 = next(c for c in p["capacitors"] if c["ref"] == "C1")
+    assert c1["rated_v"] is None
+    assert any(k["what"] == "parts.json row NOPE123"
+               for k in p["known_unknowns"])
+
+
 def test_mlcc_floor_on_a_rail_of_unknown_dc_is_not_judged():
     # glasgow revD0/D1 VDDA (corpus sweep): U19 TPS7A20 states 0.47 uF,
     # 25 uF nominal sits on the rail but its DC is not named. That is

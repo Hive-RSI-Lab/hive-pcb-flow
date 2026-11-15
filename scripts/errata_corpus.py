@@ -208,8 +208,8 @@ def matches(violation: dict, catch: dict) -> bool:
 KICAD8_PCB = 20240108
 
 
-def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
-    """The board a check reads: the revision's own file, or, for one older
+def _upgraded(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The revision's own file, or, for one older
     than KiCad 8 (a `module`-era file, which geom reads no footprints from,
     or a KiCad 6/7 one, whose references are `fp_text` that placelib and
     check_connector_fit skip every footprint over, #1123), a copy `kicad-cli pcb upgrade` brought to the current format, as intake
@@ -244,6 +244,87 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     return dest
 
 
+def _netlist(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The netlist of the revision's schematic, in the run dir: kicad-cli's
+    export, or for a KiCad 4/5 schematic (which kicad-cli exports empty)
+    legacy_net's. Kept while the schematic is unchanged."""
+    import hashlib
+    sys.path.insert(0, str(SCRIPTS / "lib"))
+    import env
+    import legacy_net
+    sch = repo / b[rev]["sch"]
+    net = empty.parent / f"{rev}.net"
+    stamp = net.with_suffix(".net.src")
+    digest = hashlib.sha256(str(sch).encode() + sch.read_bytes()).hexdigest()
+    if net.is_file() and stamp.is_file() and stamp.read_text() == digest:
+        return net
+    stamp.unlink(missing_ok=True)
+    if legacy_net.is_legacy(sch):
+        r = legacy_net.netlist(sch, net, pcb=repo / b[rev]["pcb"])
+        if r["status"] != "pass":
+            raise SystemExit(f"{b['id']} {rev}: {r['error']}")
+    else:
+        cli = env.find_kicad_cli()
+        if not cli:
+            raise SystemExit(f"{b['id']} {rev}: a netlist needs kicad-cli "
+                             "(bin/hwde env)")
+        subprocess.run([str(cli), "sch", "export", "netlist", "-o", str(net),
+                        str(sch)], capture_output=True, text=True,
+                       timeout=900, check=True)
+    stamp.write_text(digest)
+    return net
+
+
+def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The board a check reads: the revision's file (brought to KiCad 8 by
+    _upgraded where older), with the pin names its own schematic gives the
+    pads that carry none, as pin_backfill gives a board board_init made
+    before #1220. Every board gets the same step, from its own schematic
+    only: pin_backfill names a pad only where the board's net agrees with
+    the schematic's, and writes nothing when under half agree. The named
+    copy sits in the run dir (`{rev}-pins.kicad_pcb`, with what pin_backfill
+    said in `{rev}-pins.json`), nothing is written into the checkout, and it
+    is reused while the board, the schematic and pin_backfill are unchanged.
+    A revision with no schematic, or one whose netlist will not export, is
+    read without the names."""
+    import hashlib
+    base = _upgraded(b, rev, repo, empty)
+    if not b[rev].get("sch") or not (repo / b[rev]["sch"]).is_file():
+        return base
+    dest = empty.parent / f"{rev}-pins.kicad_pcb"
+    report = empty.parent / f"{rev}-pins.json"
+    stamp = dest.with_suffix(".src")
+    sch = repo / b[rev]["sch"]
+    digest = hashlib.sha256(
+        base.read_bytes() + b"\0" + str(sch).encode() + sch.read_bytes()
+        + b"\0" + (SCRIPTS / "pin_backfill.py").read_bytes()).hexdigest()
+    if stamp.is_file() and stamp.read_text().split("\n")[0] == digest:
+        return dest if stamp.read_text().split("\n")[1:2] == ["written"] \
+            else base
+    stamp.unlink(missing_ok=True)
+    dest.unlink(missing_ok=True)
+    try:
+        net = _netlist(b, rev, repo, empty)
+    except (SystemExit, subprocess.SubprocessError, OSError) as e:
+        report.write_text(json.dumps({"status": "no_netlist",
+                                      "error": str(e)[:300]}))
+        stamp.write_text(f"{digest}\nno_netlist")
+        return base
+    subprocess.run([sys.executable, str(SCRIPTS / "pin_backfill.py"),
+                    "--pcb", str(base), "--netlist", str(net),
+                    "--out", str(dest), "--out-report", str(report)],
+                   capture_output=True, text=True, timeout=900)
+    try:
+        status = json.loads(report.read_text(encoding="utf-8"))["status"]
+    except (OSError, ValueError, KeyError):
+        status = "error"
+    if status != "written" or not dest.is_file():
+        dest.unlink(missing_ok=True)
+        status = status if status != "written" else "error"
+    stamp.write_text(f"{digest}\n{status}")
+    return dest if status == "written" else base
+
+
 def _netlist_audit(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["netlist_audit.py", "--sch", str(repo / b[rev]["sch"]),
             "--constraints", str(empty)]
@@ -254,9 +335,30 @@ def _check_mate_pins(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--constraints", str(empty)]
 
 
+def board_constraints(b: dict, rev: str, repo: Path) -> Path | None:
+    """The revision's own constraints.json, if its project ships one: next to
+    the board file, else at the checkout's root. The same lookup on every
+    board, with nothing written per board; none found, none used."""
+    pcb = repo / b[rev]["pcb"]
+    for d in (pcb.parent, repo):
+        f = d / "constraints.json"
+        if f.is_file():
+            return f
+    return None
+
+
 def _check_current(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    # a catch's own constraints (a non-empty file) win; otherwise the
+    # board's shipped constraints.json, where one exists
+    cons = empty
+    try:
+        stated = json.loads(empty.read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError):
+        stated = None
+    if not stated:
+        cons = board_constraints(b, rev, repo) or empty
     return ["check_current.py", "--pcb", str(_pcb(b, rev, repo, empty)),
-            "--constraints", str(empty)]
+            "--constraints", str(cons)]
 
 
 def _check_pinouts(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
@@ -328,24 +430,8 @@ def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
 def _check_straps(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board, with the netlist kicad-cli exports from its schematic
     (what the pipeline puts beside an hwde board)."""
-    sys.path.insert(0, str(SCRIPTS / "lib"))
-    import env
-    cli = env.find_kicad_cli()
-    if not cli:
-        raise SystemExit("check_straps catches need kicad-cli (bin/hwde env)")
-    net = empty.parent / f"{rev}.net"
-    import legacy_net
-    sch = repo / b[rev]["sch"]
-    if legacy_net.is_legacy(sch):  # KiCad 4/5: kicad-cli exports it empty
-        r = legacy_net.netlist(sch, net, pcb=repo / b[rev]["pcb"])
-        if r["status"] != "pass":
-            raise SystemExit(f"{b['id']} {rev}: {r['error']}")
-    else:
-        subprocess.run([str(cli), "sch", "export", "netlist", "-o", str(net),
-                        str(sch)], capture_output=True, text=True,
-                       timeout=900, check=True)
     return ["check_straps.py", "--pcb", str(_pcb(b, rev, repo, empty)),
-            "--netlist", str(net)]
+            "--netlist", str(_netlist(b, rev, repo, empty))]
 
 
 def _dfm(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
@@ -461,6 +547,125 @@ COVERAGE_KINDS = {"check_ratings": {
     "rating_regulator_output_unjudged", "rating_no_attributes"}}
 
 
+def _n(v) -> int:
+    """A report field as a count: a list or dict by its length, a number as is."""
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, (list, tuple, dict)):
+        return len(v)
+    return 0
+
+
+def _rows(rep: dict) -> list[dict]:
+    return [c for c in rep.get("checked") or () if isinstance(c, dict)]
+
+
+def _sum(rep: dict, *keys: str) -> int:
+    return sum(_n(c.get(k)) for c in _rows(rep) for k in keys)
+
+
+# What each check's report shows it actually judged on a board (items it
+# checked, parts it compared): a check that says nothing_to_judge only when it
+# finds no part of its kind otherwise counts as judging a board it looked at
+# and judged nothing on. Read only from the report; the checks are untouched.
+EVIDENCE = {
+    "check_current": lambda r: _n(r.get("checked")),
+    "check_thermal": lambda r: _n(r.get("checked")),
+    "check_esd": lambda r: _sum(r, "connectors"),
+    "check_silk": lambda r: _sum(r, "silk_items", "refdes_checked"),
+    "check_mounting": lambda r: _n(r.get("checked")),
+    "check_wicking": lambda r: _sum(r, "vias", "smd_pads"),
+    "check_straps": lambda r: _sum(r, "mcus"),
+    "check_fp_geometry": lambda r: sum(_n(v) for v in (r.get("judged") or {}).values())
+    if isinstance(r.get("judged"), dict) else _n(r.get("judged")),
+    "check_fp_package": lambda r: _n(r.get("judged")),
+    "check_ratings": lambda r: _n(r.get("pins_checked")) + _n(
+        (r.get("operating_range") or {}).get("parts_checked"))
+    + _n(r.get("listing_comparison")),
+    "check_pinouts": lambda r: _n(r.get("connectors")),
+    "check_mate_pins": lambda r: sum(_n(r.get(k)) for k in
+                                     ("pairs", "stated_mates", "standard_headers")),
+    "check_connector_fit": lambda r: _n(r.get("edges")) + sum(
+        1 for p in r.get("parts") or () if isinstance(p, dict) and p.get("pins")),
+    "check_bom_sync": lambda r: sum(1 for v in (r.get("legs") or {}).values() if v),
+    "netlist_audit": lambda r: _n(r.get("pins_connected")) + sum(
+        _n(v) for k, v in r.items()
+        if k.endswith(("_checked", "_judged")) and isinstance(v, int)),
+    "dfm": lambda r: _n((r.get("coverage") or {}).get("ran")),
+}
+
+# Findings that say a check couldn't judge something, for the coverage count
+# only (the triage rows keep them): they don't show the check judged a board.
+NOT_A_JUDGEMENT = {**COVERAGE_KINDS, "check_straps": {"mcu_unknown"}}
+
+
+def _not_judged_count(nj) -> int:
+    if isinstance(nj, dict):
+        return sum(len(v) if isinstance(v, (list, tuple)) else
+                   int(v) if isinstance(v, int) else 1 for v in nj.values())
+    if isinstance(nj, (list, tuple)):
+        return len(nj)
+    return 1 if nj else 0
+
+
+def coverage(rep: dict, script: str | None = None) -> dict:
+    """What a check's report says it could judge on a board. `judged` only when
+    it made at least one finding (not a can't-judge note) or its report shows
+    something it judged (EVIDENCE); `nothing_to_judge` (its reason) when it
+    says so; `judged_nothing` when it judged nothing and didn't say why.
+    `not_judged` counts the items it named but couldn't judge (a list, or a
+    dict of reason -> items or a count). For the footprint checks,
+    `parts_judged` / `parts_not_judged` count parts."""
+    n = _not_judged_count(rep.get("not_judged"))
+    out: dict = {"not_judged": n}
+    if script in ("check_fp_geometry", "check_fp_package"):
+        out["parts_judged"] = EVIDENCE[script](rep)
+        out["parts_not_judged"] = n
+    if rep.get("nothing_to_judge"):
+        return {"status": "nothing_to_judge",
+                "reason": str(rep["nothing_to_judge"])[:200], **out}
+    if script is None or script not in EVIDENCE:
+        return {"status": "judged", **out}
+    skip = NOT_A_JUDGEMENT.get(script, set())
+    found = any(v.get("kind") not in skip for v in rep.get("violations") or ()
+                if isinstance(v, dict))
+    judged = found or EVIDENCE[script](rep) > 0
+    return {"status": "judged" if judged else "judged_nothing", **out}
+
+
+def coverage_line(rows: list[tuple[str, str, dict]]) -> list[str]:
+    """Per check, over the swept boards (rev A): how many it judged, how many
+    gave it nothing to judge, how many had items it couldn't judge, and how
+    many it crashed on. Shows where a score can't move: a check that judges
+    nothing on a set can't catch anything on it."""
+    per: dict[str, dict[str, int]] = {}
+    for _bid, script, r in rows:
+        c = per.setdefault(script, {"judged": 0, "nothing_to_judge": 0,
+                                    "judged_nothing": 0, "with_not_judged": 0,
+                                    "crashed": 0})
+        if "error" in r:
+            c["crashed"] += 1
+            continue
+        cov = r.get("coverage")
+        if not cov:
+            continue
+        c[cov["status"]] += 1
+        c["with_not_judged"] += bool(cov.get("not_judged"))
+        if "parts_judged" in cov:
+            c["parts_judged"] = c.get("parts_judged", 0) + cov["parts_judged"]
+            c["parts_not_judged"] = (c.get("parts_not_judged", 0)
+                                     + cov["parts_not_judged"])
+    return [f"coverage {s}: judged {c['judged']}, nothing_to_judge "
+            f"{c['nothing_to_judge']}, judged nothing (unsaid) "
+            f"{c['judged_nothing']}, with not_judged items "
+            f"{c['with_not_judged']}, crashed {c['crashed']}"
+            + (f"; parts judged {c['parts_judged']}, parts not_judged "
+               f"{c['parts_not_judged']}" if "parts_judged" in c else "")
+            for s, c in sorted(per.items())]
+
+
 def sweep(cache: Path, b: dict) -> dict:
     """Every check the corpus runs, on both revisions, with nothing said about
     the defects: the blind run a holdout board gets before its errata are read
@@ -491,6 +696,12 @@ def sweep(cache: Path, b: dict) -> dict:
         if cov:
             res[script]["coverage_gone_on_rev_b"] = [
                 v for v in gone if v.get("kind") in cov]
+        rep = cache / "runs" / b["id"] / f"rev_a-{script}.json"
+        try:
+            res[script]["coverage"] = coverage(
+                json.loads(rep.read_text(encoding="utf-8")), script)
+        except (OSError, ValueError):
+            pass
     out = cache / "runs" / b["id"] / "sweep.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res, indent=1))
@@ -742,12 +953,13 @@ def main(argv: list[str] | None = None) -> int:
         # unvalidated: a holdout board is fetched and swept before its
         # defects are judged, so before it has its blind verdicts
         raw = _raw(man, "holdout")
-        pairs, errored = 0, []
+        pairs, errored, rows = 0, [], []
         for b in raw:
             if not wanted(b):
                 continue
             fetch(where(b), b)
             for script, r in sweep(where(b), b).items():
+                rows.append((b["id"], script, r))
                 print(b["id"], script, *([f"crashed: {script}"] if "error" in r
                                          else []), json.dumps(r))
                 pairs += 1
@@ -756,6 +968,9 @@ def main(argv: list[str] | None = None) -> int:
         # a crashed check is a hole in the sweep, not a clean pass (#1189)
         print(f"sweep: {pairs} (board, check) pairs, {len(errored)} errored"
               + (": " + ", ".join(errored) if errored else ""))
+        # counts per check, no board names: this reaches builders' logs too
+        for line in coverage_line(rows):
+            print(line)
         note_left_out()
         return 0
     boards = [b for b in load_all(man) if wanted(b)]

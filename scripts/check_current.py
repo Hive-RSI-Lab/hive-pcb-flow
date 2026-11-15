@@ -202,9 +202,18 @@ INFERRED_DT_C (60 C: what takes a board at 50 C ambient to ~110 C, near
 FR-4's Tg). The rating is the most the node carries, not what this board
 draws, so this is a gross-error screen: a node left at signal width fails
 it (digits v1, 0.25 mm), the designer's own fix passes it (digits v2, 0.75
-mm needs 0.71 at 60 C). Its findings are warnings with extras inferred=true
-and from_part; a constraints.json entry for the net (the playbook writes one
-per switching node at P2) replaces it, at the board's real current and dT. A part
+mm needs 0.71 at 60 C). A constraints.json entry for the net (the playbook
+writes one per switching node at P2) replaces the inferred entry. Without
+one, the node is judged at the load the board states for its output, the
+smallest of: the power entry of the rail on an inductor's far pad (at that
+entry's dT), and the iout_a of a block whose name carries the regulator's
+ref; capped at the rating. With no load stated, a node at signal width
+(narrowest track <= SCREEN_WIDTH_MM, 0.25) on a part rated >=
+SCREEN_MIN_RATED_A (1 A) keeps its undersized_track findings, "no declared
+load; judged at the part's rated current"; any other failure at the rating
+is not judged (reason no_declared_load, report key "no_declared_load"). All
+inferred findings are warnings with extras inferred=true, from_part and
+load_source. A part
 with a pin named SW/LX/PH that no row matches is listed in the report's
 "unrated_switch_nodes" (facts only).
 
@@ -1547,6 +1556,180 @@ def track_leaf_bound(bg: geom.BoardGeom, sides: list | None):
     return best
 
 
+def _item_graph(bg: geom.BoardGeom, net: str):
+    """The net's copper as items (each track, pad, via and fill part), with
+    an edge where two items share a layer and their copper touches (within
+    TOUCH_MM: a cap that only meets a pad's edge still joins it); a via's
+    or plated pad's barrel is the item itself, on all its layers. Returns
+    (items, adj [set of neighbour indices], refs [pad ref or None])."""
+    items: list = []                  # (layers, poly, ref)
+    for t in bg.tracks_of(net):
+        items.append(((t.layer,), t.poly, None, t))
+    for p in bg.pads_of(net):
+        items.append((tuple(p.layers), p.poly, p.ref, p))
+    for v in bg.vias_of(net):
+        items.append((tuple(v.layers), v.poly, None, v))
+    for z in bg.zones_of(net):
+        for l in z.layers:
+            fill = z.fill_on(l)
+            for g in getattr(fill, "geoms", [fill]):
+                if g.geom_type == "Polygon" and not g.is_empty:
+                    items.append(((l,), g, None, None))
+    adj = [set() for _ in items]
+    if items:
+        tree = STRtree([it[1] for it in items])
+        for i, (layers, poly, _r, _o) in enumerate(items):
+            for j in tree.query(poly, predicate="dwithin",
+                                distance=TOUCH_MM):
+                j = int(j)
+                if j > i and set(layers) & set(items[j][0]):
+                    adj[i].add(j)
+                    adj[j].add(i)
+    return items, adj
+
+
+def _blocks(adj: list) -> tuple[list, set]:
+    """(biconnected blocks as vertex sets, articulation vertices) of an
+    undirected graph, iterative Tarjan/Hopcroft."""
+    n = len(adj)
+    disc, low = [-1] * n, [0] * n
+    blocks, cuts, clock = [], set(), 0
+    for root in range(n):
+        if disc[root] != -1:
+            continue
+        disc[root] = low[root] = clock
+        clock += 1
+        stack = [(root, -1, iter(sorted(adj[root])))]
+        estack: list = []
+        kids = 0
+        while stack:
+            u, parent, it = stack[-1]
+            for v in it:
+                if disc[v] == -1:
+                    disc[v] = low[v] = clock
+                    clock += 1
+                    estack.append((u, v))
+                    stack.append((v, u, iter(sorted(adj[v]))))
+                    if u == root:
+                        kids += 1
+                    break
+                if v != parent and disc[v] < disc[u]:
+                    estack.append((u, v))
+                    low[u] = min(low[u], disc[v])
+            else:
+                stack.pop()
+                if parent == -1:
+                    continue
+                low[parent] = min(low[parent], low[u])
+                if low[u] >= disc[parent]:
+                    if parent != root:
+                        cuts.add(parent)
+                    block = set()
+                    while estack:
+                        e = estack.pop()
+                        block.update(e)
+                        if e == (parent, u):
+                            break
+                    blocks.append(block)
+        if kids > 1:
+            cuts.add(root)
+    return blocks, cuts
+
+
+def _reach(adj: list, start, blocked: set) -> set:
+    seen, todo = {start}, [start]
+    while todo:
+        u = todo.pop()
+        for v in adj[u]:
+            if v not in seen and v not in blocked:
+                seen.add(v)
+                todo.append(v)
+    return seen
+
+
+def block_sides(bg: geom.BoardGeom, net: str, track, sources,
+                cache: dict | None = None):
+    """track_sides from the block-cut tree of the net's item overlap graph
+    (#1168), for when the end-cap test can't split the copper: a track
+    shorter than it is wide whose end cap reaches the far pad, or a far
+    track that also touches the near pad. The track's block (or, when the
+    track is itself a cut, the track) meets the rest of the copper only at
+    its ports: each piece hanging off one of its cut items, each pad inside
+    it, and each pour inside it. With one port that may feed the rail (one
+    holding a possible source, or with none known, a pour or an unbounded
+    part) and every other port bounded, every current in the block enters
+    at the feed and leaves through the others, so no item in it carries more
+    than their sum. A part with pads in two ports could pass current between
+    them, and a second possible feed could circulate it: no bound then; nor
+    when the feed is a pour inside the block, which touches it at two or
+    more places and may pass its own current through it (a tap whose far
+    pad has a via of its own back to the plane).
+    With no feed at all, the worst case is the smallest port feeding the
+    rest. Returns [refs of the ports past the feed], or None. A genuine loop
+    back to the source copper keeps the track in the source's block, so it
+    is not bounded here."""
+    if cache is not None and "g" in cache:
+        items, adj, blocks, cuts = cache["g"]
+    else:
+        items, adj = _item_graph(bg, net)
+        blocks, cuts = _blocks(adj)
+        if cache is not None:
+            cache["g"] = (items, adj, blocks, cuts)
+    me = next((i for i, it in enumerate(items) if it[3] is track), None)
+    if me is None or not adj[me]:
+        return None
+    ports = []                        # (item indices, the block item it hangs on)
+    if me in cuts:
+        left = set(adj[me])
+        while left:
+            part = _reach(adj, left.pop(), {me})
+            left -= part
+            ports.append((part, me))
+    else:
+        block = next((b for b in blocks if me in b), None)
+        if block is None:
+            return None
+        for a in sorted(block):
+            if a in cuts:
+                out = {a}
+                for v in adj[a]:
+                    if v not in block and v not in out:
+                        out |= _reach(adj, v, {a})
+                ports.append((out, a))
+            elif items[a][2] or items[a][3] is None:
+                ports.append(({a}, a))   # a pad or a pour inside the block
+    every = sources[0] if sources else None
+    facts = []                        # (refs, amps, may_feed, on_pour)
+    for port, at in ports:
+        refs = {items[i][2] for i in port if items[i][2]}
+        pour = any(items[i][3] is None for i in port)
+        if not refs and not pour:
+            continue                  # dead-end copper: carries nothing
+        amps = _loads(bg, refs)
+        feed = bool(refs & every) if every is not None else (
+            pour or amps is None)
+        facts.append((refs, amps, feed, items[at][3] is None))
+    seen: set = set()
+    for refs, _a, _f, _p in facts:
+        if refs & seen:
+            return None               # a part bridging two ports
+        seen |= refs
+    feeds = [f for f in facts if f[2]]
+    if len(feeds) > 1:
+        return None
+    if not feeds:
+        if len(facts) < 2:
+            return None
+        feeds = [min(facts, key=lambda f: f[1])]
+    if feeds[0][3]:
+        return None                   # fed by a pour inside the block: the
+        #                               block may carry pour current around
+    rest = [f for f in facts if f is not feeds[0]]
+    if not rest or any(f[1] is None for f in rest):
+        return None
+    return [set().union(*(f[0] for f in rest))]
+
+
 def _stub_graph(bg: geom.BoardGeom, net: str, fills: dict,
                 skip: frozenset = frozenset()):
     """The net's copper outside its fills, minus the items whose id() is in
@@ -1910,6 +2093,7 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
             undersized = [(v, t) for v, t in undersized if id(v) not in drop]
             pour_taps = [v["pos"] for v, _ in shunted]
         # a bridge whose far side feeds only bounded loads: their sum
+        block_cache: dict = {}
         for v, t in list(undersized):
             if v["bridge"]:
                 sides = track_sides(bg, net, t)
@@ -1920,6 +2104,10 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
             leaf = track_leaf_bound(bg, sides)
             if leaf is None and not v["bridge"] and id(t) in edge_of:
                 leaf = behind_bridge(bg, net, g, bridges, edge_of[id(t)], t)
+            if leaf is None and sides is None:
+                # #1168: the end-cap split can't cut it; the block-cut tree can
+                sides = block_sides(bg, net, t, sources, block_cache)
+                leaf = track_leaf_bound(bg, sides)
             if leaf is None or leaf[0] >= v["current_a"]:
                 mid = t.shape.interpolate(0.5, normalized=True).coords[0]
                 far = branch_refs(bg, net, sides, sources) if (
@@ -2326,6 +2514,103 @@ def inferred_switch_entries(entries: list[dict], bg: geom.BoardGeom,
     return list(found.values()), list(uniq.values())
 
 
+SCREEN_WIDTH_MM = 0.25         # default signal width: the no-load screen's ceiling
+SCREEN_MIN_RATED_A = 1.0       # ... on a regulator rated at least this
+
+
+def declared_switch_load(bg: geom.BoardGeom, entry: dict,
+                         cons: dict) -> dict | None:
+    """The smallest load this board states for an inferred switch node's
+    output, capped at the part's rating: the power entry of the rail on the
+    far pad of an inductor that sits on the node, and the iout_a of a block
+    whose name carries the regulator's ref. None when nothing is stated."""
+    net, ref = entry["net"], entry["from_part"]
+    power = {e.get("net"): e for e in cons.get("power", []) if e.get("net")}
+    found: list[tuple[float, float, str]] = []
+    inductors = sorted({p.ref for p in bg.pads_of(net=net)
+                        if re.match(r"L\d", p.ref or "")})
+    for lref in inductors:
+        for pad in bg.pads_of(ref=lref):
+            out = pad.net
+            if out and out != net and out in power and "current_a" in power[out]:
+                e = power[out]
+                found.append((float(e["current_a"]), float(e.get("dt_c", 10.0)),
+                              f"{out} power entry ({lref} output)"))
+    for b in cons.get("blocks", []) or []:
+        if not isinstance(b, dict):
+            continue
+        op = b.get("operating_point") or {}
+        iout = op.get("iout_a")
+        if iout is not None and re.search(rf"(?<![A-Za-z0-9]){re.escape(ref)}"
+                                          rf"(?![0-9])", str(b.get("name", ""))):
+            found.append((float(iout), 10.0,
+                          f"block {b.get('block') or b.get('name')!r} iout_a"))
+    if not found:
+        return None
+    amps, dt_c, src = min(found, key=lambda f: f[0])
+    rated = float(entry["current_a"])
+    if amps > rated:
+        amps, src = rated, f"{src}, capped at the part's rating"
+    return {"current_a": amps, "dt_c": dt_c, "source": src}
+
+
+def judge_switch_node(bg: geom.BoardGeom, entry: dict, cons: dict):
+    """(violations, facts, no_load) for one inferred switch node (module
+    docstring). A stated load judges it at that load; with none, a node at
+    signal width on a part rated >= SCREEN_MIN_RATED_A is screened at the
+    rating, and anything else that fails at the rating is not judged."""
+    ref, part, net = entry["from_part"], entry["part"], entry["net"]
+    rated = entry["current_a"]
+    load = declared_switch_load(bg, entry, cons)
+    tag = f"{net} is {ref} ({part})'s switch node"
+    if load is not None:
+        e = dict(entry, current_a=load["current_a"], dt_c=load["dt_c"])
+        vs, facts = check_net(bg, e, cons)
+        for v in vs:
+            v["severity"] = "warning"
+            v["msg"] = v["items"][0]["msg"] = (
+                f"{v['msg']}; inferred: {tag}, judged at the declared load "
+                f"{load['current_a']:g} A from {load['source']} - name the "
+                f"net in constraints.json power to set its own current")
+            v.update(inferred=True, from_part=ref, load_source=load["source"])
+            if ref not in v["refs"]:
+                v["refs"] = sorted(v["refs"] + [ref])
+        return vs, dict(facts, inferred=True, from_part=ref,
+                        load_source=load["source"]), None
+    vs, facts = check_net(bg, entry, cons)
+    facts = dict(facts, inferred=True, from_part=ref,
+                 load_source="part rating")
+    if not vs:
+        return [], facts, None
+    widths = [t.width for t in bg.tracks_of(net)]
+    narrow = min(widths) if widths else None
+    screen = (rated >= SCREEN_MIN_RATED_A and narrow is not None
+              and narrow <= SCREEN_WIDTH_MM + 1e-6)
+    kept = [v for v in vs if screen and v["kind"] == "undersized_track"]
+    for v in kept:
+        v["severity"] = "warning"
+        v["msg"] = v["items"][0]["msg"] = (
+            f"{v['msg']}; inferred: {tag}; no declared load; judged at the "
+            f"part's rated current {rated:g} A, screened at dT="
+            f"{INFERRED_DT_C:.0f}C - name the net in constraints.json power "
+            f"with this board's current")
+        v.update(inferred=True, from_part=ref, load_source="part rating")
+        if ref not in v["refs"]:
+            v["refs"] = sorted(v["refs"] + [ref])
+    rest = [v for v in vs if v not in kept]
+    nl = None
+    if rest:
+        kinds = sorted({v["kind"] for v in rest})
+        nl = {"net": net, "from_part": ref, "part": part, "rated_a": rated,
+              "kinds": kinds, "narrowest_mm": checklib.rnd(narrow)
+              if narrow is not None else None,
+              "why": (f"fails at the part's rated {rated:g} A "
+                      f"({', '.join(kinds)}) but the board states no load "
+                      f"for it; name the net in constraints.json power")}
+        facts["not_judged"] = "no_declared_load"
+    return kept, facts, nl
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(
         description="Trace width / pour neck / via count vs current (IPC-2152).")
@@ -2343,6 +2628,17 @@ def run(argv=None):
     # refill) as committed with findings on their nets cut to warnings
     bg, fill = geom.fresh_board(Path(args.pcb))
 
+    # a power entry naming a net this copy doesn't have is skipped and listed,
+    # not fatal: one stale net mustn't throw away the rest of the file. A file
+    # none of whose power nets are on the board belongs to another revision
+    # (a snapshot walked up to its board's file): constraints_mismatch, and
+    # the switch nodes are left unjudged rather than judged as if no file
+    # had been given.
+    missing = [e["net"] for e in entries
+               if isinstance(e, dict) and e.get("net") and e["net"] not in bg.nets]
+    entries = [e for e in entries
+               if not (isinstance(e, dict) and e.get("net") in missing)]
+    mismatch = bool(missing) and not entries
     violations: list[dict] = []
     checked: list[dict] = []
     for entry in entries:
@@ -2350,22 +2646,13 @@ def run(argv=None):
         violations.extend(vs)
         checked.append(facts)
     inferred, unrated = inferred_switch_entries(entries, bg, switch_rows())
-    for entry in inferred:
-        vs, facts = check_net(bg, entry, cons)
-        for v in vs:
-            v["severity"] = "warning"
-            v["msg"] = v["items"][0]["msg"] = (
-                f"{v['msg']}; inferred: {entry['net']} is "
-                f"{entry['from_part']} ({entry['part']})'s switch node, at its "
-                f"rated {entry['current_a']:g} A, screened at dT="
-                f"{INFERRED_DT_C:.0f}C - name the net in "
-                f"constraints.json power with this board's current")
-            v.update(inferred=True, from_part=entry["from_part"])
-            if entry["from_part"] not in v["refs"]:
-                v["refs"] = sorted(v["refs"] + [entry["from_part"]])
+    no_load: list[dict] = []
+    for entry in ([] if mismatch else inferred):
+        vs, facts, nl = judge_switch_node(bg, entry, cons)
         violations.extend(vs)
-        checked.append(dict(facts, inferred=True,
-                            from_part=entry["from_part"]))
+        checked.append(facts)
+        if nl:
+            no_load.append(nl)
     ret_entry = derived_return_entry(entries, bg)
     if ret_entry is not None:
         vs, facts = check_net(bg, ret_entry, cons)
@@ -2373,15 +2660,33 @@ def run(argv=None):
         checked.append(facts)
 
     extra = {"unrated_switch_nodes": unrated} if unrated else {}
+    if no_load:
+        extra["no_declared_load"] = no_load
+    if missing:
+        extra["constraints_missing_nets"] = missing
+    if mismatch:
+        extra["constraints_mismatch"] = [
+            {"net": e["net"], "from_part": e["from_part"], "part": e["part"]}
+            for e in inferred]
     extra_fill = checklib.zone_fill_facts(violations, fill)
     payload = checklib.report(
         SCRIPT, args.pcb, violations, checked=checked,
         stackup_assumed=bg.stackup.assumed,
-        nothing_to_judge=None if checked else
+        nothing_to_judge=None if checked or mismatch else
         "no power entries in constraints and no switcher the table knows",
         not_judged=[f"{u['ref']} ({u.get('value')}) {u['pin']} on {u['net']}: "
                     "a switch node whose part isn't in switch_nodes.yaml and "
                     "with no power entry" for u in unrated]
+        + [f"no_declared_load: {n['from_part']} ({n['part']}) {n['net']}: "
+           f"{n['why']}" for n in no_load]
+        + ([f"constraints_mismatch: none of the constraints file's power "
+            f"nets ({', '.join(missing)}) is on this board, so it belongs to "
+            f"another revision; switch nodes "
+            f"{', '.join(e['net'] for e in inferred) or '(none)'} not judged"]
+           if mismatch else
+           [f"constraints_missing_net: power entry {n} names a net this board "
+            f"doesn't have; skipped, the rest of the file is used"
+            for n in missing])
         + extra_fill.pop("not_judged", []), **extra, **extra_fill)
     return payload, args.out
 

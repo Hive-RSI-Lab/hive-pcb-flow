@@ -735,8 +735,9 @@ def fan_one(ctx: dict, bga: bgalib.Bga, ep: dict, layers: list[str],
     staged, work, krt = ctx["staged"], ctx["work"], ctx["krt"]
     out = work / (f"{staged.stem}.{bga.ref}.{method or ep['method']}"
                   f"{'.' + tag if tag else ''}.kicad_pcb")
-    fab = fab_overrides(work, ep, ctx["floors"])
-    launch = ["--hole-to-hole", f"{ctx['floors']['hole_to_hole']:g}"]
+    fl = {**ctx["floors"], **(ep.get("fine_via") or {})}
+    fab = fab_overrides(work, ep, fl)
+    launch = ["--hole-to-hole", f"{fl['hole_to_hole']:g}"]
     if open_to:
         plan = work / f"{out.stem}.open.json"
         plan.write_text(json.dumps({"open": {n: list(s) for n, s in
@@ -891,9 +892,26 @@ def run(argv: list[str] | None = None):
     keep_vip, vip_why = via_in_pad_choice(
         len(bg0.copper_layers), args.allow_via_in_pad, args.no_via_in_pad,
         free_filled_via_layers())
+    fine_cap = fine_cap_row(len(bg0.copper_layers)) \
+        if keep_vip and not build else None
     plans = []
     for b in bgas:
-        ep = bgalib.escape_params(b, floors)
+        fv = bgalib.fine_via(b, len(bg0.copper_layers), fine_cap,
+                             free_filled_via_layers()) if fine_cap else None
+        ep = bgalib.escape_params(b, {**floors, **fv} if fv else floors)
+        if fv:      # #1252: the fab's smallest via, filled, in the pad
+            # the courtyard copper rule stays at the field's own clearance:
+            # the fine via's thin ring needs 0.15 track-to-via, but that is
+            # the fine rule's hole_clearance to check, not a track-to-track
+            # rule Freerouting (netclass clearance) never sees - a 0.15
+            # courtyard rule turned 18 of its 0.125 gaps into DRC errors
+            ep.update(method="underpad", fine_via=fv,
+                      rule_clearance=bgalib.escape_params(
+                          b, floors)["clearance"],
+                      why=(f"{b.pitch:g} mm field on {len(bg0.copper_layers)}"
+                           f" layers: filled {fv['via_diameter']:g}/"
+                           f"{fv['via_drill']:g} mm via in the pad "
+                           "(JLC's BGA guide; POFV free from 6 layers)"))
         if args.method:
             ep["method"] = args.method
         layers, planes = escape_layers(bg0, b, explicit_layers)
@@ -902,9 +920,15 @@ def run(argv: list[str] | None = None):
                       "pairs": pairs, "pair_gap": gap})
 
     def _plan_fact(p):
+        fv = p["ep"].get("fine_via")
         return {**p["bga"].as_dict(), **{k: p["ep"][k] for k in (
             "via_size", "via_drill", "track_width", "clearance", "method",
             "why", "budget")}, "layers": p["layers"],
+            **({"fine_via": {"rule": bgalib.fine_rule_name(p["bga"].ref),
+                             "hole_to_hole": fv["hole_to_hole"],
+                             "hole_clearance": fv["hole_clearance"],
+                             "rule_clearance": p["ep"]["rule_clearance"]}}
+               if fv else {}),
             "plane_layers": p["planes"],
             **({"pairs": p["pairs"], "pair_gap_mm": p["pair_gap"]}
                if p["pairs"] else {}),
@@ -931,7 +955,9 @@ def run(argv: list[str] | None = None):
     dru = staged.with_suffix(".kicad_dru")
     dru_text = dru.read_text(encoding="utf-8") if dru.is_file() else ""
     dru_text, rules_changed = bgalib.ensure_rules(
-        dru_text, [(p["bga"].ref, p["ep"]["clearance"]) for p in plans])
+        dru_text, [(p["bga"].ref,
+                    p["ep"].get("rule_clearance", p["ep"]["clearance"]),
+                    p["ep"].get("fine_via")) for p in plans])
     if rules_changed:
         dru.write_text(dru_text, encoding="utf-8")
     pristine = {f.name: f.read_bytes() for f in work.iterdir()
@@ -1016,8 +1042,8 @@ def run(argv: list[str] | None = None):
             r["via_in_pad"]["items_removed"] = rc.rip_new_copper(
                 staged, old_uuids, set(vip))
         elif vip:
-            clash = vip_conflicts(bg, b, new, floors["hole_to_hole"],
-                                  ep["clearance"])
+            clash = vip_conflicts(bg, b, new, (ep.get("fine_via") or floors)
+                                  ["hole_to_hole"], ep["clearance"])
             if clash:
                 r["via_in_pad"]["clashing"] = sorted(clash)
                 r["via_in_pad"]["items_removed"] = rip_in_fields(
@@ -1104,6 +1130,14 @@ def run(argv: list[str] | None = None):
     for r, p in zip(results, plans):
         r["via_in_pad"]["filled"] = sum(
             1 for v in filled if v.net in set(p["bga"].nets.values()))
+    teardropped = []
+    if kept_nets:
+        teardropped = enable_breakout_teardrops(
+            cli, staged, work, [x for x in new_items
+                                if isinstance(x, geom.Via)])
+    for r, p in zip(results, plans):
+        r["teardrops"] = sum(1 for v in teardropped
+                             if v.net in set(p["bga"].nets.values()))
 
     board_updated = (bool(kept_nets) or bool(moved)
                      or bool(power_first.get("placed")))
@@ -1125,6 +1159,44 @@ def run(argv: list[str] | None = None):
     return payload, args.out_report
 
 
+def breakout_vias(vias: list) -> list:
+    """Escape vias whose ring is under the fab's absolute ring plus drill
+    wander (teardroplib: JLC 0.05 + 0.075): a fine field's 0.15/0.25 via
+    has 0.05. dfm_check flags each track join on one with no teardrop as
+    dfm_ring_breakout; the routers add the inner-layer joins later."""
+    import teardroplib as tdl
+    lim = tdl.MIN_RING_ABS_MM + tdl.DRILL_WANDER_MM
+    return [v for v in vias
+            if v.uuid and (v.diameter - v.drill) / 2.0 < lim - 1e-9]
+
+
+def enable_breakout_teardrops(cli, staged: Path, work: Path,
+                              vias: list) -> list:
+    """Turn on KiCad's per-via teardrop setting on the breakout_vias of the
+    escape (lib/teardrop_swig enable). It makes no copper here: every later
+    zone refill (drc_routed, route_teardrops) builds a drop on each track
+    joining the via, including the inner-layer ones the routers add. The
+    breakout vias that got it are returned."""
+    import env
+    import teardroplib as tdl
+    todo = breakout_vias(vias)
+    if not todo:
+        return []
+    bp = env.find_kicad_python(cli) if cli else None
+    if bp is None:
+        raise CheckError("KiCad bundled python not found (env.py)")
+    cfg = tdl.config(None)
+    job = {"verb": "enable", "board": str(staged), "out": str(staged),
+           "vias": [v.uuid for v in todo], "pads": [],
+           "params": {k: cfg[k] for k in (
+               "length_ratio", "max_length_mm", "width_ratio",
+               "max_width_mm", "filter_ratio", "curved")}}
+    res = routelib.run_worker(bp, job, work,
+                              worker=SCRIPTS / "lib" / "teardrop_swig.py")
+    missing = set(res.get("missing") or [])
+    return [v for v in todo if v.uuid not in missing]
+
+
 def filled_via_layers() -> set[int]:
     """Copper layer counts the fab fills and caps vias on (POFV,
     jlc_pricing.yaml options.via_fill_epoxy)."""
@@ -1134,12 +1206,20 @@ def filled_via_layers() -> set[int]:
     return {int(k) for k in table}
 
 
+def fine_cap_row(n_copper: int) -> dict | None:
+    """The JLC capability row (1 oz) whose abs_min_via_* floors size a
+    fine field's via (#1252); None when there is no such row."""
+    import fabfloors
+    try:
+        return fabfloors.profile(n_copper, 1.0)[1]
+    except fabfloors.FabFloorError:
+        return None
+
+
 def free_filled_via_layers() -> set[int]:
     """Layer counts whose filled, capped vias the fab charges nothing for."""
     import order_quote
-    table = (order_quote.load_pricing(order_quote.PRICING).get("options")
-             or {}).get("via_fill_epoxy") or {}
-    return {int(k) for k, v in table.items() if float(v or 0) == 0}
+    return bgalib.free_fill_layers(order_quote.load_pricing(order_quote.PRICING))
 
 
 def plane_ball_specs(bg, refs: list[str], nets: list[str]) -> list[str]:

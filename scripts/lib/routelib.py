@@ -109,7 +109,8 @@ DEFAULT_LADDER = [
 _PASS_RE = re.compile(
     r"Auto-router pass #(\d+).*?score of (\d+(?:\.\d+)?)(?: \((\d+) unrouted\))?")
 _SESSION_RE = re.compile(
-    r"Auto-router session completed: started with (\d+) unrouted nets"
+    r"Auto-router session completed( with timeout)?: started with (\d+) "
+    r"unrouted nets"
     r".*?final score: (\d+(?:\.\d+)?)(?: \((\d+) unrouted\))?")
 
 
@@ -186,8 +187,19 @@ def run_worker(bundled_python: Path, job: dict, stage: Path,
     return result
 
 
+def fr_job_timeout(timeout_s: float) -> int:
+    """Freerouting's own stop, ahead of run_freerouting's hard kill: at
+    --router.job_timeout it ends the session and writes the SES so far
+    (2.2.4: "session completed with timeout", rc 0), where the kill leaves
+    no SES at all (an escaped 6-layer BGA bench: every rung
+    killed at 600 s while still improving). A tenth of the cap, at least
+    20 s, is left for the SES write."""
+    return max(10, int(timeout_s - max(20, timeout_s / 10)))
+
+
 def build_fr_cmd(java: Path, jar: Path, dsn: Path, ses: Path,
-                 rung: dict | None = None) -> list[str]:
+                 rung: dict | None = None,
+                 job_timeout_s: int | None = None) -> list[str]:
     rung = rung or {}
     if jar.name == FR_OVERLAY_JAR:
         launch = ["-cp", os.pathsep.join((str(FR_OVERLAY), str(jar))), FR_MAIN_CLASS]
@@ -203,6 +215,9 @@ def build_fr_cmd(java: Path, jar: Path, dsn: Path, ses: Path,
         cmd += ["-us", str(rung["us"])]
     if rung.get("inc"):
         cmd += ["-inc", str(rung["inc"])]
+    if job_timeout_s:
+        h, rest = divmod(int(job_timeout_s), 3600)
+        cmd += [f"--router.job_timeout={h:02d}:{rest // 60:02d}:{rest % 60:02d}"]
     cmd += ["-de", str(dsn), "-do", str(ses)]
     return cmd
 
@@ -219,7 +234,8 @@ def run_freerouting(java: Path, jar: Path, dsn: Path, ses: Path, *,
     until the hard cap; a silent wedged JVM ends after `stall_s`."""
     import threading
     import time
-    cmd = cmd or build_fr_cmd(java, jar, dsn, ses, rung)
+    cmd = cmd or build_fr_cmd(java, jar, dsn, ses, rung,
+                              job_timeout_s=fr_job_timeout(timeout))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, cwd=str(dsn.parent))
     chunks: list[bytes] = []
@@ -286,16 +302,17 @@ def parse_fr_log(text: str) -> dict:
     started = None
     score = None
     if session:
-        started = int(session.group(1))
-        score = float(session.group(2))
-        unrouted = int(session.group(3)) if session.group(3) else None
+        started = int(session.group(2))
+        score = float(session.group(3))
+        unrouted = int(session.group(4)) if session.group(4) else None
     if unrouted is None and passes:
         unrouted = passes[-1]["unrouted"]
     if unrouted is None and session:
         unrouted = 0  # session completed, no pass lines captured
     return {"passes": passes, "unrouted": unrouted,
             "started_unrouted": started, "final_score": score,
-            "session_completed": bool(session)}
+            "session_completed": bool(session),
+            "job_timeout_hit": bool(session and session.group(1))}
 
 
 def completion_fraction(facts: dict) -> float | None:

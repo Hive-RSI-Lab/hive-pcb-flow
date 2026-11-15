@@ -210,6 +210,36 @@ def load_json(path, what: str) -> dict:
         raise CheckError(f"{what} {p} is not valid JSON: {exc}") from exc
 
 
+SNAPSHOT_DIRS = ("state_snapshots", "snapshots")
+
+
+def find_constraints(pcb) -> Path | None:
+    """The constraints.json that governs a board file: the one beside it, or,
+    for a copy kept under a state_snapshots/ (or snapshots/) folder, the
+    nearest one above it, up to the board folder that holds the snapshots
+    (checking each level and its kicad/). A board outside a snapshot folder
+    gets only its sibling: walking up from an ordinary board could pick up
+    another board's file. The caller still checks that the file's nets are on
+    the copy (check_current: constraints_mismatch)."""
+    p = Path(pcb).resolve()
+    own = p.parent / "constraints.json"
+    if own.is_file():
+        return own
+    parts = p.parent.parts
+    idx = [i for i, n in enumerate(parts) if n in SNAPSHOT_DIRS]
+    if not idx:
+        return None
+    top = Path(*parts[:idx[-1]])        # the board folder holding the snapshots
+    d = p.parent
+    while True:
+        for c in (d / "constraints.json", d / "kicad" / "constraints.json"):
+            if c.is_file():
+                return c
+        if d == top or d.parent == d:
+            return None
+        d = d.parent
+
+
 def emit(payload: dict, out: str | None) -> int:
     """Write/print the report; return the SPEC exit code for its status."""
     text = json.dumps(payload, indent=1)

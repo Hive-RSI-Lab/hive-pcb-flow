@@ -13,6 +13,9 @@
 #   theta_ja   degC/W: the lowest junction-to-ambient thermal resistance
 #              of any package the datasheet lists, so a heat finding holds
 #              whichever package is fitted
+#   (tj_max and theta_ja are left out when the datasheet gives neither,
+#   as Torex's XC6206 gives only package Pd: the heat check is then
+#   reported as not judged)
 # loads: a part's demand on the rail its supply pins are on.
 #   supply     regex on the supply pin function
 #   i_supply   A: the current the datasheet says the supply must be able to
@@ -152,6 +155,44 @@ regulators:
   - {doc: ap2112.pdf, sha256: ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f, page: 4, table: '', quote: 'IOUT(MAX) Maximum Output Current VIN = 2.5V, VOUT = 1.182V to 1.218V 600 — — mA', fields: [iout_max]}
   - {doc: ap2112.pdf, sha256: ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f, page: 3, table: '', quote: 'TJ Operating Junction Temperature Range +150 °C', fields: [tj_max]}
   - {doc: ap2112.pdf, sha256: ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f, page: 3, table: '', quote: 'SO-8 114', fields: [theta_ja]}
+- mpn: XC6206P33
+  match: ^XC6206P(3|4|5)\d
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.2
+  source: Torex XC6206 Series datasheet, Features and Absolute Maximum Ratings
+  cite:
+  - {doc: xc6206.pdf, sha256: 8fda1e40ea3e7c17178353aceba9c9a9794e56a1960d02b105c576429ce418ed, page: 1, table: '', table: 'Maximum Output Current', quote: '200mA (3.0V type)', fields: [iout_max]}
+- mpn: XC6220
+  match: ^XC6220
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 1.0
+  tj_max: 125
+  theta_ja: 66.67
+  source: Torex XC6220 Series datasheet, Electrical Characteristics and Power Dissipation (board mount)
+  cite:
+  - {doc: xc6220.pdf, sha256: 36c8215b268fff0c5639ebb77568148075a60efae11801a025ecd3c91648e8ea, page: 5, table: 'Output Current', quote: '1000 1200', fields: [iout_max]}
+  - {doc: xc6220.pdf, sha256: 36c8215b268fff0c5639ebb77568148075a60efae11801a025ecd3c91648e8ea, page: 29, table: '', quote: 'Board Mount (Tj max = 125', fields: [tj_max]}
+  - {doc: xc6220.pdf, sha256: 36c8215b268fff0c5639ebb77568148075a60efae11801a025ecd3c91648e8ea, page: 29, table: 'SOP-8FD Power Dissipation', quote: '66.67', fields: [theta_ja]}
+- mpn: HT7533-1
+  match: ^HT75\d\d-1
+  verified: true
+  kind: ldo
+  out: ^V?OUT$
+  in: ^V?IN$
+  iout_max: 0.07
+  tj_max: 150
+  theta_ja: 200
+  source: Holtek HT75xx-1 datasheet Rev. 2.80, Absolute Maximum Ratings, Thermal Information, Electrical Characteristics
+  cite:
+  - {doc: ht75xx-1.pdf, sha256: d43d4670a7758308c5a77b3047e4da561468308ac04a869be46d4d0470cbc4ae, page: 7, table: '', quote: 'IOUT Output Current VIN=5.3V 70 100', fields: [iout_max]}
+  - {doc: ht75xx-1.pdf, sha256: d43d4670a7758308c5a77b3047e4da561468308ac04a869be46d4d0470cbc4ae, page: 4, table: 'Maximum Junction Temperature', quote: '150°C', fields: [tj_max]}
+  - {doc: ht75xx-1.pdf, sha256: d43d4670a7758308c5a77b3047e4da561468308ac04a869be46d4d0470cbc4ae, page: 4, table: 'Thermal Information', quote: 'SOT89 200', fields: [theta_ja]}
 
 loads:
 - mpn: ESP32-S3-WROOM-1
@@ -181,6 +222,31 @@ loads:
   source: Espressif ESP32-C6-MINI-1 datasheet, Recommended Operating Conditions
   cite:
   - {doc: esp32c6mini1.pdf, sha256: 26691033f31cbebf623842c16624e61151b152533c13a850c091c8e858c510a2, page: 26, table: '', quote: 'IV DD Current delivered by external power supply 0.5 — — A', fields: [i_supply]}
+- mpn: STM32G030
+  match: ^STM32G030
+  verified: true
+  supply: ^VDD
+  i_supply: 0.0083
+  source: ST DS12991 Rev 3 (STM32G030x6/x8), Table 25 Current consumption in Run mode, 64 MHz from Flash, max at 85 C. That table is measured with all peripherals disabled, so a busy part may draw more; GPIO loads (LEDs) are summed on their own.
+  cite:
+  - {doc: stm32g030f6.pdf, sha256: bd4d70f72b2e82c5965a2b92ef3b9c96ad48c0ecdf195cf900d14cd47bff09f5, page: 44, table: 'Table 25', quote: '64 MHz Flash memory 5.7 5.9 8.0 8.3', fields: [i_supply]}
+- mpn: STM32F103
+  match: ^STM32F103
+  verified: true
+  supply: ^VDD
+  i_supply: 0.0503
+  source: ST DS5319 Rev 18 (STM32F103x8/xB), Table 13 Maximum current consumption in Run mode from Flash, 72 MHz, all peripherals enabled, TA 105 C.
+  cite:
+  - {doc: stm32f103c8.pdf, sha256: 0596dd57693c93d214c9cb69186429883c853bad8650926def57c1ed3cdf2e9f, page: 41, table: 'Table 13', quote: '72 MHz 50.0 50.3', fields: [i_supply]}
+- mpn: SHT4x
+  match: ^SHT4[0135]-
+  verified: true
+  supply: ^VDD$
+  i_supply: 0.1
+  peak: true
+  source: Sensirion SHT4x datasheet Version 7.3 (June 2026), Electrical Specifications, supply current with the 200 mW heater on (max 100 mA). It draws this only while firmware runs the heater; measuring it takes 500 uA max.
+  cite:
+  - {doc: sht4x.pdf, sha256: 8db4a43f17149b76811cfb504caaeca4ef844ddc710cb9b45905c51c7ddfe3c2, page: 9, table: '', quote: 'Nomin. heater “200 mW” - 60 100 mA', fields: [i_supply]}
 
 gpio:
 - mpn: RP2040
