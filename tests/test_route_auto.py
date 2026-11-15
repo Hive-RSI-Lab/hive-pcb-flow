@@ -551,6 +551,14 @@ def test_fr_heap_is_a_clamped_share_of_the_budget(monkeypatch):
     assert routelib.fr_heap_mb() == routelib.FR_HEAP_MAX_MB
 
 
+def test_fr_heap_ceiling_fits_a_heavy_job():
+    # the JVM grows to its -Xmx before a full GC, so the ceiling sets its
+    # footprint; with the JVM's own overhead, Xvfb and python it has to stay
+    # well inside heavy's 4500 MB job reservation (bench peak 4.3 GB at 4096)
+    assert routelib.FR_HEAP_MAX_MB <= 2048
+    assert routelib.fr_heap_mb(12 * 1024) == routelib.FR_HEAP_MAX_MB
+
+
 def test_fr_heap_env_override(monkeypatch):
     monkeypatch.setenv("HWDE_FR_HEAP_MB", "1500")
     assert routelib.fr_heap_mb(64 * 1024) == 1500
