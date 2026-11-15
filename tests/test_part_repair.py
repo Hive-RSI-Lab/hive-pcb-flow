@@ -791,6 +791,113 @@ def test_late_teardrops_give_the_re_prunes_losses_to_vias_made_without():
         kept, made, td_src, gone, params, set())] == [[3.0, 0.0]]
 
 
+def test_takes_drop_and_drop_length_read_an_items_settings():
+    """KiCad 10.0.6 makes no drop for a track at or over filter_ratio x
+    the via's size (0.9 x 0.254 = 0.2286 mm), and lays it over
+    length_ratio x the size past the via's edge, capped by max_length_mm
+    (0 sets no cap); a key left out reads as ITEM_PARAMS."""
+    assert tdl.takes_drop(0.2, 0.254, {})
+    assert not tdl.takes_drop(0.229, 0.254, {})
+    assert not tdl.takes_drop(0.3, 0.254, {"filter_ratio": 0.9})
+    assert not tdl.takes_drop(0.2, 0.254, {"max_width_mm": 0.2})
+    assert tdl.takes_drop(0.25, 0.3, {})
+    assert tdl.drop_length(0.254, {}) == pytest.approx(0.127)
+    assert tdl.drop_length(4.0, {}) == pytest.approx(1.0)
+    assert tdl.drop_length(4.0, {"max_length_mm": 0}) == pytest.approx(2.0)
+    assert tdl.drop_length(0.5, {"length_ratio": 0.8,
+                                 "max_length_mm": "x"}) == pytest.approx(0.4)
+
+
+@pytest.mark.parametrize("widths, wide, floor, want", [
+    # the widest the removed via's drops took that takes one here
+    ([0.2, 0.15, 0.22], 0.3, 0.1, 0.22),
+    ([0.25, 0.2], 0.3, 0.1, 0.2),
+    # none of them: the net's width, then its floor
+    ([], 0.2, 0.1, 0.2),
+    ([0.25], 0.3, 0.12, 0.12),
+    # never under the floor
+    ([0.1], 0.3, 0.15, 0.15),
+    # no width at or over the floor takes a drop: leave it to the gate
+    ([0.2], 0.3, 0.25, None),
+])
+def test_neck_width_is_the_widest_a_drop_takes(widths, wide, floor, want):
+    assert pr.neck_width(0.254, dict(tdl.ITEM_PARAMS), widths, wide,
+                         floor) == want
+
+
+def test_neck_tracks_narrow_a_track_too_wide_for_a_new_vias_drop():
+    """A track too wide for the drop on a new via that took teardrops
+    narrows from its end in the via to NECK_PAST past where the drop ends
+    (0.127 mm past the 0.254 mm via's edge), walking on through the one
+    track that goes on from its far end; the rest keeps its width, split
+    off with its orientation, td_src growing with it. Tracks already
+    narrow, of another net, cut back by the prune, or on a via that took
+    no teardrops stay as they are, and a walk stops at a branch."""
+    via = {"op": "add_via", "net": "A", "at": [0.0, 0.0], "size": 0.254,
+           "drill": 0.15, "teardrops": {}}
+
+    def tr(layer, a, b, w=0.3, net="A"):
+        return {"op": "add_track", "net": net, "layer": layer,
+                "width": w, "start": list(a), "end": list(b)}
+
+    kept = [via,
+            tr("F.Cu", (0, 0), (1, 0)),            # 1: via at its start
+            tr("B.Cu", (2, 0), (0, 0)),            # 2: via at its end
+            tr("In1.Cu", (0, 0), (0, 0.1)),        # 3: wholly inside,
+            tr("In1.Cu", (0, 0.1), (0, 1.0)),      # 4: walked on to
+            tr("In2.Cu", (0, 0), (0, 0.2)),        # 5: then a branch
+            tr("In2.Cu", (0, 0.2), (1, 0.2)),      # 6
+            tr("In2.Cu", (0, 0.2), (-1, 0.2)),     # 7
+            tr("In3.Cu", (0, 0), (0, -1), w=0.2),  # 8: narrow already
+            tr("In4.Cu", (0, 0), (0, -1), net="B"),  # 9: another net
+            tr("In5.Cu", (0, 0), (0, -1)),         # 10: cut back
+            {"op": "add_via", "net": "A", "at": [5.0, 0.0], "size": 0.254,
+             "drill": 0.15},                        # 11: took none
+            tr("F.Cu", (5, 0), (6, 0))]             # 12
+    td_src = ["s"] + [None] * (len(kept) - 1)
+    asked = []
+
+    def width_of(i, p):
+        asked.append((i, p["filter_ratio"]))
+        return 0.2
+
+    n = len(kept)
+    out = pr.neck_tracks(kept, td_src, {10: ((), ())}, width_of)
+    assert asked == [(0, 0.9)]
+    at = round(0.127 + 0.127 + pr.NECK_PAST, 4)
+    assert kept[1] == tr("F.Cu", (0, 0), (at, 0), w=0.2)
+    assert kept[2] == tr("B.Cu", (at, 0), (0, 0), w=0.2)
+    assert kept[3] == tr("In1.Cu", (0, 0), (0, 0.1), w=0.2)
+    assert kept[4] == tr("In1.Cu", (0, 0.1), (0, at), w=0.2)
+    assert kept[5] == tr("In2.Cu", (0, 0), (0, 0.2), w=0.2)
+    assert kept[n:] == [tr("F.Cu", (at, 0), (1, 0)),
+                        tr("B.Cu", (2, 0), (at, 0)),
+                        tr("In1.Cu", (0, at), (0, 1.0))]
+    assert kept[6:13] == [
+        tr("In2.Cu", (0, 0.2), (1, 0.2)),
+        tr("In2.Cu", (0, 0.2), (-1, 0.2)),
+        tr("In3.Cu", (0, 0), (0, -1), w=0.2),
+        tr("In4.Cu", (0, 0), (0, -1), net="B"),
+        tr("In5.Cu", (0, 0), (0, -1)), kept[11],
+        tr("F.Cu", (5, 0), (6, 0))]
+    assert td_src == ["s"] + [None] * (len(kept) - 1)
+    assert len(td_src) == n + 3
+    assert [(o["layer"], o["width"], o["was"], o["length"]) for o in out] \
+        == [("F.Cu", 0.2, 0.3, pytest.approx(at)),
+            ("B.Cu", 0.2, 0.3, pytest.approx(at)),
+            ("In1.Cu", 0.2, 0.3, pytest.approx(at)),
+            ("In2.Cu", 0.2, 0.3, pytest.approx(0.2))]
+    assert {(o["net"], tuple(o["via"])) for o in out} == {("A", (0.0, 0.0))}
+    # run again: nothing in the via's copper is too wide now
+    assert pr.neck_tracks(kept, td_src, {10: ((), ())}, width_of) == []
+    assert asked == [(0, 0.9)]
+    # no width to narrow to: nothing changes, the gate names the loss
+    kept2 = [dict(via), tr("F.Cu", (0, 0), (1, 0))]
+    src2 = ["s", None]
+    assert pr.neck_tracks(kept2, src2, {}, lambda i, p: None) == []
+    assert kept2[1] == tr("F.Cu", (0, 0), (1, 0)) and src2 == ["s", None]
+
+
 @pytest.mark.parametrize("params, want", [
     ([], pr.TD_READ),
     ([None, {"enabled": False, "max_length_mm": 9.0}], pr.TD_READ),

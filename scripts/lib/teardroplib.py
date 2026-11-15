@@ -569,6 +569,26 @@ def too_wide(width: float, size: float, limits) -> bool:
         or width >= fr * size - eps
 
 
+def takes_drop(width: float, size: float, p: dict) -> bool:
+    """True when KiCad makes a drop for a track this wide on an item of
+    this smaller copper size with teardrop settings p (params_of, or
+    add_via's "teardrops": a key left out reads as ITEM_PARAMS)."""
+    return not too_wide(width, size, _limits(p))
+
+
+def drop_length(size: float, p: dict) -> float:
+    """mm along a track, from where it leaves the item's copper, that
+    KiCad 10.0.6 lays a drop over: length_ratio x the item's size, capped
+    by max_length_mm (0 sets no cap). p as for takes_drop."""
+    n = []
+    for k in ("length_ratio", "max_length_mm"):
+        v = p.get(k)
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool) \
+            and math.isfinite(v) and v >= 0
+        n.append(float(v) if ok else float(ITEM_PARAMS[k]))
+    return min(n[0] * size, n[1]) if n[1] > 0 else n[0] * size
+
+
 def _fine_pitch_refs(bg, limit: float) -> set[str]:
     by_ref: dict[str, list] = {}
     for p in bg.pads_of():
