@@ -373,6 +373,7 @@ class Zone:
     thermal_gap: Optional[float] = None
     spoke_width: Optional[float] = None
     min_thickness: Optional[float] = None
+    uuid: Optional[str] = None  # see Track.uuid
 
     @property
     def filled(self) -> bool:
@@ -1137,7 +1138,8 @@ class BoardGeom:
                                         fnode, "thermal_bridge_width")
                                     if fnode is not None else None,
                                     min_thickness=_num_of(zone,
-                                                          "min_thickness")))
+                                                          "min_thickness"),
+                                    uuid=_uuid_of(zone)))
             zid += 1
 
     def _parse_outline(self, root) -> Polygon:

@@ -566,7 +566,7 @@ def thermal_pads(bg: geom.BoardGeom) -> list:
 
 
 def thermal_spokes(pad, fills, gap: float, sw: float, mt: float,
-                   joined=None) -> list:
+                   joined=None, mids: bool = False) -> list:
     """The live thermal spokes of `pad` in `fills` (one zone's polygons on
     one layer), best first, as (score, keep-out). A spoke is where a fill
     polygon crosses the pad outline grown by half the thermal gap, as
@@ -578,7 +578,8 @@ def thermal_spokes(pad, fills, gap: float, sw: float, mt: float,
     other copper of the net meets that polygon (default: all do); DRC does
     not count a spoke into an island only the pad meets. Best is joined,
     then in the largest polygon, then with the most fill within 1 mm of
-    its end."""
+    its end. mids=True: (score, keep-out, (x, y)), the last where the
+    spoke crosses the ring (its middle there)."""
     sw = min(sw, min(pad.size)) if min(pad.size) > 0 else sw
     edge = pad.poly.buffer(gap / 2).exterior
     out = []
@@ -608,7 +609,7 @@ def thermal_spokes(pad, fills, gap: float, sw: float, mt: float,
                 Point(p_out).buffer(max(mt, sw) / 2))
             near = poly.intersection(Point(p_out).buffer(1.0)).area
             out.append(((bool(tied), round(poly.area, 6), round(near, 6)),
-                        shape))
+                        shape) + (((m.x, m.y),) if mids else ()))
     out.sort(key=lambda f: f[0], reverse=True)
     return out
 

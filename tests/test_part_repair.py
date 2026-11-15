@@ -473,6 +473,78 @@ def test_patch_notes_name_a_patch_the_move_leaves_behind(tmp_path):
     assert len(notes) == 1
     assert notes[0].startswith("zone PATCH_A on F.Cu met U1.1")
     assert "zone_patch --net A --layer F.Cu" in notes[0]
+    assert pr.patch_notes(bg, old, away, uuids=True) == [("zA", notes[0])]
+
+
+def test_orphan_patches_find_a_patch_left_joining_nothing(tmp_path):
+    """#1140 (the C216-C224 job on the voice board): a PATCH_<net> zone
+    that met copper of its net before the run and meets none after it is
+    isolated copper, removed in the route ops with a note in place of the
+    early one; one a track of its net still meets stays, as does a zone
+    not named PATCH_ or one with no uuid."""
+    bg0 = geom.BoardGeom.from_file(_board(tmp_path, U1 + PATCH_A, "b0"))
+    assert pr.orphan_patches(bg0, bg0) == []
+    away = U1.replace("(at 0 0)", "(at 10 0)", 1)
+    bg1 = geom.BoardGeom.from_file(_board(tmp_path, away + PATCH_A, "b1"))
+    [(z, pads)] = pr.orphan_patches(bg0, bg1)
+    assert (z.uuid, z.name, z.net, pads) == ("zA", "PATCH_A", "A", ["U1.1"])
+    held = _seg((-2, 0), (-6, 0), "A", "h0")
+    bg2 = geom.BoardGeom.from_file(_board(tmp_path, away + PATCH_A + held,
+                                          "b2"))
+    assert pr.orphan_patches(bg0, bg2) == []
+    for other in (PATCH_A.replace('"PATCH_A"', '"POUR_A"'),
+                  PATCH_A.replace(' (uuid "zA")', "")):
+        b0 = geom.BoardGeom.from_file(_board(tmp_path, U1 + other, "c0"))
+        b1 = geom.BoardGeom.from_file(_board(tmp_path, away + other, "c1"))
+        assert pr.orphan_patches(b0, b1) == []
+    early = pr.patch_notes(bg1, {"U1": bg0.pads_of(ref="U1")},
+                           {"U1": bg1.pads_of(ref="U1")})
+    gone, marks = [], []
+    payload = {"notes": ["kept", *early], "removed_zones": []}
+    pr._drop_patch(z, pads, gone, marks, payload, early)
+    assert gone == ["zA"]
+    assert marks[0].contains(box(-3, -1, -1, 1).buffer(0.99))
+    assert payload["removed_zones"] == [
+        {"uuid": "zA", "name": "PATCH_A", "net": "A", "layers": ["F.Cu"],
+         "met": ["U1.1"]}]
+    assert payload["notes"][0] == "kept" and len(payload["notes"]) == 2
+    assert payload["notes"][1].startswith(
+        "zone PATCH_A on F.Cu joins no copper of A after the run, where it"
+        " met U1.1 before: removed")
+
+
+def _starved(ref, num, zone, *, layer="B.Cu", pos=(1, 1), pth=False,
+             zlayer=None):
+    pad = (f"PTH pad {num} [GND] of {ref}" if pth
+           else f"Pad {num} [GND] of {ref} on {layer}")
+    return {"source": "drc", "check": "starved_thermal", "severity": "error",
+            "net": "GND", "layer": zlayer or layer, "msg": "starved",
+            "pos": [0, 0], "items": [
+                {"msg": f"Zone [GND] on {zlayer or layer}, priority 0",
+                 "pos": [0, 0], "uuid": zone},
+                {"msg": pad, "pos": list(pos), "uuid": f"p-{ref}-{num}"}]}
+
+
+def test_starved_pads_name_the_pad_its_layer_and_zone():
+    """#1140: KiCad names a starved thermal's zone and pad in its items;
+    only those the run made count. The layer is the pad's, else the
+    zone's; a PTH pad in a zone on more layers has none."""
+    old = _starved("C210", "2", "zG", pos=(5, 5))
+    new = _starved("C221", "1", "zG", pos=(9, 9))
+    clr = _vat("drc", "clearance", "A", (2, 2), (2, 3))
+    assert pr.starved_pads({"violations": [old]},
+                           {"violations": [old, new, clr]}) \
+        == [("C221", "1", "B.Cu", "zG")]
+    smd = _starved("C9", "2", "zM", layer="B.Cu",
+                   zlayer="F.Cu and 3 more")
+    pth = _starved("J1", "1", "zG", pth=True)
+    many = _starved("J2", "3", "zM", pth=True, zlayer="F.Cu and 1 more")
+    named = _starved("C5", "1", "zN")
+    named["items"][0]["msg"] = "Zone 'PATCH_GND' [GND] on B.Cu, priority 2"
+    assert pr.starved_pads({"violations": []},
+                           {"violations": [smd, pth, many, named]}) == [
+        ("C9", "2", "B.Cu", "zM"), ("J1", "1", "B.Cu", "zG"),
+        ("J2", "3", None, "zM"), ("C5", "1", "B.Cu", "zN")]
 
 
 def test_load_ops_takes_footprint_ops_only(tmp_path, monkeypatch):

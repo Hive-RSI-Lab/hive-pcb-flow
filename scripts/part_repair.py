@@ -54,8 +54,8 @@ net back together, and keep the result only if the board got no worse.
      clearance error and makes another still fails.
 
 In DIR on a pass: 01-rip.route_edit.json, 02-place.place_edit.json and
-03-route.route_edit.json (prunes and pushes removed, then the new routes),
-which replay on --pcb in this order:
+03-route.route_edit.json (prunes, pushes and orphan patch zones removed,
+then the new routes), which replay on --pcb in this order:
 
   hwde route_edit --pcb B --ops DIR/01-rip.route_edit.json
   hwde place_edit --pcb B --ops DIR/02-place.place_edit.json --allow-routed
@@ -71,7 +71,14 @@ part_repair.json, and base/, trial/ and work/ with their boards. When DRC got
 worse, both list the new violations on work/B (where, which net, the items'
 uuids), so the next try knows what to rip or move. Zones are
 refilled, not reshaped: a PATCH_<net> zone (zone_patch) whose fill met an
-old pad and meets no new pad of its net is named in the report's notes.
+old pad and meets no new pad of its net is named in the report's notes; one
+the run leaves joining no copper of its net at all (DRC's isolated copper,
+one more island of the net) is removed in 03-route, and the report names
+the pads it met. A pad the run leaves starved, its pour reaching it by one
+spoke (as when the prune takes copper that held the pour off it), gets a
+track of its net on that spoke, from its centre into the fill: KiCad's DRC
+counts the track as a second spoke, but it adds no new path, and the notes
+say so.
 The new vias have no teardrops (route_edit's add_via sets none), so a via
 that is ripped and replaced loses its drops, and DRC does not see it.
 
@@ -91,6 +98,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -882,9 +890,10 @@ def _shorted(bg, old: dict) -> set:
             if not board_update._nets_equal(it.net, p.net)}
 
 
-def patch_notes(bg, old: dict, new: dict) -> list[str]:
+def patch_notes(bg, old: dict, new: dict, uuids: bool = False) -> list:
     """PATCH_<net> zones whose fill met an old pad of their net and meets
-    no new one: zone_patch's to reshape."""
+    no new one: zone_patch's to reshape. uuids=True: (zone uuid, note)
+    pairs, so a note can go with its zone (orphan_patches)."""
     notes = []
     for z in bg.zones_of():
         if not z.name.startswith("PATCH_"):
@@ -899,12 +908,194 @@ def patch_notes(bg, old: dict, new: dict) -> list[str]:
                 meets = [p for p in new.get(ref, []) if p.net == z.net
                          and ly in p.layers and fill.intersects(p.poly)]
                 if met and not meets:
-                    notes.append(
-                        f"zone {z.name} on {ly} met {ref}."
-                        f"{met[0].number} and meets no new pad of {z.net}:"
-                        f" reshape it with zone_patch --net {z.net} --layer"
-                        f" {ly} (or --remove)")
+                    note = (f"zone {z.name} on {ly} met {ref}."
+                            f"{met[0].number} and meets no new pad of"
+                            f" {z.net}: reshape it with zone_patch --net"
+                            f" {z.net} --layer {ly} (or --remove)")
+                    notes.append((z.uuid, note) if uuids else note)
     return notes
+
+
+def _meets_net(bg, z, ly: str) -> bool:
+    """Does zone z's fill on ly meet other copper of its net there: a
+    track, via or pad of the net on ly, or another zone's fill?"""
+    fill = z.fill_on(ly)
+    if fill.is_empty:
+        return False
+    grown = fill.buffer(TOUCH)
+    items = bg.tracks_of(net=z.net, layer=ly) + bg.vias_of(
+        net=z.net, layer=ly) + bg.pads_of(net=z.net, layer=ly)
+    if any(grown.intersects(it.poly) for it in items):
+        return True
+    return any(o is not z and grown.intersects(o.fill_on(ly))
+               for o in bg.zones_of(net=z.net, layer=ly)
+               if o.fills.get(ly))
+
+
+def orphan_patches(bg0, bg1) -> list:
+    """(zone, pads) for each PATCH_<net> zone (zone_patch) that met copper
+    of its net on bg0 and whose fill on bg1 meets none on any layer: the
+    run's moves left it joining nothing, and DRC finds it as isolated
+    copper. pads: the "REF.N" of the net's pads its bg0 fill met. A zone
+    is the same on both boards by its uuid; one without a uuid stays."""
+    base = {z.uuid: z for z in bg0.zones_of() if z.uuid}
+    out = []
+    for z in bg1.zones_of():
+        z0 = base.get(z.uuid) if z.uuid else None
+        if z0 is None or z.teardrop or not z.name.startswith("PATCH_") \
+                or not z.filled \
+                or any(_meets_net(bg1, z, ly) for ly in z.fills) \
+                or not any(_meets_net(bg0, z0, ly) for ly in z0.fills):
+            continue
+        pads = sorted({f"{p.ref}.{p.number}" for ly in z0.fills
+                       for p in bg0.pads_of(net=z0.net, layer=ly)
+                       if z0.fill_on(ly).buffer(TOUCH).intersects(p.poly)})
+        out.append((z, pads))
+    return out
+
+
+def _drop_patch(z, pads: list, gone: list, marks: list, payload: dict,
+                early: list) -> None:
+    """Records that orphan patch zone z (orphan_patches) goes: its uuid in
+    gone (the route ops remove it, so the replay does), where its fill was
+    in marks (the gate looks there), a line in payload["removed_zones"],
+    and a note in place of patch_notes' early ones about it."""
+    lys = sorted(ly for ly, fs in z.fills.items() if fs)
+    gone.append(z.uuid)
+    marks.append(shapely.union_all([z.fill_on(ly) for ly in lys])
+                 .buffer(1.0))   # repair_area's margin
+    payload["removed_zones"].append({"uuid": z.uuid, "name": z.name,
+                                     "net": z.net, "layers": lys,
+                                     "met": pads})
+    payload["notes"] = [n for n in payload["notes"] if n not in early]
+    met = ", ".join(pads)
+    payload["notes"].append(
+        f"zone {z.name} on {'/'.join(lys)} joins no copper of {z.net}"
+        f" after the run, where it met {met or 'copper of its net'} before:"
+        " removed, as DRC finds it isolated copper"
+        + (f"; if {met} needs a patch, build one with zone_patch --net"
+           f" {z.net} --layer {lys[0]}" if met else ""))
+
+
+# KiCad's item descriptions (PAD and ZONE GetItemDescription): "Pad 2
+# [GND] of C210 on B.Cu", "PTH pad 1 [GND] of J1", "Zone [GND] on B.Cu,
+# priority 0", "Zone 'P' [GND] on F.Cu and 3 more, priority 0"
+_PAD_RE = re.compile(r"^(?:PTH pad|Pad) (.+?) \[.*\] of (\S+)(?: on (.+))?$")
+_ZONE_RE = re.compile(r"^Zone .*\] on (.+), priority -?\d+$")
+
+
+def starved_pads(drc0: dict, drc1: dict) -> list:
+    """(ref, pad number, layer, zone uuid) of each starved thermal on the
+    after board that no before violation matches (unmatched). The layer is
+    the pad's, else the zone's; None for a PTH pad in a zone on more than
+    one layer (KiCad names neither): spoke_tracks takes the layers the
+    pad is short on."""
+    out = []
+    for v in unmatched(drc0, drc1):
+        if v.get("check") != "starved_thermal":
+            continue
+        pad = zone = None
+        lys = [None, None]
+        for it in v.get("items") or []:
+            msg = it.get("msg") or ""
+            m = _PAD_RE.match(msg)
+            if m:
+                pad, lys[0] = (m.group(2), m.group(1)), m.group(3)
+            elif msg.startswith("Zone"):
+                zone = it.get("uuid")
+                m = _ZONE_RE.match(msg)
+                if m and not re.search(r" and \d+ more$", m.group(1)):
+                    lys[1] = m.group(1)
+        if pad and zone:
+            out.append((*pad, lys[0] or lys[1], zone))
+    return out
+
+
+SPOKE_REACH = 10     # steps of SPOKE_STEP mm past the spoke's end, at most
+SPOKE_STEP = 0.05
+
+
+def spoke_tracks(bg, starved: list, rules) -> tuple[list, list]:
+    """(add_track ops, notes) for the starved thermals of bg (starved_pads)
+    that one live spoke joins: a track of the pad's net from its copper
+    centre along that spoke into the fill. KiCad's DRC counts a net track
+    from inside the pad's ring to the fill as a spoke when the live ones
+    fall short (rf.Obstacles.spoke_count), so the pad passes with two. The
+    track lies on the spoke's own copper, so it adds no new path: what
+    else joins the pad (a solid patch zone, a route) is its real join.
+    rules: the router's (width_floor, net_layers). A pad no track can be
+    laid for gets a note."""
+    obs = rf.Obstacles(bg, spokes=True)
+    want = set(starved)
+    found = set()
+    ops, notes = [], []
+    for i, (p, z, layer, gap, sw, mt) in enumerate(obs._thermal_index()):
+        key = (p.ref, p.number, layer, z.uuid)
+        if key not in want:
+            key = (p.ref, p.number, None, z.uuid)     # a layer of a PTH pad
+            if key not in want:
+                continue
+        n = obs.spoke_count(i)
+        if key[2] is None and not 0 < n < rf.SPOKES_MIN:
+            continue
+        found.add(key)
+        where = f"{p.ref}.{p.number} on {layer}"
+        live = [s for s in rf.thermal_spokes(
+            p, z.fills.get(layer, ()), gap, sw, mt,
+            joined=obs._joined(p, z, layer), mids=True) if s[0][0]]
+        why, op = "", None
+        if p.custom is not None and not p.custom.is_empty:
+            why = "it is a custom pad (KiCad's proxy spokes)"
+        elif not 0 < n < rf.SPOKES_MIN:
+            why = f"the spoke model counts {n}"
+        elif not live:
+            why = "no live spoke into fill that meets other copper of it"
+        elif not rules.net_layers(p.net, [layer]):
+            why = f"the .kicad_dru keeps {p.net} off {layer}"
+        else:
+            op = _spoke_track(p, z, layer, gap, sw, mt, live[0][2], rules)
+        if op is None:
+            notes.append(
+                f"{where} starves (DRC: fewer thermal spokes from"
+                f" {z.name or z.net} than it asks) and no track was laid on"
+                f" its spoke: {why or 'none fits in the spoke and the fill'};"
+                " move the copper that holds the pour off it, or join the"
+                " pad solid")
+            continue
+        ops.append(op)
+        notes.append(
+            f"{where} starves after the run (the pour reaches it by one"
+            f" spoke): a {op['width']:.3f} mm {p.net} track on that spoke"
+            " gives DRC the second join it counts; it adds no new path")
+    notes += [f"{r}.{num}{f' on {ly}' if ly else ''} starves, but the"
+              " spoke model finds no thermal pad like it short of spokes to"
+              " lay a track for" for r, num, ly, _ in
+              sorted(want - found, key=lambda k: (k[0], k[1], k[2] or ""))]
+    return ops, notes
+
+
+def _spoke_track(p, z, layer, gap, sw, mt, mid, rules):
+    """The add_track op from pad p's copper centre along its spoke through
+    mid (thermal_spokes) to the first point past the spoke's end that is
+    in z's fill, if the track lies in the fill and the pad; else None."""
+    end = rf.spoke_end(p, mid, gap, mt)
+    if end is None:
+        return None
+    (ox, oy), (ux, uy) = end
+    fill = z.fill_on(layer)
+    inner = fill.buffer(-TOUCH)
+    room = shapely.union(fill, p.poly).buffer(1e-4)
+    w = max(rules.width_floor(p.net), min(sw, min(p.size)) - 0.02)
+    a = tuple(p.copper_center)
+    for k in range(SPOKE_REACH + 1):
+        b = (ox + ux * k * SPOKE_STEP, oy + uy * k * SPOKE_STEP)
+        if inner.contains(Point(b)) and room.contains(
+                LineString([a, b]).buffer(w / 2)):
+            return {"op": "add_track", "net": p.net, "layer": layer,
+                    "start": [round(a[0], 4), round(a[1], 4)],
+                    "end": [round(b[0], 4), round(b[1], 4)],
+                    "width": round(w, 4)}
+    return None
 
 
 def _vsig(v: dict) -> tuple:
@@ -1149,7 +1340,8 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         "tracks": sum(isinstance(i, geom.Track) for i in ripped),
         "vias": sum(not isinstance(i, geom.Track) for i in ripped),
         "clashes": clashes, "by_net": by_net}
-    payload["notes"] += patch_notes(bg0, old, new)
+    patch_pairs = patch_notes(bg0, old, new, uuids=True)
+    payload["notes"] += [n for _, n in patch_pairs]
 
     # 5. work: rips, then the ops (refilled), then no other-net copper on
     # the parts' pads
@@ -1180,7 +1372,10 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
             f" {n} thermal spoke{'' if n == 1 else 's'} where DRC asks"
             f" {rf.SPOKES_MIN} (starved thermal); the copper already round"
             " the pad starves the fill there, so no route of this run mends"
-            " it: move that copper or the part, or join the pad solid")
+            " it. If DRC still finds it starved at the end, the run lays a"
+            " track on its live spoke, which DRC counts as a second but"
+            " which adds no new path: the fix is to move that copper or the"
+            " part, or join the pad solid")
     base_isl: dict = {}
 
     def base_count(n):
@@ -1306,9 +1501,12 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
             shorter[len(kept)] = ((c[0].a, c[0].b), (c[1].a, c[1].b))
         kept.append(op)
 
+    gone_zones: list = []   # PATCH_ zones the run left joining nothing
+    zone_marks: list = []   # and where their fill was (the gate's area)
+
     def ops_now():
         return [{"op": "remove", "uuid": u}
-                for u in dict.fromkeys(pushed + pruned)] + [
+                for u in dict.fromkeys(pushed + pruned + gone_zones)] + [
             o for u, (was, new) in moved.items()
             for o in _set_ends(u, was, new)] + kept
 
@@ -1327,9 +1525,9 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     bg1 = geom.BoardGeom.from_file(work)
 
     def gate_area():
-        return repair_area(reach, adds, ripped + [
+        return shapely.union_all([repair_area(reach, adds, ripped + [
             by_uuid[u] for u in dict.fromkeys(pushed + pruned + list(moved))
-            if u in by_uuid])
+            if u in by_uuid])] + zone_marks)
 
     def pour_nets(area):
         return {z.net for g in (bg0, bg1) for z in g.zones_of()
@@ -1345,6 +1543,7 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     seen = set(nets)
     late_anchors = set(anchors)
     drop: set = set()
+    payload["removed_zones"] = []
     for npass in range(REPRUNE + 1):
         area = gate_area()
         late_nets = nets | pour_nets(area)
@@ -1358,14 +1557,23 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
             adds_on=[op for i, op in enumerate(kept) if i not in drop | dup],
             refs=refs, anchors=late_anchors, notes=payload["notes"],
             seed=area)
-        if not dead and not late:
+        # a PATCH_<net> zone the moves left joining no copper of its net
+        # is a dead end too: DRC finds it as isolated copper, net_islands
+        # as one more island of its net (#1140)
+        orphans = orphan_patches(bg0, bg1)
+        if not dead and not late and not orphans:
             break
         if npass == REPRUNE:
+            left = set(dead) | set(late) | {z.uuid for z, _ in orphans}
             payload["notes"].append(
                 f"after {REPRUNE} refills the prune still finds dead "
-                f"copper: {', '.join(sorted(set(dead) | set(late)))}")
+                f"copper: {', '.join(sorted(left))}")
             break
         step = [{"op": "remove", "uuid": u} for u in dead]
+        step += [{"op": "remove", "uuid": z.uuid} for z, _ in orphans]
+        for z, pads in orphans:
+            _drop_patch(z, pads, gone_zones, zone_marks, payload,
+                        [n for u, n in patch_pairs if u == z.uuid])
         for u, (was, new) in late.items():
             step += _set_ends(u, was, new)
             if u in made:   # a route of this run: its add op is cut back
@@ -1384,6 +1592,21 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                 moved.pop(u, None)
         drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
         bg1 = geom.BoardGeom.from_file(work)
+    # a pad the run left starved, its pour reaching it by one spoke now
+    # (the prune took copper that held the pour off it): a track of its
+    # net on that spoke gives DRC the second join it counts (#1140)
+    starved = starved_pads(drc0, drc1)
+    payload["spoke_tracks"] = []
+    if starved:
+        sp_ops, sp_notes = spoke_tracks(bg1, starved, router.rules)
+        payload["notes"] += sp_notes
+        payload["spoke_tracks"] = sp_ops
+        if sp_ops:
+            route_edit.apply_ops(work, sp_ops)
+            kept += sp_ops
+            adds = adds + sp_ops   # the gate's area takes them in
+            drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
+            bg1 = geom.BoardGeom.from_file(work)
     area = gate_area()
     payload["trimmed"] += [kept[i] for i in sorted(drop)]
     payload["shortened"] = [
@@ -1483,6 +1706,16 @@ def report_md(p: dict) -> str:
         lines += [f"Cut back {n} track{'' if n == 1 else 's'} with a dead"
                   " end that is the only link between copper of its net, to"
                   " the last copper it meets there.", ""]
+    for z in p.get("removed_zones") or []:
+        lines += [f"Removed zone {z['name']} ({z['net']} on"
+                  f" {'/'.join(z['layers'])}): it met"
+                  f" {', '.join(z['met']) or 'copper of its net'} and joins"
+                  " none after the run (isolated copper).", ""]
+    if p.get("spoke_tracks"):
+        n = len(p["spoke_tracks"])
+        lines += [f"Laid {n} track{'' if n == 1 else 's'} on the live spoke"
+                  " of a pad the run left starved: DRC counts each as a"
+                  " second spoke; none adds a new path (see the notes).", ""]
     for key, head in (("failed", "Would not join"),
                       ("worse", "Worse than before")):
         if p.get(key):

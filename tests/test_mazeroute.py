@@ -19,6 +19,7 @@ import math
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from shapely.geometry import LineString, Point, box
@@ -746,6 +747,12 @@ def test_thermal_spokes_and_keep_outs(tmp_path, mf_path):
     want = box(10.5, 9.75, 11.13, 10.25).union(Point(11.13, 10).buffer(0.25))
     [right] = [s for _, s in live if s.centroid.x > 10]
     assert right.symmetric_difference(want).area < 1e-3
+    # mids=True: where each spoke crosses the ring (the pad grown by half
+    # the gap), in the same order
+    mids = rf.thermal_spokes(p, z.fills["F.Cu"], gap, sw, mt, mids=True)
+    assert [(f[0], f[1]) for f in mids] == live
+    assert sorted((round(x, 3), round(y, 3)) for _, _, (x, y) in mids) \
+        == [(9.25, 10.0), (10.75, 10.0)]
     obs = rf.Obstacles(bg)
     assert obs.spokes_near(box(0, 0, 20, 20)) == []      # off by default
     obs = rf.Obstacles(bg, spokes=True)
@@ -790,6 +797,45 @@ def test_spoke_count_as_drc_counts_it(tmp_path, mf_path):
                    "00000000-0000-0000-0000-0000000005c2")
     three = _obs(_thermal(tmp_path, via + stray))
     assert three.spoke_count(0) == 1
+
+
+def test_a_starved_pad_gets_a_track_on_its_live_spoke(tmp_path, mf_path):
+    """#1140 (C221 on the voice board): a pad whose pour reaches it by one
+    live spoke gets a track of its net from its centre along that spoke
+    into the fill, which the spoke model (as DRC) counts as the second."""
+    import make_fixture as mf
+    import part_repair as pr
+    via = mf.via(15, 10, "GND", "00000000-0000-0000-0000-0000000005b1")
+    bg = _thermal(tmp_path, via)               # the right half is tied
+    assert _obs(bg).spoke_count(0) == 1
+    zid = "00000000-0000-0000-0000-0000000005a1"
+    rules = SimpleNamespace(net_layers=lambda net, lys: list(lys),
+                            width_floor=lambda net: 0.101)
+    ops, notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid)], rules)
+    [op] = ops
+    assert (op["op"], op["net"], op["layer"]) == ("add_track", "GND", "F.Cu")
+    assert op["start"] == [10.0, 10.0]
+    assert op["end"][1] == pytest.approx(10.0)
+    assert 11.0 < op["end"][0] < 11.4               # just past the spoke
+    assert op["width"] == pytest.approx(0.48)       # in the 0.5 mm spoke
+    assert "adds no new path" in notes[0]
+    track = mf.seg(*op["start"], *op["end"], op["width"], "F.Cu", "GND",
+                   "00000000-0000-0000-0000-0000000005c1")
+    assert _obs(_thermal(tmp_path, via + track)).spoke_count(0) == 2
+    # none for a net the .kicad_dru keeps off the layer, or a pad that is
+    # not there: a note each
+    banned = SimpleNamespace(net_layers=lambda net, lys: [],
+                             width_floor=rules.width_floor)
+    ops, notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid),
+                                      ("G9", "1", "F.Cu", zid)], banned)
+    assert ops == []
+    assert "keeps GND off F.Cu" in notes[0]
+    assert notes[1].startswith("G9.1 on F.Cu starves")
+    # both halves tied: no live spoke short, nothing to lay
+    left = mf.via(5, 10, "GND", "00000000-0000-0000-0000-0000000005b2")
+    ops, notes = pr.spoke_tracks(_thermal(tmp_path, via + left),
+                                 [("G1", "1", "F.Cu", zid)], rules)
+    assert ops == [] and "the spoke model counts 2" in notes[0]
 
 
 def test_zone_join():
