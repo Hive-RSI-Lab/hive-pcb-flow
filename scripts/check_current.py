@@ -1556,6 +1556,180 @@ def track_leaf_bound(bg: geom.BoardGeom, sides: list | None):
     return best
 
 
+def _item_graph(bg: geom.BoardGeom, net: str):
+    """The net's copper as items (each track, pad, via and fill part), with
+    an edge where two items share a layer and their copper touches (within
+    TOUCH_MM: a cap that only meets a pad's edge still joins it); a via's
+    or plated pad's barrel is the item itself, on all its layers. Returns
+    (items, adj [set of neighbour indices], refs [pad ref or None])."""
+    items: list = []                  # (layers, poly, ref)
+    for t in bg.tracks_of(net):
+        items.append(((t.layer,), t.poly, None, t))
+    for p in bg.pads_of(net):
+        items.append((tuple(p.layers), p.poly, p.ref, p))
+    for v in bg.vias_of(net):
+        items.append((tuple(v.layers), v.poly, None, v))
+    for z in bg.zones_of(net):
+        for l in z.layers:
+            fill = z.fill_on(l)
+            for g in getattr(fill, "geoms", [fill]):
+                if g.geom_type == "Polygon" and not g.is_empty:
+                    items.append(((l,), g, None, None))
+    adj = [set() for _ in items]
+    if items:
+        tree = STRtree([it[1] for it in items])
+        for i, (layers, poly, _r, _o) in enumerate(items):
+            for j in tree.query(poly, predicate="dwithin",
+                                distance=TOUCH_MM):
+                j = int(j)
+                if j > i and set(layers) & set(items[j][0]):
+                    adj[i].add(j)
+                    adj[j].add(i)
+    return items, adj
+
+
+def _blocks(adj: list) -> tuple[list, set]:
+    """(biconnected blocks as vertex sets, articulation vertices) of an
+    undirected graph, iterative Tarjan/Hopcroft."""
+    n = len(adj)
+    disc, low = [-1] * n, [0] * n
+    blocks, cuts, clock = [], set(), 0
+    for root in range(n):
+        if disc[root] != -1:
+            continue
+        disc[root] = low[root] = clock
+        clock += 1
+        stack = [(root, -1, iter(sorted(adj[root])))]
+        estack: list = []
+        kids = 0
+        while stack:
+            u, parent, it = stack[-1]
+            for v in it:
+                if disc[v] == -1:
+                    disc[v] = low[v] = clock
+                    clock += 1
+                    estack.append((u, v))
+                    stack.append((v, u, iter(sorted(adj[v]))))
+                    if u == root:
+                        kids += 1
+                    break
+                if v != parent and disc[v] < disc[u]:
+                    estack.append((u, v))
+                    low[u] = min(low[u], disc[v])
+            else:
+                stack.pop()
+                if parent == -1:
+                    continue
+                low[parent] = min(low[parent], low[u])
+                if low[u] >= disc[parent]:
+                    if parent != root:
+                        cuts.add(parent)
+                    block = set()
+                    while estack:
+                        e = estack.pop()
+                        block.update(e)
+                        if e == (parent, u):
+                            break
+                    blocks.append(block)
+        if kids > 1:
+            cuts.add(root)
+    return blocks, cuts
+
+
+def _reach(adj: list, start, blocked: set) -> set:
+    seen, todo = {start}, [start]
+    while todo:
+        u = todo.pop()
+        for v in adj[u]:
+            if v not in seen and v not in blocked:
+                seen.add(v)
+                todo.append(v)
+    return seen
+
+
+def block_sides(bg: geom.BoardGeom, net: str, track, sources,
+                cache: dict | None = None):
+    """track_sides from the block-cut tree of the net's item overlap graph
+    (#1168), for when the end-cap test can't split the copper: a track
+    shorter than it is wide whose end cap reaches the far pad, or a far
+    track that also touches the near pad. The track's block (or, when the
+    track is itself a cut, the track) meets the rest of the copper only at
+    its ports: each piece hanging off one of its cut items, each pad inside
+    it, and each pour inside it. With one port that may feed the rail (one
+    holding a possible source, or with none known, a pour or an unbounded
+    part) and every other port bounded, every current in the block enters
+    at the feed and leaves through the others, so no item in it carries more
+    than their sum. A part with pads in two ports could pass current between
+    them, and a second possible feed could circulate it: no bound then; nor
+    when the feed is a pour inside the block, which touches it at two or
+    more places and may pass its own current through it (a tap whose far
+    pad has a via of its own back to the plane).
+    With no feed at all, the worst case is the smallest port feeding the
+    rest. Returns [refs of the ports past the feed], or None. A genuine loop
+    back to the source copper keeps the track in the source's block, so it
+    is not bounded here."""
+    if cache is not None and "g" in cache:
+        items, adj, blocks, cuts = cache["g"]
+    else:
+        items, adj = _item_graph(bg, net)
+        blocks, cuts = _blocks(adj)
+        if cache is not None:
+            cache["g"] = (items, adj, blocks, cuts)
+    me = next((i for i, it in enumerate(items) if it[3] is track), None)
+    if me is None or not adj[me]:
+        return None
+    ports = []                        # (item indices, the block item it hangs on)
+    if me in cuts:
+        left = set(adj[me])
+        while left:
+            part = _reach(adj, left.pop(), {me})
+            left -= part
+            ports.append((part, me))
+    else:
+        block = next((b for b in blocks if me in b), None)
+        if block is None:
+            return None
+        for a in sorted(block):
+            if a in cuts:
+                out = {a}
+                for v in adj[a]:
+                    if v not in block and v not in out:
+                        out |= _reach(adj, v, {a})
+                ports.append((out, a))
+            elif items[a][2] or items[a][3] is None:
+                ports.append(({a}, a))   # a pad or a pour inside the block
+    every = sources[0] if sources else None
+    facts = []                        # (refs, amps, may_feed, on_pour)
+    for port, at in ports:
+        refs = {items[i][2] for i in port if items[i][2]}
+        pour = any(items[i][3] is None for i in port)
+        if not refs and not pour:
+            continue                  # dead-end copper: carries nothing
+        amps = _loads(bg, refs)
+        feed = bool(refs & every) if every is not None else (
+            pour or amps is None)
+        facts.append((refs, amps, feed, items[at][3] is None))
+    seen: set = set()
+    for refs, _a, _f, _p in facts:
+        if refs & seen:
+            return None               # a part bridging two ports
+        seen |= refs
+    feeds = [f for f in facts if f[2]]
+    if len(feeds) > 1:
+        return None
+    if not feeds:
+        if len(facts) < 2:
+            return None
+        feeds = [min(facts, key=lambda f: f[1])]
+    if feeds[0][3]:
+        return None                   # fed by a pour inside the block: the
+        #                               block may carry pour current around
+    rest = [f for f in facts if f is not feeds[0]]
+    if not rest or any(f[1] is None for f in rest):
+        return None
+    return [set().union(*(f[0] for f in rest))]
+
+
 def _stub_graph(bg: geom.BoardGeom, net: str, fills: dict,
                 skip: frozenset = frozenset()):
     """The net's copper outside its fills, minus the items whose id() is in
@@ -1919,6 +2093,7 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
             undersized = [(v, t) for v, t in undersized if id(v) not in drop]
             pour_taps = [v["pos"] for v, _ in shunted]
         # a bridge whose far side feeds only bounded loads: their sum
+        block_cache: dict = {}
         for v, t in list(undersized):
             if v["bridge"]:
                 sides = track_sides(bg, net, t)
@@ -1929,6 +2104,10 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
             leaf = track_leaf_bound(bg, sides)
             if leaf is None and not v["bridge"] and id(t) in edge_of:
                 leaf = behind_bridge(bg, net, g, bridges, edge_of[id(t)], t)
+            if leaf is None and sides is None:
+                # #1168: the end-cap split can't cut it; the block-cut tree can
+                sides = block_sides(bg, net, t, sources, block_cache)
+                leaf = track_leaf_bound(bg, sides)
             if leaf is None or leaf[0] >= v["current_a"]:
                 mid = t.shape.interpolate(0.5, normalized=True).coords[0]
                 far = branch_refs(bg, net, sides, sources) if (

@@ -1024,7 +1024,10 @@ def test_leaf_with_unbounded_part_keeps_budget(tmp_path_factory):
 
 def test_leaf_with_second_path_keeps_budget(tmp_path_factory):
     """A track from the leg back to the main block makes the leg a possible
-    bypass of the neck: no bound, the findings stay at 2 A."""
+    bypass of the neck: no bound, the findings stay at 2 A. The loop's own
+    tracks are bounded at R1 (#1168): the leg and loop hold no source, so
+    all their current comes in through the main block and none of it can
+    exceed what R1 draws."""
     track = (
         '  (segment (start 9.9 8) (end 14.5 8) (width 0.3) (layer "F.Cu") (net "PWR"))\n'
         '  (segment (start 14.5 8) (end 14.5 5.2) (width 0.3) (layer "F.Cu") (net "PWR"))\n')
@@ -1032,7 +1035,8 @@ def test_leaf_with_second_path_keeps_budget(tmp_path_factory):
     vs, facts = check_current.check_net(bg, ENTRY_PWR)
     assert _kinds(vs, "pour_neckdown")
     assert len(_kinds(vs, "insufficient_transition_vias")) == 2
-    assert "leaf_branches" not in facts
+    assert {b["kind"] for b in facts.get("leaf_branches", [])} \
+        <= {"undersized_track"}
 
 
 def test_leaf_reaching_real_load_still_fails(tmp_path_factory):
@@ -2385,3 +2389,135 @@ def test_short_steps_to_an_unbounded_part_keep_budget(tmp_path_factory):
     vs, facts = check_current.check_net(bg, ENTRY_PWR)
     found = _kinds(vs, "undersized_track")
     assert found and {v["current_a"] for v in found} == {2.0}
+
+
+# ---- block-cut bound (#1168) -------------------------------------------------
+# Two bridges the end-cap split can't cut. A: a 0.56 x 0.30 mm stub from a
+# via to R1's pad, whose start cap already reaches the pad. The pads are
+# wider than the stubs, so neither is a pad-exit neck. B: a stub from
+# U2's pad whose onward track (to R1) also overlaps that pad. Both feed only
+# R1, so both carry at most R1's current, not the rail's 2 A.
+
+_PLANE_B = """  (zone (net "PWR") (layer "B.Cu")
+    (polygon (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10)))
+    (filled_polygon (layer "B.Cu")
+      (pts (xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10))))
+"""
+
+
+def _r1_at(x: float, y: float, ref: str = "R1", value: str = "10k",
+           lib: str = "t:R0402") -> str:
+    """A small part (10k R1 by default) whose 0.6 mm pad 1 (on PWR) is
+    centred at (x, y)."""
+    return f"""  (footprint "{lib}" (at {x + 0.4} {y})
+    (layer "F.Cu")
+    (property "Reference" "{ref}" (at 0 0 0))
+    (property "Value" "{value}" (at 0 0 0))
+    (pad "1" smd rect (at -0.4 0) (size 0.6 0.7) (layers "F.Cu") (net "PWR"))
+    (pad "2" smd rect (at 0.45 0) (size 0.3 0.7) (layers "F.Cu") (net "SIG")))
+"""
+
+
+_CASE_A = _PLANE_B + """  (via (at 3 5) (size 0.3) (drill 0.15) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (segment (start 3 5) (end 3.3 5) (width 0.56) (layer "F.Cu") (net "PWR"))
+""" + _r1_at(3.57, 5) + _U1_ON_PLANE
+
+_U2_PAD6 = """  (footprint "t:U" (at 10 5)
+    (layer "F.Cu")
+    (property "Reference" "U2" (at 0 0 0))
+    (pad "6" smd rect (at 0 0) (size 0.55 0.4) (layers "F.Cu") (net "PWR")))
+  (segment (start 10.8 5) (end 12 5) (width 1.0) (layer "F.Cu") (net "PWR"))
+  (via (at 12 5) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "PWR"))
+"""
+_CASE_B = _PLANE_B + _U2_PAD6 + """  (segment (start 10 5) (end 9.625 5) (width 0.3) (layer "F.Cu") (net "PWR"))
+  (segment (start 9.625 5) (end 8.775 5.85) (width 0.3) (layer "F.Cu") (net "PWR"))
+""" + _r1_at(8.775, 5.85)
+
+def _stub(vs, facts, x0, y0):
+    hit = [v for v in _kinds(vs, "undersized_track")
+           if v["segment"]["start"] == [x0, y0]]
+    leaf = [b for b in facts.get("leaf_branches", [])
+            if b["kind"] == "undersized_track" and b["loads"] == ["R1"]]
+    return hit, leaf
+
+
+def test_end_cap_split_fails_on_both_cases(tmp_path_factory):
+    """The shapes #1168 is about: track_sides can't cut either stub."""
+    for name, body, start in (("bca0", _CASE_A, (3, 5)),
+                              ("bcb0", _CASE_B, (10, 5))):
+        bg = _board(tmp_path_factory, name, body)
+        [t] = [t for t in bg.tracks_of("PWR")
+               if tuple(t.shape.coords[0]) == start]
+        assert check_current.track_sides(bg, "PWR", t) is None
+        sides = check_current.block_sides(bg, "PWR", t, None)
+        assert sides == [{"R1"}]
+
+
+def test_short_wide_stub_to_lone_pad_takes_its_bound(tmp_path_factory):
+    """#1168 A: shorter than wide, its start cap reaches R1's pad; the
+    block-cut tree still sees R1 as all that lies past it."""
+    bg = _board(tmp_path_factory, "bca", _CASE_A)
+    hit, leaf = _stub(*check_current.check_net(bg, ENTRY_PWR), 3, 5)
+    assert hit == [] and leaf
+
+
+def test_stub_whose_far_track_touches_near_pad_takes_its_bound(
+        tmp_path_factory):
+    """#1168 B: the onward track overlaps U2's pad too, so with the stub
+    dropped the copper is one piece; the block holding the stub hangs off
+    U2's pad and holds only R1."""
+    bg = _board(tmp_path_factory, "bcb", _CASE_B)
+    hit, leaf = _stub(*check_current.check_net(bg, ENTRY_PWR), 10, 5)
+    assert hit == [] and leaf
+
+
+@pytest.mark.parametrize("name,body,start", [
+    ("bca2", _CASE_A.replace(_r1_at(3.57, 5), _r1_at(3.57, 5, "U3", "LDO",
+                                                     "t:U")), (3, 5)),
+    ("bcb2", _CASE_B.replace(_r1_at(8.775, 5.85),
+                             _r1_at(8.775, 5.85, "U3", "LDO", "t:U")),
+     (10, 5))])
+def test_unbounded_part_past_the_stub_keeps_budget(tmp_path_factory, name,
+                                                   body, start):
+    """Quiet twins: the same stubs with an unbounded part (U3, possibly a
+    source) where R1 was get no bound and are judged at the rail's 2 A."""
+    bg = _board(tmp_path_factory, name, body)
+    [t] = [t for t in bg.tracks_of("PWR")
+           if tuple(t.shape.coords[0]) == start]
+    assert check_current.block_sides(bg, "PWR", t, None) is None
+    vs, _facts = check_current.check_net(bg, ENTRY_PWR)
+    hit = [v for v in _kinds(vs, "undersized_track")
+           if v["segment"]["start"] == list(start)]
+    assert hit and hit[0]["current_a"] == 2.0
+
+
+def test_loop_to_another_pin_of_the_feeding_part_keeps_budget(
+        tmp_path_factory):
+    """A track from R1's pad to U2's pin 7 (also PWR) gives the piece past
+    the stub a second way in through U2 itself: no bound."""
+    pin7 = _U2_PAD6.replace(
+        '(net "PWR")))',
+        '(net "PWR"))\n    (pad "7" smd rect (at 0 1.2) (size 0.55 0.2) '
+        '(layers "F.Cu") (net "PWR")))', 1)
+    loop = ('  (segment (start 8.775 5.85) (end 8.775 6.2) (width 0.2) '
+            '(layer "F.Cu") (net "PWR"))\n'
+            '  (segment (start 8.775 6.2) (end 10 6.2) (width 0.2) '
+            '(layer "F.Cu") (net "PWR"))\n')
+    bg = _board(tmp_path_factory, "bcb3",
+                _CASE_B.replace(_U2_PAD6, pin7) + loop)
+    [t] = [t for t in bg.tracks_of("PWR")
+           if tuple(t.shape.coords[0]) == (10, 5)
+           and tuple(t.shape.coords[-1]) == (9.625, 5)]
+    assert check_current.block_sides(bg, "PWR", t, None) is None
+
+
+def test_block_sides_refuses_a_piece_holding_a_source(tmp_path_factory):
+    """With the rail's sources known, a piece that holds one is not past
+    the track: the bound is refused even if every other part is bounded."""
+    bg = _board(tmp_path_factory, "bcsrc", _CASE_B)
+    [t] = [t for t in bg.tracks_of("PWR")
+           if tuple(t.shape.coords[0]) == (10, 5)]
+    assert check_current.block_sides(bg, "PWR", t, ({"R1"}, set(), set())) \
+        is None
+    assert check_current.block_sides(
+        bg, "PWR", t, ({"U2"}, {"U2"}, set())) == [{"R1"}]
