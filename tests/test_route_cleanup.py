@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from shapely.geometry import LineString, Point, Polygon, box
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -242,6 +242,54 @@ def test_stacked_short_spurs_cascade():
             S("s3", (2, 0), (2, 0.05)), S("s4", (2, 0.05), (2, 0.1))]
     gone_s, _ = rcl.find_dangling(segs, [], pads, EMPTY)
     assert gone_s == ["s4", "s3"]
+
+
+# T runs pad to pad; a short stub s has both ends on T's copper, so by
+# KiCad's rule T holds only one of them. When s also carries other copper
+# that does not touch T, s is the only link and must stay.
+_T_PADS = [PD((0, 0)), PD((10, 0))]
+
+
+def _t_track():
+    return S("T", (0, 0), (10, 0), width=0.2)
+
+
+def test_stub_bridging_track_to_pad_is_kept():
+    """Pad P sits 0.1 mm clear of T's copper; s overlaps both. Dropping s
+    would make P an island (review F1, case A)."""
+    p = PD((4.9, 0.7))
+    segs = [_t_track(), S("s", (4.9, 0.15), (5.05, 0), width=0.2)]
+    assert not p.poly.intersects(_body_of(segs[0]))
+    assert rcl.find_dangling(segs, [], _T_PADS + [p], EMPTY)[0] == []
+
+
+def test_stub_bridging_track_to_track_is_kept():
+    """Track U ends 0.18 mm clear of T's copper and overlaps s's end, so
+    s is U's only link to T. Dropping s would cascade into U (review F1,
+    case D)."""
+    u_pad = rcl.PadItem("N", ("F.Cu",), (4.9, 3.2), box(4.4, 2.9, 5.4, 3.5))
+    segs = [_t_track(), S("U", (4.9, 3.0), (4.9, 0.38), width=0.2),
+            S("s", (4.9, 0.19), (5.09, 0), width=0.2)]
+    assert rcl.find_dangling(segs, [], _T_PADS + [u_pad], EMPTY)[0] == []
+
+
+def test_stub_bridging_track_to_fill_piece_is_kept():
+    """The same holds when the other copper is one polygon of a fill that
+    does not reach T; a stub with nothing but T still goes."""
+    piece = box(4.4, 0.2, 5.4, 1.2)
+    far = box(20, 20, 21, 21)
+
+    def fill(net, layer):
+        return MultiPolygon([piece, far]) if net == "N" else Polygon()
+
+    segs = [_t_track(), S("s", (4.9, 0.15), (5.05, 0), width=0.2)]
+    assert rcl.find_dangling(segs, [], _T_PADS, fill)[0] == []
+    bare = [_t_track(), S("s", (4.9, 0.05), (5.05, 0), width=0.2)]
+    assert rcl.find_dangling(bare, [], _T_PADS, EMPTY)[0] == ["s"]
+
+
+def _body_of(seg):
+    return LineString([seg.a, seg.b]).buffer(seg.width / 2.0)
 
 
 def test_regression_pd_trigger_vbus_stubs_survive():

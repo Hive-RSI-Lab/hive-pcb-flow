@@ -30,8 +30,8 @@ positions, never file hashes.
    still where they were. On a routed board give the same ops to
    `part_repair.py` instead: it rips the copper the move spoils in a window
    round each part, makes the move, routes every net back to as few islands as
-   it had, and keeps the result only if DRC got no worse (exit 1 and nothing
-   written otherwise). With bare place_edit, re-route the affected nets
+   it had, and keeps the result only if DRC got no worse and no violation is
+   new near the move (exit 1 and nothing written otherwise). With bare place_edit, re-route the affected nets
    (`reroute-net`) before believing `drc_routed`. Unconnected items in DRC are
    the honest signal.
 2. **Neighbour silk does not move.** The footprint's own silk travels with it;
@@ -58,5 +58,5 @@ move, and `placement` (the agent) when the move cascades into its neighbours.
   mechanical constraint someone paid for.
 - Do not batch a move with a re-route in one snapshot. Snapshot before the move;
   the re-route is its own step with its own gate. part_repair is the one
-  exception: it gates the pair itself, and its three op files (rip, place,
-  route) still replay one at a time.
+  exception: it gates the pair itself, and its op files (rip, place, route)
+  still replay one at a time.

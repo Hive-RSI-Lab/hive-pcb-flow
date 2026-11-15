@@ -22,18 +22,29 @@ net back together, and keep the result only if the board got no worse.
      the first via, pad, junction, same-net pour or free end, or up to the
      first segment that leaves the window: that one stays.
   5. work: DIR/work gets the rips (route_edit), then the ops (place_edit,
-     refilled, with its touch check on: no other-net copper may touch a new
-     pad, so a rip that missed something fails here).
+     refilled). Then no track or via of another net may touch a pad of the
+     parts (KiCad would carry it onto the pad's net when it saves), unless
+     it touched one of their old pads on the base board too: a rip that
+     missed something is an error here, whatever the op.
   6. join: every net the rips or the parts touch is routed back to as few
      islands as it had (lib/mazeroute.py), the parts' nets first: at the
      widest width ripped from it, then at its rule width, then letting the
-     maze router push other signal nets' copper in the window aside and put
-     it back (Router.reroute). Dead stubs left in the windows are pruned
-     (route_cleanup's dangling pass): none the new routes meet, except a
-     spur off a junction they make with copper that holds without it.
-  7. check: the routes go in, the board is refilled and DRC'd. It passes when
-     no net has more islands than before, no DRC check counts more errors or
-     warnings than before, and no net has more unconnected items.
+     maze router push other signal nets' copper aside and put it back
+     (Router.reroute), one window at a time: each window its islands meet.
+     Dead stubs left in the windows, or within --margin of the copper
+     pushed aside, are pruned (route_cleanup's dangling pass): none the new
+     routes meet, except a spur off a junction they make with copper that
+     holds without it.
+  7. check: the routes go in, the board is refilled and DRC'd. The repair
+     area is the windows, --margin round the copper pushed aside, and 1 mm
+     round the copper the run added or removed. The run passes when no net
+     has more islands than before (the nets above, and every net with a
+     pour that meets the repair area), no DRC check counts more errors or
+     warnings than before, no net has more unconnected items, and no error
+     or warning is new in the repair area: one that no base violation
+     matches (by check, net and item positions, else by check and item
+     uuids) and that lies, or has an item, in it. So a fix that clears one
+     clearance error and makes another still fails.
 
 In DIR on a pass: 01-rip.route_edit.json, 02-place.place_edit.json and
 03-route.route_edit.json (prunes and pushes removed, then the new routes),
@@ -44,6 +55,9 @@ which replay on --pcb in this order:
   hwde route_edit --pcb B --ops DIR/03-route.route_edit.json --refill
 
 An op file with nothing in it is not written (and its step is skipped).
+The last step written takes --refill, so the zones are filled as on
+DIR/work/B: when there is no 03-route (every net still joined or tied in
+by its pour), place_edit takes it.
 --apply does all three at once: DIR/work/B replaces --pcb, on a pass only and
 only if --pcb has not changed since the run began. Always in DIR: REPORT.md,
 part_repair.json, and base/, trial/ and work/ with their boards. When DRC got
@@ -54,7 +68,10 @@ old pad and meets no new pad of its net is named in the report's notes.
 
 Contract: --pcb is read only, except with --apply on a pass. Exit 0 pass,
 1 violations (a net would not join, or the board got worse: --pcb untouched,
-no op files), 2 error.
+no op files), 2 error (part_repair.json and REPORT.md say which, once DIR is
+made). part_repair.json's board_sha256 is --pcb's hash when the run began:
+the op files replay on that board. With --apply, a --pcb that changed
+during the run is not replaced (exit 2; the op files stay).
 """
 from __future__ import annotations
 
@@ -65,6 +82,7 @@ import hashlib
 import json
 import math
 import os
+import shlex
 import shutil
 import sys
 from collections import Counter
@@ -259,10 +277,19 @@ def _held(router):
     return set(router.obs.hidden), list(router.obs.added), router._conn
 
 
-def join_net(router, net: str, want: int, near, width, keep):
+def _meets(router, net: str, w) -> bool:
+    """Does box w meet one of net's islands in the router?"""
+    return any(w.intersects(p) for i in router.islands(net)
+               for ly, ps in i.items() if ly is not None for p in ps)
+
+
+def join_net(router, net: str, want: int, near, width, keep, boxes=()):
     """Route net back to `want` islands: (ops, uuids pushed aside, how,
-    {net pushed: islands it may end with}). Raises CheckError with every
-    try's reason when none works; the router is then as it was."""
+    {net pushed: islands it may end with}). The last try pushes other
+    nets aside (Router.reroute) in each of `boxes` that one of the net's
+    islands meets, one box at a time, then joins what is left. Raises
+    CheckError with every try's reason when none works; the router is then
+    as it was."""
     why = []
     for w in dict.fromkeys([width, None]):
         held = _held(router)
@@ -275,8 +302,25 @@ def join_net(router, net: str, want: int, near, width, keep):
             why.append(f"{'rule width' if w is None else f'width {w:g}'}:"
                        f" {e}")
     held = _held(router)
+    uuids, ops, maxes, tried = [], [], {}, []
     try:
-        uuids, ops, maxes = router.reroute(net, near.bounds, keep=keep)
+        for b in boxes:
+            if len(router.islands(net)) <= want:
+                break
+            if not _meets(router, net, b):
+                continue
+            try:
+                u, o, m = router.reroute(net, b.bounds, keep=keep)
+            except CheckError as e:     # reroute left the router as it was
+                tried.append(str(e))
+                continue
+            uuids += u
+            ops += o
+            for v, n in m.items():
+                maxes[v] = max(maxes.get(v, 0), n)
+        if not uuids:
+            raise CheckError("; ".join(tried) or "no window meets its"
+                             " islands")
         ops += router.join_islands(net, want, near)
         return ops, uuids, "pushed other nets aside", maxes
     except CheckError as e:
@@ -447,6 +491,30 @@ def _dangling(pcb: Path, bg, nets: set, *, gone=(), adds=(), win=None,
         hold |= bad
 
 
+def touch_shorts(bg, refs, before=frozenset()) -> list[str]:
+    """Tracks and vias of another net whose copper touches a pad of refs on
+    bg (KiCad would carry them onto the pad's net when it saves), less the
+    (ref, uuid) pairs in `before`: one line each."""
+    out = []
+    for r in refs:
+        for p in bg.pads_of(ref=r):
+            for it in board_update._touching(bg, p):
+                if not board_update._nets_equal(it.net, p.net) \
+                        and (r, it.uuid) not in before:
+                    out.append(f"{r}.{p.number} ({p.net or 'no net'}) <-"
+                               f" {it.net or 'no net'} {_kind(it)}"
+                               f" {(it.uuid or '?')[:8]}")
+    return out
+
+
+def _shorted(bg, old: dict) -> set:
+    """(ref, uuid) of the other-net tracks and vias that touch a ref's
+    pads on bg already."""
+    return {(r, it.uuid) for r, pads in old.items() for p in pads
+            for it in board_update._touching(bg, p)
+            if not board_update._nets_equal(it.net, p.net)}
+
+
 def patch_notes(bg, old: dict, new: dict) -> list[str]:
     """PATCH_<net> zones whose fill met an old pad of their net and meets
     no new one: zone_patch's to reshape."""
@@ -472,8 +540,67 @@ def patch_notes(bg, old: dict, new: dict) -> list[str]:
     return notes
 
 
-def gates(drc0: dict, drc1: dict, isl: dict) -> list[str]:
-    """Why the repaired board is worse than the base one (empty: it isn't)."""
+def _vsig(v: dict) -> tuple:
+    pts = sorted(tuple(round(c, 3) for c in it["pos"])
+                 for it in v.get("items") or [] if it.get("pos"))
+    return v.get("source"), v.get("check"), v.get("net"), tuple(pts)
+
+
+def _usig(v: dict):
+    uu = sorted(it["uuid"] for it in v.get("items") or [] if it.get("uuid"))
+    return (v.get("source"), v.get("check"), tuple(uu)) if uu else None
+
+
+def unmatched(drc0: dict, drc1: dict) -> list[dict]:
+    """The after violations that no before violation matches: first by
+    source, check, net and item positions (_vsig), then, for the rest, by
+    source, check and item uuids (_usig: the same items, moved or reshaped
+    by the refill). Each before violation matches one after at most."""
+    pool: dict = {}
+    for i, v in enumerate(drc0["violations"]):
+        pool.setdefault(_vsig(v), []).append(i)
+    used, rest = set(), []
+    for v in drc1["violations"]:
+        got = pool.get(_vsig(v))
+        if got:
+            used.add(got.pop())
+        else:
+            rest.append(v)
+    left = Counter(_usig(v) for i, v in enumerate(drc0["violations"])
+                   if i not in used and _usig(v))
+    out = []
+    for v in rest:
+        sig = _usig(v)
+        if sig and left[sig]:
+            left[sig] -= 1
+        else:
+            out.append(v)
+    return out
+
+
+def _key(v: dict) -> str:
+    return "unconnected" if v.get("source") == "unconnected" \
+        else f"{v.get('source')}:{v.get('check')}"
+
+
+def _issue(v: dict) -> bool:
+    """An error or warning that issue_counts counts (not unconnected)."""
+    return v.get("source") != "unconnected" \
+        and v.get("severity") in ("error", "warning")
+
+
+def _in(area, v: dict) -> bool:
+    """Does violation v, or one of its items, lie in area?"""
+    if area is None:
+        return False
+    pts = [v.get("pos")] + [it.get("pos") for it in v.get("items") or []]
+    return any(area.intersects(Point(p)) for p in pts if p)
+
+
+def gates(drc0: dict, drc1: dict, isl: dict, area=None) -> list[str]:
+    """Why the repaired board is worse than the base one (empty: it isn't).
+    area: where the run changed the board (repair_area); an error or
+    warning in it that matches no base violation (unmatched) fails too."""
     worse = [f"{n or '(no net)'}: {a} -> {b} islands"
              for n, (a, b) in sorted(isl.items()) if b > a]
     i0, i1 = route_improve.issue_counts(drc0), route_improve.issue_counts(drc1)
@@ -485,42 +612,46 @@ def gates(drc0: dict, drc1: dict, isl: dict) -> list[str]:
     a, b = route_improve.unconnected(drc0), route_improve.unconnected(drc1)
     if b > a:
         worse.append(f"unconnected: {a} -> {b}")
+    near = Counter(_key(v) for v in unmatched(drc0, drc1)
+                   if _issue(v) and _in(area, v))
+    worse += [f"DRC {k}: {n} new near the repair (none like it before)"
+              for k, n in sorted(near.items())]
     return worse
 
 
-def _vsig(v: dict) -> tuple:
-    pts = sorted(tuple(round(c, 3) for c in it["pos"])
-                 for it in v.get("items") or [] if it.get("pos"))
-    return v.get("source"), v.get("check"), v.get("net"), tuple(pts)
+def repair_area(win, adds: list, gone: list, margin: float = 1.0):
+    """The windows, and margin mm round the copper the run added (route_edit
+    add ops) and removed (tracks and vias): where its new violations lie."""
+    shapes = [win]
+    for op in adds:
+        if op["op"] == "add_track":
+            shapes.append(LineString([op["start"], op["end"]]).buffer(
+                op["width"] / 2 + margin))
+        elif op["op"] == "add_via":
+            shapes.append(Point(op["at"]).buffer(op["size"] / 2 + margin))
+    shapes += [it.poly.buffer(margin) for it in gone]
+    return shapely.union_all(shapes)
 
 
-def new_violations(drc0: dict, drc1: dict) -> list[dict]:
+def new_violations(drc0: dict, drc1: dict, area=None) -> list[dict]:
     """The after violations behind gates' DRC and unconnected lines.
 
-    For each source:check that counts more errors or warnings than before,
-    and each net with more unconnected items, the after violations that no
-    before violation matches by check, net and item positions: where to
-    look on DIR/work/B, and the uuids of the items to rip or reroute. One
-    that only moved is listed too (it matches nothing before)."""
+    The after violations that no before violation matches (unmatched),
+    for each source:check that counts more errors or warnings than before,
+    each net with more unconnected items, and every error or warning in
+    area: where to look on DIR/work/B, and the uuids of the items to rip or
+    reroute."""
     i0, i1 = route_improve.issue_counts(drc0), route_improve.issue_counts(drc1)
     grew = {k for k, n in i1.items() if n > i0.get(k, 0)}
     u0, u1 = rf.unconnected_by_net(drc0), rf.unconnected_by_net(drc1)
     grew_net = {k for k, n in u1.items() if n > u0.get(k, 0)}
-    before = Counter(_vsig(v) for v in drc0["violations"])
     out = []
-    for v in drc1["violations"]:
-        if v.get("source") == "unconnected":
-            key = "unconnected"
+    for v in unmatched(drc0, drc1):
+        key = _key(v)
+        if key == "unconnected":
             if (v.get("net") or "") not in grew_net:
                 continue
-        else:
-            key = f"{v.get('source')}:{v.get('check')}"
-            if v.get("severity") not in ("error", "warning") \
-                    or key not in grew:
-                continue
-        sig = _vsig(v)
-        if before[sig]:
-            before[sig] -= 1
+        elif not _issue(v) or (key not in grew and not _in(area, v)):
             continue
         out.append({"key": key, "severity": v.get("severity"),
                     "pos": v.get("pos"), "layer": v.get("layer"),
@@ -547,6 +678,9 @@ def _write_ops(path: Path, ops: list) -> None:
 
 def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
            keep=(), apply: bool = False) -> dict:
+    """The steps in the module docstring, in out; the payload. Once out is
+    made, an error is written to part_repair.json and REPORT.md (status
+    "error") before it is raised."""
     cli = env.find_kicad_cli()
     if cli is None or env.find_kicad_python(cli) is None:
         raise CheckError("KiCad bundled python not found (env.py)")
@@ -554,8 +688,25 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
     out = routelib.fresh_work_dir(out)
     refs = list(dict.fromkeys(op["ref"] for op in ops))
     payload: dict = {"script": "part_repair", "status": "pass",
-                     "board": str(pcb), "out": str(out), "refs": refs,
-                     "ops": len(ops), "notes": [], "applied": False}
+                     "board": str(pcb), "board_sha256": sha0,
+                     "out": str(out), "refs": refs, "ops": len(ops),
+                     "notes": [], "applied": False}
+    try:
+        return _steps(pcb, ops, out, payload, cli=cli, margin=margin,
+                      keep=keep, apply=apply)
+    except Exception as e:
+        payload["status"] = "error"
+        payload["error"] = f"{type(e).__name__}: {e}"
+        try:
+            _finish(payload, out)
+        except Exception:       # the first error is the one to raise
+            pass
+        raise
+
+
+def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
+           keep, apply) -> dict:
+    refs = payload["refs"]
 
     # 1. base: refilled, DRC'd
     base = route_auto._stage_board(pcb, out / "base")
@@ -594,7 +745,8 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
         "clashes": clashes, "by_net": by_net}
     payload["notes"] += patch_notes(bg0, old, new)
 
-    # 5. work: rips, then the ops (refilled, touch check on)
+    # 5. work: rips, then the ops (refilled), then no other-net copper on
+    # the parts' pads
     work = route_auto._stage_board(base, out / "work")
     rip_ops = [{"op": "remove", "uuid": it.uuid} for it in ripped]
     if rip_ops:
@@ -609,6 +761,11 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
     nets = list(dict.fromkeys(part_nets + [it.net for it in ripped
                                            if it.net]))
     bgw = geom.BoardGeom.from_file(work)
+    shorts = touch_shorts(bgw, refs, _shorted(bg0, old))
+    if shorts:
+        raise CheckError("other-net copper touches the parts' pads after the"
+                         " rips (a rip missed it; KiCad would put it on the"
+                         " pad's net): " + "; ".join(shorts))
     router = mazeroute.Router(bgw)
     base_isl: dict = {}
 
@@ -638,9 +795,12 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
             joins[net]["how"] = "still joined"
             continue
         near = near_of.get(net) or win
+        own = [r for r in refs if any(p.net == net for p in old[r] + new[r])]
+        boxes = [wins[r] for r in own] + [w for r, w in wins.items()
+                                          if r not in own]
         try:
             jops, gone, how, maxes = join_net(
-                router, net, want, near, widest.get(net), keep)
+                router, net, want, near, widest.get(net), keep, boxes)
         except CheckError as e:
             joins[net]["how"] = "failed"
             failed.append(str(e))
@@ -661,10 +821,16 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
         payload["failed"] = failed
         return _finish(payload, out)
 
-    # prune what the rips and joins left hanging in the windows
+    # prune what the rips, pushes and joins left hanging: in the windows,
+    # and within margin of the copper pushed aside (a pushed track crosses
+    # a window's edge, so what it led to outside can be left dangling)
     nets = set(queue)
+    by_uuid = {it.uuid: it for it in bgw.tracks_of() + bgw.vias_of()
+               if it.uuid}
+    reach = shapely.union_all([win] + [by_uuid[u].poly.buffer(margin)
+                                       for u in pushed if u in by_uuid])
     anchors = set(_dangling(base, bg0, nets))
-    pruned = _dangling(work, bgw, nets, gone=pushed, adds=adds, win=win,
+    pruned = _dangling(work, bgw, nets, gone=pushed, adds=adds, win=reach,
                        anchors=anchors)
     payload["pruned"] = pruned
     route_ops = [{"op": "remove", "uuid": u}
@@ -678,14 +844,21 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
         route_edit.apply_ops(work, route_ops)
     drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
     bg1 = geom.BoardGeom.from_file(work)
-    isl = {n: [base_count(n), len(rf.net_islands(bg1, n))] for n in nets}
+    area = repair_area(reach, adds, ripped + [
+        by_uuid[u] for u in dict.fromkeys(pushed + pruned) if u in by_uuid])
+    pours = {z.net for g in (bg0, bg1) for z in g.zones_of()
+             if z.net and not z.teardrop
+             and any(f.intersects(area) for fs in z.fills.values()
+                     for f in fs)}
+    isl = {n: [base_count(n), len(rf.net_islands(bg1, n))]
+           for n in sorted(nets | pours)}
     payload["islands"] = isl
     payload["drc"] = {"before": drc0["counts"], "after": drc1["counts"]}
-    worse = gates(drc0, drc1, isl)
+    worse = gates(drc0, drc1, isl, area)
     if worse:
         payload["status"] = "violations"
         payload["worse"] = worse
-        payload["new_violations"] = new_violations(drc0, drc1)
+        payload["new_violations"] = new_violations(drc0, drc1, area)
         return _finish(payload, out)
 
     files = []
@@ -697,23 +870,34 @@ def repair(pcb: Path, ops: list, out: Path, *, margin: float = MARGIN,
     payload["op_files"] = files
     payload["replay"] = _replay(pcb, out, files)
     if apply:
-        if _sha(pcb) != sha0:
-            raise CheckError(f"{pcb} changed while part_repair ran: not"
-                             f" applied (the op files in {out} still"
-                             " replay)")
         tmp = pcb.with_name(f".{pcb.name}.part_repair")
         shutil.copy2(work, tmp)  # work is DIR/work/B itself
+        if _sha(pcb) != payload["board_sha256"]:
+            tmp.unlink()
+            raise CheckError(
+                f"{pcb} changed while part_repair ran: not applied. The op"
+                f" files in {out} replay on the board as it was when the run"
+                f" began (sha256 {payload['board_sha256'][:12]}), not on it"
+                " as it is now")
         os.replace(tmp, pcb)
         payload["applied"] = True
     return _finish(payload, out)
 
 
 def _replay(pcb: Path, out: Path, files: list) -> list[str]:
+    """The commands that replay `files` on pcb, in order; the last one
+    refills the zones (route_edit and place_edit both take --refill).
+    Paths are shell-quoted, so a line pastes as it is."""
     tail = {RIP_FILE: "route_edit", PLACE_FILE: "place_edit",
             ROUTE_FILE: "route_edit"}
-    extra = {PLACE_FILE: " --allow-routed", ROUTE_FILE: " --refill"}
-    return [f"hwde {tail[f]} --pcb {pcb} --ops {out / f}{extra.get(f, '')}"
-            for f in files]
+    cmds = []
+    for i, f in enumerate(files):
+        extra = " --allow-routed" if f == PLACE_FILE else ""
+        if i == len(files) - 1:
+            extra += " --refill"
+        cmds.append(f"hwde {tail[f]} --pcb {shlex.quote(str(pcb))}"
+                    f" --ops {shlex.quote(str(out / f))}{extra}")
+    return cmds
 
 
 def _finish(payload: dict, out: Path) -> dict:
@@ -727,6 +911,8 @@ def report_md(p: dict) -> str:
     lines = [f"# part_repair: {p['status']}", "",
              f"Board: `{p['board']}`; parts: {', '.join(p['refs'])};"
              f" ops: {p['ops']}.", ""]
+    if p.get("error"):
+        lines += [f"Error: {p['error']}", ""]
     rp = p.get("ripped")
     if rp:
         lines += [f"Ripped {rp['tracks']} tracks and {rp['vias']} vias"

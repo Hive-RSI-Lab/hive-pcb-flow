@@ -159,6 +159,10 @@ SLOW = {
     "tests/test_tolerance.py::test_live_xyce_sampling_agrees_with_python_mc": "runs Xyce .sampling from the IIC-OSIC-TOOLS tree",
     "tests/test_part_repair.py::test_live_renumber_r6_applies_and_replays": _TOOLS,
     "tests/test_part_repair.py::test_live_swap_fp_r6_to_0805_leaves_the_board": _TOOLS,
+    "tests/test_part_repair.py::test_live_move_r6_replays_from_the_place_file": _TOOLS,
+    "tests/test_part_repair.py::test_live_rotate_and_flip_r6_rejoin_and_replay": _TOOLS,
+    "tests/test_part_repair.py::test_live_a_join_that_must_push_other_nets_aside": _TOOLS,
+    "tests/test_part_repair.py::test_live_a_worse_board_writes_nothing_and_names_why": _TOOLS,
 }
 
 
