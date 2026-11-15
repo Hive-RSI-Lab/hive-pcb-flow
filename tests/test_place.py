@@ -465,6 +465,80 @@ def test_effective_courtyard_catches_pad_overlap():
     assert ea.intersects(eb)
 
 
+def _stock_0402(ref, x, y, courtyard="kicad"):
+    """KiCad C_0402_1005Metric: pads +-0.48, 0.56 x 0.62; courtyard drawn
+    0.15 mm beyond the pad field (+-0.91 x +-0.46)."""
+    from shapely.geometry import box as _box
+    pads = [placelib.FpPad("1", "A", (-0.48, 0.0), (0.56, 0.62), False),
+            placelib.FpPad("2", "B", (0.48, 0.0), (0.56, 0.62), False)]
+    cy = {"kicad": _box(-0.91, -0.46, 0.91, 0.46),
+          "body": _box(-0.5, -0.25, 0.5, 0.25),     # EasyEDA body-only
+          None: None}[courtyard]
+    return _fp_with_courtyard(ref, x, y, cy, pads)
+
+
+def _legal_model(*fps):
+    from types import SimpleNamespace
+    from shapely.geometry import box as _box
+    return SimpleNamespace(footprints={f.ref: f for f in fps},
+                           outline=_box(0, 0, 50, 50), rule_areas=[])
+
+
+def _overlaps(*fps, placement=None):
+    return [x for x in placelib.legality_violations(_legal_model(*fps),
+                                                    placement)
+            if x["kind"] == "courtyard_overlap"]
+
+
+def test_stock_0402_pair_with_clear_courtyards_is_quiet():
+    """#1062: two stock 0402s 0.3 mm pad to pad, drawn courtyards touching
+    but clear - KiCad DRC passes them; the 0.25 mm pad grow flagged them."""
+    a = _stock_0402("C1", 10.0, 10.0)
+    b = _stock_0402("C2", 10.0 + 1.52 + 0.30, 10.0)
+    assert a.courtyard_holds_pads()
+    assert _overlaps(a, b) == []
+    # the same pair under an explicit 0.25 mm grow is still flagged, and the
+    # message says it is the pad fields, not the courtyards
+    ov = _overlaps(a, b, placement={"pad_margin_mm": 0.25})
+    assert len(ov) == 1 and ov[0]["drawn_courtyards_clear"] is True
+    assert ov[0]["pad_gap_mm"] == pytest.approx(0.30, abs=0.01)
+    assert ov[0]["msg"].startswith("pad fields too close C1/C2")
+
+
+def test_diagonal_pair_judged_by_true_distance():
+    """#1062: the square grow reached 0.25 mm in x AND y at a corner, so a
+    diagonal pair 0.537 mm apart corner to corner (0.38 in x and y) was
+    flagged at a 0.25 mm grow. Round corners judge the true distance."""
+    a = _stock_0402("C1", 10.0, 10.0, courtyard=None)
+    b = _stock_0402("C2", 10.0 + 1.52 + 0.38, 10.0 + 0.62 + 0.38,
+                    courtyard=None)
+    assert _overlaps(a, b) == []
+    # 0.35 mm corner to corner is inside 2 x 0.25: still caught
+    c = _stock_0402("C3", 10.0 + 1.52 + 0.25, 10.0 + 0.62 + 0.25,
+                    courtyard=None)
+    assert len(_overlaps(a, c)) == 1
+
+
+def test_real_courtyard_overlap_still_flagged():
+    a = _stock_0402("C1", 10.0, 10.0)
+    b = _stock_0402("C2", 10.0 + 1.72, 10.0)     # courtyards overlap 0.1 mm
+    ov = _overlaps(a, b)
+    assert len(ov) == 1 and ov[0]["msg"].startswith("courtyard overlap")
+    assert "drawn_courtyards_clear" not in ov[0]
+
+
+def test_body_only_courtyard_keeps_pad_grow():
+    """#438 kept: an EasyEDA courtyard smaller than its pads is no proper
+    courtyard, so its pads still grow 0.25 mm and a 0.3 mm pad gap is
+    flagged."""
+    a = _stock_0402("C1", 10.0, 10.0, courtyard="body")
+    b = _stock_0402("C2", 10.0 + 1.52 + 0.30, 10.0, courtyard="body")
+    assert not a.courtyard_holds_pads()
+    ov = _overlaps(a, b)
+    assert len(ov) == 1 and ov[0]["drawn_courtyards_clear"] is True
+    assert ov[0]["pad_margin_mm"] == [0.25, 0.25]
+
+
 def test_validate_text_ops_good():
     ops = place_edit.validate_ops({"version": 1, "ops": [
         {"op": "add_text", "text": "+5V", "x": 10.0, "y": 20.0,

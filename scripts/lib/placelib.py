@@ -38,6 +38,10 @@ import checklib
 
 SOURCE = "check.place"
 EPS_AREA = 0.01  # mm^2 - below this an intersection is numerical noise
+# the least courtyard excess beyond the pads KiCad's library draws (chips
+# under 0603: 0.15 mm; 0603 and up 0.25 mm), and the slack for its rounding
+KICAD_MIN_EXCESS = 0.15
+EXCESS_TOL = 0.005
 
 
 # ---------------------------------------------------------------- model
@@ -115,6 +119,67 @@ class Footprint:
             boxes.append(box(p.local[0] - hx - m, p.local[1] - hy - m,
                              p.local[0] + hx + m, p.local[1] + hy + m))
         return unary_union(boxes)
+
+    def pad_copper_local(self) -> Polygon | None:
+        """The pads themselves, ungrown: the union of per-pad boxes,
+        rotation-aware like pad_shape_local."""
+        if not self.pads:
+            return None
+        boxes = []
+        for p in self.pads:
+            th = math.radians(p.rot)
+            c, s = abs(math.cos(th)), abs(math.sin(th))
+            hx = p.size[0] / 2 * c + p.size[1] / 2 * s
+            hy = p.size[0] / 2 * s + p.size[1] / 2 * c
+            boxes.append(box(p.local[0] - hx, p.local[1] - hy,
+                             p.local[0] + hx, p.local[1] + hy))
+        return unary_union(boxes)
+
+    def courtyard_holds_pads(self, excess: float = KICAD_MIN_EXCESS) -> bool:
+        """True when the drawn courtyard already holds the pad field grown
+        `excess` mm with round corners: a proper courtyard, as KiCad's
+        library draws them (0.15 mm beyond the pads for chips under 0603,
+        0.25 mm above). An EasyEDA body-only courtyard (#438) is not."""
+        cy, pads = self.courtyard_local, self.pad_copper_local()
+        if cy is None or pads is None:
+            return False
+        return cy.buffer(1e-6).contains(pads.buffer(excess - EXCESS_TOL))
+
+    def judge_extents_local(self, margin: float | None = None):
+        """The shape the place gate's part-vs-part overlap test judges
+        (#1062), local frame. A proper courtyard (courtyard_holds_pads) is
+        judged as drawn, as KiCad DRC judges it: growing its pads a further
+        0.25 mm false-flagged stock 0402s 0.3 mm apart whose courtyards are
+        clear. Otherwise the courtyard united with the pads grown
+        pad_margin with ROUND corners, so a diagonal pair is judged by its
+        true distance. `margin` (placement.pad_margin_mm) is an explicit
+        grow and applies to every part."""
+        cy, pads = self.courtyard_local, self.pad_copper_local()
+        if margin is None and self.courtyard_holds_pads():
+            return cy
+        m = self.pad_margin if margin is None else margin
+        grown = pads.buffer(m) if pads is not None else None
+        if cy is not None:
+            return cy if grown is None else cy.union(grown)
+        return grown if grown is not None else box(-0.5, -0.5, 0.5, 0.5)
+
+    def judge_extents_abs(self, margin: float | None = None):
+        p = affinity.rotate(self.judge_extents_local(margin), -self.angle,
+                            origin=(0, 0))
+        return affinity.translate(p, self.pos[0], self.pos[1])
+
+    def pad_copper_abs(self):
+        cu = self.pad_copper_local()
+        if cu is None:
+            return None
+        p = affinity.rotate(cu, -self.angle, origin=(0, 0))
+        return affinity.translate(p, self.pos[0], self.pos[1])
+
+    def courtyard_abs(self):
+        if self.courtyard_local is None:
+            return None
+        p = affinity.rotate(self.courtyard_local, -self.angle, origin=(0, 0))
+        return affinity.translate(p, self.pos[0], self.pos[1])
 
     def precise_extents_abs(self):
         """Declared courtyard UNION precise pad shape, board frame - the
@@ -612,9 +677,11 @@ def legality_violations(model: PlaceModel, placement: dict | None) -> list[dict]
     placement = placement or {}
     edges = {e["ref"]: e for e in placement.get("edges", []) if e.get("ref")}
     fps = [model.footprints[r] for r in sorted(model.footprints)]
+    margin = None
     if placement.get("pad_margin_mm") is not None:
+        margin = float(placement["pad_margin_mm"])
         for f in fps:
-            f.pad_margin = float(placement["pad_margin_mm"])
+            f.pad_margin = margin
     ext = {f.ref: f.extents_abs() for f in fps}
 
     def collides(a: Footprint, b: Footprint) -> bool:
@@ -630,16 +697,38 @@ def legality_violations(model: PlaceModel, placement: dict | None) -> list[dict]
                 or "through_hole" in b.attrs or any(p.through for p in b.pads))
         return thru
 
-    # Overlap uses the PRECISE shape (courtyard + per-pad boxes, U5): the
-    # bbox hull's pad-free corners false-flagged tight-but-legal decouplers.
-    # The hull contains the precise shape, so hull-disjoint pairs skip the
-    # (more expensive) precise intersection outright.
+    # Overlap uses the JUDGE shape (#1062): a proper drawn courtyard as
+    # drawn, else courtyard + pads grown round (U5: the bbox hull's pad-free
+    # corners false-flagged tight-but-legal decouplers). The hull contains
+    # it, so hull-disjoint pairs skip the precise intersection outright.
+    # The placer still packs by precise_extents_abs, the stricter shape.
     precise: dict = {}
 
     def prec(f: Footprint):
         if f.ref not in precise:
-            precise[f.ref] = f.precise_extents_abs()
+            precise[f.ref] = f.judge_extents_abs(margin)
         return precise[f.ref]
+
+    def overlap_msg(a: Footprint, b: Footprint, area: float):
+        ca, cb = a.courtyard_abs(), b.courtyard_abs()
+        if ca is not None and cb is not None \
+                and ca.intersection(cb).area <= EPS_AREA:
+            pa, pb = a.pad_copper_abs(), b.pad_copper_abs()
+            gap = pa.distance(pb) if pa is not None and pb is not None \
+                else None
+            ma = a.pad_margin if margin is not None \
+                or not a.courtyard_holds_pads() else 0.0
+            mb = b.pad_margin if margin is not None \
+                or not b.courtyard_holds_pads() else 0.0
+            gs = f"{gap:.2f} mm" if gap is not None else "?"
+            return (f"pad fields too close {a.ref}/{b.ref}: drawn courtyards "
+                    f"clear, pads {gs} apart, pads grown {ma:g}/{mb:g} mm "
+                    f"overlap ({area:.2f} mm2)"), {
+                        "drawn_courtyards_clear": True,
+                        "pad_gap_mm": checklib.rnd(gap) if gap is not None
+                        else None,
+                        "pad_margin_mm": [ma, mb]}
+        return f"courtyard overlap {a.ref}/{b.ref} ({area:.2f} mm2)", {}
 
     for i, a in enumerate(fps):
         for b in fps[i + 1:]:
@@ -650,11 +739,11 @@ def legality_violations(model: PlaceModel, placement: dict | None) -> list[dict]
             inter = prec(a).intersection(prec(b))
             if inter.area > EPS_AREA:
                 c = inter.centroid
+                msg, extra = overlap_msg(a, b, inter.area)
                 v.append(checklib.violation(
                     "place", "error", (c.x, c.y), None, None, [a.ref, b.ref],
-                    f"courtyard overlap {a.ref}/{b.ref} ({inter.area:.2f} mm2)",
-                    SOURCE, kind="courtyard_overlap",
-                    overlap_mm2=checklib.rnd(inter.area)))
+                    msg, SOURCE, kind="courtyard_overlap",
+                    overlap_mm2=checklib.rnd(inter.area), **extra))
 
     for f in fps:
         e = ext[f.ref]
