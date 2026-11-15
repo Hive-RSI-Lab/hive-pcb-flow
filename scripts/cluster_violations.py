@@ -107,6 +107,7 @@ FIXER_HINTS = {
     "dfm_copper_to_edge": "router", "dfm_hole_size": "router",
     "dfm_hole_to_hole": "router", "dfm_hole_to_edge": "router",
     "dfm_annular_ring": "router",
+    "dfm_hole_to_track": "router", "dfm_slot_size": "library",
     "dfm_silk_width": "silk", "dfm_silk_over_pad": "silk",
     "dfm_mask_dam": "silk",
     "dfm_missing_layer": "fab", "dfm_no_drill": "fab",

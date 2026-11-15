@@ -507,3 +507,54 @@ parts:
           - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'For the best performance, source impedance to the REF terminal should be kept below 2 Ω.', fields: []}
           - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'This uneven amplification degrades CMRR.', fields: []}
           - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'Figure 59. Driving the Reference Pin', fields: []}
+
+  - mpn: BQ24074
+    match: '^BQ2407[2-59]'
+    verified: true   # TI SLUS810N read 2026-11-15, Table 7-1
+    pins:
+      - pin: EN1
+        forbid: [open]
+        why: >-
+          EN1 and EN2 pick the input current limit (100 mA, 500 mA, ILIM or
+          standby); each has only a weak 285 k pull-down and must be tied
+        source: >-
+          SLUS810N Table 7-1 EN1/EN2: "Do not leave EN1 or EN2 unconnected to
+          ensure proper operation."
+        cite:
+          - &bq_en {doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 8, table: 'Table 7-1. Pin Functions', quote: 'Do not leave EN1 or EN2 unconnected to ensure proper operation.', fields: []}
+      - pin: EN2
+        forbid: [open]
+        why: >-
+          EN1 and EN2 pick the input current limit (100 mA, 500 mA, ILIM or
+          standby); each has only a weak 285 k pull-down and must be tied
+        source: >-
+          SLUS810N Table 7-1 EN1/EN2: "Do not leave EN1 or EN2 unconnected to
+          ensure proper operation."
+        cite: [*bq_en]
+      - pin: CE
+        forbid: [open]
+        why: >-
+          nCE enables charging when low; it has only a weak 285 k pull-down
+          and must be tied or driven
+        source: >-
+          SLUS810N Table 7-1 CE: "Do not leave CE unconnected to ensure
+          proper operation."
+        cite:
+          - {doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 8, table: 'Table 7-1. Pin Functions', quote: 'Do not leave CE unconnected to ensure proper operation.', fields: []}
+
+  - mpn: TPS61023
+    match: '^TPS61023'
+    verified: true   # TI SLVSF14B read 2026-11-15, Pin Functions and 6.5
+    pins:
+      - pin: EN
+        forbid: [open]
+        severity: warning
+        why: >-
+          EN is a logic input (high enables, low shuts down) with no pull or
+          default state given; left open the boost's state is undefined
+        source: >-
+          SLVSF14B Pin Functions EN: "Enable logic input. Logic high voltage
+          enables the device." No internal pull is stated, so open is an
+          inference: a warning
+        cite:
+          - {doc: tps61023.pdf, sha256: a8c0a51b17502e4cb39dbe55852c27ec4579047c76676704ddcb9b4c5da7dd9a, page: 3, table: 'Pin Functions', quote: 'Enable logic input. Logic high voltage enables the device.', fields: []}

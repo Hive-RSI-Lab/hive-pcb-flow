@@ -23,6 +23,7 @@ Public API:
 """
 from __future__ import annotations
 
+import math
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from pathlib import Path
 
 from gerbonara import ExcellonFile, GerberFile
 from gerbonara.graphic_objects import Arc, Flash, Line, Region
+from gerbonara.graphic_primitives import Rectangle
 from gerbonara.rs274x import GerberParser
 from shapely import set_precision
 from shapely.geometry import LineString, Point, Polygon
@@ -136,10 +138,27 @@ ARC_MAX_ERROR_MM = 1e-3
 OUTLINE_SNAP_MM = 1e-5
 
 
+def _rect_pts(r) -> list:
+    """A gerbonara Rectangle's four corners. gerbonara 1.6.3's own
+    Rectangle.to_arc_poly is right only at multiples of 90 degrees: at 45 or
+    315 degrees a square comes out as four copies of its centre, so a KiCad
+    RotRect pad (a square pad turned 45 degrees) vanished from the copper and
+    a track into it read as 0.015 mm from its drill (minuet v4 J5, #454)."""
+    c, s = math.cos(r.rotation), math.sin(r.rotation)
+    return [(r.x + dx * c - dy * s, r.y + dx * s + dy * c)
+            for dx, dy in ((-r.w / 2, -r.h / 2), (r.w / 2, -r.h / 2),
+                           (r.w / 2, r.h / 2), (-r.w / 2, r.h / 2))]
+
+
 def _flash_polys(obj) -> list:
     """A Flash/Region -> shapely polygons in BOARD space (y negated)."""
     out = []
     for prim in obj.to_primitives("mm"):
+        if isinstance(prim, Rectangle):
+            poly = Polygon([(x, -y) for x, y in _rect_pts(prim)]).buffer(0)
+            if not poly.is_empty:
+                out.append(poly)
+            continue
         try:
             ap = prim.to_arc_poly()
             pts = list(ap.approximate_arcs(max_error=ARC_MAX_ERROR_MM).outline)
@@ -351,6 +370,7 @@ class FabStack:
         self.backdrill_files: list[Path] = []
         self._cache: dict[str, LayerGeom] = {}
         self._holes: list[Hole] | None = None
+        self._slots: list[Slot] | None = None
         self._outline = None
         self._scan()
 
@@ -425,6 +445,19 @@ class FabStack:
                     continue
             self._holes = out
         return self._holes
+
+    @property
+    def slots(self) -> list[Slot]:
+        """Routed drill hits (read_slots) from every drill file."""
+        if self._slots is None:
+            out: list[Slot] = []
+            for p in self.drill_files:
+                try:
+                    out.extend(read_slots(p))
+                except Exception:
+                    continue
+            self._slots = out
+        return self._slots
 
     @property
     def outline(self):

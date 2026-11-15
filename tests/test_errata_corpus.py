@@ -554,6 +554,34 @@ def test_a_stale_report_does_not_stand_in_for_a_crash(tmp_path, monkeypatch):
     assert "error" in ec.sweep(cache, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
 
 
+def test_sweep_lists_coverage_notes_apart(tmp_path, monkeypatch):
+    note = {"kind": "rating_unrated", "net": None, "refs": ["D2"]}
+    fault = {"kind": "rating_over_voltage", "net": "/5V", "refs": ["C1"]}
+    found = {"rev_a": [note, fault], "rev_b": []}
+    monkeypatch.setattr(ec, "audit", lambda c, b, rev, s: found[rev])
+    r = ec.sweep(tmp_path, {"id": "h", "rev_a": {}, "rev_b": {}})
+    assert r["check_ratings"]["gone_on_rev_b"] == [fault]
+    assert r["check_ratings"]["coverage_gone_on_rev_b"] == [note]
+    assert r["check_ratings"]["rev_a"] == 2
+    # a check with no coverage kinds keeps every row
+    assert r["check_silk"]["gone_on_rev_b"] == [note, fault]
+    assert "coverage_gone_on_rev_b" not in r["check_silk"]
+
+
+def test_ratings_not_judged_kinds_are_coverage(tmp_path, monkeypatch):
+    """Every ratings kind that only says a limit wasn't judged is coverage,
+    whatever its severity; a finding of a limit broken stays in triage."""
+    notes = [{"kind": k, "net": None, "refs": ["U1"]} for k in (
+        "rating_datasheet_unassessed", "rating_regulator_output_unjudged",
+        "rating_no_attributes")]
+    fault = {"kind": "rating_regulator_output", "net": "/3V3", "refs": ["U1"]}
+    found = {"rev_a": notes + [fault], "rev_b": []}
+    monkeypatch.setattr(ec, "audit", lambda c, b, rev, s: found[rev])
+    r = ec.sweep(tmp_path, {"id": "h", "rev_a": {}, "rev_b": {}})["check_ratings"]
+    assert r["gone_on_rev_b"] == [fault]
+    assert r["coverage_gone_on_rev_b"] == notes
+
+
 def test_sweep_output_labels_the_crash(tmp_path, monkeypatch, capsys):
     cache = _planted(tmp_path, monkeypatch, CRASH)
     monkeypatch.setattr(ec, "fetch", lambda c, b: None)

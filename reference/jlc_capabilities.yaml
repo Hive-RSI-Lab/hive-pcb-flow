@@ -50,7 +50,12 @@
 #     min_copper_to_edge_mm, min_hole_diameter_mm, min_hole_to_hole_mm,
 #     min_hole_to_edge_mm, min_npth_diameter_mm, min_annular_ring_mm (VIAS), min_pth_annular_ring_mm
 #     (component PTH holes; falls back to min_annular_ring_mm), min_silk_width_mm,
-#     min_solder_mask_dam_mm. (Its paste/outline/release checks are threshold-
+#     min_solder_mask_dam_mm (raised by board.solder_mask_dam_by_color_mm for
+#     the board's F.Mask colour), min_pth_to_track_mm / min_via_to_track_mm /
+#     min_npth_to_track_mm (outer copper only; dfm_hole_to_track),
+#     min_plated_slot_width_mm, min_npth_slot_width_mm,
+#     min_plated_slot_length_ratio (dfm_slot_size; #454, JLC page read
+#     2026-11-15). (Its paste/outline/release checks are threshold-
 #     free: dfm_pad_tented, dfm_open_outline, dfm_missing_layer.)
 #   dfm_check also reads the abs_min_* floors, min_via_hole_to_hole_mm,
 #     and (board vias, check_via_sizes, rows with abs_min_via_drill_mm
@@ -90,6 +95,11 @@ board:
   surface_finish: [HASL, "LeadFree HASL", ENIG]
   solder_mask_colors: [green, black, blue, red, white, yellow, purple, "matte black", "matte green"]
   silkscreen_colors: [white, black]
+  # Mask dam by colour (#454, dfm_check.mask_dam_floor; JLC page read
+  # 2026-11-15): 'Min. pad spacing: 0.10 mm (green, red, yellow, blue,
+  # purple) Min. pad spacing: 0.13 mm (black, white)'. The colour is the
+  # board's F.Mask stackup colour; one not named here takes the row figure.
+  solder_mask_dam_by_color_mm: {black: 0.13, white: 0.13, "matte black": 0.13}
 
 # Castellated (plated half-hole) edge pads. A pad is castellated when its
 # footprint marks it `(property pad_prop_castellated)` (KiCad's "Castellated
@@ -159,6 +169,13 @@ design_rules:
     abs_min_hole_to_hole_mm: 0.45    # JLC pad hole-to-hole
     min_via_hole_to_hole_mm: 0.5     # via-to-via: designed like any hole pair
     abs_min_via_hole_to_hole_mm: 0.2 # JLC via hole-to-hole
+    min_pth_to_track_mm: 0.35        # JLC 'PTH to Track 0.28mm 0.35mm is recommended' (2026-11-15, #454)
+    abs_min_pth_to_track_mm: 0.28
+    min_via_to_track_mm: 0.2         # JLC 'Via hole to Track 0.2mm'
+    min_npth_to_track_mm: 0.2        # JLC 'NPTH to Track 0.2mm'; routed slots >= 0.2 too
+    min_plated_slot_width_mm: 0.5    # JLC plated slot 2-layer 0.5 / multilayer 0.35
+    min_npth_slot_width_mm: 1.0      # JLC 'Min. Non-Plated Slots 1.0mm'
+    min_plated_slot_length_ratio: 2.0  # JLC: slot length at least 2x its width
     min_silk_width_mm: 0.15
     min_silk_height_mm: 1.0          # ~40 mil legible floor
     min_solder_mask_dam_mm: 0.1
@@ -187,9 +204,16 @@ design_rules:
     abs_min_hole_to_hole_mm: 0.45    # JLC pad hole-to-hole
     min_via_hole_to_hole_mm: 0.5     # via-to-via: designed like any hole pair
     abs_min_via_hole_to_hole_mm: 0.2 # JLC via hole-to-hole
+    min_pth_to_track_mm: 0.35        # JLC 'PTH to Track 0.28mm 0.35mm is recommended' (2026-11-15, #454)
+    abs_min_pth_to_track_mm: 0.28
+    min_via_to_track_mm: 0.2         # JLC 'Via hole to Track 0.2mm'
+    min_npth_to_track_mm: 0.2        # JLC 'NPTH to Track 0.2mm'; routed slots >= 0.2 too
+    min_plated_slot_width_mm: 0.5    # JLC plated slot 2-layer 0.5 / multilayer 0.35
+    min_npth_slot_width_mm: 1.0      # JLC 'Min. Non-Plated Slots 1.0mm'
+    min_plated_slot_length_ratio: 2.0  # JLC: slot length at least 2x its width
     min_silk_width_mm: 0.15
     min_silk_height_mm: 1.0
-    min_solder_mask_dam_mm: 0.1
+    min_solder_mask_dam_mm: 0.2      # JLC 2 oz: 'Min. pad spacing: 0.20 mm (any color)' (2026-11-15, #454)
     min_solder_mask_clearance_mm: 0.05
     min_pad_size_mm: 0.25
     outer_copper_oz: 2.0
@@ -215,6 +239,13 @@ design_rules:
     abs_min_hole_to_hole_mm: 0.45    # JLC pad hole-to-hole
     min_via_hole_to_hole_mm: 0.5     # via-to-via: designed like any hole pair
     abs_min_via_hole_to_hole_mm: 0.2 # JLC via hole-to-hole
+    min_pth_to_track_mm: 0.35        # JLC 'PTH to Track 0.28mm 0.35mm is recommended' (2026-11-15, #454)
+    abs_min_pth_to_track_mm: 0.28
+    min_via_to_track_mm: 0.2         # JLC 'Via hole to Track 0.2mm'
+    min_npth_to_track_mm: 0.2        # JLC 'NPTH to Track 0.2mm'; routed slots >= 0.2 too
+    min_plated_slot_width_mm: 0.35   # JLC plated slot 2-layer 0.5 / multilayer 0.35
+    min_npth_slot_width_mm: 1.0      # JLC 'Min. Non-Plated Slots 1.0mm'
+    min_plated_slot_length_ratio: 2.0  # JLC: slot length at least 2x its width
     min_silk_width_mm: 0.15
     min_silk_height_mm: 1.0
     min_solder_mask_dam_mm: 0.1
@@ -244,9 +275,16 @@ design_rules:
     abs_min_hole_to_hole_mm: 0.45    # JLC pad hole-to-hole
     min_via_hole_to_hole_mm: 0.5     # via-to-via: designed like any hole pair
     abs_min_via_hole_to_hole_mm: 0.2 # JLC via hole-to-hole
+    min_pth_to_track_mm: 0.35        # JLC 'PTH to Track 0.28mm 0.35mm is recommended' (2026-11-15, #454)
+    abs_min_pth_to_track_mm: 0.28
+    min_via_to_track_mm: 0.2         # JLC 'Via hole to Track 0.2mm'
+    min_npth_to_track_mm: 0.2        # JLC 'NPTH to Track 0.2mm'; routed slots >= 0.2 too
+    min_plated_slot_width_mm: 0.35   # JLC plated slot 2-layer 0.5 / multilayer 0.35
+    min_npth_slot_width_mm: 1.0      # JLC 'Min. Non-Plated Slots 1.0mm'
+    min_plated_slot_length_ratio: 2.0  # JLC: slot length at least 2x its width
     min_silk_width_mm: 0.15
     min_silk_height_mm: 1.0
-    min_solder_mask_dam_mm: 0.1
+    min_solder_mask_dam_mm: 0.2      # JLC 2 oz: 'Min. pad spacing: 0.20 mm (any color)' (2026-11-15, #454)
     min_solder_mask_clearance_mm: 0.05
     min_pad_size_mm: 0.25
     outer_copper_oz: 2.0
@@ -272,6 +310,13 @@ design_rules:
     abs_min_hole_to_hole_mm: 0.45    # JLC pad hole-to-hole
     min_via_hole_to_hole_mm: 0.5     # via-to-via: designed like any hole pair
     abs_min_via_hole_to_hole_mm: 0.2 # JLC via hole-to-hole
+    min_pth_to_track_mm: 0.35        # JLC 'PTH to Track 0.28mm 0.35mm is recommended' (2026-11-15, #454)
+    abs_min_pth_to_track_mm: 0.28
+    min_via_to_track_mm: 0.2         # JLC 'Via hole to Track 0.2mm'
+    min_npth_to_track_mm: 0.2        # JLC 'NPTH to Track 0.2mm'; routed slots >= 0.2 too
+    min_plated_slot_width_mm: 0.35   # JLC plated slot 2-layer 0.5 / multilayer 0.35
+    min_npth_slot_width_mm: 1.0      # JLC 'Min. Non-Plated Slots 1.0mm'
+    min_plated_slot_length_ratio: 2.0  # JLC: slot length at least 2x its width
     min_silk_width_mm: 0.15
     min_silk_height_mm: 1.0
     min_solder_mask_dam_mm: 0.1

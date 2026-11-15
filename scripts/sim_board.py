@@ -36,8 +36,15 @@ Findings (violation kind; severity):
                           chip size's D/CRCW e3 Umax): an 0805 2 MOhm on a
                           400 V bus dissipates 0.08 W but is over 150 V
   cap_overvoltage         DC across a cap above its rated voltage (error);
-  cap_dc_bias             class-II ceramic at more than half its rating
-                          (warning: it loses much of its capacitance)
+  cap_dc_bias             class-II ceramic losing its capacitance to DC
+                          bias: warning when its rail's stated floor
+                          (constraints power[].min_cout or a regulator's
+                          cited effective pin_requirements row, as
+                          mlcc_dcbias) is missed on the low curve and this
+                          part keeps less than the share it needs; info
+                          above half its rating or under half its nominal
+                          otherwise (an uncited screen), with a rail that
+                          states no floor listed as not judged
   fb_divider_mismatch     an adjustable regulator's FB divider sets a Vout
                           more than 3 % (warning) / 5 % (error) off the
                           output rail's declared voltage; a constraints
@@ -1235,6 +1242,7 @@ def analyze(board: dict, parts: dict, rails: dict, opts: dict) -> tuple:
 
     # capacitors: DC across against rating and DC-bias derating
     cfacts = []
+    crows: list[dict] = []
     for e in (x for x in model["elems"] if x["kind"] == "C"):
         vs = [abs(volts(sc, e["nets"][0]) - volts(sc, e["nets"][1]))
               for sc in ops if volts(sc, e["nets"][0]) is not None
@@ -1255,6 +1263,14 @@ def analyze(board: dict, parts: dict, rails: dict, opts: dict) -> tuple:
                        "c_eff": checklib.rnd(eff["c_eff"], 12),
                        "c_eff_low": checklib.rnd(eff["c_eff_low"], 12),
                        "c_eff_curve": eff["curve"]})
+        ends = [n for n in e["nets"] if n not in model["grounds"]]
+        crows.append({"ref": e["ref"], "net": e["nets"][0], "vdc": vdc,
+                      "rail": ends[0] if len(ends) == 1 else None,
+                      "rating_v": rating, "dielectric": diel,
+                      "class2": bool(re.match(r"[XYZ]\d[A-Z]", diel.upper())),
+                      "c_nom": e["value"], "c_eff": eff["c_eff"],
+                      "c_eff_low": eff["c_eff_low"],
+                      "fraction": eff["fraction"], "curve": eff["curve"]})
         if rating is None:
             if vdc >= 6.0:
                 unknowns.append({"ref": e["ref"], "what": "voltage rating",
@@ -1266,19 +1282,7 @@ def analyze(board: dict, parts: dict, rails: dict, opts: dict) -> tuple:
                              e["nets"][0], f"{e['ref']} sees {vdc:.3g} V DC "
                              f"over its {rating:g} V rating ({rsrc})",
                              vdc=vdc, rating_v=rating))
-        elif re.match(r"[XYZ]\d[A-Z]", diel.upper()) and (
-                vdc > 0.5 * rating or eff["fraction"] < 0.5):
-            vios.append(_vio("cap_dc_bias", "warning", [e["ref"]],
-                             e["nets"][0],
-                             f"{e['ref']} ({_f(e['value'], 'F')} {diel}) at "
-                             f"{vdc:.3g} V DC is {vdc / rating:.0%} of its "
-                             f"{rating:g} V rating: about "
-                             f"{_f(eff['c_eff'], 'F')} effective "
-                             f"({_f(eff['c_eff_low'], 'F')} low, "
-                             f"{eff['curve']} curve, mlcc_dcbias.py) - check "
-                             "the maker's DC-bias curve", vdc=vdc,
-                             rating_v=rating, c_eff=eff["c_eff"],
-                             c_eff_low=eff["c_eff_low"]))
+    cap_dc_bias_findings(crows, opts.get("cap_floors") or {}, vios, unknowns)
     facts["capacitors_dc"] = sorted(cfacts, key=lambda r: -r["vdc"])[:25]
     facts["rail_currents_a"] = {
         net: checklib.rnd(-ops["default"]["src"].get(
@@ -1290,6 +1294,74 @@ def analyze(board: dict, parts: dict, rails: dict, opts: dict) -> tuple:
              if n in o["driven"] and n not in rails and n not in grounds}
         for sc, o in ops.items()}
     return model, ops, tran, scen, ens, vios, unknowns, facts, version
+
+
+# The generic screen below is lib/mlcc.py's +-25 % class-II curve and a
+# half-rating line no datasheet sets, so on its own it is info (#1232).
+# What warns is a rail's stated floor - constraints power[].min_cout or a
+# regulator's cited `effective: true` pin_requirements row, the lookup
+# mlcc_dcbias uses (#1067) - missed on the low curve.
+DC_BIAS_SCREEN = 0.5
+
+
+def cap_dc_bias_findings(rows: list[dict], floors: dict[str, dict],
+                         vios: list, unknowns: list) -> None:
+    """cap_dc_bias per class-II part. rows: every capacitor with a known DC
+    ({ref, net, rail, vdc, rating_v, dielectric, class2,
+    c_nom, c_eff, c_eff_low, fraction, curve}); floors: {net: {min_c,
+    source}}. Warning only for a part keeping (low curve) less than the
+    share of the rail's nominal its floor needs, on a rail whose low-curve
+    total misses that floor; a screened part anywhere else is info, and its
+    rail, with no floor stated, goes to known_unknowns as not judged."""
+    totals: dict[str, dict] = {}
+    for r in rows:
+        if r["rail"]:
+            t = totals.setdefault(r["rail"], {"c_nom": 0.0, "c_eff_low": 0.0})
+            t["c_nom"] += r["c_nom"]
+            t["c_eff_low"] += r["c_eff_low"]
+    unjudged: set[str] = set()
+    for r in rows:
+        if not r["class2"] or r["rating_v"] is None or \
+                r["vdc"] > r["rating_v"]:
+            continue
+        fl = floors.get(r["rail"]) if r["rail"] else None
+        t = totals.get(r["rail"]) if r["rail"] else None
+        need = fl["min_c"] / t["c_nom"] if fl and t and t["c_nom"] else None
+        keeps_low = r["c_eff_low"] / r["c_nom"] if r["c_nom"] else 1.0
+        part = (f"{r['ref']} ({_f(r['c_nom'], 'F')} {r['dielectric']}) at "
+                f"{r['vdc']:.3g} V DC is {r['vdc'] / r['rating_v']:.0%} of "
+                f"its {r['rating_v']:g} V rating: about "
+                f"{_f(r['c_eff'], 'F')} effective "
+                f"({_f(r['c_eff_low'], 'F')} low, {r['curve']} curve, "
+                "mlcc_dcbias.py)")
+        common = dict(vdc=r["vdc"], rating_v=r["rating_v"], c_eff=r["c_eff"],
+                      c_eff_low=r["c_eff_low"])
+        if need is not None and keeps_low < need and \
+                t["c_eff_low"] < fl["min_c"]:
+            vios.append(_vio(
+                "cap_dc_bias", "warning", [r["ref"]], r["net"],
+                part + f"; {r['rail']} holds its {_f(fl['min_c'], 'F')} "
+                f"effective floor ({fl['source']}) only if every part keeps "
+                f"{need:.0%} of its {_f(t['c_nom'], 'F')} nominal",
+                need_fraction=checklib.rnd(need, 4),
+                floor_source=fl["source"], **common))
+        elif r["vdc"] > DC_BIAS_SCREEN * r["rating_v"] or \
+                r["fraction"] < DC_BIAS_SCREEN:
+            why = (f"{r['rail']} holds its {_f(fl['min_c'], 'F')} floor "
+                   f"({fl['source']})" if fl else
+                   "no effective-capacitance floor stated for "
+                   f"{r['rail'] or r['net']}: not judged")
+            vios.append(_vio(
+                "cap_dc_bias", "info", [r["ref"]], r["net"],
+                part + f" (generic 50 % screen; {why})", **common))
+            if not fl and (r["rail"] or r["net"]) not in unjudged:
+                unjudged.add(r["rail"] or r["net"])
+                unknowns.append({
+                    "ref": r["ref"], "what": "effective-capacitance floor",
+                    "why": f"{r['rail'] or r['net']}: no constraints "
+                           "power[].min_cout or regulator pin_requirements "
+                           "row marked effective, so its DC-bias loss is "
+                           "not judged"})
 
 
 def regulator_findings(board, parts, rails, model, opts, vios, unknowns,
@@ -1986,6 +2058,9 @@ def run(a) -> dict:
             "ambient_c": (cons or {}).get("ambient_c")
             if isinstance((cons or {}).get("ambient_c"), (int, float))
             else None}
+    import mlcc_dcbias  # noqa: PLC0415 - it imports this module
+    opts["cap_floors"] = mlcc_dcbias.floors_for(
+        board, parts, cons, {}, mlcc_dcbias.load_pin_requirements())
     (model, ops, tran, scen, ens, vios, unknowns, facts,
      version) = analyze(board, parts, rails, opts)
     regulator_findings(board, parts, rails, model, opts, vios, unknowns, facts)

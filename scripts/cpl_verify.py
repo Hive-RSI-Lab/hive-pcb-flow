@@ -961,6 +961,10 @@ def _footprint_row(fp: Footprint, cpl: dict, row: dict, a1: dict | None) -> dict
 # without regard to case or spaces round them.
 CPL_COLUMNS = ("Designator", "Mid X", "Mid Y", "Rotation")
 POS_COLUMNS = ("Ref", "PosX", "PosY", "Rot", "Side")
+# KiCad's placement file with its position and rotation columns renamed to
+# the CPL's (Ref,Val,Package,Mid X,Mid Y,Rotation,Side: one-rom fire-28):
+# Ref and Side say it is still KiCad's file, so its rotation is KiCad's.
+POS_ALIASES = {"PosX": "Mid X", "PosY": "Mid Y", "Rot": "Rotation"}
 POS_NOTE = ("KiCad's placement file: each Rot is the board's own rotation, "
             "read as the CPL rotation it stands for with no correction (r on "
             "the top, 180 - r on the bottom), so wrong_rotation marks a part "
@@ -974,7 +978,8 @@ def cpl_format(header) -> str:
     cols = {str(h).strip().lower() for h in header or () if h}
     if {c.lower() for c in CPL_COLUMNS} <= cols:
         return "cpl"
-    if {c.lower() for c in POS_COLUMNS} <= cols:
+    if all(c.lower() in cols or POS_ALIASES.get(c, "").lower() in cols
+           for c in POS_COLUMNS):
         return "kicad_pos"
     raise ValueError(
         f"not a CPL ({', '.join(CPL_COLUMNS)}, Layer) nor KiCad's placement "
@@ -984,7 +989,8 @@ def cpl_format(header) -> str:
 
 def read_placement(path: Path) -> tuple[str, dict[str, dict]]:
     """(format, {ref: {x, y (board frame, y down), rot, layer}}) from a CPL
-    or from KiCad's own placement file. A byte order mark is read past
+    or from KiCad's own placement file, also with its PosX/PosY/Rot named
+    Mid X/Mid Y/Rotation (POS_ALIASES). A byte order mark is read past
     (Fabrication Toolkit writes one: oasis v0.2).
 
     The placement file's PosX/PosY are the CPL's Mid X/Mid Y (bom_cpl copies
@@ -1000,6 +1006,8 @@ def read_placement(path: Path) -> tuple[str, dict[str, dict]]:
 
         def cell(r: dict, key: str, default: str = "") -> str:
             name = col.get(key.lower())
+            if name is None and fmt == "kicad_pos" and key in POS_ALIASES:
+                name = col.get(POS_ALIASES[key].lower())
             v = r.get(name) if name is not None else None
             return default if v is None else str(v).strip()
 

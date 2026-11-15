@@ -149,6 +149,19 @@ parts:
          cite: [{doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: '100nF capacitor is recommended from BST to SW to power the high-side driver.', fields: [value]},
                 {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 15, table: '', quote: 'To ensure proper operation, a ceramic capacitor must be connected between the BST and SW pins.', fields: []}]}
 
+  - mpn: ADR4520
+    match: '^ADR452[05]'
+    # ADI ADR4520/4525/4530/4533/4540/4550 Rev. B, Chinese edition (LCSC
+    # C579305): analog.com was unreachable from the tower (#1227). Recite
+    # from the English edition when it can be fetched.
+    verified: true   # read 2026-11-15, table 12 and the ADR4520 table
+    requires:
+      - {id: COUT, pin: VOUT, to: GND, kinds: [C], min: 1.0e-6, max: 100.0e-6,
+         source: "ADR4520 Rev. B (Chinese edition) output capacitor section and table 12: ADR4520/ADR4525 need COUT of at least 1.0 uF for stability; the ADR4520 table gives load capacitance 1 to 100 uF",
+         cite: [{doc: adr4520.pdf, sha256: 512ab2dfe214da568c1b7a4db91cba1246c6d6be9947984a6cf47501d0e42923, page: 31, table: '表12', quote: '出于稳定性和滤除低电平电压噪声的考虑，需要使用一个输 出电容。输出电容的最小值见表12。', fields: []},
+                {doc: adr4520.pdf, sha256: 512ab2dfe214da568c1b7a4db91cba1246c6d6be9947984a6cf47501d0e42923, page: 31, table: '表12', quote: 'ADR4520、ADR4525 1.0 µF', fields: [min]},
+                {doc: adr4520.pdf, sha256: 512ab2dfe214da568c1b7a4db91cba1246c6d6be9947984a6cf47501d0e42923, page: 4, table: '', quote: '负载电容 1 100 µF', fields: [max]}]}
+
   - mpn: TPS7A20
     match: '^TPS7A20'
     verified: true   # TI SBVS338H read 2026-11-14
@@ -159,3 +172,96 @@ parts:
          source: "TPS7A20 pin table OUT and Recommended Operating Conditions note 3: 0.47 uF to 200 uF effective, required for stability",
          cite: [{doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 3, table: '', quote: 'A low equivalent series resistance (ESR) capacitor is required from OUT to ground for stability.', fields: []},
                 {doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 5, table: 'Recommended Operating Conditions', quote: 'Effective output capacitance of 0.47 μF minimum and 200 μF maximum is required for stability.', fields: [min, max]}]}
+
+  # PCB-0021 lipo-boost (#1226). XC61C (U3, voltage detector) has no row:
+  # the Torex datasheet could not be fetched from the tower and no LCSC copy
+  # exists; its open-drain output is held by the LED and connector on 0021.
+  - mpn: BQ24074
+    match: '^BQ2407[2-59]'
+    verified: true   # TI SLUS810N read 2026-11-15, Table 7-1 and 6.3
+    aliases: {EP: VSS, GND: VSS}
+    requires:
+      - {id: CIN, pin: IN, to: VSS, kinds: [C], min: 1.0e-6, max: 10.0e-6,
+         when: connected,
+         source: "SLUS810N Table 7-1 IN: bypass capacitor 1 uF to 10 uF to VSS",
+         cite: [{doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 8, table: 'Table 7-1. Pin Functions', quote: 'Connect bypass capacitor 1 μF to 10 μF to VSS.', fields: [min, max]}]}
+      - {id: COUT, pin: OUT, to: VSS, kinds: [C], min: 4.7e-6, max: 47.0e-6,
+         source: "SLUS810N Table 7-1 OUT: bypass OUT to VSS with a 4.7 uF to 47 uF ceramic capacitor",
+         cite: [{doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 8, table: 'Table 7-1. Pin Functions', quote: 'Bypass OUT to VSS with a 4.7-μF to 47-μF ceramic capacitor.', fields: [min, max]}]}
+      - {id: CBAT, pin: BAT, to: VSS, kinds: [C], min: 4.7e-6, max: 47.0e-6,
+         source: "SLUS810N Table 7-1 BAT: bypass BAT to VSS with a 4.7 uF to 47 uF ceramic capacitor",
+         cite: [{doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 8, table: 'Table 7-1. Pin Functions', quote: 'Bypass BAT to VSS with a 4.7-μF to 47-μF ceramic capacitor.', fields: [min, max]}]}
+      - {id: RILIM, pin: ILIM, to: VSS, kinds: [R], min: 1100, max: 8000,
+         source: "SLUS810N Table 7-1 ILIM and 6.3 Recommended Operating Conditions: RILIM 1100 to 8000 ohm sets the input current limit; ILIM left open disables charging",
+         cite: [{doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 8, table: 'Table 7-1. Pin Functions', quote: 'Leaving ILIM unconnected disables all charging.', fields: []},
+                {doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 10, table: 'Recommended Operating Conditions', quote: 'RILIM Maximum input current programming resistor 1100 8000', fields: [min, max]}]}
+      - {id: RISET, pin: ISET, to: VSS, kinds: [R], min: 590, max: 8900,
+         source: "SLUS810N Table 7-1 ISET and 6.3 Recommended Operating Conditions: RISET 590 to 8900 ohm sets the fast-charge current; ISET left open disables charging",
+         cite: [{doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 8, table: 'Table 7-1. Pin Functions', quote: 'Charging is disabled if ISET is left unconnected.', fields: []},
+                {doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 10, table: 'Recommended Operating Conditions', quote: 'RISET Fast-charge current programming resistor (1) 590 8900', fields: [min, max]}]}
+      - {id: RTS, pin: TS, to: VSS, kinds: [R], value: 10k, when: undriven,
+         severity: warning,
+         source: "SLUS810N Table 7-1 TS: the battery pack's 10 k NTC, or a 10 k fixed resistor TS to VSS when TS is unused. A TS net on a connector (pack NTC) needs no part on the board; a warning, since an NTC drawn with a TH refdes is not an R",
+         cite: [{doc: bq24074.pdf, sha256: 4fe4e4f9855501f83b400c6932e3098439e51c50539e40dc45b44a8d509e8db1, page: 9, table: 'Table 7-1. Pin Functions', quote: 'For applications that do not use the TS function, connect a 10-kΩ fixed resistor from TS to VSS to maintain a valid voltage level on TS.', fields: [value]}]}
+
+  - mpn: TPS61023
+    match: '^TPS61023'
+    verified: true   # TI SLVSF14B read 2026-11-15, 6.3 and 8.2.2.3
+    requires:
+      - {id: CIN, pin: VIN, to: GND, kinds: [C], min: 1.0e-6, effective: true,
+         source: "SLVSF14B 6.3 Recommended Operating Conditions: CIN effective input capacitance 1.0 uF min, 4.7 uF nominal (no max)",
+         cite: [{doc: tps61023.pdf, sha256: a8c0a51b17502e4cb39dbe55852c27ec4579047c76676704ddcb9b4c5da7dd9a, page: 4, table: 'Recommended Operating Conditions', quote: 'CIN Effective input capacitance range 1.0 4.7', fields: [min]}]}
+      - {id: COUT, pin: VOUT, to: GND, kinds: [C], min: 4.0e-6, max: 1000.0e-6,
+         effective: true,
+         source: "SLVSF14B 6.3 Recommended Operating Conditions and 8.2.2.3: COUT 4 uF to 1000 uF effective",
+         cite: [{doc: tps61023.pdf, sha256: a8c0a51b17502e4cb39dbe55852c27ec4579047c76676704ddcb9b4c5da7dd9a, page: 4, table: 'Recommended Operating Conditions', quote: 'COUT Effective output capacitance range 4 10 1000', fields: [min, max]},
+                {doc: tps61023.pdf, sha256: a8c0a51b17502e4cb39dbe55852c27ec4579047c76676704ddcb9b4c5da7dd9a, page: 14, table: '', quote: 'TI recommends using the X5R or X7R ceramic output capacitor in the range of 4-μF to 1000-μF effective', fields: [min, max]}]}
+
+  # PCB-0007 rf-de-20m (#1224).
+  - mpn: LM5017
+    match: '^LM5017'
+    verified: true   # TI SNVS783K read 2026-11-15, Pin Functions, 7.3 and 8.2.2
+    aliases: {EP: RTN, PAD: RTN, GND: RTN}
+    requires:
+      - {id: CBST, pin: BST, to: SW, kinds: [C], value: 10n,
+         source: "SNVS783K Pin Functions BST and 7.3: an external 0.01 uF ceramic capacitor is required between BST and SW",
+         cite: [{doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 3, table: 'Pin Functions', quote: 'An external capacitor is required between the BST and SW pins (0.01-μF', fields: [value]},
+                {doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 11, table: '', quote: 'A 0.01 uF ceramic capacitor connected between the BST pin and the SW pin', fields: [value]}]}
+      - {id: CVCC, pin: VCC, to: RTN, kinds: [C], value: 1u, severity: warning,
+         source: "SNVS783K Pin Functions VCC and 8.2.2: a 1 uF VCC bypass capacitor is recommended (a recommendation, so a warning)",
+         cite: [{doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 3, table: 'Pin Functions', quote: 'A 1-μF decoupling capacitor is recommended.', fields: [value]},
+                {doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 23, table: '', quote: 'A 1-µF capacitor of 16 V or higher rating is recommended for the VCC regulator bypass capacitor.', fields: [value]}]}
+      - {id: RON, pin: RON, to: VIN, kinds: [R],
+         source: "SNVS783K Pin Functions RON: a resistor between RON and VIN sets the buck switch on-time",
+         cite: [{doc: lm5017.pdf, sha256: 80d7593066ab9d93b7e65a10ede20c47b7b71bffe75ea14cc628258a7345dbe1, page: 3, table: 'Pin Functions', quote: 'A resistor between this pin and VIN sets the buck switch on-time as a', fields: []}]}
+
+  - mpn: LMG1020
+    match: '^LMG1020'
+    verified: true   # TI SNOSD45B read 2026-11-15, Pin Functions and 10.1.2
+    requires:
+      - {id: CVDD, pin: VDD, to: GND, kinds: [C], min: 0.1e-6, max: 1.0e-6,
+         source: "SNOSD45B 10.1.2 Bypass Capacitor: VDD bypassed to GND by at least 0.1 uF, up to 1 uF, X7R or better",
+         cite: [{doc: lmg1020.pdf, sha256: 4a25e40c21b910a8008e3e8b77a97fd16b42cc743cfbc0cacec37b2c5585c13d, page: 3, table: 'Pin Functions', quote: 'Decouple through a small size, low inductance capacitor to GND', fields: []},
+                {doc: lmg1020.pdf, sha256: 4a25e40c21b910a8008e3e8b77a97fd16b42cc743cfbc0cacec37b2c5585c13d, page: 16, table: '', quote: 'This bypass capacitor has to be at least a 0.1 µF, up to 1 µF', fields: [min, max]}]}
+
+  # PCB-0010 bb-buck (#1225).
+  - mpn: LMR33630
+    match: '^LMR3363[0-9]'
+    verified: true   # TI SNVSAN3F read 2026-11-15, Pin Functions and 9.2.2.6-9.2.2.8
+    aliases: {EP: AGND, PAD: AGND, GND: PGND}
+    requires:
+      - {id: CBOOT, pin: BOOT, to: SW, kinds: [C], value: 100n,
+         source: "SNVSAN3F Pin Functions BOOT and 9.2.2.7: a 100 nF ceramic bootstrap capacitor BOOT to SW is required",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 5, table: 'Pin Functions', quote: 'Connect a high-quality 100-nF', fields: [value]},
+                {doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'The LMR33630 requires a bootstrap capacitor connected between the BOOT pin and the SW pin.', fields: []}]}
+      - {id: CVCC, pin: VCC, to: PGND, kinds: [C], value: 1u,
+         source: "SNVSAN3F Pin Functions VCC and 9.2.2.8: VCC requires a 1 uF ceramic capacitor to GND",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 5, table: 'Pin Functions', quote: 'quality 1-µF capacitor from this pin to GND.', fields: [value]},
+                {doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'requires a 1-µF, 16-V ceramic capacitor connected from VCC to GND for proper operation.', fields: [value]}]}
+      - {id: CIN, pin: VIN, to: PGND, kinds: [C], min: 10.0e-6,
+         source: "SNVSAN3F 9.2.2.6: a minimum of 10 uF of ceramic capacitance is required at the input (held per part, nominal: the sum across parts is not judged)",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'A minimum of 10 µF of ceramic capacitance is required', fields: [min]}]}
+      - {id: CHF, pin: VIN, to: PGND, kinds: [C], value: 220n,
+         source: "SNVSAN3F 9.2.2.6: a small 220 nF ceramic capacitor must be used at the input as a high-frequency bypass",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'In addition, a small case size, 220-nF', fields: [value]},
+                {doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'ceramic capacitor must be used at the input, as close a possible to the regulator.', fields: []}]}

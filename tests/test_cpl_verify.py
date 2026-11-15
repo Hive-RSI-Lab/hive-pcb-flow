@@ -1820,6 +1820,24 @@ def test_kicad_placement_file_with_a_wrong_rotation_fails(ws, tmp_path):
     assert rc == 1 and v["U1"]["verdict"] == "wrong_rotation"
 
 
+def test_kicad_placement_file_with_cpl_column_names_is_kicad_pos(ws, tmp_path):
+    """KiCad's file with PosX/PosY/Rot renamed Mid X/Mid Y/Rotation, Ref and
+    Side kept (one-rom fire-28's fab/*-top-pos.csv) raised 'not a CPL' (rc
+    2): it reads as KiCad's own file, rotation and all."""
+    pos = tmp_path / "board-top-pos.csv"
+    pos.write_text(_POS.format(u1="90.000000").replace(
+        "PosX,PosY,Rot", "Mid X,Mid Y,Rotation"), encoding="utf-8")
+    fmt, rows = cv.read_placement(pos)
+    assert fmt == "kicad_pos"
+    assert rows["U3"] == {"x": 70.0, "y": 10.0, "rot": 180.0,
+                          "layer": "Bottom"}
+    rc, rep = _run_main(ws, tmp_path, pos)
+    v = {p["ref"]: p for p in rep["parts"]}
+    assert rep["status"] != "error", rep
+    assert [v[r]["verdict"] for r in ("U1", "U3", "C3")] == ["ok"] * 3
+    assert rep["cpl_format"] == "kicad_pos"
+
+
 def test_a_cpl_header_is_matched_whatever_its_case(tmp_path):
     p = tmp_path / "cpl.csv"
     p.write_text(" designator ,MID X,mid y,LAYER,rotation\nU1,10,-10,Top,450\n",

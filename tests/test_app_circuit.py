@@ -143,6 +143,26 @@ def test_tps7a20_output_capacitor(cap, want):
     assert _parts(viol) == want
 
 
+# ------------------------------------------- voltage reference output cap
+
+@pytest.mark.parametrize("cap,want", [
+    (None, [("error", "U1", "COUT")]),
+    ("470n", [("error", "U1", "COUT")]),   # under ADI's 1.0 uF (table 12)
+    ("2.2u", []),                          # PCB-0014's C5
+    ("220u", [("error", "U1", "COUT")])])  # over the 100 uF load cap max
+def test_adr4520_output_capacitor(cap, want):
+    comps = {"U1": "ADR4520BRZ"}
+    nets = {"/VREF": [_m("U1", "6", "VOUT", "power_out")],
+            "GND": [_m("U1", "4", "GND", "power_in")],
+            "+5V": [_m("U1", "2", "VIN", "power_in")]}
+    if cap:
+        comps["C1"] = cap
+        nets["/VREF"].append(_m("C1", "1"))
+        nets["GND"].append(_m("C1", "2"))
+    viol, _ = _audit(comps, nets)
+    assert _parts(viol) == want
+
+
 # ---------------------------------------------------- must-connect EN pin
 
 @pytest.mark.parametrize("en,fault", [("open", True), ("rail", False)])
@@ -248,3 +268,190 @@ def test_a_cap_value_that_cannot_be_read_is_not_judged(cap):
     assert _parts(viol) == []
     nj = [n for n in facts["not_judged"] if n.startswith("pin_part_missing")]
     assert len(nj) == 1 and "can't be read" in nj[0] and "C1" in nj[0]
+
+
+# ------------------------------------- BQ24074 + TPS61023 (PCB-0021, #1226)
+
+def _lipo(values=None, drop=(), open_pins=()):
+    """PCB-0021 as wired: U1 BQ24074 charger feeding +SYS, U2 TPS61023
+    boosting +SYS to +5V. `values` changes part values, `drop` removes
+    parts, `open_pins` moves (ref, pin, name) to its own unconnected net."""
+    comps = {"U1": "BQ24074RGTR", "U2": "TPS61023DRLR",
+             "C1": "4.7uF 25V X5R", "C4": "100nF", "C2": "10uF 25V X5R",
+             "C10": "10uF 25V X5R", "C14": "100nF", "C3": "10uF 25V X5R",
+             "C11": "22uF 25V X5R", "C12": "22uF 25V X5R",
+             "R1": "10k", "R2": "1.2k", "R3": "1k", "R9": "100k",
+             "J3": "HX PZ2.54-1x7P"}
+    comps.update(values or {})
+    nets = {
+        "VBUS": [_m("U1", "13", "IN", "power_in"), _m("C1", "1"),
+                 _m("C4", "1")],
+        "+SYS": [_m("U1", "10", "OUT", "power_out"),
+                 _m("U1", "11", "OUT", "power_out"),
+                 _m("U1", "5", "EN2", "input"),
+                 _m("U2", "3", "VIN", "power_in"), _m("C2", "1"),
+                 _m("C10", "1"), _m("C14", "1"), _m("R9", "1")],
+        "VBAT": [_m("U1", "2", "BAT"), _m("U1", "3", "BAT"), _m("C3", "1")],
+        "+5V": [_m("U2", "6", "VOUT", "power_out"), _m("C11", "1"),
+                _m("C12", "1")],
+        "/ILIM": [_m("U1", "12", "ILIM", "input"), _m("R2", "1")],
+        "/ISET": [_m("U1", "16", "ISET"), _m("R3", "1")],
+        "/TS": [_m("U1", "1", "TS", "input"), _m("R1", "1")],
+        "/EN": [_m("U2", "2", "EN", "input"), _m("R9", "2"), _m("J3", "6")],
+        "GND": [_m("U1", "8", "VSS", "power_in"), _m("U1", "17", "EP"),
+                _m("U1", "4", "~{CE}", "input"),
+                _m("U1", "6", "EN1", "input"),
+                _m("U2", "4", "GND", "power_in"), _m("J3", "1")]
+                + [_m(r, "2") for r in ("C1", "C4", "C2", "C10", "C14", "C3",
+                                        "C11", "C12", "R1", "R2", "R3")],
+    }
+    for r in drop:
+        del comps[r]
+        for n in nets:
+            nets[n] = [x for x in nets[n] if x["ref"] != r]
+    for ref, pin, name in open_pins:
+        for n in list(nets):
+            got = [x for x in nets[n] if x["ref"] == ref and x["pin"] == pin]
+            nets[n] = [x for x in nets[n] if x not in got]
+            if got:
+                nets[f"unconnected-({ref}-{name}-Pad{pin})"] = got
+    return comps, nets
+
+
+def test_pcb0021_as_wired_is_quiet():
+    viol, _ = _audit(*_lipo())
+    assert _parts(viol) == []
+    assert [v for v in viol if v["kind"] == "pin_state"] == []
+
+
+@pytest.mark.parametrize("values,drop,want", [
+    ({"C1": "22uF"}, ("C4",), [("error", "U1", "CIN")]),
+    ({"C2": "100uF", "C10": "100uF"}, (), [("error", "U1", "COUT")]),
+    ({"C3": "1uF"}, (), [("error", "U1", "CBAT")]),
+    ({"R2": "680"}, (), [("error", "U1", "RILIM")]),
+    ({"R3": "10k"}, (), [("error", "U1", "RISET")]),
+    ({}, ("R1",), [("warning", "U1", "RTS")]),
+    ({"C2": "470nF", "C10": "470nF"}, (),
+     [("error", "U1", "COUT"), ("error", "U2", "CIN")]),
+    ({"C11": "2.2uF", "C12": "2.2uF"}, (), [("error", "U2", "COUT")]),
+])
+def test_lipo_part_rows_catch_each_planted_fault(values, drop, want):
+    viol, _ = _audit(*_lipo(values, drop))
+    assert _parts(viol) == want
+
+
+def test_a_ts_pin_on_a_connector_needs_no_resistor():
+    """The pack's NTC reaches TS through the battery connector."""
+    comps, nets = _lipo(drop=("R1",))
+    comps["J2"] = "S2B-PH"
+    nets["/TS"].append(_m("J2", "3"))
+    viol, _ = _audit(comps, nets)
+    assert _parts(viol) == []
+
+
+@pytest.mark.parametrize("ref,pin,name,sev", [
+    ("U1", "6", "EN1", "error"), ("U1", "5", "EN2", "error"),
+    ("U1", "4", "~{CE}", "error"), ("U2", "2", "EN", "warning")])
+def test_lipo_enable_pins_must_not_float(ref, pin, name, sev):
+    viol, _ = _audit(*_lipo(open_pins=[(ref, pin, name)]))
+    hits = [v for v in viol if v["kind"] == "pin_state"]
+    assert [(v["severity"], v["refs"]) for v in hits] == [(sev, [ref])]
+
+
+# ------------------------------------- LM5017 + LMG1020 (PCB-0007, #1224)
+
+def _de20m(values=None, drop=()):
+    """PCB-0007 as wired: U101 LM5017 buck from +40V, U201 LMG1020 GaN
+    driver on +5V_DRV. `values` changes part values, `drop` removes parts."""
+    comps = {"U101": "LM5017 100V sync COT buck",
+             "U201": "LMG1020 5V GaN driver 7A/5A",
+             "C107": "10nF", "C106": "2.2uF", "R103": "100k",
+             "C201": "100nF", "C202": "10nF", "C213": "1uF"}
+    comps.update(values or {})
+    nets = {
+        "+40V": [_m("U101", "2", "VIN", "power_in"),
+                 _m("U101", "3", "UVLO", "input"), _m("R103", "1")],
+        "/hk/RON": [_m("U101", "4", "RON", "input"), _m("R103", "2")],
+        "/hk/BST": [_m("U101", "7", "BST", "input"), _m("C107", "1")],
+        "/hk/BUCK_SW": [_m("U101", "8", "SW", "power_out"),
+                        _m("C107", "2")],
+        "/hk/VCC": [_m("U101", "6", "VCC", "power_out"), _m("C106", "1")],
+        "+5V_DRV": [_m("U201", "A1", "VDD", "power_in")]
+        + [_m(r, "1") for r in ("C201", "C202", "C213")],
+        "GND": [_m("U101", "1", "RTN", "power_in"),
+                _m("U101", "9", "PAD", "passive"),
+                _m("U201", "B1", "GND", "power_in"),
+                _m("U201", "C2", "IN-", "input")]
+        + [_m(r, "2") for r in ("C106", "C201", "C202", "C213")],
+    }
+    for r in drop:
+        del comps[r]
+        for n in nets:
+            nets[n] = [x for x in nets[n] if x["ref"] != r]
+    return comps, nets
+
+
+def test_pcb0007_as_wired_is_quiet():
+    """VCC's 2.2 uF is one E3 step from the 1 uF the datasheet names."""
+    viol, _ = _audit(*_de20m())
+    assert _parts(viol) == []
+
+
+@pytest.mark.parametrize("values,drop,want", [
+    ({}, ("C107",), [("error", "U101", "CBST")]),
+    ({"C107": "100nF"}, (), [("error", "U101", "CBST")]),
+    ({}, ("C106",), [("warning", "U101", "CVCC")]),
+    ({"C106": "10uF"}, (), [("warning", "U101", "CVCC")]),
+    ({}, ("R103",), [("error", "U101", "RON")]),
+    ({}, ("C201", "C213"), [("error", "U201", "CVDD")]),
+    ({"C201": "10nF", "C213": "4.7uF"}, (), [("error", "U201", "CVDD")]),
+])
+def test_de20m_part_rows_catch_each_planted_fault(values, drop, want):
+    viol, _ = _audit(*_de20m(values, drop))
+    assert _parts(viol) == want
+
+
+# ------------------------------------- LMR33630 (PCB-0010, #1225)
+
+def _bb(values=None, drop=()):
+    """PCB-0010 as wired: U1 LMR33630 buck from +VIN. `values` changes part
+    values, `drop` removes parts."""
+    comps = {"U1": "LMR33630ADDAR", "C1": "220nF 50V X7R",
+             "C2": "10uF 50V X7R", "C3": "10uF 50V X7R",
+             "C10": "10uF 50V X7R", "C6": "100nF 50V X7R",
+             "C7": "1uF 25V X7R", "L1": "15uH"}
+    comps.update(values or {})
+    nets = {
+        "+VIN": [_m("U1", "2", "VIN", "power_in"), 
+                 _m("U1", "3", "EN", "input")]
+        + [_m(r, "1") for r in ("C1", "C2", "C3", "C10")],
+        "/BST": [_m("U1", "7", "BOOT", "passive"), _m("C6", "1")],
+        "/SW": [_m("U1", "8", "SW", "power_out"), _m("C6", "2"),
+                _m("L1", "1")],
+        "/VCC": [_m("U1", "6", "VCC", "power_out"), _m("C7", "1")],
+        "GND": [_m("U1", "1", "PGND", "power_in"), _m("U1", "9", "EP")]
+        + [_m(r, "2") for r in ("C1", "C2", "C3", "C10", "C7")],
+    }
+    for r in drop:
+        del comps[r]
+        for n in nets:
+            nets[n] = [x for x in nets[n] if x["ref"] != r]
+    return comps, nets
+
+
+def test_pcb0010_as_wired_is_quiet():
+    viol, _ = _audit(*_bb())
+    assert _parts(viol) == []
+
+
+@pytest.mark.parametrize("values,drop,want", [
+    ({}, ("C6",), [("error", "U1", "CBOOT")]),
+    ({}, ("C7",), [("error", "U1", "CVCC")]),
+    ({}, ("C2", "C3", "C10"), [("error", "U1", "CIN")]),
+    ({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"}, (),
+     [("error", "U1", "CIN")]),
+    ({}, ("C1",), [("error", "U1", "CHF")]),
+])
+def test_lmr33630_rows_catch_each_planted_fault(values, drop, want):
+    viol, _ = _audit(*_bb(values, drop))
+    assert _parts(viol) == want
