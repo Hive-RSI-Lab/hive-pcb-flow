@@ -29,7 +29,9 @@ and cited in reference/ingest/dfm-assembly.md:
                      IC's aperture itself unless the order asks for 1:1;
                      the board's paste layer is what the check reads.
 
-An exposed pad is a footprint's largest SMD pad when the footprint has three
+An exposed pad is a footprint's largest SMD pad with copper on the
+footprint's own side (all of its SMD pads when none is there, so a stock
+`*_ThermalVias` belly's bottom copy is not it) when the footprint has three
 or more other pads on the same side, it is at least four times their median
 area, and its centre sits inside the hull of their centres (QFN, DFN,
 HTSSOP, SO-8EP and modules' ground pads; not a SOT-223 tab or a 2-pad
@@ -153,6 +155,7 @@ def read_pads(pcb: Path) -> tuple[dict, dict]:
         f_m, f_r = _margin(fp)
         lib = _strs(fp)[0] if _strs(fp) else ""
         leadless = bool(LEADLESS.search(lib.split(":")[-1]))
+        side = fp_side(fp)
         for pad in _kids(fp, "pad"):
             if len(pad) < 4:
                 continue
@@ -191,13 +194,22 @@ def read_pads(pcb: Path) -> tuple[dict, dict]:
                 "number": number, "kind": kind, "shape": shape,
                 "cu_side": _cu_side(layers), "paste_side": pside,
                 "copper": copper, "aperture": ap, "center": center,
-                "leadless": leadless})
+                "leadless": leadless, "fp_side": side})
     return out, skipped
+
+
+def fp_side(fp) -> str | None:
+    """A footprint's own side from its `(layer)`: "F", "B" or None."""
+    fl = _kid(fp, "layer")
+    return {"F.Cu": "F", "B.Cu": "B"}.get(
+        str(_tok(fl[1])) if fl is not None and len(fl) > 1 else "")
 
 
 def exposed_pad(pads: list[dict]) -> dict | None:
     """The footprint's exposed pad, or None (rule in the module docstring)."""
     smd = [p for p in pads if p["kind"] == "smd" and p["cu_side"]]
+    # the part's own side; all of them when none is there (#1197)
+    smd = [p for p in smd if p.get("fp_side") in (None, p["cu_side"])] or smd
     if len(smd) < EP_MIN_OTHERS + 1:
         return None
     big = max(smd, key=lambda p: p["copper"].area)

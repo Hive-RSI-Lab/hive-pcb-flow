@@ -583,7 +583,7 @@ EVIDENCE = {
     "check_fp_package": lambda r: _n(r.get("judged")),
     "check_ratings": lambda r: _n(r.get("pins_checked")) + _n(
         (r.get("operating_range") or {}).get("parts_checked"))
-    + _n(r.get("listing_comparison")),
+    + _n(r.get("listing_comparison")) + _n(r.get("parts_rated_unextracted")),
     "check_pinouts": lambda r: _n(r.get("connectors")),
     "check_mate_pins": lambda r: sum(_n(r.get(k)) for k in
                                      ("pairs", "stated_mates", "standard_headers")),
@@ -666,6 +666,125 @@ def coverage_line(rows: list[tuple[str, str, dict]]) -> list[str]:
             for s, c in sorted(per.items())]
 
 
+# A word kept in a blocker label: a lowercase word, a lowercase kind
+# (snake_case), a lowercase path to a reference table, or a short all-caps
+# word with no digit (MCU, JLC). Part numbers, refs, nets, footprint names,
+# quoted and parenthesised text are dropped, so a label carries no board's
+# names and can go to builders as a count.
+_WORD = re.compile(r"^(?:[a-z][a-z'-]*[a-z]|[a-z]|[a-z]+(?:_[a-z]+)+"
+                   r"|[a-z_/]+\.(?:yaml|json|csv|md)|[A-Z]{2,5}(?:s|'s)?|[A-Z][a-z'-]+)"
+                   r"[,.;:]?$")
+
+
+def blocker_label(text) -> str:
+    """A reason a check gave, as a label that names nothing on the board."""
+    t = str(text or "")
+    t = re.sub(r"\([^()]*\)|\[[^\[\]]*\]|(?<![A-Za-z])'[^']*'(?![A-Za-z])"
+               r"|\"[^\"]*\"", " ", t)
+    words = [w for w in t.split() if _WORD.match(w)]
+    out = " ".join(words).strip(" ,.;:")
+    out = re.sub(r"\s+([,.;:])", r"\1", out)
+    out = re.sub(r"([,;:])(?:\s*[,;:])+", r"\1", out)
+    # a name scrubbed off the end leaves its preposition dangling
+    out = re.sub(r"(?:\s+(?:on|for|in|of|with|to|at|by|from|a|an|the|and|or))+$",
+                 "", out).strip(" ,.;:")
+    return out[:120].rsplit(" ", 1)[0] if len(out) > 120 else (out or "unlabelled")
+
+
+def _item_label(item) -> str:
+    """One not_judged item's reason: a dict's reason/why/kind; a string
+    `kind: ...` by its kind, `REFS (part): why` by its why."""
+    if isinstance(item, dict):
+        return blocker_label(item.get("reason") or item.get("why")
+                             or item.get("kind") or "")
+    head, sep, tail = str(item).partition(": ")
+    kind = head.split(" ", 1)[0]
+    if sep and re.match(r"^[a-z]+(?:_[a-z]+)+$", kind):
+        return kind
+    if sep and re.match(r"^[a-z][a-z_ ]*$", head):
+        return blocker_label(head)
+    return blocker_label(tail if sep else head)
+
+
+def blockers(rep: dict | None, cov: dict | None, crash: dict | None = None,
+             pins: str | None = None) -> dict:
+    """Why a check judged less than all of one board (rev A), from its own
+    report: `board` is why it judged nothing there (its nothing_to_judge
+    reason, "no reason given" when it gave none, "timeout" or "crashed");
+    `items` counts the items it named but couldn't judge, by reason;
+    `inputs` notes what the harness couldn't give it (pin names the
+    schematic couldn't supply), on a board it didn't judge."""
+    out: dict = {"board": None, "items": {}}
+    if crash is not None:
+        out["board"] = "timeout" if "timed out" in str(crash.get("error")) \
+            else "crashed"
+    elif cov and cov.get("status") == "nothing_to_judge":
+        out["board"] = blocker_label((rep or {}).get("nothing_to_judge")
+                                     or cov.get("reason"))
+    elif cov and cov.get("status") == "judged_nothing":
+        out["board"] = "no reason given"
+    nj = (rep or {}).get("not_judged")
+    items: dict[str, int] = {}
+    if isinstance(nj, dict):
+        for k, v in nj.items():
+            n = len(v) if isinstance(v, (list, tuple, dict)) else \
+                int(v) if isinstance(v, int) and not isinstance(v, bool) else 1
+            items[blocker_label(k)] = items.get(blocker_label(k), 0) + n
+    elif isinstance(nj, (list, tuple)):
+        for it in nj:
+            k = _item_label(it)
+            items[k] = items.get(k, 0) + 1
+    elif nj:
+        items["unlabelled"] = 1
+    out["items"] = items
+    if out["board"] and pins in ("no_netlist", "error", "mismatch", "no_source"):
+        out["inputs"] = [f"pin names: {pins}"]
+    return out
+
+
+def _pin_status(cache: Path, b: dict, rev: str = "rev_a") -> str | None:
+    """What the pin-name step said for a revision (its stamp's second line)."""
+    stamp = cache / "runs" / b["id"] / f"{rev}-pins.src"
+    try:
+        lines = stamp.read_text(encoding="utf-8").split("\n")
+    except OSError:
+        return None
+    return lines[1] if len(lines) > 1 else None
+
+
+def blocker_lines(rows: list[tuple[str, str, dict]]) -> list[str]:
+    """Per check, over the swept boards: how many boards each reason kept
+    it from judging (a check that gave none counts under "no reason given"),
+    and how many items it named but couldn't judge, by reason. Counts and
+    labels only, no board names: this reaches builders' logs."""
+    per: dict[str, tuple[dict, dict, dict, dict]] = {}
+    for _bid, script, r in rows:
+        bl = r.get("blockers")
+        if not bl:
+            continue
+        brd, its, on, inp = per.setdefault(script, ({}, {}, {}, {}))
+        if bl.get("board"):
+            brd[bl["board"]] = brd.get(bl["board"], 0) + 1
+        for k, n in (bl.get("items") or {}).items():
+            its[k] = its.get(k, 0) + n
+            on[k] = on.get(k, 0) + 1
+        for k in bl.get("inputs") or ():
+            inp[k] = inp.get(k, 0) + 1
+
+    def order(d: dict) -> list:
+        return sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))
+    out = []
+    for s, (brd, its, on, inp) in sorted(per.items()):
+        out.append(f"blockers {s}: boards not judged: "
+                   + ("; ".join(f"{k} {n}" for k, n in order(brd)) or "none")
+                   + (" | inputs missing: " + "; ".join(
+                       f"{k} {n}" for k, n in order(inp)) if inp else "")
+                   + " | items not judged: "
+                   + ("; ".join(f"{k} {n} on {on[k]} board(s)"
+                                for k, n in order(its)) or "none"))
+    return out
+
+
 def sweep(cache: Path, b: dict) -> dict:
     """Every check the corpus runs, on both revisions, with nothing said about
     the defects: the blind run a holdout board gets before its errata are read
@@ -684,9 +803,13 @@ def sweep(cache: Path, b: dict) -> dict:
             res[script] = {"error": str(e).splitlines()[0][:300], "rc": e.rc,
                            "check_error": e.check_error,
                            "stderr_tail": e.tail}
+            res[script]["blockers"] = blockers(None, None, res[script],
+                                               _pin_status(cache, b))
             continue
         except (SystemExit, subprocess.SubprocessError, OSError) as e:
             res[script] = {"error": str(e)[:300]}
+            res[script]["blockers"] = blockers(None, None, res[script],
+                                               _pin_status(cache, b))
             continue
         zk = {_key(v) for v in z}
         gone = [v for v in a if _key(v) not in zk]
@@ -698,8 +821,10 @@ def sweep(cache: Path, b: dict) -> dict:
                 v for v in gone if v.get("kind") in cov]
         rep = cache / "runs" / b["id"] / f"rev_a-{script}.json"
         try:
-            res[script]["coverage"] = coverage(
-                json.loads(rep.read_text(encoding="utf-8")), script)
+            report = json.loads(rep.read_text(encoding="utf-8"))
+            res[script]["coverage"] = coverage(report, script)
+            res[script]["blockers"] = blockers(
+                report, res[script]["coverage"], pins=_pin_status(cache, b))
         except (OSError, ValueError):
             pass
     out = cache / "runs" / b["id"] / "sweep.json"
@@ -970,6 +1095,8 @@ def main(argv: list[str] | None = None) -> int:
               + (": " + ", ".join(errored) if errored else ""))
         # counts per check, no board names: this reaches builders' logs too
         for line in coverage_line(rows):
+            print(line)
+        for line in blocker_lines(rows):
             print(line)
         note_left_out()
         return 0

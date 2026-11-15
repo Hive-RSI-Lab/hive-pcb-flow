@@ -262,6 +262,31 @@ warning from INFERRED_AIR_C (25 C, JEDEC still air) or ambient_c, here and
 on the datasheet's board. Give the part a thermal entry with this board's
 load to replace the screen.
 
+A row gives tj_max_c and theta-JA per package (`packages`: name, a `pkg`
+regex tried on Value / MPN first, then the footprint name, theta_ja_c_w,
+exposed_pad), each with a cited datasheet table. Only an exposed-pad
+package is screened on copper: its heat goes into the pad's pour, so thin
+copper there is a board fault whatever the load. A leaded or no-pad part
+(SOT-23, SOIC) sheds its heat through its pins, so its temperature turns
+on its loss, and a board states no load: it is not_judged, never guessed.
+Every power IC the check sees and cannot judge is listed in
+extra["candidates"] with its reason, and its not_judged line says what is
+missing:
+  no_row            a power-IC family (thermal_parts.yaml `families`, or a
+                    regulator in switch_nodes / regulator_vref /
+                    converter_fsw / source_limits) with no thermal row
+  no_package_theta  a row, but no theta-JA for this package
+  no_load           a no-pad package and no stated load; the line gives a
+                    screen ceiling, (tj_max_c - air) / theta_JA, the most
+                    the part can shed on the JEDEC board, as check_current
+                    does: a screen, not a verdict (advisory)
+  no_heatsink_net   an exposed pad on no net
+  ldo_heat          an LDO, whose heat is (Vin - Vout) x I: netlist_audit's
+                    LDO dissipation check judges it, so it is listed but
+                    is not a not_judged line here
+A screened finding carries package, tj_max_c and p_max_screen_w and is
+advisory, like every inferred screen.
+
 CLI: --pcb board.kicad_pcb [--constraints constraints.json] [--out report.json]
      exit 0/1/2 per SPEC section 6.
 
@@ -1197,13 +1222,88 @@ def thermal_rows(path: Path = THERMAL_PARTS_YAML) -> list[dict]:
     return [dict(r, rx=re.compile(r["match"], re.I)) for r in rows]
 
 
+def _texts(fp: dict) -> list[str]:
+    """A footprint's Value and MPN fields, the texts rows match on."""
+    props = fp.get("props") or {}
+    return [str(t).strip() for t in
+            [fp.get("value") or ""] + [props.get(k) or "" for k in MPN_PROPS]
+            if t and str(t).strip()]
+
+
 def thermal_row(fp: dict, rows: list[dict]) -> dict | None:
     """The thermal_parts.yaml row a footprint matches on Value / MPN."""
-    props = fp.get("props") or {}
-    texts = [fp.get("value") or ""] + [props.get(k) or "" for k in MPN_PROPS]
-    return next((r for r in rows
-                 if any(t and r["rx"].search(str(t).strip()) for t in texts)),
+    texts = _texts(fp)
+    return next((r for r in rows if any(r["rx"].search(t) for t in texts)),
                 None)
+
+
+def row_package(fp: dict, row: dict) -> tuple[dict | None, str]:
+    """(package, why-not) of a row for one footprint: the row's own
+    theta_ja_c_w, its only package, or the one whose `pkg` regex the Value
+    or MPN matches, else the footprint library name (first wins)."""
+    if "theta_ja_c_w" in row:
+        return ({"name": row.get("package", ""),
+                 "theta_ja_c_w": row["theta_ja_c_w"],
+                 "exposed_pad": row.get("exposed_pad", False)}, "")
+    pkgs = row.get("packages") or []
+    if not pkgs:
+        return None, "its thermal_parts.yaml row gives no package theta-JA"
+    if len(pkgs) == 1:
+        return pkgs[0], ""
+    # the MPN suffix (DBV, DDC) outranks the footprint name: a DBV part is
+    # often drawn on a TSOT-25 footprint
+    for hay in (" ".join(_texts(fp)), fp.get("lib") or ""):
+        hit = next((k for k in pkgs if re.search(k["pkg"], hay, re.I)), None)
+        if hit:
+            return hit, ""
+    return None, ("its package is none of the row's "
+                  f"({', '.join(k['name'] for k in pkgs)}) by Value, MPN or "
+                  "footprint")
+
+
+def _ref_rows(name: str, key: str = "regulators") -> list[dict]:
+    path = THERMAL_PARTS_YAML.parent / name
+    if not path.exists():
+        return []
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return [r for r in data.get(key) or [] if isinstance(r, dict)
+            and r.get("match")]
+
+
+def candidate_rules(path: Path = THERMAL_PARTS_YAML) -> list[dict]:
+    """What makes a footprint a power IC to look at (module doc): the
+    regulator rows of the other reference tables and thermal_parts.yaml's
+    `families`. Each {rx, where, ldo_theta}: ldo_theta set when
+    source_limits.yaml gives an LDO's theta_ja (netlist_audit's ldo_heat
+    judges its heat from the rail's load)."""
+    rules = []
+    for name in ("switch_nodes.yaml", "regulator_vref.yaml",
+                 "converter_fsw.yaml"):
+        rules += [{"rx": re.compile(r["match"], re.I), "where": name,
+                   "ldo_theta": None} for r in _ref_rows(name)]
+    for r in _ref_rows("source_limits.yaml"):
+        ldo = r.get("kind") == "ldo"
+        rules.append({"rx": re.compile(r["match"], re.I),
+                      "where": "source_limits.yaml",
+                      "ldo": ldo,
+                      "ldo_theta": r.get("theta_ja") if ldo else None})
+    fams = yaml.safe_load(path.read_text(encoding="utf-8")).get("families")
+    rules += [{"rx": re.compile(f["match"], re.I),
+               "where": "thermal_parts.yaml families", "ldo_theta": None,
+               "what": f.get("what", "")} for f in fams or []]
+    return rules
+
+
+def candidate_rule(fp: dict, rules: list[dict]) -> dict | None:
+    texts = _texts(fp)
+    return next((r for r in rules if any(r["rx"].search(t) for t in texts)),
+                None)
+
+
+def screen_ceiling_w(tj_max: float, theta: float, air_c: float) -> float:
+    """The dissipation that takes the die to tj_max through theta: a
+    screen, not a judgement (module doc)."""
+    return max(0.0, (tj_max - air_c) / theta)
 
 
 def heatsink_net(bg: geom.BoardGeom, ref: str) -> str | None:
@@ -1231,20 +1331,25 @@ def warn_current_a(row: dict, theta: float, air_c: float) -> float | None:
 
 
 def check_inferred(bg: geom.BoardGeom, ref: str, row: dict,
-                   air_c: float | None):
-    """(violations, facts) for a known power IC no thermal entry names."""
+                   air_c: float | None, pkg: dict | None = None):
+    """(violations, facts) for a known power IC no thermal entry names, in
+    an exposed-pad package `pkg` (row_package's, by default)."""
     fp = bg.footprints[ref]
     part = fp.get("value") or ref
+    if pkg is None:
+        pkg, _ = row_package(fp, row)
     net = heatsink_net(bg, ref)
     facts = {"ref": ref, "part": part, "inferred": True,
-             "theta_ja_datasheet_cw": float(row["theta_ja_c_w"]),
+             "theta_ja_datasheet_cw": float(pkg["theta_ja_c_w"]),
              "source": row["source"]}
+    if pkg.get("name"):
+        facts["package"] = pkg["name"]
     if net is None:
         return [], dict(facts, skipped="its biggest pad has no net")
     _, base = check_part(bg, {"ref": ref, "net": net, "power_w": 1.0,
                               "dt_c": 1e9})
     theta = min(base["theta_ja"], base.get("theta_spread_cw", base["theta_ja"]))
-    ds = float(row["theta_ja_c_w"])
+    ds = float(pkg["theta_ja_c_w"])
     ratio = theta / ds
     air = INFERRED_AIR_C if air_c is None else air_c
     facts.update(net=net, theta_board_cw=checklib.rnd(theta),
@@ -1253,6 +1358,11 @@ def check_inferred(bg: geom.BoardGeom, ref: str, row: dict,
     if here is not None:
         facts.update(warn_peak_a=checklib.rnd(here),
                      warn_peak_a_datasheet=checklib.rnd(there))
+    if "tj_max_c" in row:
+        facts.update(tj_max_c=float(row["tj_max_c"]),
+                     p_max_screen_w=checklib.rnd(screen_ceiling_w(
+                         float(row["tj_max_c"]), theta, air)),
+                     advisory=True)
     if ratio <= THETA_RATIO_MAX:
         return [], facts
     (cx, cy), side, _, _ = part_region(bg, ref)
@@ -1274,6 +1384,94 @@ def check_inferred(bg: geom.BoardGeom, ref: str, row: dict,
                   theta_board_cw=checklib.rnd(theta),
                   theta_ja_datasheet_cw=ds, theta_ratio=checklib.rnd(ratio))
     return [v], facts
+
+
+REASON_TEXT = {
+    "no_row": "no reference/thermal_parts.yaml row (theta-JA by package, "
+              "Tj max)",
+    "no_package_theta": "{why}",
+    "no_load": "a {pkg} package with no exposed pad: its heat leaves "
+               "through its leads, so the copper screen doesn't apply, and "
+               "no thermal entry gives its load; at {theta:g} C/W it reaches "
+               "Tj max {tj:g} C at {pmax:.2g} W from {air:g} C air (a screen "
+               "ceiling, not a judgement)",
+    "no_heatsink_net": "its exposed pad has no net, so there's no copper to "
+                       "judge",
+}
+
+
+def screen_power_ics(bg: geom.BoardGeom, listed: set, air_c: float | None):
+    """(violations, checked facts, candidates) for the power ICs no thermal
+    entry names (module doc). A row with an exposed-pad package is screened
+    by check_inferred; every other power IC becomes a candidate with its
+    reason: no_row, no_package_theta, no_load (no exposed pad, no load
+    stated), no_heatsink_net, or ldo_heat (netlist_audit judges an LDO's
+    heat from its rail load and source_limits.yaml's theta_ja: listed, not
+    left out)."""
+    rows, rules = thermal_rows(), candidate_rules()
+    air = INFERRED_AIR_C if air_c is None else air_c
+    violations, checked, candidates = [], [], []
+    for ref in sorted(bg.footprints):
+        fp = bg.footprints[ref]
+        if ref in listed or not bg.pads_of(ref=ref):
+            continue
+        row = thermal_row(fp, rows)
+        rule = None if row else candidate_rule(fp, rules)
+        if row is None and rule is None:
+            continue
+        cand = {"ref": ref, "part": fp.get("value") or ref}
+        if row is None:
+            if rule.get("ldo_theta") is not None:
+                candidates.append(dict(
+                    cand, reason="ldo_heat",
+                    detail="netlist_audit's ldo_heat judges it from its "
+                           "rail load (source_limits.yaml theta_ja "
+                           f"{float(rule['ldo_theta']):g} C/W)"))
+                continue
+            cand.update(reason="no_row", seen_in=rule["where"])
+            if rule.get("ldo"):
+                cand["reason"] = "no_package_theta"
+                cand["detail"] = ("its source_limits.yaml LDO row gives no "
+                                  "theta_ja, so neither check can judge its "
+                                  "heat")
+            else:
+                cand["detail"] = REASON_TEXT["no_row"]
+        else:
+            pkg, why = row_package(fp, row)
+            if pkg is None:
+                cand.update(reason="no_package_theta", detail=why)
+            elif pkg.get("exposed_pad"):
+                if heatsink_net(bg, ref) is None:
+                    cand.update(reason="no_heatsink_net",
+                                package=pkg.get("name", ""),
+                                detail=REASON_TEXT["no_heatsink_net"])
+                else:
+                    vs, facts = check_inferred(bg, ref, row, air_c, pkg)
+                    violations.extend(vs)
+                    checked.append(facts)
+                    continue
+            else:
+                theta = float(pkg["theta_ja_c_w"])
+                cand.update(reason="no_load", package=pkg.get("name", ""),
+                            theta_ja_datasheet_cw=theta)
+                if "tj_max_c" in row:
+                    tj = float(row["tj_max_c"])
+                    pmax = screen_ceiling_w(tj, theta, air)
+                    cand.update(tj_max_c=tj,
+                                p_max_screen_w=checklib.rnd(pmax),
+                                advisory=True,
+                                detail=REASON_TEXT["no_load"].format(
+                                    pkg=pkg.get("name") or "leaded",
+                                    theta=theta, tj=tj, pmax=pmax, air=air))
+                else:
+                    cand["detail"] = (f"a {pkg.get('name') or 'leaded'} "
+                                      "package with no exposed pad and no "
+                                      "load stated")
+        cand["not_judged"] = (f"{ref} ({cand['part']}): {cand['reason']}: "
+                              f"{cand['detail']}; give it a thermal entry "
+                              "with its loss to judge it")
+        candidates.append(cand)
+    return violations, checked, candidates
 
 
 def run(argv=None):
@@ -1312,15 +1510,16 @@ def run(argv=None):
         not_judged.extend(facts.pop("not_judged", []))
         checked.append(facts)
 
-    # a known power IC nobody gave a thermal entry: its datasheet's board
+    # a known power IC nobody gave a thermal entry: its datasheet's board;
+    # one it can't judge goes into candidates with what's missing
     listed = {e.get("ref") for e in entries}
-    rows = thermal_rows()
-    for ref in sorted(bg.footprints):
-        row = None if ref in listed else thermal_row(bg.footprints[ref], rows)
-        if row is not None and bg.pads_of(ref=ref):
-            vs, facts = check_inferred(bg, ref, row, air_c)
-            violations.extend(vs)
-            checked.append(facts)
+    vs, inferred, candidates = screen_power_ics(bg, listed, air_c)
+    violations.extend(vs)
+    checked.extend(inferred)
+    not_judged.extend(c.pop("not_judged") for c in candidates
+                      if "not_judged" in c)
+    if candidates:
+        extra["candidates"] = candidates
 
     # a pad-up part nobody gave a thermal entry: nothing says how its slug
     # is cooled
@@ -1352,7 +1551,10 @@ def run(argv=None):
         SCRIPT, args.pcb, violations, checked=checked,
         nothing_to_judge=None if checked or ripple else
         "no thermal or ripple entries in constraints, and no power IC "
-        "reference/thermal_parts.yaml knows",
+        "reference/thermal_parts.yaml knows" if not candidates else
+        f"no thermal or ripple entries in constraints, and none of the "
+        f"{len(candidates)} power IC(s) it found can be judged without one: "
+        "candidates says what each lacks",
         not_judged=not_judged + extra_fill.pop("not_judged", []), **extra,
         **extra_fill)
     return payload, args.out

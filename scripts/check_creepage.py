@@ -190,7 +190,7 @@ def undeclared_nets(bg: geom.BoardGeom, vmap: dict, cons: dict,
     known = set(vmap) | {n for a, b, _v in vpairs for n in (a, b)}
     powered = {e.get("net") for e in cons.get("power") or []
                if isinstance(e, dict)}
-    poured = {z.net for z in bg.zones_of() if z.net}
+    poured = {z.net for z in bg.zones_of() if z.net and not z.teardrop}
     out: list[str] = []
     for net in sorted(n for n in bg.nets if n and n not in known):
         named = volts_from_name(net)

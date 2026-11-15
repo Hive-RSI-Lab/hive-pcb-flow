@@ -2685,6 +2685,9 @@ def run(pcb: Path, fab_dir: Path | None = None, copper_oz: float | None = None,
         "not_applicable": {},
         "skipped_error": skipped_cov,
     }
+    if not ran and not vios:
+        payload["nothing_to_judge"] = ("no DFM family could run: "
+                                       + ", ".join(skipped_cov)[:160])
     if strict and skipped_cov:
         # A release DFM must not read "pass" (or even a graded "fail") when
         # sub-checks silently never ran - refuse instead (codex C7).

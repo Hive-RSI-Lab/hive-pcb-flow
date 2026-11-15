@@ -8,8 +8,9 @@ exposed pad voids and the other side grows a solder ball. Valor NPI and
 CAM350 flag it; Eurocircuits asks for a mask dam between any via within
 0.25 mm of a pad; NXP AN-HVQFN and TI SLUA271 ask for exposed-pad thermal
 vias to be plugged/tented from the far side, kept out of the paste
-(window-pane) or filled (VIPPO). An exposed pad's own vias are
-check_ep_paste's (paste_on_via); here they are only counted
+(window-pane) or filled (VIPPO). An exposed pad's own vias, and its
+footprint's own plated via pads inside it (a stock `*_ThermalVias` belly),
+are check_ep_paste's (paste_on_via); here they are only counted
 (`ep_vias_skipped`). Findings (all warnings):
 
   wick_via_in_pad   a via's drill reaches 0.05 mm or more (past the mask's
@@ -293,6 +294,7 @@ def read_pads(root, dflt: dict) -> dict[str, list[dict]]:
         fx, fy, fa = fn[0], fn[1], (fn[2] if len(fn) > 2 else 0.0)
         ref = _fp_ref(fp)
         f_mm = _margin(fp)
+        side = check_paste.fp_side(fp)
         for pad in _kids(fp, "pad"):
             if len(pad) < 4:
                 continue
@@ -328,7 +330,7 @@ def read_pads(root, dflt: dict) -> dict[str, list[dict]]:
             out.setdefault(ref, []).append({
                 "ref": ref, "number": str(pad[1]), "kind": kind,
                 "cu_side": cu_side, "copper": copper, "mask": mask,
-                "center": c})
+                "center": c, "fp_side": side})
     return out
 
 
@@ -386,6 +388,12 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
     fps = read_pads(root, dflt)
     dam = max(dam_mm, dflt["mask_min_width"])
     eps = {ref: check_paste.exposed_pad(p) for ref, p in fps.items()}
+    # a footprint's own plated via pads in its exposed pad (a stock
+    # *_ThermalVias belly) are its vias too: counted, as board vias are
+    # (#1198)
+    fp_vias = sum(1 for ref, ep in eps.items() if ep is not None
+                  for p in fps[ref] if p["kind"] == "thru_hole"
+                  and ep["copper"].contains(Point(p["center"])))
     gm = {}
     if gerbers is not None and gerbers.is_dir():
         import gerblib
@@ -393,7 +401,7 @@ def check(pcb: Path, gerbers: Path | None = None, dam_mm: float = DAM_MM
         gm = {s: GerberMask(fab.mask(s)) for s in SIDES if fab.mask(s)}
     seen = {"vias": len(vias), "tenting_assumed": dflt["tenting_assumed"],
             "vias_filled_or_capped": 0, "smd_pads": 0,
-            "pairs_near": 0, "ep_vias_skipped": 0, "dam_mm": dam,
+            "pairs_near": 0, "ep_vias_skipped": fp_vias, "dam_mm": dam,
             "gerbers": str(gerbers) if gm else None}
     cross = {"agree": 0, "disagree": []}
     vios: list[dict] = []
@@ -540,7 +548,9 @@ def run(argv=None):
     vios, seen = check(pcb, _gerber_dir(pcb, args.gerbers), args.dam_mm)
     return checklib.report(
         SCRIPT, pcb, vios, checked=[seen], not_judged=[TENTING_ASSUMED]
-        if seen.get("tenting_assumed") and seen.get("vias") else None), args.out
+        if seen.get("tenting_assumed") and seen.get("vias") else None,
+        nothing_to_judge=None if vios or seen["vias"] or seen["smd_pads"]
+        else "no via and no SMD pad on the board"), args.out
 
 
 def main(argv=None) -> int:

@@ -458,6 +458,33 @@ def test_a_diff_pair_is_never_ripped(tmp_path):
     assert rip == []
 
 
+def test_a_dru_layer_ban_holds_in_plan_routes(tmp_path):
+    """#1140: under a full F.Cu wall SIG goes by B.Cu; a DRU rule that
+    keeps it off B.Cu leaves no way, and one that keeps it off both
+    layers fails it for that reason without a search."""
+    body = _pad("U1", 5, 15, "SIG") + _pad("U2", 25, 15, "SIG")
+    body += _seg(15, 0.1, 15, 29.9, 0.25, "F.Cu", "+3V3")
+    off = ('(rule "off"\n\t(layer "{ly}")\n\t(constraint disallow track)\n'
+           "\t(condition \"A.NetName == 'SIG'\")\n)\n")
+    pcb = _board(tmp_path, body, dru=DRU + off.format(ly="B.Cu"))
+    rules, jobs = _plan(pcb, [_pair("SIG", (5, 15), (25, 15))])
+    assert rules.net_layers("SIG", ["F.Cu", "B.Cu"]) == ["F.Cu"]
+    assert rules.net_layers("+3V3", ["F.Cu", "B.Cu"]) == ["F.Cu", "B.Cu"]
+    assert jobs[0]["status"] == "failed"
+    assert not [op for op in jobs[0].get("ops", ())
+                if op.get("layer") == "B.Cu"]
+    facts = json.loads(json.dumps(rf._rules_facts(rules)))
+    assert facts["bans"]["track"] == [
+        {"nets": ["SIG"], "not": [], "classes": [], "not_classes": [],
+         "layers": ["B.Cu"]}]
+    pcb = _board(tmp_path, body, dru=DRU + off.format(ly="F.Cu")
+                 + off.format(ly="B.Cu"))
+    _, jobs = _plan(pcb, [_pair("SIG", (5, 15), (25, 15))])
+    assert jobs[0]["status"] == "failed"
+    assert jobs[0]["reason"] == ("the .kicad_dru keeps its tracks off every"
+                                 " routable layer")
+
+
 def test_rules_facts_of_an_hdi_board_are_json():
     """#477: route_finish crashed writing its report on an HDI build, after
     routing, because Rules.spans holds Span objects."""

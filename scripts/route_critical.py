@@ -464,6 +464,19 @@ def _dru_warn(msg: str) -> None:
         print(f"route_critical: {msg}", file=sys.stderr)
 
 
+def dru_rule_forms(text: str):
+    """(name, body) of each top-level (rule ...) form of a .kicad_dru, in
+    file order, read as KiCad reads the file (routelib.dru_forms, #1163):
+    the name unquoted, the body the rest of the form."""
+    for form in routelib.dru_forms(text):
+        m = _DRU_RULE_HEAD_RE.match(form)
+        if not m:
+            continue
+        name = re.sub(r"\\(.)", r"\1", m.group(1)) \
+            if m.group(1) is not None else m.group(2) or ""
+        yield name, form[m.end():]
+
+
 def parse_dru_rules(text: str) -> list[dict]:
     """Named (rule ...) blocks -> [{name, constraint, min_mm, nets,
     condition, layer}], one row per (constraint ...) clause whose min KiCad
@@ -763,6 +776,38 @@ def dru_net_floors(dru_path: Path | None, constraint: str) -> dict[str, float]:
         for net in rule["nets"]:
             floors[net] = max(floors.get(net, 0.0), rule["min_mm"])
     return floors
+
+
+_DRU_SIZED_RE = re.compile(r"\(constraint\s+(track_width|diff_pair_gap)\b")
+_DRU_NETCLASS_RE = re.compile(r"\.NetClass\s*==\s*'([^']+)'")
+
+
+def dru_sized_nets(dru_path: Path | None, nets=(),
+                   net_classes: dict | None = None) -> set[str]:
+    """Of `nets`, those a .kicad_dru track_width or diff_pair_gap rule
+    names, by NetName or NetClass (KiCad's wildcards), whatever the rule's
+    bounds and the rest of its condition. A reroute that rips such a net
+    puts it back at the router's width, alone: past an impedance rule's
+    (max ..) or off its pair (#1140: a part move pushed the USB pairs
+    aside, and 43 In2.Cu tracks came back at 0.2 against a 0.1778 max).
+    parse_dru_rules gives a row only for a min it reads as a length, and
+    reads NetName terms only, so this reads the blocks itself. A barrier
+    rule (aiee_iso_*) names no sized net.
+    net_classes = routelib.pro_net_classes' {net: (class, ...)}."""
+    text = _dru_text(dru_path)
+    if text is None:
+        return set()
+    names, classes = set(), set()
+    for name, body in dru_rule_forms(text):
+        if name.startswith("aiee_iso_") or not _DRU_SIZED_RE.search(body):
+            continue
+        names |= set(_DRU_NETNAME_RE.findall(body))
+        classes |= set(_DRU_NETCLASS_RE.findall(body))
+    nc = net_classes or {}
+    return {n for n in nets
+            if any(routelib._kicad_match(p, n) for p in names)
+            or any(routelib._kicad_match(p, c)
+                   for p in classes for c in nc.get(n, ()))}
 
 
 def dru_neck_rules(dru_path: Path | None,

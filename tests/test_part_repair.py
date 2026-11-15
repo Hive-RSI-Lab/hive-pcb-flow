@@ -217,53 +217,243 @@ def test_new_violations_name_what_the_gate_counts():
         " C221 on B.Cu at (34.025, 51.500)" in pr.report_md(p)
 
 
-def test_dangling_prunes_only_free_copper_in_the_window(u1):
-    pcb, bg = u1
-    nets = {"B", "C"}
-    assert set(pr._dangling(pcb, bg, nets, win=WIN)) == {"b0", "b1", "b2"}
-    # with no window, c1 (outside it) may go, and c0 behind it
-    assert set(pr._dangling(pcb, bg, nets)) \
-        == {"b0", "b1", "b2", "c0", "c1"}
-    # an anchor stays and holds what leads to it
-    assert set(pr._dangling(pcb, bg, nets, win=WIN, anchors={"b2"})) == {"b1"}
-    # so does copper that meets a new route
-    add = {"op": "add_track", "net": "B", "layer": "F.Cu", "width": 0.25,
-           "start": [-0.3, 1.5], "end": [-0.3, 2.5]}
-    assert set(pr._dangling(pcb, bg, nets, win=WIN, adds=[add])) == {"b1"}
-    # copper that is gone leaves what it held free
-    assert set(pr._dangling(pcb, bg, nets, win=WIN, gone={"c1"})) \
-        == {"b0", "b1", "b2", "c0"}
-
-
 def _add(net, a, b):
     return {"op": "add_track", "net": net, "layer": "F.Cu", "width": 0.25,
             "start": list(a), "end": list(b)}
 
 
-def test_dangling_prunes_the_stubs_behind_a_new_junction(u1):
-    """A route that lands where b0 forks meets b1 and b2 at that end only,
-    and b0 holds it there to pad 2: the two stubs go, b0 stays."""
+def _fp(ref, x, y, net, size=0.4):
+    """A one-pad part: copper a route can end on that holds."""
+    return (f'(footprint "T:P" (layer "F.Cu") (at {x} {y}) (uuid "f{ref}")'
+            f' (property "Reference" "{ref}")\n (pad "1" smd rect (at 0 0)'
+            f' (size {size} {size}) (layers "F.Cu") (net "{net}")))\n')
+
+
+def _pour(net, x0, y0, x1, y1, uid, teardrop=False):
+    pts = f"(xy {x0} {y0}) (xy {x1} {y0}) (xy {x1} {y1}) (xy {x0} {y1})"
+    attr = " (attr (teardrop (type padvia)))" if teardrop else ""
+    return (f'(zone (net "{net}") (net_name "{net}") (layer "F.Cu")'
+            f' (uuid "{uid}"){attr}\n (polygon (pts {pts}))\n'
+            f' (filled_polygon (layer "F.Cu") (pts {pts})))\n')
+
+
+def _u1(tmp_path, extra, name):
+    pcb = _board(tmp_path, U1 + COPPER + extra, name=name)
+    return pcb, geom.BoardGeom.from_file(pcb)
+
+
+def test_dangling_peels_dead_chains_from_the_seed(u1):
+    """#1140: what KiCad's DRC calls dangling goes, one piece at a time as
+    each removal leaves the next end free: from the copper that meets the
+    seed out along its chain, wherever that leads."""
     pcb, bg = u1
+    nets = {"B", "C"}
+    gone, cut = pr._dangling(pcb, bg, nets, seed=WIN)
+    assert set(gone) == {"b0", "b1", "b2", "c0", "c1"} and cut == []
+    # the stubs at the fork go before the track they leave free
+    assert gone.index("b0") > max(gone.index("b1"), gone.index("b2"))
+    assert set(pr._dangling(pcb, bg, nets)[0]) == set(gone)
+    # c1's free end alone in the seed takes c0 behind it, out of the seed
+    assert pr._dangling(pcb, bg, nets, seed=box(1.5, 3.5, 2.5, 4.5)) \
+        == (["c1", "c0"], [])
+    # a seed with nothing dead in it takes nothing, though a3 dangles
+    assert pr._dangling(pcb, bg, {"A"}, seed=box(-3.5, -2.5, -2.5, -1.5)) \
+        == ([], [])
+    # an anchor stays and holds what leads to it
+    assert set(pr._dangling(pcb, bg, nets, seed=WIN, anchors={"b2"})[0]) \
+        == {"b1", "c0", "c1"}
+    # copper that is gone leaves what it held free
+    assert pr._dangling(pcb, bg, {"C"}, seed=WIN, gone={"c1"}) == (["c0"], [])
+
+
+def test_dangling_takes_a_via_met_on_one_layer(u1):
+    """KiCad's via_dangling: a via that its net meets on one layer only
+    dangles. With a2 and a3 gone, vA has a1 on F.Cu alone: it goes, then a1
+    and a0. All of A dangles (a3 runs off to nothing): out from a3's end."""
+    pcb, bg = u1
+    assert pr._dangling(pcb, bg, {"A"}, seed=WIN, gone={"a2", "a3"}) \
+        == (["vA", "a1", "a0"], [])
+    assert pr._dangling(pcb, bg, {"A"}, seed=WIN) \
+        == (["a3", "a2", "vA", "a1", "a0"], [])
+
+
+U2D = _fp("U2", 4.6, -4, "D") + _seg((4.6, -2), (4.6, -4), "D", "d4")
+AROUND = (_seg((4.4, 0), (6, 0), "D", "d8a") + _seg((6, 0), (6, -4), "D", "d8b")
+          + _seg((6, -4), (4.6, -4), "D", "d8c"))
+
+
+def test_dangling_keeps_a_dead_end_that_is_a_nets_only_link(tmp_path):
+    """d1's two ends meet nothing, but d0 (from pad 4) and d4 (to U2's pad)
+    meet its middle: without d1, D falls in two, so it stays, cut back to
+    the two joints (#1140). With another way round from pad 4 to U2, d1
+    goes, and d4 and d0 after it."""
+    pcb, bg = _u1(tmp_path, U2D, "link")
+    cuts = {}
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, cuts=cuts) == ([], [])
+    was, now = cuts.pop("d1")
+    assert not cuts and (was.a, was.b) == ((3, -2), (5, -2))
+    assert (now.uuid, now.layer, now.width, now.a, now.b) \
+        == ("d1", "F.Cu", 0.25, (4, -2), (4.6, -2))
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN) == ([], [])
+    # what a run leaves: dangling on the board as it is, cut back or not
+    assert pr._dead_on(pcb, bg, {"D"}) == {"d1"}
+    pcb, bg = _u1(tmp_path, U2D + AROUND, "loop")
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, cuts=cuts) \
+        == (["d1", "d4", "d0"], [])
+    assert cuts == {}
+
+
+def test_dangling_cuts_back_a_track_whose_partner_went(tmp_path):
+    """#1140 (R7, C216-C224): the run pushed c0 aside, so c1's end where c0
+    met it is dead, but a route of the run tees into c1, which alone joins
+    it to P6: c1 is cut back to the tee, as KiCad would leave no tail."""
+    pcb, bg = _u1(tmp_path, _fp("P6", 2, 4, "C") + _fp("P7", 3, 3, "C"),
+                  "tee")
+    tee = _add("C", (3, 3), (2, 3))
+    cuts = {}
+    assert pr._dangling(pcb, bg, {"C"}, seed=WIN, adds=[tee], cuts=cuts) \
+        == ([], [])
+    assert cuts == {}               # c0 holds both of c1's ends
+    assert pr._dangling(pcb, bg, {"C"}, seed=WIN, adds=[tee], cuts=cuts,
+                        gone={"c0"}) == ([], [])
+    was, now = cuts.pop("c1")
+    assert not cuts and (was.a, was.b, now.a, now.b) \
+        == ((2, 2.5), (2, 4), (2, 3), (2, 4))
+
+
+def test_dangling_cuts_the_routers_tail_past_its_joint(tmp_path):
+    """A route of the run from U2's pad that runs on past d1 to nothing is
+    the only link from U2 to D: it is cut back to d1 (by its add's index),
+    and d1, which it alone joins to d0, to the two joints."""
+    pcb, bg = _u1(tmp_path, _fp("U2", 4.6, -4, "D"), "over")
+    over = _add("D", (4.6, -4), (4.6, -1))
+    cuts = {}
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, adds=[over], cuts=cuts) \
+        == ([], [])
+    assert sorted(cuts) == ["+0", "d1"]
+    assert (cuts["+0"][1].a, cuts["+0"][1].b) == ((4.6, -4), (4.6, -2))
+    assert (cuts["d1"][1].a, cuts["d1"][1].b) == ((4, -2), (4.6, -2))
+
+
+def test_set_ends_and_the_report_name_a_cut():
+    """A cut board track keeps its uuid: set_point moves the ends that
+    changed. The report counts the cuts."""
+    Seg = pr.route_cleanup.Seg
+    was = Seg("t1", "D", "F.Cu", 0.25, (3.0, -2.0), (5.0, -2.0))
+    assert pr._set_ends("t1", was, Seg("t1", "D", "F.Cu", 0.25, (4.0, -2.0),
+                                       (5.0, -2.0))) \
+        == [{"op": "set_point", "uuid": "t1", "which": "start",
+             "to": [4.0, -2.0]}]
+    assert [o["which"] for o in pr._set_ends("t1", was, Seg(
+        "t1", "D", "F.Cu", 0.25, (4.0, -2.0), (4.6, -2.0)))] \
+        == ["start", "end"]
+    note = pr._cut_note("t1", "D", "F.Cu", ((3, -2), (5, -2)),
+                        ((4, -2), (4.6, -2)))
+    assert note == {"uuid": "t1", "net": "D", "layer": "F.Cu",
+                    "from": [3, -2, 5, -2], "to": [4, -2, 4.6, -2]}
+    p = {"status": "pass", "board": "b", "refs": ["U1"], "ops": 1,
+         "applied": True, "shortened": [note]}
+    assert "Cut back 1 track with a dead end" in pr.report_md(p)
+
+
+def test_dangling_trims_the_routers_dead_tails(u1):
+    """An add is copper like any other: one with an end on nothing is
+    trimmed (its index comes back), and what it alone held goes after it."""
+    pcb, bg = u1
+    tail = _add("B", (0, 1), (1, 1))      # off b0's middle to nothing
+    gone, cut = pr._dangling(pcb, bg, {"B"}, seed=WIN, adds=[tail])
+    assert set(gone) == {"b0", "b1", "b2"} and cut == [0]
+
+
+def test_dangling_prunes_the_stubs_behind_a_new_junction(tmp_path):
+    """A route from a pad that lands where b0 forks meets b1 and b2 at that
+    end only, and b0 holds it there to pad 2: the two stubs go, b0 stays."""
+    pcb, bg = _u1(tmp_path, _fp("P1", 0, 2.8, "B"), "fork")
     add = _add("B", (0, 2), (0, 2.8))
-    assert set(pr._dangling(pcb, bg, {"B"}, win=WIN, adds=[add])) \
-        == {"b1", "b2"}
+    gone, cut = pr._dangling(pcb, bg, {"B"}, seed=WIN, adds=[add])
+    assert set(gone) == {"b1", "b2"} and cut == []
 
 
-def test_dangling_keeps_the_copper_a_new_route_hangs_on(u1, tmp_path):
-    """A route that lands on b1's free end alone hangs on b1, so b1 and b0
-    stay. One that lands where d1 ends at a dead stub d2 hangs on d1 (d0's
-    T onto it leads to pad 4): once d2 would go too, nothing at that end
-    holds the route, so d1 and d0 stay (and d2 with them)."""
-    pcb, bg = u1
+def test_dangling_keeps_the_copper_a_new_route_hangs_on(tmp_path):
+    """A route that lands on b1's free end hangs on b1, so b1 and b0 stay.
+    A dead stub d2 off d1's end goes with d1 and d0 (d1's other end is
+    free); with a route from a pad onto that end, d2 goes and d1 stays: it
+    is all that joins the route to d0 and pad 4."""
+    pcb, bg = _u1(tmp_path, _fp("P1", 0.6, 2.8, "B"), "b1")
     add = _add("B", (0.6, 2), (0.6, 2.8))
-    assert set(pr._dangling(pcb, bg, {"B"}, win=WIN, adds=[add])) == {"b2"}
-    pcb2 = _board(tmp_path, U1 + COPPER
-                  + _seg((5, -2), (5.5, -2.5), "D", "d2"), name="d2")
-    bg2 = geom.BoardGeom.from_file(pcb2)
-    assert set(pr._dangling(pcb2, bg2, {"D"}, win=WIN)) \
-        == {"d0", "d1", "d2"}
+    assert pr._dangling(pcb, bg, {"B"}, seed=WIN, adds=[add]) == (["b2"], [])
+    d2 = _seg((5, -2), (5.5, -2.5), "D", "d2")
+    pcb, bg = _u1(tmp_path, d2, "d2")
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN) == (["d2", "d1", "d0"], [])
+    pcb, bg = _u1(tmp_path, d2 + _fp("P2", 5, -2.8, "D"), "d2p")
     add = _add("D", (5, -2), (5, -2.8))
-    assert pr._dangling(pcb2, bg2, {"D"}, win=WIN, adds=[add]) == []
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, adds=[add]) == (["d2"], [])
+
+
+def test_dangling_counts_pours_not_teardrops(tmp_path):
+    """A B pour under b1's free end holds b1, and b0 behind it; a teardrop
+    there does not: the refill makes teardrops again from what is left."""
+    pcb, bg = _u1(tmp_path, _pour("B", 0.4, 1.8, 1.0, 2.2, "zB"), "pour")
+    assert pr._dangling(pcb, bg, {"B"}, seed=WIN) == (["b2"], [])
+    pcb, bg = _u1(tmp_path, _pour("B", 0.4, 1.8, 1.0, 2.2, "tB", True), "td")
+    assert [z.teardrop for z in bg.zones_of()] == [True]
+    assert set(pr._dangling(pcb, bg, {"B"}, seed=WIN)[0]) \
+        == {"b0", "b1", "b2"}
+
+
+def _bpour(net, x0, y0, x1, y1, uid):
+    pts = f"(xy {x0} {y0}) (xy {x1} {y0}) (xy {x1} {y1}) (xy {x0} {y1})"
+    return (f'(zone (net "{net}") (net_name "{net}") (layer "B.Cu")'
+            f' (uuid "{uid}")\n (polygon (pts {pts}))\n'
+            f' (filled_polygon (layer "B.Cu") (pts {pts})))\n')
+
+
+VIA_P = ('(via (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu")'
+         ' (net "P") (uuid "vP"))\n')
+
+
+def test_peel_keeps_board_copper_whose_pour_the_refill_cut_back(tmp_path):
+    """#1140: a via in U9's pad met P's B.Cu pour on the base board; on the
+    work board a new via of Q cuts that pour back from it, so it meets the
+    pad alone and dangles. It was live design copper: it stays, with a
+    note on what cut the pour, and the gate counts what that costs. A via
+    of the run's own, or one whose track the run took, goes."""
+    part = _fp("U9", 0, 0, "P", 0.8)
+    base = _board(tmp_path, part + VIA_P + _bpour("P", -2, -2, 2, 2, "zP")
+                  + _seg((0, 0), (-1.5, 0), "P", "tP", "B.Cu"), "base")
+    work = _board(tmp_path, part + VIA_P + _bpour("P", 0.6, -2, 2, 2, "zP"),
+                  "work")
+    bg0, bg1 = (geom.BoardGeom.from_file(p) for p in (base, work))
+    seed = box(-1, -1, 1, 1)
+    assert pr._dangling(work, bg1, {"P"}, seed=seed) == (["vP"], [])
+    add = {"op": "add_via", "net": "Q", "at": [0.0, 0.9], "size": 0.4,
+           "drill": 0.2}
+    tail = (" the B.Cu pour of P back from via vP at (0.0, 0.0) on U9.1: the"
+            " via stays (it met the pour on the base board) and the gate"
+            " counts what that costs")
+    # tP on the base board too: the run took what vP hung on, so it goes
+    anchors, notes = set(), []
+    assert pr._peel(work, bg0, bg1, {"P"}, made={}, adds_on=[add],
+                    refs=[], anchors=anchors, notes=notes, seed=seed) \
+        == (["vP"], [], {})
+    assert anchors == set() and notes == []
+    base = _board(tmp_path, part + VIA_P + _bpour("P", -2, -2, 2, 2, "zP"),
+                  "base2")
+    bg0 = geom.BoardGeom.from_file(base)
+    assert pr._peel(work, bg0, bg1, {"P"}, made={}, adds_on=[add],
+                    refs=[], anchors=anchors, notes=notes, seed=seed) \
+        == ([], [], {})
+    assert anchors == {"vP"}
+    assert notes == ["the new via of Q at (0.0, 0.9) cuts" + tail]
+    # no add of another net near: the refill did it
+    notes = []
+    assert pr._peel(work, bg0, bg1, {"P"}, made={}, adds_on=[], refs=[],
+                    anchors=set(), notes=notes, seed=seed) == ([], [], {})
+    assert notes == ["the refill cuts" + tail]
+    # a via the run made goes
+    assert pr._peel(work, bg0, bg1, {"P"}, made={"vP": 0}, adds_on=[add],
+                    refs=[], anchors=set(), notes=[], seed=seed) \
+        == (["vP"], [], {})
 
 
 PATCH_A = ('(zone (net "A") (net_name "A") (layer "F.Cu") (uuid "zA")'
@@ -283,6 +473,105 @@ def test_patch_notes_name_a_patch_the_move_leaves_behind(tmp_path):
     assert len(notes) == 1
     assert notes[0].startswith("zone PATCH_A on F.Cu met U1.1")
     assert "zone_patch --net A --layer F.Cu" in notes[0]
+    assert pr.patch_notes(bg, old, away, uuids=True) == [("zA", notes[0])]
+
+
+def test_orphan_patches_find_a_patch_left_joining_nothing(tmp_path):
+    """#1140 (the C216-C224 job on the voice board): a PATCH_<net> zone
+    that met copper of its net before the run and meets none after it is
+    isolated copper, removed in the route ops with a note in place of the
+    early one; one a track of its net still meets stays, as does a zone
+    not named PATCH_ or one with no uuid."""
+    bg0 = geom.BoardGeom.from_file(_board(tmp_path, U1 + PATCH_A, "b0"))
+    assert pr.orphan_patches(bg0, bg0) == []
+    away = U1.replace("(at 0 0)", "(at 10 0)", 1)
+    bg1 = geom.BoardGeom.from_file(_board(tmp_path, away + PATCH_A, "b1"))
+    [(z, pads)] = pr.orphan_patches(bg0, bg1)
+    assert (z.uuid, z.name, z.net, pads) == ("zA", "PATCH_A", "A", ["U1.1"])
+    held = _seg((-2, 0), (-6, 0), "A", "h0")
+    bg2 = geom.BoardGeom.from_file(_board(tmp_path, away + PATCH_A + held,
+                                          "b2"))
+    assert pr.orphan_patches(bg0, bg2) == []
+    for other in (PATCH_A.replace('"PATCH_A"', '"POUR_A"'),
+                  PATCH_A.replace(' (uuid "zA")', "")):
+        b0 = geom.BoardGeom.from_file(_board(tmp_path, U1 + other, "c0"))
+        b1 = geom.BoardGeom.from_file(_board(tmp_path, away + other, "c1"))
+        assert pr.orphan_patches(b0, b1) == []
+    early = pr.patch_notes(bg1, {"U1": bg0.pads_of(ref="U1")},
+                           {"U1": bg1.pads_of(ref="U1")})
+    gone, marks = [], []
+    payload = {"notes": ["kept", *early], "removed_zones": []}
+    pr._drop_patch(z, pads, gone, marks, payload, early)
+    assert gone == ["zA"]
+    assert marks[0].contains(box(-3, -1, -1, 1).buffer(0.99))
+    assert payload["removed_zones"] == [
+        {"uuid": "zA", "name": "PATCH_A", "net": "A", "layers": ["F.Cu"],
+         "met": ["U1.1"]}]
+    assert payload["notes"][0] == "kept" and len(payload["notes"]) == 2
+    assert payload["notes"][1].startswith(
+        "zone PATCH_A on F.Cu joins no copper of A after the run, where it"
+        " met U1.1 before: removed")
+
+
+def _starved(ref, num, zone, *, layer="B.Cu", pos=(1, 1), pth=False,
+             zlayers="B.Cu", said=True):
+    """A starved_thermal as kc.run_drc reads it from KiCad 10.0.6: the
+    message names the layer (said), the items the zone and the pad."""
+    pad = (f"PTH pad {num} [GND] of {ref}" if pth
+           else f"Pad {num} [GND] of {ref} on {layer}")
+    msg = "Thermal relief connection to zone incomplete" + (
+        f" (layer {layer}; zone min spoke count 2; actual 1)" if said
+        else "")
+    return {"source": "drc", "check": "starved_thermal", "severity": "error",
+            "net": "GND", "layer": layer, "msg": msg,
+            "pos": [0, 0], "items": [
+                {"msg": f"Zone [GND] on {zlayers}, priority 0",
+                 "pos": [0, 0], "uuid": zone},
+                {"msg": pad, "pos": list(pos), "uuid": f"p-{ref}-{num}"}]}
+
+
+def test_starved_pads_name_the_pad_its_layer_and_zone():
+    """#1140: KiCad names a starved thermal's zone and pad in its items
+    and the layer in its message; only those the run made count. A zone's
+    text lists its layers and a PTH pad's names none, so the layer is the
+    message's, else the pad's, by the board's canonical name; else None."""
+    old = _starved("C210", "2", "zG", pos=(5, 5))
+    new = _starved("C221", "1", "zG", pos=(9, 9))
+    clr = _vat("drc", "clearance", "A", (2, 2), (2, 3))
+    assert pr.starved_pads({"violations": [old]},
+                           {"violations": [old, new, clr]}) \
+        == [("C221", "1", "B.Cu", "zG")]
+    smd = _starved("C9", "2", "zM", zlayers="F.Cu and B.Cu")
+    pth = _starved("J1", "1", "zG", pth=True,
+                   zlayers="F.Cu, In1.Cu and B.Cu")
+    inner = _starved("J2", "3", "zM", pth=True, layer="SIG1",
+                     zlayers="F.Cu, SIG1 and B.Cu")
+    mute = _starved("J3", "1", "zG", pth=True, said=False,
+                    zlayers="F.Cu and B.Cu")
+    bare = _starved("C8", "1", "zG", said=False)
+    named = _starved("C5", "1", "zN")
+    named["items"][0]["msg"] = "Zone 'PATCH_GND' [GND] on B.Cu, priority 2"
+    assert pr.starved_pads(
+        {"violations": []},
+        {"violations": [smd, pth, inner, mute, bare, named]},
+        {"SIG1": "In1.Cu"}) == [
+        ("C9", "2", "B.Cu", "zM"), ("J1", "1", "B.Cu", "zG"),
+        ("J2", "3", "In1.Cu", "zM"), ("J3", "1", None, "zG"),
+        ("C8", "1", "B.Cu", "zG"), ("C5", "1", "B.Cu", "zN")]
+
+
+def test_layer_names_map_a_renamed_layer_to_its_own(tmp_path):
+    """#1140: DRC names a layer by the board's name for it; layer_names
+    maps that back to the canonical one."""
+    pcb = tmp_path / "named.kicad_pcb"
+    pcb.write_text(
+        '(kicad_pcb (version 20260206) (generator "test")\n'
+        '  (general (thickness 1.6))\n'
+        '  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal "SIG1")\n'
+        '    (2 "B.Cu" signal) (25 "Edge.Cuts" user))\n'
+        '  (setup)\n  (net 0 "")\n)\n')
+    names = pr.layer_names(geom.BoardGeom.from_file(pcb))
+    assert names["SIG1"] == "In1.Cu" and "F.Cu" not in names
 
 
 def test_load_ops_takes_footprint_ops_only(tmp_path, monkeypatch):
@@ -308,6 +597,58 @@ def test_run_refuses_bad_arguments(tmp_path):
     with pytest.raises(CheckError, match="board not found"):
         pr.run(["--pcb", str(tmp_path / "none.kicad_pcb"), "--op", op,
                 "--out", str(tmp_path / "o")])
+
+
+UNREAD_DRU = ('(version 1)\n(rule "odd_F" (layer "F.Cu")'
+              ' (constraint disallow track)'
+              ' (condition "A.Type == \'track\'"))\n')
+
+
+class _PastTheStop(Exception):
+    """run_drc was called: the run got past the unread-rule stop."""
+
+
+def test_an_unread_disallow_rule_stops_the_run_unless_allowed(tmp_path,
+                                                                monkeypatch):
+    pcb = _board(tmp_path, U1)
+    pcb.with_suffix(".kicad_dru").write_text(UNREAD_DRU, encoding="utf-8")
+    monkeypatch.setattr(pr.env, "find_kicad_cli", lambda: Path("kicad-cli"))
+    monkeypatch.setattr(pr.env, "find_kicad_python",
+                        lambda cli: Path("python"))
+
+    def drc(*a, **k):
+        raise _PastTheStop()
+    monkeypatch.setattr(pr.kc, "run_drc", drc)
+    op = json.dumps({"op": "rotate", "ref": "U1", "deg": 90})
+    out = tmp_path / "o"
+    with pytest.raises(CheckError, match="odd_F.*--allow-unread-rules"):
+        pr.run(["--pcb", str(pcb), "--op", op, "--out", str(out)])
+    p = _report(out)
+    assert (p["status"], p["unread_dru_rules"], p["allow_unread_rules"]) \
+        == ("error", ["odd_F"], False)
+    assert "odd_F have a condition the router doesn't read, so the run" \
+        " stopped." in (out / "REPORT.md").read_text(encoding="utf-8")
+    with pytest.raises(_PastTheStop):
+        pr.run(["--pcb", str(pcb), "--op", op, "--out", str(tmp_path / "o2"),
+                "--allow-unread-rules"])
+    p = _report(tmp_path / "o2")
+    assert (p["unread_dru_rules"], p["allow_unread_rules"]) \
+        == (["odd_F"], True)
+    # an error after the stop is not the stop's: the report says the run
+    # went on
+    assert "routed anyway and left them to DRC" in (
+        tmp_path / "o2" / "REPORT.md").read_text(encoding="utf-8")
+
+
+def test_made_maps_each_adds_uuid_to_its_index_and_names_the_dups():
+    ops = [{"op": "delete_track"}] + [{"op": "add_track"}] * 3 \
+        + [{"op": "add_via"}]
+    results = [{"status": "ok"}, {"uuid": "t1", "status": "ok"},
+               {"status": "exists"}, {"status": "ok"},
+               {"uuid": "v1", "status": "ok"}]
+    assert pr._made(ops, results, 1) == ({"t1": 0, "v1": 3}, {1})
+    # results that stop short made nothing past their end
+    assert pr._made(ops, results[:2], 1) == ({"t1": 0}, set())
 
 
 def test_gates_fail_on_a_new_violation_near_the_repair():
@@ -387,7 +728,7 @@ class FakeRouter:
         self.pushes = 0
         self.calls: list = []
 
-    def islands(self, net):
+    def islands(self, net, scraps=True):
         return [{"F.Cu": [b], None: 1} for b in self.isl]
 
     def join_islands(self, net, want, near=None, width=None):
@@ -530,6 +871,33 @@ def _replay_cmds(p, fresh) -> None:
 
 def _report(out) -> dict:
     return json.loads((out / "part_repair.json").read_text(encoding="utf-8"))
+
+
+def test_live_a_cut_applies_and_replays(kicad, tmp_path):
+    """#1140: the set_point ops part_repair writes for a cut (a board track
+    kept, its dead end cut back) apply as its run applies them, and replay
+    from its ops file. A sweep's R7 rot180 failed here: route_edit took
+    set_point from its own move_via only, so the run's apply raised after
+    the board was swapped in and the replay refused the op."""
+    import route_edit
+
+    pcb = _copy(tmp_path, "kicad")
+    t = min((t for t in geom.BoardGeom.from_file(pcb).tracks_of()
+             if t.uuid and len(t.shape.coords) == 2 and t.shape.length > 1),
+            key=lambda t: t.uuid)
+    a, b = (tuple(q) for q in t.shape.coords)
+    Seg = pr.route_cleanup.Seg
+    q = (round(a[0] + 0.75 * (b[0] - a[0]), 4),
+         round(a[1] + 0.75 * (b[1] - a[1]), 4))
+    ops = pr._set_ends(t.uuid, Seg(t.uuid, t.net, t.layer, t.width, a, b),
+                       Seg(t.uuid, t.net, t.layer, t.width, a, q))
+    assert [r["status"] for r in pr.route_edit.apply_ops(pcb, ops)] \
+        == ["changed"]
+    fresh = _copy(tmp_path, "fresh")
+    pr._write_ops(tmp_path / pr.ROUTE_FILE, ops)
+    assert route_edit.main(["--pcb", str(fresh), "--ops",
+                            str(tmp_path / pr.ROUTE_FILE)]) == 0
+    assert _copper(fresh) == _copper(pcb) != _copper(ROUTE / pcb.name)
 
 
 def test_live_renumber_r6_applies_and_replays(kicad, tmp_path,
@@ -753,6 +1121,127 @@ def test_live_a_join_that_must_push_other_nets_aside(kicad, tmp_path,
     fresh = _copy(tmp_path, "fresh")
     _replay_cmds(p, fresh)
     assert _copper(fresh) == _copper(out / "work" / pcb.name)
+
+
+def test_live_a_net_that_fails_joins_again_first(kicad, tmp_path,
+                                                 monkeypatch):
+    """A net that won't join in the parts' order (as when a join before it
+    took its room) gets a second pass from the board after the rips, with
+    it first. The first pass's joins are undone, not kept: the replay of
+    the second makes the same copper."""
+    real = pr.join_net
+    calls = []
+
+    def second_fails(router, net, *a, **k):
+        calls.append(net)
+        if len(calls) == 2:
+            raise CheckError(f"{net}: no room (test)")
+        return real(router, net, *a, **k)
+    monkeypatch.setattr(pr, "join_net", second_fails)
+    pcb = _copy(tmp_path, "kicad")
+    out = tmp_path / "out"
+    assert pr.main(["--pcb", str(pcb), "--op", json.dumps(RENUMBER),
+                    "--out", str(out)]) == 0
+    p = _report(out)
+    assert p["status"] == "pass", p.get("worse") or p.get("failed")
+    a, b = calls[:2]
+    again = calls[calls.index(b, 2):]       # the second pass, b first
+    assert a in again, calls                # a's first join was undone
+    assert p["join_passes"] == [{"first": [], "failed": [b]},
+                                {"first": [b], "failed": []}]
+    assert any("joins ran again" in n for n in p["notes"])
+    assert "failed" not in {j["how"] for j in p["joins"].values()}
+    assert all(y <= x for x, y in p["islands"].values()), p["islands"]
+    fresh = _copy(tmp_path, "fresh")
+    _replay_cmds(p, fresh)
+    assert _copper(fresh) == _copper(out / "work" / pcb.name)
+
+
+def _quarter_in(s, end):
+    """route_cleanup.Seg s with its `end` end ("a" or "b") moved a quarter
+    of the way along it."""
+    p, q = (s.a, s.b) if end == "b" else (s.b, s.a)
+    at = (round(p[0] + 0.75 * (q[0] - p[0]), 4),
+          round(p[1] + 0.75 * (q[1] - p[1]), 4))
+    return dataclasses.replace(s, **{end: at})
+
+
+def test_live_the_late_prune_folds_each_pass_into_the_ops(kicad, tmp_path,
+                                                          monkeypatch):
+    """#1140: what each re-prune after a refill finds goes into the ops.
+    A dead route of the run leaves its add op (trimmed), a dead board track
+    is removed (pruned), and a cut shortens a route's add op or moves a
+    board track's end (shortened), from where the track was before, also
+    when a later pass cuts it again or removes it. The replay makes the
+    work board. The peels are made up (the R6 job leaves none) and the gate
+    is left out (a made-up removal can split a net)."""
+    import route_cleanup
+    pcb = _copy(tmp_path, "kicad")
+    cu = list(geom.BoardGeom.from_file(pcb).copper_layers)
+    base = {s.uuid for s in route_cleanup.parse_items(pcb, cu)[0]}
+    real = pr._dangling
+    seen: list = []     # the board's tracks as each late pass found them
+    pick: dict = {}
+
+    def late(board, bg, nets, *, seed=None, cuts=None, **k):
+        if "adds" in k or seed is None:     # the first prune, _dead_on
+            return real(board, bg, nets, seed=seed, cuts=cuts, **k)
+        segs = {s.uuid: s for s in route_cleanup.parse_items(board, cu)[0]}
+        seen.append(segs)
+        if len(seen) == 1:
+            runs = sorted(u for u, s in segs.items()
+                          if u not in base and s.length > 0.2)
+            olds = sorted(u for u, s in segs.items()
+                          if u in base and s.net in nets and s.length > 1)
+            assert len(runs) >= 2 and len(olds) >= 3, (runs, olds)
+            pick.update(r1=runs[0], r2=runs[1], b1=olds[0], b2=olds[1],
+                        b3=olds[2])
+            for u in (pick["r1"], pick["b2"]):
+                cuts[u] = (segs[u], _quarter_in(segs[u], "b"))
+            return [pick["b1"]], []
+        if len(seen) == 2:
+            for u in (pick["r1"], pick["b3"]):
+                cuts[u] = (segs[u], _quarter_in(segs[u], "a"))
+            return [pick["r2"], pick["b2"]], []
+        return [], []
+    monkeypatch.setattr(pr, "_dangling", late)
+    monkeypatch.setattr(pr, "gates", lambda *a, **k: [])
+    out = tmp_path / "out"
+    assert pr.main(["--pcb", str(pcb), "--op", json.dumps(RENUMBER),
+                    "--out", str(out)]) == 0
+    p = _report(out)
+    assert p["status"] == "pass" and len(seen) == 3
+    first, last = seen[0], seen[1]
+    r1, r2, b1, b2, b3 = (pick[k] for k in ("r1", "r2", "b1", "b2", "b3"))
+
+    def ends(s):
+        return [pr._r(v) for q in (s.a, s.b) for v in q]
+    assert p["pruned"][-2:] == [b1, b2]
+    assert [(o["start"], o["end"]) for o in p["trimmed"]][-1:] \
+        == [(list(first[r2].a), list(first[r2].b))]
+    rows = {(r["uuid"], tuple(r["from"])): r["to"] for r in p["shortened"]}
+    assert (b2, tuple(ends(first[b2]))) not in rows      # cut, then gone
+    assert rows[(b3, tuple(ends(first[b3])))] \
+        == ends(_quarter_in(last[b3], "a"))
+    r1_now = _quarter_in(last[r1], "a")                  # cut twice
+    assert rows[("", tuple(ends(first[r1])))] == ends(r1_now)
+    ops = json.loads((out / pr.ROUTE_FILE).read_text(
+        encoding="utf-8"))["ops"]
+    assert {o["uuid"] for o in ops if o["op"] == "remove"} >= {b1, b2}
+    assert not any(o.get("uuid") == b2 for o in ops if o["op"] != "remove")
+    assert [o["which"] for o in ops if o.get("uuid") == b3] == ["start"]
+    adds = [(o["start"], o["end"]) for o in ops if o["op"] == "add_track"]
+    assert (list(r1_now.a), list(r1_now.b)) in adds
+    assert (list(first[r2].a), list(first[r2].b)) not in adds
+    work = out / "work" / pcb.name
+    now = {s.uuid: s for s in route_cleanup.parse_items(work, cu)[0]}
+    assert not {b1, b2, r2} & set(now)
+    assert (now[b3].a, now[b3].b) == (_quarter_in(last[b3], "a").a,
+                                      last[b3].b)
+    assert (now[r1].a, now[r1].b) == (r1_now.a, r1_now.b)
+    fresh = _copy(tmp_path, "fresh")
+    _replay_cmds(p, fresh)
+    assert _copper(fresh) == _copper(work)
 
 
 def test_live_a_board_changed_during_the_run_is_not_replaced(

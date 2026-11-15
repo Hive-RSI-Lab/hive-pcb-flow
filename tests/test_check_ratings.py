@@ -2560,6 +2560,117 @@ def test_package_table_resistor_is_not_called_the_distributors(tmp_path):
     assert "D/CRCW" in f["source"] and "parts.json" not in f["source"]
 
 
+# ---------------- a capacitor rated from its part number or Value (#1307)
+
+def _cap_ws(tmp_path, mpn="", value="", net="+12V", ref="C1"):
+    """One 2-pad part on net/GND with no voltage attribute; the MPN as a
+    footprint property, as KiCad libraries carry it."""
+    ws = _ws(tmp_path, [(ref, "", {"1": net, "2": "GND"},
+                         "Capacitor_SMD:C_0402_1005Metric", value)], {})
+    pcb = ws / "kicad" / "board.kicad_pcb"
+    if mpn:
+        pcb.write_text(pcb.read_text().replace(
+            '(property "LCSC" "")', f'(property "LCSC" "") (property "MPN" '
+            f'"{mpn}")'))
+    viol, facts = cr.run_check(pcb, ws / "parts", None, None)
+    over = [v for v in viol if v["kind"] == "rating_over_voltage"]
+    fact = next(f for f in facts["ledger_facts"]
+                if f["subject"] == ref and f["kind"] == "rating")
+    return over, fact, facts
+
+
+def test_cap_rated_from_samsung_voltage_code_planted(tmp_path):
+    # CL05A105KQ5NNNC: 10th character Q = 6.3 V, on a 12 V rail
+    over, fact, facts = _cap_ws(tmp_path, "CL05A105KQ5NNNC")
+    assert len(over) == 1 and over[0]["limit_v"] == 6.3
+    assert "voltage code Q" in over[0]["msg"] and "Samsung" in over[0]["msg"]
+    assert fact["status"] == "failed"
+
+
+def test_cap_rated_from_samsung_voltage_code_quiet_twin(tmp_path):
+    # the same part with code A = 25 V holds 12 V: listed, from the code
+    over, fact, facts = _cap_ws(tmp_path, "CL05A105KA5NNNC")
+    assert over == []
+    assert (fact["status"], fact["rated_from"]) == ("listed", "part_code")
+    assert "voltage code A" in fact["source"]
+    assert facts["parts_rated_unextracted"] == ["C1"]
+    assert not any(v.get("refs") == ["C1"] for v in cr.run_check(
+        tmp_path / "ws" / "kicad" / "board.kicad_pcb",
+        tmp_path / "ws" / "parts", None, None)[0]
+        if v["kind"] == "rating_unrated")
+
+
+def test_cap_rated_from_value_field(tmp_path):
+    over, _, _ = _cap_ws(tmp_path, value="220u/16V", net="+24V")
+    assert len(over) == 1 and over[0]["limit_v"] == 16
+    assert "Value field" in over[0]["msg"]
+
+
+def test_cap_value_field_quiet_twin(tmp_path):
+    over, fact, _ = _cap_ws(tmp_path, value="C_0.1u_0402_35V_10%_JB",
+                            net="+24V")
+    assert over == [] and fact["rated_from"] == "part_code"
+
+
+def test_cap_code_and_value_disagree_lower_held(tmp_path):
+    # code A says 25 V, the Value says 10 V: 12 V is over the lower
+    over, _, _ = _cap_ws(tmp_path, "CL05A105KA5NNNC", value="1u 10V")
+    assert len(over) == 1 and over[0]["limit_v"] == 10
+    assert "the lower" in over[0]["msg"]
+
+
+def test_unknown_code_and_diode_value_are_not_read(tmp_path):
+    # a Samsung code letter with no row is never guessed
+    over, fact, _ = _cap_ws(tmp_path, "CL05A105KZ5NNNC")
+    assert over == [] and fact["status"] == "unknown"
+    # a zener's "5V1" is its clamp voltage, not a rating
+    over, fact, _ = _cap_ws(tmp_path / "d", value="5V1", ref="D1")
+    assert over == [] and fact["status"] == "unknown"
+
+
+@pytest.mark.parametrize("mpn, volts, maker", [
+    # each maker's own example or a part its page decodes
+    ("CL05A105KA5NNNC", 25, "Samsung"),
+    ("CL10B104KB8NNNC", 50, "Samsung"),
+    ("GRM155R71C104KA88D", 16, "Murata"),
+    ("GCM188R71H104KA57D", 50, "Murata"),
+    ("CC0402KRX7R9BB104", 50, "Yageo"),
+    ("CX0805MRX7R8BB223", 25, "Yageo"),
+    ("C0402C132J5GACTU", 50, "KEMET"),
+    ("UMK107B7474KA-TR", 50, "Taiyo Yuden"),
+    ("MCASJ31LSB5106KTNA01", 6.3, "Taiyo Yuden"),
+    ("0402CG101J500NT", 50, "Fenghua"),
+    ("C1005X7R1C104K050BC", 16, "TDK"),
+])
+def test_mpn_voltage_code_per_maker(mpn, volts, maker):
+    import mlcc
+    r = mlcc.mpn_voltage(mpn)
+    assert r["v"] == volts and maker in r["series"]
+    assert "http" in r["cite"]
+
+
+@pytest.mark.parametrize("mpn", [
+    "CL05A105KZ5NNNC",       # Samsung code with no row
+    "GRM31CR72E104KW03L",    # Murata 2E is a row; W03L tail still decodes
+    "CGA3E2X7R1H104K080AA",  # TDK CGA: no entry
+    "RC0402FR-0710KL",       # a resistor
+])
+def test_mpn_voltage_code_never_guessed(mpn):
+    import mlcc
+    r = mlcc.mpn_voltage(mpn)
+    if mpn.startswith("GRM"):
+        assert r["v"] == 250
+    else:
+        assert r is None
+
+
+def test_every_voltage_code_table_cites_a_page():
+    import mlcc
+    for e in mlcc.load_vcodes():
+        assert e["codes"] and "http" in e["cite"] and "p" in e["cite"]
+        assert "v" in e["_rx"].groupindex
+
+
 def test_extracted_rating_stays_verified_and_says_datasheet(tmp_path):
     ws = _suspect_ws(tmp_path, None)
     f = _fact(ws, "U1")

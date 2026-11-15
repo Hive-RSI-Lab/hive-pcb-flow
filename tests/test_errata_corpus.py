@@ -740,6 +740,10 @@ def test_coverage_counts_judged_only_on_evidence():
                         "pins_checked": 0}, "check_ratings")["status"] == "judged_nothing"
     assert ec.coverage({"violations": [{"kind": "rating_over"}],
                         "pins_checked": 0}, "check_ratings")["status"] == "judged"
+    # a part rated with no extraction (listing, part-number code) is judged
+    assert ec.coverage({"pins_checked": 0, "parts_rated_unextracted": ["C1"]},
+                       "check_ratings")["status"] == "judged"
+    assert ec.EVIDENCE["check_ratings"]({"parts_rated_unextracted": ["C1", "C2"]}) == 2
     assert ec.coverage({"violations": [{"kind": "mcu_unknown"}],
                         "checked": [{"mcus": []}]}, "check_straps")["status"] == "judged_nothing"
     assert ec.coverage({"checked": [{"mcus": ["U1"]}]}, "check_straps")["status"] == "judged"
@@ -766,3 +770,69 @@ def test_coverage_counts_footprint_parts():
         "coverage check_fp_package: judged 1, nothing_to_judge 0, judged nothing "
         "(unsaid) 1, with not_judged items 2, crashed 0; parts judged 6, "
         "parts not_judged 8"]
+
+
+def test_blocker_label_names_nothing_on_the_board():
+    lab = ec.blocker_label
+    assert lab("reference/reset_states.yaml has no row for U3 (STM32G071KBUx)") \
+        == "reference/reset_states.yaml has no row"
+    assert lab("no standard header on J4") == "no standard header"
+    assert lab("4 connector(s) on the board, none with an extraction") \
+        == "connector on the board, none with an extraction"
+    assert lab("package 'SMD-4P,1.6x0.9mm' not read") == "package not read"
+    assert lab("the part's package name is not read") == "the part's package name is not read"
+    assert lab("") == "unlabelled"
+    # items: a kind by its kind, `REFS (part) ...: why` by its why
+    assert ec._item_label("rail_over on +3V3: U2 (AMS1117-3.3) is rated 800 mA") == "rail_over"
+    assert ec._item_label("U2 (LMR62014) SW on Net-(C8-Pad1): a switch node whose part "
+                          "isn't in switch_nodes.yaml") \
+        == "a switch node whose part isn't in switch_nodes.yaml"
+    assert ec._item_label("J3: no extraction") == "no extraction"
+    assert ec._item_label({"ref": "U1", "reason": "no row"}) == "no row"
+
+
+def test_blockers_say_why_a_board_was_not_judged():
+    cov = ec.coverage({"nothing_to_judge": "no MCU on the board"}, "check_straps")
+    assert ec.blockers({"nothing_to_judge": "no MCU on the board"}, cov) == {
+        "board": "no MCU on the board", "items": {}}
+    # a check that judged nothing and gave no reason (#1295) is counted so
+    cov = ec.coverage({"pins_checked": 0}, "check_ratings")
+    assert ec.blockers({"pins_checked": 0}, cov)["board"] == "no reason given"
+    # judged, with items it couldn't judge, by reason
+    rep = {"judged": 2, "not_judged": {"no part number on the footprint": ["R1", "R2"],
+                                       "package 'X-1' not read": 3}}
+    bl = ec.blockers(rep, ec.coverage(rep, "check_fp_package"))
+    assert bl == {"board": None, "items": {"no part number on the footprint": 2,
+                                           "package not read": 3}}
+    # a crash or a timeout, and the pin names the harness couldn't give
+    assert ec.blockers(None, None, {"error": "b rev_a: x timed out after 900 s"},
+                       "no_netlist") == {"board": "timeout", "items": {},
+                                         "inputs": ["pin names: no_netlist"]}
+    assert ec.blockers(None, None, {"error": "boom"})["board"] == "crashed"
+    # an input note only on a board the check didn't judge
+    assert "inputs" not in ec.blockers({}, {"status": "judged"}, pins="no_netlist")
+
+
+def test_blocker_lines_count_by_reason_per_check():
+    rows = [("a", "c", {"blockers": {"board": "no reason given", "items": {}}}),
+            ("b", "c", {"blockers": {"board": "no MCU", "items": {"x": 2}}}),
+            ("d", "c", {"blockers": {"board": "no MCU", "items": {"x": 1},
+                                     "inputs": ["pin names: no_netlist"]}}),
+            ("e", "c", {"blockers": {"board": None, "items": {}}})]
+    assert ec.blocker_lines(rows) == [
+        "blockers c: boards not judged: no MCU 2; no reason given 1 | inputs "
+        "missing: pin names: no_netlist 1 | items not judged: x 3 on 2 board(s)"]
+
+
+def test_sweep_prints_blockers_and_stores_them(tmp_path, monkeypatch, capsys):
+    cache = _planted(tmp_path, monkeypatch, NOTHING)
+    monkeypatch.setattr(ec, "fetch", lambda c, b: None)
+    monkeypatch.setattr(ec, "_raw", lambda m, w: [{"id": "p", "rev_a": {}, "rev_b": {}}])
+    ec.main(["sweep", "p", "--cache", str(cache)])
+    out = capsys.readouterr().out
+    assert ("blockers planted: boards not judged: no part of its kind 1 | "
+            "items not judged: none") in out
+    (tmp_path / "c").mkdir()
+    cache2 = _planted(tmp_path / "c", monkeypatch, CRASH)
+    r = ec.sweep(cache2, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
+    assert r["blockers"]["board"] == "crashed"

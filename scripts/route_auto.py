@@ -163,8 +163,9 @@ def _dsn_track_bans(staged: Path, dsn: Path, bg: geom.BoardGeom) -> list[dict]:
         return []
     text, done = routelib.dsn_apply_track_bans(
         dsn.read_text(encoding="utf-8"),
-        routelib.dru_track_bans(dru.read_text(encoding="utf-8"),
-                                list(bg.copper_layers)))
+        routelib.dru_track_bans(
+            dru.read_text(encoding="utf-8"), list(bg.copper_layers),
+            layer_names=getattr(bg, "layer_user_names", None)))
     if done:
         dsn.write_text(text, encoding="utf-8")
     return done
@@ -274,7 +275,8 @@ def _plane_carried(bg: geom.BoardGeom) -> set[str]:
     with traces across another net's
     thermal pour (bb-ldo: 25.6 mm of GND on F.Cu through the +3V3 pour,
     -2.6 % of the effective area)."""
-    return {z.net for z in bg.zones_of() if z.net and z.filled}
+    return {z.net for z in bg.zones_of()
+            if z.net and z.filled and not z.teardrop}
 
 
 def _finish_targets(unrouted: list[str], rip: list[tuple[str, str]],
@@ -679,6 +681,20 @@ def _restore_teardrops(bp, staged: Path, work: Path, td: list) -> int:
             "filter_ratio", "curved")}},
         work, worker=SCRIPTS / "lib" / "teardrop_swig.py")
     return len(uu) - len(res.get("missing") or [])
+
+
+def _teardrops_back(bp, cli, staged: Path, work: Path, td: list, *,
+                    parity: bool) -> tuple[int, dict | None]:
+    """_restore_teardrops, then a refill and a fresh DRC when it turned any
+    back on: the setting makes no copper, KiCad builds the teardrop zones
+    on a refill, and the report's DRC has to see them (6-layer bench: 12
+    restored, then 0 drops and 12 dfm_ring_breakout until refilled).
+    Returns (restored, drc or None when nothing was restored)."""
+    n = _restore_teardrops(bp, staged, work, td)
+    if not n:
+        return 0, None
+    kc.run_drc(cli, staged, refill=True, save_board=True)
+    return n, kc.run_drc(cli, staged, parity=parity, all_track_errors=True)
 
 
 def _pre_index(pre: dict) -> dict:
@@ -1099,7 +1115,10 @@ def run(argv: list[str] | None = None):
             maze_facts.pop("drc", None)
 
     # 6. sanity + swap the routed board in
-    teardrops_restored = _restore_teardrops(bp, staged, work, td_vias)
+    teardrops_restored, td_drc = _teardrops_back(
+        bp, cli, staged, work, td_vias, parity=sch.is_file())
+    if td_drc is not None:
+        drc = td_drc
     bg2 = geom.BoardGeom.from_file(staged)
     tracks_after = len(bg2.tracks_of())
     if fr_ok and tracks_after <= tracks_before \

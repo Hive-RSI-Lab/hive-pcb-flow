@@ -3,6 +3,7 @@ under paste (#475). Known answers on small planted-fault boards; the slow
 test cross-checks the mask-merge decision against kicad-cli's F.Mask."""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -12,7 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+import check_paste  # noqa: E402
 import check_wicking  # noqa: E402
+from _boards import stock_footprints  # noqa: E402
 
 SMD = '(layers "F.Cu" "F.Paste" "F.Mask")'
 LAYERS = """(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (9 "F.Adhes" user)
@@ -165,6 +168,56 @@ def test_exposed_pad_vias_are_left_to_check_ep_paste(tmp_path):
     pcb = _board(tmp_path, _setup(tent=("no", "no")), _qfn(), _ep_vias())
     kinds, _, seen = _kinds(pcb)
     assert kinds == [] and seen["ep_vias_skipped"] == 4
+
+
+def _stock_flipped(lib, name, x=20, y=20):
+    """A stock KiCad footprint at (x, y), front and flipped to the back
+    (every F. layer to B. and back; the geometry needn't mirror)."""
+    root = stock_footprints()
+    mod = root and root / f"{lib}.pretty" / f"{name}.kicad_mod"
+    if not (mod and mod.is_file()):
+        pytest.skip("needs KiCad's footprint library")
+    first, rest = mod.read_text(encoding="utf-8").split("\n", 1)
+    body = (first + f"\n  (at {x} {y})\n"
+            + rest.replace('"REF**"', '"U1"', 1) + "\n")
+    flip = re.sub(r'"([FB])\.', lambda m: '"B.' if m[1] == "F" else '"F.',
+                  body)
+    return ((body, "F"), (flip, "B"))
+
+
+@pytest.mark.parametrize("lib,name,ep,own", [
+    ("Package_SO", "MSOP-8-1EP_3x3mm_P0.65mm_EP1.5x1.8mm_ThermalVias",
+     "9", 4),
+    ("Package_DFN_QFN", "QFN-44-1EP_9x9mm_P0.65mm_EP7.5x7.5mm_ThermalVias",
+     "45", 5)])
+def test_stock_thermal_via_exposed_pad_is_found_on_either_side(
+        tmp_path, lib, name, ep, own):
+    # hive-pcb-flow #1197: the stock footprint's far-side copy of the EP
+    # (the copper its vias land on) is as big as the EP; on a flipped part
+    # it is on the board's front and was taken as the exposed pad, so a
+    # board via in the real EP read as an open via in an ordinary pad.
+    # Its own via pads (#1198) are counted with it, for check_ep_paste.
+    for body, side in _stock_flipped(lib, name):
+        pcb = _board(tmp_path, _setup(tent=("no", "no")), body,
+                     _via(20, 20))
+        kinds, _, seen = _kinds(pcb)
+        assert kinds == [], side
+        assert seen["ep_vias_skipped"] == own + 1, side
+        pads = check_paste.read_pads(pcb)[0]["U1"]
+        assert check_paste.exposed_pad(pads)["number"] == ep, side
+
+
+def test_a_via_in_an_ordinary_pad_of_a_flipped_part_still_warns(tmp_path):
+    # the quiet twin: a board via in a lead pad of the same flipped part
+    (_, _), (body, _) = _stock_flipped(
+        "Package_SO", "MSOP-8-1EP_3x3mm_P0.65mm_EP1.5x1.8mm_ThermalVias")
+    m = re.search(r"\(pad \"1\" smd \w+\s+\(at (\S+) ([^\s)]+)", body)
+    pcb = _board(tmp_path, _setup(tent=("no", "no")), body,
+                 _via(20 + float(m[1]), 20 + float(m[2]), size=0.3,
+                      drill=0.15))
+    kinds, _, seen = _kinds(pcb)
+    assert "wick_via_in_pad" in kinds
+    assert seen["ep_vias_skipped"] == 4
 
 
 def test_kicad8_list_form_tenting(tmp_path):

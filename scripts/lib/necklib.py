@@ -6,10 +6,14 @@ those rules first (#924); route_escape and route_auto read them here too, so
 a fine-pitch power ball gets out at every stage, not only at close.
 
 board_necks(pcb, bg, neck_rules) -> {net: {layer: [(zone, width)]}}. A zone
-is the footprint's courtyard (what the rule's intersectsCourtyard reads) cut
-to NECK_REACH_MM round the net's own pads of that part on the layer, so a
-neck stays the pad's escape check_current accepts (its 1 mm pad-exit bound),
-not a narrow trace across the part.
+is where a track at the rule's width meets the footprint's courtyard: KiCad's
+intersectsCourtyard reads the track's copper, not its centre line, so the
+courtyard grows by half that width, less NECK_OVERLAP_MM (#1140: the way from
+C216's +3V3 pad to its via ends 0.02 mm past the courtyard edge, where the
+bare courtyard held it to the net's full width). The zone is cut to
+NECK_REACH_MM round the net's own pads of that part on the layer, so a neck
+stays the pad's escape check_current accepts (its 1 mm pad-exit bound), not
+a narrow trace across the part.
 
 neck_width(necks, net, layer, shape) -> the narrowest neck width whose zone
 holds the whole shape (a point, a track's centre line), or None.
@@ -24,6 +28,8 @@ from shapely import affinity
 
 NECK_REACH_MM = 0.75          # #924, how far past its pads a neck may run:
 #                               inside check_current's 1 mm pad exit
+NECK_OVERLAP_MM = 0.02        # #1140, how far a neck track's copper still
+#                               reaches into the courtyard at the zone's edge
 
 
 def courtyard_abs(f):
@@ -37,7 +43,8 @@ def courtyard_abs(f):
 
 def board_necks(pcb: Path, bg, neck_rules: list) -> dict:
     """{net: {layer: [(zone, width)]}} for the .kicad_dru's courtyard-held
-    width rules (route_critical.dru_neck_rules); {} without any."""
+    width rules (route_critical.dru_neck_rules); {} without any. A centre
+    line inside a zone keeps a track of the zone's width on the courtyard."""
     if not neck_rules:
         return {}
     import placelib
@@ -47,12 +54,13 @@ def board_necks(pcb: Path, bg, neck_rules: list) -> dict:
         cy = courtyard_abs(fps.get(r["ref"]))
         if cy is None or cy.is_empty:
             continue
+        held = cy.buffer(max(r["min_mm"] / 2 - NECK_OVERLAP_MM, 0.0))
         for layer in bg.copper_layers:
             pads = [p.poly for p in bg.pads_of(r["net"], layer)
                     if p.ref == r["ref"]]
             if not pads:
                 continue
-            zone = cy.intersection(
+            zone = held.intersection(
                 shapely.union_all(pads).buffer(NECK_REACH_MM))
             if not zone.is_empty:
                 out.setdefault(r["net"], {}).setdefault(layer, []).append(

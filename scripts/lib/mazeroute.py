@@ -25,6 +25,11 @@ Router.reroute(net, region, ...) rip other signal nets' copper in a box,
                                  ripped net may end with more islands than it
                                  had (#927)
 Router.corridor(net, a, b, hw)   the route as a polygon, for a pour (#926)
+
+A net's routes keep off the layers the board's .kicad_dru disallows its
+tracks on, and take no via where it disallows those (#1140: Rules.bans);
+a disallow rule whose condition the reader can't follow is named on stderr
+and in Router.unread_rules, and left to DRC.
 """
 from __future__ import annotations
 
@@ -55,6 +60,7 @@ PRES_START = 1.0    # PathFinder: the price of a cell another net uses...
 PRES_GROW = 1.5     # ...grows this much each round
 HIST_STEP = 0.5     # and a cell shared at the end of a round keeps this
 REROUTE_TRIES = 6    # orders reroute tries before it gives up
+_WARNED: set = set()   # unread DRU rules already named on stderr
 
 
 def _side_union(side: dict):
@@ -69,28 +75,70 @@ def _merge(*sides: dict) -> dict:
     return out
 
 
+def _bounds_area(poly) -> float:
+    x0, y0, x1, y1 = poly.bounds
+    return (x1 - x0) * (y1 - y0)
+
+
+def _clip(side: dict, win) -> dict:
+    """The side's polygons cut to box win, as polygons; a layer with none
+    left in it is dropped."""
+    out: dict = {}
+    for layer, ps in side.items():
+        for p in ps:
+            if not p.intersects(win):
+                continue
+            for q in shapely.get_parts(p.intersection(win)):
+                if q.geom_type == "Polygon" and q.area > 0:
+                    out.setdefault(layer, []).append(q)
+    return out
+
+
 class Router:
     """Routes on one board, each route an obstacle to the next."""
 
     def __init__(self, bg, *, rules=None, layers=None, grid: float = GRID,
                  margin: float = MARGIN, via_cost_mm: float = VIA_COST_MM,
-                 max_nodes: int = 3_000_000):
+                 max_nodes: int = 3_000_000, spokes: bool = False):
         self.bg = bg
         self.rules = rules or rf.board_rules(Path(bg.path), bg)
         self.layers = list(layers) if layers else rf.routable_layers(bg)
         bad = [x for x in self.layers if x not in bg.copper_layers]
         if bad:
             raise CheckError(f"not copper layers of this board: {bad}")
-        self.obs = rf.Obstacles(bg)
+        self.obs = rf.Obstacles(bg, spokes=spokes)
         self.g = grid
         self.margin = margin
         self.via_cost_mm = via_cost_mm
         self.max_nodes = max_nodes
         self._conn = 0
         # power, pour and rule-width nets are never ripped (route_finish's
-        # keep_nets): their copper is sized by rule
-        self.keep_nets = ({z.net for z in bg.zones_of()}
-                          | set(self.rules.net_width) | {""})
+        # keep_nets): their copper is sized by rule. A teardrop is no pour.
+        self.keep_nets = (rf.pour_nets(bg) | set(self.rules.net_width)
+                          | set(getattr(self.rules, "sized_nets", ()))
+                          | {""})
+        bans = getattr(self.rules, "bans", None)
+        self.unread_rules = list(bans.unread) if bans else []
+        new = [r for r in self.unread_rules if r not in _WARNED]
+        if new:
+            _WARNED.update(new)
+            print("mazeroute: the .kicad_dru's disallow rule(s) "
+                  f"{', '.join(new)} have a condition this router doesn't"
+                  " read: routes may break them, and DRC will say",
+                  file=sys.stderr)
+
+    def net_layers(self, net: str) -> list:
+        """The router's layers the net's tracks may use: the .kicad_dru's
+        disallow rules keep some nets off some (#1140)."""
+        return self.rules.net_layers(net, self.layers)
+
+    def _on(self, net: str) -> str:
+        """The net's layers, for an error."""
+        on = self.net_layers(net)
+        off = [ly for ly in self.layers if ly not in on]
+        return (", ".join(on) or "no layer") + (
+            f" (the .kicad_dru keeps {net} off {', '.join(off)})"
+            if off else "")
 
     # ------------------------------------------------------------ ends
 
@@ -113,6 +161,12 @@ class Router:
                     if ly not in self.layers:
                         raise CheckError(f"end {s!r}: {ly} is not a routable"
                                          f" layer ({', '.join(self.layers)})")
+                    if layer and ly not in self.net_layers(net):
+                        raise CheckError(
+                            f"end {s!r}: the .kicad_dru disallows {net}'s"
+                            f" tracks on {ly}; name the point on one of"
+                            f" {', '.join(self.net_layers(net)) or '-'},"
+                            " or with no layer")
                     side.setdefault(ly, []).append(
                         Point(x, y).buffer(self.g * 0.75, quad_segs=4))
                 continue
@@ -197,7 +251,7 @@ class Router:
         hit = self.find(net, sa, sb, width)
         if hit is None:
             raise CheckError(f"route {net} {a} -> {b}: no path on "
-                             f"{', '.join(self.layers)} at the board's rules")
+                             f"{self._on(net)} at the board's rules")
         ops = hit[0]
         if pull:
             ops = pulled_ops(hit[2], hit[1], ops,
@@ -225,13 +279,35 @@ class Router:
 
     # --------------------------------------------------------- islands
 
-    def islands(self, net: str) -> list[dict]:
+    def islands(self, net: str, scraps: bool = True,
+                ends: bool = False) -> list[dict]:
         """The net's copper as it stands in this router: the board's, less
         what is ripped (obs.hidden), plus what is routed (obs.added), as
         [{layer: [polygons]}]. Each island also lists its pads' count under
-        the key None."""
+        the key None. scraps=False leaves out the islands of zone fill alone
+        with no pad: fill a move cut off from its pads, which the refill
+        redoes or KiCad's island removal drops, so no route need join it
+        (#1140).
+        ends=True gives what a route may end on: a via the rest of the net
+        meets on one of its layers alone is left out of that layer's list
+        (its other layers keep it). A route ending on it there would leave
+        it met on one layer, which KiCad 10 calls dangling (via_dangling),
+        and the prune can't take it while the route hangs on it; ending on
+        the copper that meets it instead, the via goes (#1140: the R2A flip
+        on pd_trigger, whose join ended on the disk of a via a rip had left
+        on B.Cu alone). Meeting as part_repair._via_free counts it: copper
+        that touches it, teardrops not; a pad or via meeting it on two or
+        more layers keeps it whole. Teardrops are no end: a refill makes
+        them again from the copper they flare, so a route ending in one
+        alone is left hanging, or on the via the teardrop flares (#1140:
+        with only the via left out, that join ended in the via's B.Cu
+        teardrop, inside its disk and 0.26 mm off the track's centre line,
+        so it held the via again). They still join their island, so
+        islands and pad counts are as without."""
         cu = list(self.bg.copper_layers)
-        pieces: list[tuple[frozenset, object, bool]] = []
+        pieces: list[tuple[frozenset, object, bool, bool]] = []
+        vias: list[int] = []         # the pieces that are vias
+        tear: set = set()            # teardrop fill: meets no via
         for it in self.obs.items + self.obs.added:
             if it.net != net or (it.uuid and it.uuid in self.obs.hidden):
                 continue
@@ -243,10 +319,15 @@ class Router:
             if ly and not shape.is_empty:
                 is_pad = it.uuid is None and it.conn < 0 \
                     and it.shape.geom_type == "Polygon" and not it.tied
-                pieces.append((ly, shape, is_pad))
-        for znet, layer, poly in self.obs.fills:
+                if it.hole is not None and it.half > 0:
+                    vias.append(len(pieces))
+                pieces.append((ly, shape, is_pad, False))
+        tds = getattr(self.obs, "fill_teardrop", ())
+        for k, (znet, layer, poly) in enumerate(self.obs.fills):
             if znet == net:
-                pieces.append((frozenset({layer}), poly, False))
+                if k < len(tds) and tds[k]:
+                    tear.add(len(pieces))
+                pieces.append((frozenset({layer}), poly, False, True))
         parent = list(range(len(pieces)))
 
         def find(i):
@@ -256,28 +337,52 @@ class Router:
             return i
 
         tree = shapely.STRtree([p[1] for p in pieces]) if pieces else None
-        for i, (ly, shape, _) in enumerate(pieces):
+        for i, (ly, shape, _, _) in enumerate(pieces):
             for j in tree.query(shape, predicate="intersects"):
                 j = int(j)
                 if j > i and ly & pieces[j][0]:
                     parent[find(j)] = find(i)
+        alone: dict[int, str] = {}   # via -> the one layer it is met on
+        for i in vias if ends else ():
+            met: set = set()
+            for j in tree.query(pieces[i][1], predicate="intersects"):
+                both = pieces[i][0] & pieces[int(j)][0]
+                if int(j) == i or int(j) in tear or not both:
+                    continue
+                if len(both) > 1:
+                    break
+                met |= both
+            else:
+                if len(met) == 1:
+                    alone[i] = next(iter(met))
         groups: dict[int, dict] = {}
-        for i, (ly, shape, is_pad) in enumerate(pieces):
-            g = groups.setdefault(find(i), {None: 0})
+        live: set = set()
+        for i, (ly, shape, is_pad, is_fill) in enumerate(pieces):
+            r = find(i)
+            g = groups.setdefault(r, {None: 0})
             g[None] += is_pad
+            if not is_fill:
+                live.add(r)
+            if ends and i in tear:
+                continue
             for layer in ly:
-                g.setdefault(layer, []).append(shape)
-        return list(groups.values())
+                if alone.get(i) != layer:
+                    g.setdefault(layer, []).append(shape)
+        return [g for r, g in groups.items() if scraps or r in live]
 
     def join_islands(self, net: str, want: int, near=None,
                      width=None) -> list:
         """Route between the net's islands until it has at most `want`,
         nearest pair first (to `near`'s centre when given); committed ops.
         Islands without a pad join too: a ripped track leaves stubs that
-        would hang dead otherwise."""
+        would hang dead otherwise; an island of zone fill alone does not
+        (islands scraps=False). Each pair is tried in a window round its
+        smaller island first, the rest of the net cut to it, then over the
+        whole of the net as before: a net with a plane spans the board, and
+        a grid of the whole board for every try cost minutes (#1140)."""
         ops: list = []
         for _ in range(64):
-            isl = self.islands(net)
+            isl = self.islands(net, scraps=False, ends=True)
             if len(isl) <= want:
                 return ops
             sides = [{k: v for k, v in i.items() if k is not None}
@@ -292,17 +397,41 @@ class Router:
                     if best is None or d < best[0]:
                         best = (d, i, j)
             _, i, j = best
-            others = _merge(*[s for k, s in enumerate(sides) if k != i])
-            hit = self.find(net, sides[i], others, width)
+            hit = self._join_near(net, sides, polys, i, j, width)
+            if hit is None:
+                others = _merge(*[s for k, s in enumerate(sides) if k != i])
+                hit = self.find(net, sides[i], others, width)
             if hit is None:
                 hit = self.find(net, sides[j], _merge(
                     *[s for k, s in enumerate(sides) if k != j]), width)
             if hit is None:
                 raise CheckError(f"{net}: {len(isl)} islands, no path joins"
-                                 f" them on {', '.join(self.layers)}")
+                                 f" them on {self._on(net)}")
             self.commit(hit[0])
             ops += hit[0]
         raise CheckError(f"{net}: islands won't join")
+
+    def _join_near(self, net, sides, polys, i, j, width):
+        """join_islands' local try: from the smaller of islands i and j to
+        the rest of the net cut to a box round it, wide enough to hold the
+        other island's nearest copper and a margin past it; None when the
+        box would hold the whole net (the full try is the same) or no path
+        is found in it."""
+        whole = shapely.union_all(polys).bounds
+        gap = polys[i].distance(polys[j])
+        for a in sorted((i, j), key=lambda k: _bounds_area(polys[k])):
+            x0, y0, x1, y1 = polys[a].bounds
+            r = gap + self.margin
+            win = box(x0 - r, y0 - r, x1 + r, y1 + r)
+            if win.covers(box(*whole)):
+                continue
+            rest = _clip(_merge(*[s for k, s in enumerate(sides) if k != a]),
+                         win)
+            if rest:
+                hit = self.find(net, sides[a], rest, width)
+                if hit is not None:
+                    return hit
+        return None
 
     # --------------------------------------------------------- reroute
 
@@ -343,7 +472,8 @@ class Router:
         net back to as few islands as it had; in shuffled orders until one
         works (#927). Returns (removed uuids, added ops, {net: most islands
         it may end with}), with the router's state at that order's end."""
-        before = {net: len(self.islands(net))}
+        # counted as join_islands counts them: fill scraps left out
+        before = {net: len(self.islands(net, scraps=False))}
         rip = self.ripped_by(region, net, keep)
         if not rip:
             raise CheckError(
@@ -352,7 +482,7 @@ class Router:
                 " than its net's width stay)")
         victims = list(dict.fromkeys(it.net for it in rip))
         for v in victims:
-            before[v] = len(self.islands(v))
+            before[v] = len(self.islands(v, scraps=False))
         uuids = [it.uuid for it in rip]
         held_hidden, held_added, held_conn = set(self.obs.hidden), \
             list(self.obs.added), self._conn
@@ -408,6 +538,9 @@ class Router:
         grids = [self.grid(net, a, b, win, w) for net, a, b, w in prepared]
         gr0 = grids[0]
         K, ny, nx = len(self.layers), gr0.ny, gr0.nx
+        # a grid has only the layers its net may use (#1140): its layer kk
+        # is the router's lk[n][kk]
+        lk = [[self.layers.index(ly) for ly in gr.layers] for gr in grids]
         base = [[np.frombuffer(c, np.float64).reshape(ny, nx).copy()
                  for c in gr.cost] for gr in grids]
         hist = [np.zeros((ny, nx)) for _ in range(K)]
@@ -435,7 +568,7 @@ class Router:
             via = np.zeros((ny, nx), bool)
             for (i, j, k), nxt in zip(path, path[1:] + [None]):
                 if k >= 0:
-                    line[k][j, i] = True
+                    line[lk[n][k]][j, i] = True
                 if k < 0 or (nxt is not None and nxt[2] != k):
                     via[j, i] = True
             out = [ndimage.binary_dilation(m, disk(r)) if m.any() else m
@@ -445,10 +578,10 @@ class Router:
                 out = [o | vm for o in out]
             return out
 
-        def own(path):
+        def own(path, n):
             cells = [np.zeros((ny, nx), bool) for _ in range(K)]
             for i, j, k in path:
-                for kk in (range(K) if k < 0 else [k]):
+                for kk in (range(K) if k < 0 else [lk[n][k]]):
                     cells[kk][j, i] = True
             return cells
 
@@ -464,9 +597,9 @@ class Router:
                         for k in range(K):
                             occ[k] += cl[k]
                 gr = grids[n]
-                gr.cost = [array("d", (base[n][k] * (1 + hist[k])
+                gr.cost = [array("d", (base[n][kk] * (1 + hist[k])
                                        * (1 + pres * occ[k])).tobytes())
-                           for k in range(K)]
+                           for kk, k in enumerate(lk[n])]
                 path = self.search(gr, a, b)
                 if path is None:
                     raise CheckError(f"route_group {net}: no path even with"
@@ -475,7 +608,7 @@ class Router:
                 claim[n] = claims(path, n)
             shared = 0
             for n, path in enumerate(paths):
-                mine = own(path)
+                mine = own(path, n)
                 for m, cl in enumerate(claim):
                     if m == n:
                         continue
