@@ -53,7 +53,7 @@ PINS = {
     "hwde-led-test": "703f061b4277e434bddaa0acb388153ce3232eb6bd5e2908b44f78cdf7ae2b4f",
     "lite-main": "f0eaa97080a954c4ee601dae622a5676f2fbeb6302d1d88f86b4524fcd76d085",
     "minuet-v3": "e1c4903bd360390f8786155a5f9c137cc8eef7afd1ceae341b482720ec77c89d",
-    "oasis-v0-2": "81fba40c41d2a7fa4f17c0213d01cd784a5b235a63b305b27482b35929ac6b27",
+    "oasis-v0-2": "138769bf3fc27498927ed64acaf9afd812ae4177a3d6b3b1bf017df6caaf0f8b",
     "ultra-front": "bddfc3abdc82eec9cfdd6da10a1773b658e7b9fae2f54729f2f45aa20990159a",
 }
 # pins:end

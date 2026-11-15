@@ -424,7 +424,7 @@ def _models_local(pcb: Path, model_dirs=()):
     resolve = cmf.resolver(pcb)
     libs = [*kc.model_libs(pcb.resolve().parent), *map(Path, model_dirs)]
     facts = {"models_missing": {}, "unreadable": {}, "hidden_only": []}
-    out, mesh_tris = {}, {}
+    out, mesh_tris, seen = {}, {}, {}
     for ref, pos, angle, back, pads, models in cmf.footprints(pcb):
         parts, shown = [], False
         for path, offset, scale, rotate, hidden in models:
@@ -455,8 +455,13 @@ def _models_local(pcb: Path, model_dirs=()):
                 parts.append((Path(path).name, mesh_tris[key]))
         if not parts and models and not shown:
             facts["hidden_only"].append(ref)
-        out[ref] = (pos, angle, back, pads, parts)
-    return out, facts
+        seen[ref] = seen.get(ref, 0) + 1
+        out[(ref, seen[ref])] = (pos, angle, back, pads, parts)
+    # a reference several footprints share (KiCad's REF** on logos and
+    # holes) keeps each body, keyed ref#n, and none is matched to a courtyard
+    # or a constraint by that reference, since it can't say whose it is
+    return {(r if seen[r] == 1 else f"{r}#{n}"): v
+            for (r, n), v in out.items()}, facts
 
 
 def _placed(ref, pos, angle, back, t, thickness, synthetic=False) -> Body:

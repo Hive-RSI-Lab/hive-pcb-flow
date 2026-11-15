@@ -221,6 +221,19 @@ def test_datasheet_antenna_area_replaces_the_guess(tmp_path):
         "ESP32-WROOM-32E-N4", "", check_antenna.load_modules())[1]["keepout"]
 
 
+def test_a_courtyard_wider_than_the_outline_widens_the_area(tmp_path):
+    """#1188: oasis's WROOM-02 courtyard is 19.5 mm across an 18 mm module.
+    Copper inside the courtyard beside the antenna is still in the clearance
+    round it, so the area spans the courtyard's width: a 19.5 mm courtyard on
+    the WROOM-32E's 18 mm outline gives x 20.25..39.75."""
+    body = _module("30 10", "ESP32-WROOM-32E").replace(
+        "(start -9 -13) (end 9 13)", "(start -9.75 -13) (end 9.75 13)")
+    payload, _ = _antenna(_pcb(tmp_path, body))
+    mod = payload["checked"][0]["modules"][0]
+    assert mod["antenna_from"] == "datasheet"
+    assert mod["antenna_bbox"] == [20.25, -2.75, 39.75, 3.44]
+
+
 def test_a_wroom_1_value_on_a_1u_sized_footprint_keeps_the_guess(tmp_path):
     """#1188: netscore's U1 is a WROOM-1 value on a WROOM-1U footprint
     (courtyard 19.6 x 20.5). The datasheet's 25.5 mm outline doesn't fit a

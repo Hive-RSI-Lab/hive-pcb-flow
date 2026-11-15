@@ -199,7 +199,8 @@ def _datasheet_geometry(f, pads, row, ko) -> dict | None:
     longer extent matched to outline_mm): the one by pad 1 (`end: pin1`), the
     one away from it (`opposite_pin1`), or the longer pad-free run
     (`pad_free`). The module edge is the courtyard edge moved in by half the
-    courtyard's excess over the outline length. None when the courtyard is
+    courtyard's excess over the outline length; across the axis the area is
+    the outline's width or the courtyard's, whichever is wider. None when the courtyard is
     shorter than the outline by more than OUTLINE_SLACK_MM along its length
     (a value naming the module on another variant's footprint, such as a
     WROOM-1 value on a WROOM-1U footprint): the caller falls back to the
@@ -244,7 +245,11 @@ def _datasheet_geometry(f, pads, row, ko) -> dict | None:
     else:
         e = (cx1 if side == "+x" else cy1) - inset
         a0, a1, k0 = e - depth, e, e + beyond
-    lo, hi = mid - half, mid + half
+    # across the axis the area spans the outline or the courtyard, whichever
+    # is wider: copper inside the footprint's own courtyard beside the
+    # antenna is still inside the clearance Espressif and Raytac ask round it
+    c_lo, c_hi = (cy0, cy1) if along_x else (cx0, cx1)
+    lo, hi = min(mid - half, c_lo), max(mid + half, c_hi)
 
     def rect(u0, u1, v0, v1):
         u0, u1 = min(u0, u1), max(u0, u1)

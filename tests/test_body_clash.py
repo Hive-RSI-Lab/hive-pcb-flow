@@ -541,3 +541,23 @@ def test_a_socket_model_alone_is_not_judged_for_its_chip(tmp_path):
     _, _, facts = _kinds(pcb)
     assert "U1" in facts["not_judged"] and "chip" in facts["not_judged_why"]["U1"]
     assert facts["bodies"] == 1                 # the socket itself is judged
+
+
+def test_footprints_sharing_ref_star_star_are_each_their_own_body(tmp_path):
+    """bedlift rev_b: four logos all REF** were each measured against one
+    REF** courtyard, 20 to 87 mm away. Each keeps its body, keyed REF**#n,
+    and none is held to a courtyard it can't be told is its own."""
+    post = _wrl(tmp_path / "post.wrl", POST)
+    pcb = _board(tmp_path, _fp("REF**", 20, 20, post, cy=4),
+                 _fp("REF**", 80, 80, post, cy=4))
+    kinds, _, facts = _kinds(pcb)
+    assert "body_past_courtyard" not in kinds and facts["bodies"] == 2
+
+
+def test_planted_two_ref_star_star_bodies_overlapping_still_clash(tmp_path):
+    post = _wrl(tmp_path / "post.wrl", POST)
+    pcb = _board(tmp_path, _fp("REF**", 50, 50, post, cy=4),
+                 _fp("REF**", 53, 50, post, cy=4))
+    kinds, viols, _ = _kinds(pcb)
+    v = next(x for x in viols if x["kind"] == "body_clash")
+    assert v["refs"] == ["REF**#1", "REF**#2"]
