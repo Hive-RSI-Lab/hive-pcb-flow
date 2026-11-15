@@ -174,7 +174,10 @@ A pin on a net of unknown voltage is not a finding (counted in facts); a
 supply pin on one is named in not_judged by rail, since nothing compared it
 (#601). A connected pad the extraction's pinout has no row for is
 rating_unrated. A board where nothing could be compared with known volts
-reports nothing_to_judge. Facts `parts_rated_unextracted` names each part
+reports nothing_to_judge, led by the reason that kept out the most parts (no
+part number, a passive with no voltage field, no datasheet read, a datasheet
+with no pin rating, or no known voltage on its nets), and facts
+`parts_not_compared` lists each part under its reason (#1330). Facts `parts_rated_unextracted` names each part
 compared with no extraction behind it (a distributor's listing, a part-number
 voltage code or diode family, a package table), which pins_checked does not count (#1307).
 
@@ -1810,6 +1813,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     listing_compared, listing_skipped = listing_findings(
         board, exts, bom_by_lcsc, read_from, held_back, rated_by_ref, trusted,
         emit, out)
+    nothing, unjudged = (None, None) if checked_by_ref else \
+        why_nothing_judged(board, exts, out, volts)
     facts = {"parts_on_board": len(board), "extractions": sorted(exts),
              "keyed_by_mpn": by_mpn,
              "net_volts": {n: {"v": volts[n], "src": vsrc[n]}
@@ -1826,8 +1831,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                  f"{' ...' if len(pins) > 6 else ''})"
                  for net, pins in sorted(unknown_rails.items())]
              + clamp_not_judged,
-             "nothing_to_judge": None if checked_by_ref else
-             "no rating could be compared with a known voltage",
+             "nothing_to_judge": nothing,
+             "parts_not_compared": unjudged,
              "ambient": amb, "fuses": fuse_facts,
              "operating_range": temp_facts,
              "suspect_datasheets": suspect,
@@ -3249,6 +3254,54 @@ def _rating_source(tiers: set[str], b: dict, src: str,
     if "distributor" not in tiers:
         return src
     return f"{src}; {listing}" if "datasheet" in tiers else listing
+
+
+# Two-terminal parts rated by a field on their parts row (a voltage), not a
+# datasheet's pin table.
+PASSIVE_REF = re.compile(r"^(C|R|RN|D|LED|F|FB|L|Y|X|TVS|Z)\d", re.I)
+
+
+def why_nothing_judged(board: list[dict], exts: dict, vios: list[dict],
+                       volts: dict) -> tuple[str, dict[str, list[str]]]:
+    """Why a board where no rating met a known voltage judged nothing: each
+    connected part by the first thing that kept it out (#1330). A part the
+    check called unrated: no part number, a two-terminal part whose parts row
+    has no voltage field, a part number with no datasheet read, or a datasheet
+    read whose pins carry no rating it uses. Any other part had a rating or a
+    rule but no net it touches has a known voltage. The reason reads biggest
+    group first, with its count; the rest follow in brackets."""
+    unrated = {r for v in vios if v.get("kind") in
+               ("rating_unrated", "rating_no_attributes")
+               for r in v.get("refs") or () if r}
+    why: dict[str, list[str]] = {}
+    for b in sorted(board, key=lambda x: x["ref"]):
+        nets = set(b["pads"].values()) - {""}
+        if not nets:
+            continue
+        if b["ref"] not in unrated:
+            r = "no known voltage on its nets"
+        elif not (b["lcsc"] or b.get("mpn")):
+            r = "no part number"
+        elif PASSIVE_REF.match(b["ref"]) and len(nets) == 2:
+            r = "passive with no voltage field on its parts row"
+        elif b["lcsc"] in exts:
+            r = "datasheet read but no pin rating it can use"
+        else:
+            r = "no datasheet read for its part number"
+        why.setdefault(r, []).append(b["ref"])
+    if not why:
+        return "no connected part on the board", why
+    if not any(v for n, v in volts.items() if not is_ground(n)):
+        lead = "no net on the board has a known voltage; "
+    else:
+        lead = ""
+    total = sum(len(v) for v in why.values())
+    order = sorted(why.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    (top, refs), rest = order[0], order[1:]
+    text = f"{lead}{top} ({len(refs)} of {total} parts not compared)"
+    if rest:      # bracketed, so the corpus's blocker label is the top reason
+        text += " [also " + "; ".join(f"{r}: {len(v)}" for r, v in rest) + "]"
+    return text, why
 
 
 def ledger_facts(board: list[dict], exts: dict, vios: list[dict],

@@ -4,6 +4,7 @@ that it is not called a fault, and that the judged twin still judges."""
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -193,7 +194,48 @@ def test_extraction_with_no_pinout_is_unrated(tmp_path):
 
 def test_ratings_with_nothing_compared_is_nothing_to_judge(tmp_path):
     ws = _ws(tmp_path, [("U1", "C1", {"1": "VDD_MAIN"})], {"C1": MCU})
-    assert "no rating could be compared" in ratings_run(ws)["nothing_to_judge"]
+    p = ratings_run(ws)
+    assert p["nothing_to_judge"] == (
+        "no net on the board has a known voltage; no known voltage on its "
+        "nets (1 of 1 parts not compared)")
+    assert p["parts_not_compared"] == {"no known voltage on its nets": ["U1"]}
+
+
+def test_ratings_nothing_judged_names_each_reason(tmp_path):
+    """A board where no rating met a known voltage says why, part by part, in
+    the reasons the coverage breakdown uses (#1330): biggest group first."""
+    ws = _ws(tmp_path, [
+        ("U1", "", {"1": "+5V", "2": "GND"}),
+        ("U2", "", {"1": "+5V", "2": "GND"}),
+        ("U3", "C9", {"1": "+5V", "2": "GND"}),
+        ("U4", "C8", {"1": "+5V", "2": "GND"}),
+        ("C1", "C7", {"1": "+5V", "2": "GND"}),
+        ("U5", "C1", {"1": "VDD_X", "2": "GND"})],
+        {"C1": MCU, "C8": {"mpn": "BARE", "pinout": []}})
+    p = ratings_run(ws)
+    assert p["parts_not_compared"] == {
+        "no part number": ["U1", "U2"],
+        "no datasheet read for its part number": ["U3"],
+        "datasheet read but no pin rating it can use": ["U4"],
+        "passive with no voltage field on its parts row": ["C1"],
+        "no known voltage on its nets": ["U5"]}
+    nj = p["nothing_to_judge"]
+    assert nj == (
+        "no part number (2 of 6 parts not compared) [also datasheet read but "
+        "no pin rating it can use: 1; no datasheet read for its part number: "
+        "1; no known voltage on its nets: 1; passive with no voltage field on "
+        "its parts row: 1]")
+    from errata_corpus import blocker_label
+    assert blocker_label(nj) == "no part number"
+    assert not re.search(r"\b[UC]\d", nj)
+
+
+def test_ratings_judging_something_gives_no_reason(tmp_path):
+    ws = _ws(tmp_path, [("U1", "C1", {"1": "+3V3", "2": "GND"}),
+                        ("U2", "", {"1": "+3V3", "2": "GND"})], {"C1": MCU})
+    p = ratings_run(ws)
+    assert p.get("nothing_to_judge") is None
+    assert p.get("parts_not_compared") is None
 
 
 # ------------------------------------------- empty constraints: nothing judged
