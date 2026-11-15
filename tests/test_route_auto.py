@@ -769,3 +769,60 @@ def test_restored_teardrops_are_built_before_the_report_drc(tmp_path):
                                         parity=False)
     assert n == 1 and drc is not None and "counts" in drc
     assert tdl.read(routed, tdl.config(None)).drop_count >= 1
+
+
+# ---- row 129: per-ball escape keep-if-better ------------------------------
+
+def _seg(x0, y0, x1, y1, net, uid, layer="F.Cu", w=0.1):
+    return (f'  (segment (start {x0} {y0}) (end {x1} {y1}) (width {w}) '
+            f'(layer "{layer}") (net "{net}") (uuid "{uid}"))\n')
+
+
+def _escaped(tmp_path, extra="", name="b"):
+    """test_route_escape's 6 x 6 U1 with J1, /S0_0 (A1 at 18, 13) escaped by
+    a dog-bone: a stub to (18.4, 13.4) and a through via there."""
+    from test_route_escape import _via, board
+    dog = (_seg(18, 13, 18.4, 13.4, "/S0_0", "esc-s")
+           + _via(18.4, 13.4, "/S0_0", "esc-v"))
+    return board(tmp_path, extra=dog + extra, name=name)
+
+
+def test_escape_drop_takes_a_cut_off_balls_dog_bone(tmp_path):
+    """Planted fault: /S0_0 is unrouted and its ball's island is the ball
+    plus its own dog-bone, laid before routing: the dog-bone goes."""
+    bg = geom.BoardGeom.from_file(_escaped(tmp_path))
+    drops = route_auto._escape_drops(bg, ["/S0_0"], {"esc-s", "esc-v"})
+    assert drops == [{"ref": "U1", "ball": "A1", "net": "/S0_0",
+                      "uuids": ["esc-s", "esc-v"]}]
+
+
+def test_escape_drop_keeps_routed_joined_zoned_and_router_copper(tmp_path):
+    """Quiet twins: the same dog-bone stays when the net is routed, when
+    its island already reaches J1's pad, when a zone carries the net, and
+    when the copper is the router's own (not pre-routing)."""
+    bg = geom.BoardGeom.from_file(_escaped(tmp_path))
+    protect = {"esc-s", "esc-v"}
+    assert route_auto._escape_drops(bg, [], protect) == []
+    assert route_auto._escape_drops(bg, ["/S0_0"], set()) == []
+    assert route_auto._escape_drops(bg, ["/S1_1"], protect) == []
+    # a track from the dog-bone's stub end to J1's /S0_0 pad
+    j1 = [p for p in bg.pads_of(net="/S0_0") if p.ref == "J1"][0]
+    joined = _seg(18.4, 13.4, j1.center[0], j1.center[1], "/S0_0", "r1",
+                  layer="F.Cu")
+    bg2 = geom.BoardGeom.from_file(_escaped(tmp_path, joined, name="j"))
+    assert route_auto._escape_drops(bg2, ["/S0_0"], protect) == []
+    zone = ('  (zone (net "/S0_0") (layer "B.Cu") (uuid "z9")\n'
+            '    (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5)))\n  )\n')
+    bg3 = geom.BoardGeom.from_file(_escaped(tmp_path, zone, name="z"))
+    assert route_auto._escape_drops(bg3, ["/S0_0"], protect) == []
+
+
+def test_drop_pre_forgets_only_the_dropped_copper(tmp_path):
+    """The lost-copper audit must not report a drop escape_drops reports:
+    the dropped stub and via leave pre, another pre-routed track stays."""
+    other = _seg(30, 30, 31, 30, "/S5_5", "keep")
+    bg = geom.BoardGeom.from_file(_escaped(tmp_path, other))
+    pre = route_auto._preexisting(bg)
+    out = route_auto._drop_pre(pre, bg, {"esc-s", "esc-v"})
+    assert out["vias"] == []
+    assert [t[0] for t in out["tracks"]] == ["/S5_5"]

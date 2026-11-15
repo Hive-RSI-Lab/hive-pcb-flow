@@ -38,6 +38,12 @@ rules, pour pieces joined by a via, walled-in pads freed by ripping the
 fewest signal nets in the way - kept only if the board ends better
 (--no-maze-finish skips it).
 
+Before those finishes, a BGA ball the route left cut off on its own escape
+dog-bone (its net unrouted, its island reaching no other pad) loses the
+dog-bone, so the finishes route it from the bare pad (row 129); if the
+finished board is worse than the routed one before the drop, the drop is
+undone (facts.escape_drops; --keep-escapes skips it).
+
 Freerouting's own success signal is NEVER trusted (LEARNINGS [freerouting]):
 completion comes from the log's unrouted counts and the gate is kicad-cli DRC.
 
@@ -46,6 +52,7 @@ Contract:
       [--power-layers auto|"In1.Cu,In2.Cu"|none] [--max-rungs N]
       [--timeout-s S] [--work-dir DIR] [--out-report r.json] [--tries N]
       [--probe [--probe-passes N]] [--no-krt-finish] [--no-maze-finish]
+      [--keep-escapes]
   Freerouting runs single-threaded and sequential, so one board file routes
   the same way every time; a rebuilt board (fresh uuids, another DSN order)
   may not. --tries N also routes N-1 shuffled-order DSNs at the best rung,
@@ -805,6 +812,84 @@ def _maze_no_rip_retry(maze) -> dict:
     return facts
 
 
+def _ball_islands(bg, net: str) -> list[dict]:
+    """The net's tracks, vias and pads grouped into copper islands (same
+    layer and touching), each {"pads": [(ref, number)], "uuids": [...]}."""
+    items: list[tuple[set, object, tuple | None, str | None]] = []
+    for t in bg.tracks_of(net=net):
+        items.append(({t.layer}, t.poly, None, t.uuid))
+    for v in bg.vias_of(net=net):
+        items.append((set(v.layers), v.poly, None, v.uuid))
+    for p in bg.pads_of(net=net):
+        items.append((set(p.layers), p.poly, (p.ref, p.number), None))
+    parent = list(range(len(items)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            if items[i][0] & items[j][0] and \
+                    items[i][1].distance(items[j][1]) < 1e-4:
+                parent[find(j)] = find(i)
+    groups: dict[int, dict] = {}
+    for i, (_, _, pad, uuid) in enumerate(items):
+        g = groups.setdefault(find(i), {"pads": [], "uuids": []})
+        if pad:
+            g["pads"].append(pad)
+        elif uuid:
+            g["uuids"].append(uuid)
+    return list(groups.values())
+
+
+def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
+    """Escapes that leave their ball cut off after the route (row 129): a
+    BGA ball whose net DRC still calls unrouted, sitting on an island that
+    reaches no other pad of the net and holds copper laid before routing
+    (route_escape's dog-bone). Its dog-bone took room the finish needs and
+    joins nothing, so it goes before 5b/5c and the ball is routed from the
+    bare pad. A routed ball, an island that reaches another pad, a net a
+    zone carries and an island of the router's own copper are kept."""
+    import bgalib
+    bad = set(unrouted)
+    zoned = {z.net for z in bg.zones_of()}
+    out = []
+    for b in bgalib.find_bgas(bg):
+        nets = sorted({n for n in b.nets.values()
+                       if n in bad and n not in zoned})
+        for net in nets:
+            for isl in _ball_islands(bg, net):
+                if len(isl["pads"]) != 1 or isl["pads"][0][0] != b.ref:
+                    continue
+                if not protect.intersection(isl["uuids"]):
+                    continue
+                out.append({"ref": b.ref, "ball": isl["pads"][0][1],
+                            "net": net, "uuids": sorted(isl["uuids"])})
+    return out
+
+
+def _drop_pre(pre: dict, bg, uuids: set[str]) -> dict:
+    """pre without the copper the escape drop removed, so the lost-copper
+    audit does not count a drop it reports itself (facts.escape_drops)."""
+    gone_v = {(v.net, v.at, v.drill) for v in bg.vias_of()
+              if v.uuid in uuids}
+    gone_t = [t for t in bg.tracks_of() if t.uuid in uuids]
+
+    def dropped_track(net, layer, line):
+        return any(t.net == net and t.layer == layer
+                   and t.shape.buffer(PRE_TOL).covers(line) for t in gone_t)
+
+    def dropped_via(net, at, drill):
+        return any(n == net and abs(a[0] - at[0]) <= PRE_TOL
+                   and abs(a[1] - at[1]) <= PRE_TOL and abs(d - drill) <= PRE_TOL
+                   for n, a, d in gone_v)
+    return {"vias": [v for v in pre["vias"] if not dropped_via(*v)],
+            "tracks": [t for t in pre["tracks"] if not dropped_track(*t)]}
+
+
 def run(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pcb", required=True)
@@ -833,6 +918,10 @@ def run(argv: list[str] | None = None):
                     help="skip the KRT mop-up pass after the ladder")
     ap.add_argument("--no-maze-finish", action="store_true",
                     help="skip route_finish's maze pass after KRT")
+    ap.add_argument("--keep-escapes", action="store_true",
+                    help="keep every BGA dog-bone, even one the route left "
+                         "cut off (default: such a ball's escape is dropped "
+                         "before the finishes, row 129)")
     ap.add_argument("--finish-plane-nets", action="store_true",
                     help="let the KRT finish route nets a filled zone "
                          "carries (default: left to the maze finish's "
@@ -1068,20 +1157,90 @@ def run(argv: list[str] | None = None):
     ses_check = _ses_import_check(best_facts if fr_ok else None, drc)
     plane_skip = set() if args.finish_plane_nets else _plane_carried(bg)
 
-    # 5b. KRT pass: with a Freerouting result this is the mop-up (fine-pitch
-    # pads FR cannot fan out, sliver vias inside the hole-clearance floor);
-    # with NO usable Freerouting result it is the FALLBACK autorouter for
-    # the whole remainder. Kept only if the DRC strictly improves.
-    finish_facts = None
-    if not args.no_krt_finish:
-        finish_facts = _krt_finish(cli, staged, work, drc,
-                                   power_layers=power_layers,
-                                   skip_nets=plane_skip,
-                                   refill=has_zones,
-                                   parity=sch.is_file(),
-                                   timeout_s=min(args.timeout_s, 600))
-        if finish_facts and finish_facts.get("kept"):
-            drc = finish_facts.pop("drc")
+    # 5a. per-ball escape keep-if-better (row 129): a ball the route left
+    # cut off on its own dog-bone loses the dog-bone before the finishes,
+    # which then route it from the bare pad. Guarded: if the board after
+    # the finishes is worse than before the drop was made, the drop is
+    # undone and the finishes run on the board as routed.
+    escape_drops = None
+    drops = [] if args.keep_escapes else _escape_drops(
+        geom.BoardGeom.from_file(staged), _drc_unrouted(drc),
+        _protect_uuids(pre, geom.BoardGeom.from_file(staged)))
+    snap = snap_drc = snap_pre = None
+    if drops:
+        snap = work / "pre_escape_drop.kicad_pcb"
+        shutil.copy2(staged, snap)
+        snap_drc, snap_pre = drc, pre
+        gone = {u for d in drops for u in d["uuids"]}
+        pre = _drop_pre(pre, geom.BoardGeom.from_file(staged), gone)
+        route_edit.apply_ops(staged, [{"op": "remove", "uuid": u}
+                                      for u in sorted(gone)])
+        if has_zones:
+            kc.run_drc(cli, staged, refill=True, save_board=True)
+        drc = kc.run_drc(cli, staged, parity=sch.is_file(),
+                         all_track_errors=True)
+        escape_drops = {"balls": [{k: d[k] for k in ("ref", "ball", "net")}
+                                  for d in drops],
+                        "items_removed": len(gone),
+                        "unrouted_before": len(_drc_unrouted(snap_drc)),
+                        "kept": True}
+
+    def _finishes(drc):
+        # 5b. KRT pass: with a Freerouting result this is the mop-up
+        # (fine-pitch pads FR cannot fan out, sliver vias inside the
+        # hole-clearance floor); with NO usable Freerouting result it is
+        # the FALLBACK autorouter for the whole remainder. Kept only if the
+        # DRC strictly improves.
+        finish_facts = None
+        if not args.no_krt_finish:
+            finish_facts = _krt_finish(cli, staged, work, drc,
+                                       power_layers=power_layers,
+                                       skip_nets=plane_skip,
+                                       refill=has_zones,
+                                       parity=sch.is_file(),
+                                       timeout_s=min(args.timeout_s, 600))
+            if finish_facts and finish_facts.get("kept"):
+                drc = finish_facts.pop("drc")
+        # 5c. maze finish: what the ladder and KRT left unconnected (pads
+        # boxed in by neighbouring tracks, pour pieces with no via), routed
+        # one connection at a time at the board's rules; kept only if it
+        # helps.
+        maze_facts = None
+        if not args.no_maze_finish and (_drc_unrouted(drc)
+                                        or _err_counts(drc)):
+            import route_finish
+
+            def _maze(rip_board):
+                sbg = geom.BoardGeom.from_file(staged)
+                return route_finish.finish_staged(
+                    cli, staged, drc, parity=sch.is_file(), refill=has_zones,
+                    rip_errors=True, rip_board=rip_board,
+                    protect_uuids=_protect_uuids(pre, sbg),
+                    layers=(",".join(ly for ly in bg.copper_layers
+                                     if ly not in power_layers)
+                            if power_layers else "auto"))
+            maze_facts = _maze_no_rip_retry(_maze)
+            if maze_facts.get("kept"):
+                drc = maze_facts.pop("drc")
+            else:
+                maze_facts.pop("drc", None)
+
+        return drc, finish_facts, maze_facts
+
+    drc, finish_facts, maze_facts = _finishes(drc)
+    if snap is not None:
+        grade = (len(_drc_unrouted(drc)), sum(_err_counts(drc).values()))
+        base = (len(_drc_unrouted(snap_drc)),
+                sum(_err_counts(snap_drc).values()))
+        escape_drops["unrouted_after"] = grade[0]
+        if grade > base:
+            shutil.copy2(snap, staged)
+            pre = snap_pre
+            escape_drops["kept"] = False
+            escape_drops["undone_at"] = {"unrouted": grade[0],
+                                         "errors": grade[1]}
+            drc, finish_facts, maze_facts = _finishes(snap_drc)
+            escape_drops["unrouted_after_undo"] = len(_drc_unrouted(drc))
     if not fr_ok and not (finish_facts and finish_facts.get("kept")):
         if _all_timed_out(rungs):
             return _timeout_report(
@@ -1091,28 +1250,6 @@ def run(argv: list[str] | None = None):
         raise CheckError("Freerouting produced nothing usable and the KRT "
                          f"fallback did not improve the board; see {work} "
                          "(board untouched)")
-
-    # 5c. maze finish: what the ladder and KRT left unconnected (pads boxed
-    # in by neighbouring tracks, pour pieces with no via), routed one
-    # connection at a time at the board's rules; kept only if it helps.
-    maze_facts = None
-    if not args.no_maze_finish and (_drc_unrouted(drc) or _err_counts(drc)):
-        import route_finish
-
-        def _maze(rip_board):
-            sbg = geom.BoardGeom.from_file(staged)
-            return route_finish.finish_staged(
-                cli, staged, drc, parity=sch.is_file(), refill=has_zones,
-                rip_errors=True, rip_board=rip_board,
-                protect_uuids=_protect_uuids(pre, sbg),
-                layers=(",".join(ly for ly in bg.copper_layers
-                                 if ly not in power_layers)
-                        if power_layers else "auto"))
-        maze_facts = _maze_no_rip_retry(_maze)
-        if maze_facts.get("kept"):
-            drc = maze_facts.pop("drc")
-        else:
-            maze_facts.pop("drc", None)
 
     # 6. sanity + swap the routed board in
     teardrops_restored, td_drc = _teardrops_back(
@@ -1164,6 +1301,7 @@ def run(argv: list[str] | None = None):
             "krt_finish": finish_facts,
             "ses_import_check": ses_check,
             "maze_finish": maze_facts,
+            "escape_drops": escape_drops,
             "teardrops_restored": teardrops_restored,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),
             "neckdowns_snapped": dedup_facts.get("neckdowns_snapped", 0),
