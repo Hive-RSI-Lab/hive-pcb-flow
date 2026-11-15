@@ -210,6 +210,12 @@ SILK_OVERLAP_ERROR_MM2 = 0.05
 GEOM_TOL_MM = 2e-3
 
 
+# KiCad's default arc error (Board Setup, 0.005 mm): a pour's knockout round
+# a hole is a polygon inside the circle, so a pour held 0.2 mm off a hole
+# reads 0.195 mm in the gerber (minuet's USB-C pegs). Hole-to-copper allows it.
+KICAD_ARC_ERROR_MM = 0.005
+
+
 def _below(value: float, limit: float, tol: float = GEOM_TOL_MM) -> bool:
     """Is `value` genuinely under `limit` (not just tessellation noise)?"""
     return value + tol < limit
@@ -1036,6 +1042,7 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
     if not drilled or names is None:   # a drill-only fab: no copper to measure
         return
     reach = max(d[4] for d in drilled)
+    tol = GEOM_TOL_MM + KICAD_ARC_ERROR_MM
     band: list = []
     for name in names():
         if name not in ("F.Cu", "B.Cu"):
@@ -1053,13 +1060,13 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
             if not gaps:
                 continue
             d = min(gaps)
-            if _below(d, hard):
+            if _below(d, hard, tol):
                 vios.append(checklib.violation(
                     CHECK, "error", pos, name, None, [],
                     f"{what} {d:.4f} mm from copper on {name}, JLC minimum "
                     f"{hard} mm", SOURCE, kind="dfm_hole_to_track",
                     distance_mm=checklib.rnd(d), min_mm=hard, hole=what))
-            elif _below(d, lo):
+            elif _below(d, lo, tol):
                 band.append((d, pos, name))
     if lo_p is not None and hard_p is not None:
         _band_warning(vios, band, "dfm_hole_to_track",

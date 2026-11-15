@@ -121,6 +121,19 @@ def test_a_track_near_a_non_plated_hole_fails_at_its_own_figure():
         ("dfm_hole_to_track", 0.2, "non-plated hole")]
 
 
+def test_a_pour_held_at_the_npth_figure_reads_inside_it_by_arc_error_and_is_quiet():
+    """minuet's USB-C pegs: a GND pour 0.2 mm off, drawn by KiCad as a
+    polygon inside the circle, reads 0.1948 mm in the gerber."""
+    h = _hole(plated=False)
+    assert _track_vios(_fab([_track(h, 0.1948)], [h])) == []
+
+
+def test_a_pour_past_the_arc_error_still_fails():
+    h = _hole(plated=False)
+    assert [v["distance_mm"] for v in _track_vios(_fab([_track(h, 0.19)], [h]))] \
+        == [pytest.approx(0.19, abs=2e-3)]
+
+
 def _board(*pads):
     """A stand-in board: pads as (kind, x, y, drill). geom keeps every
     np_thru_hole pad in npth, copper or not; the rest are pads_of() only."""
