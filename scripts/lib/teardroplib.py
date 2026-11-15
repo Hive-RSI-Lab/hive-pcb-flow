@@ -53,6 +53,7 @@ from pathlib import Path
 
 import sexpdata
 from shapely.geometry import Point, Polygon
+from shapely.ops import unary_union
 
 DEFAULTS = {
     "enabled": False, "required": None,
@@ -101,6 +102,74 @@ def _enabled(node) -> bool:
         return False
     en = _kid(td, "enabled")
     return en is not None and _strs(en)[:1] == ["yes"]
+
+
+# ------------------------------------------------------------- item params
+
+# What one via or pad carries in its (teardrops ...) block, under the names
+# the constraints block uses; route_edit's add_via "teardrops" takes these
+# (#1138). two_tracks / prefer_zones are KiCad's allow_two_segments /
+# prefer_zone_connections, both on for a new item (checked on 10.0.6).
+ITEM_PARAMS = dict({k: DEFAULTS[k] for k in (
+    "length_ratio", "max_length_mm", "width_ratio", "max_width_mm",
+    "filter_ratio", "curved")}, two_tracks=True, prefer_zones=True)
+_FILE_KEYS = {
+    "best_length_ratio": "length_ratio", "max_length": "max_length_mm",
+    "best_width_ratio": "width_ratio", "max_width": "max_width_mm",
+    "filter_ratio": "filter_ratio", "curved_edges": "curved",
+    "allow_two_segments": "two_tracks",
+    "prefer_zone_connections": "prefer_zones",
+}
+
+
+def params_of(node) -> dict | None:
+    """A via or pad node's teardrop block as ITEM_PARAMS names plus
+    "enabled"; None when it has no block (KiCad writes one only for an item
+    with teardrops enabled, so None means off, at the defaults)."""
+    td = _kid(node, "teardrops")
+    if td is None:
+        return None
+    out = {"enabled": False}
+    for c in td[1:]:
+        if not isinstance(c, list) or not c:
+            continue
+        key = _tok(c[0])
+        if key == "enabled":
+            out["enabled"] = _strs(c)[:1] == ["yes"]
+        elif key in _FILE_KEYS:
+            name = _FILE_KEYS[key]
+            if isinstance(ITEM_PARAMS[name], bool):
+                out[name] = _strs(c)[:1] == ["yes"]
+            elif _nums(c):
+                out[name] = _nums(c)[0]
+    return out
+
+
+def via_params(root) -> dict:
+    """Every via's uuid -> params_of (None: no teardrop block)."""
+    out = {}
+    for v in _kids(root, "via"):
+        u = _kid(v, "uuid")
+        if u is not None and _strs(u):
+            out[_strs(u)[0]] = params_of(v)
+    return out
+
+
+def same_params(want: dict, got: dict | None, tol: float = 1e-4) -> bool:
+    """True when got (params_of) is enabled and has every value in want (a
+    key the block lacks reads as ITEM_PARAMS)."""
+    if not got or not got.get("enabled"):
+        return False
+    for k, w in want.items():
+        if k == "enabled":
+            continue
+        g = got.get(k, ITEM_PARAMS.get(k))
+        if isinstance(w, bool) or isinstance(g, bool):
+            if bool(w) != bool(g):
+                return False
+        elif g is None or abs(float(w) - float(g)) > tol:
+            return False
+    return True
 
 
 # ------------------------------------------------------------- config
@@ -237,8 +306,14 @@ def _fine_pitch_refs(bg, limit: float) -> set[str]:
     return out
 
 
-def read(pcb, cfg: dict | None = None) -> Board:
-    """Every candidate item with its joins, held layers and drops."""
+def read(pcb, cfg: dict | None = None, area=None) -> Board:
+    """Every candidate item with its joins, held layers and drops.
+
+    area (a shapely geometry, board mm) keeps only the items whose copper
+    meets it, and the drops that meet those: a local check (part_repair's
+    new vias, #1138) at a fraction of the whole board's cost. An item near
+    its edge can then count a drop that belongs to a neighbour left out;
+    give the area a margin round the items that matter."""
     import geom
     cfg = cfg or dict(DEFAULTS)
     text = Path(pcb).read_text(encoding="utf-8")
@@ -284,6 +359,12 @@ def read(pcb, cfg: dict | None = None) -> Board:
         items.append(Item(kind, p.net or "", p.center, p.poly, p.layers, ring,
                           min(p.size), pad_en.get(key, False),
                           ref=p.ref, number=p.number))
+    if area is not None:
+        items = [it for it in items if it.poly.intersects(area)]
+        near = unary_union([it.poly for it in items]).buffer(0.05) \
+            if items else None
+        drop_zones = [d for d in drop_zones
+                      if near is not None and d[2].intersects(near)]
 
     fr = float(cfg.get("filter_ratio") or DEFAULTS["filter_ratio"])
     for it in items:

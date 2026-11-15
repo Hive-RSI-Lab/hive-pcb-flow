@@ -11,6 +11,9 @@ hand from the copper:
   J1.2 (GND, PTH)    only the B.Cu pour -> nothing to drop
   SMD pads           out of scope by default
   => 3 items, 3 teardrop zones; a second run adds none.
+A via's teardrop settings read back as route_edit's add_via takes them
+(params_of, same_params; #1138), and read(area=) for part_repair's local
+check.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from shapely.geometry import Point
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -36,6 +40,8 @@ RAW = FIX / "led.kicad_pcb"
 DROPPED = FIX / "led_dropped.kicad_pcb"
 VIA_A = "via@18.831,20.753"
 VIA_B = "via@13.200,21.740"
+UUID_A = "7a3b7045-1c37-463a-9e27-6b82ec68a88e"
+UUID_B = "d150125a-0f47-42a1-b4eb-36069d276772"
 CAPS = {"board": {"drill_wander_mm": 0.075, "min_ring_abs_mm": 0.05}}
 
 FLEX_AREA = """\t(zone
@@ -127,6 +133,34 @@ def test_dropped_board_every_item_has_its_drop_and_nothing_left_to_do():
         assert by[n].missing() == []
     todo, done = tdl.select(b, tdl.config(None))
     assert todo == [] and len(done) == 3     # already dropped: untouched
+
+
+def test_item_params_read_from_the_via_and_compared():
+    """A via's (teardrops ...) block as route_edit's add_via takes it
+    (#1138): led_dropped's vias are at the defaults, led's have none."""
+    import sexpdata
+    got = tdl.via_params(sexpdata.loads(DROPPED.read_text(encoding="utf-8")))
+    assert got == {UUID_A: dict(tdl.ITEM_PARAMS, enabled=True),
+                   UUID_B: dict(tdl.ITEM_PARAMS, enabled=True)}
+    assert tdl.via_params(sexpdata.loads(RAW.read_text(encoding="utf-8"))) \
+        == {UUID_A: None, UUID_B: None}
+    a = got[UUID_A]
+    assert tdl.same_params(tdl.ITEM_PARAMS, a)
+    assert tdl.same_params({"length_ratio": 0.50004}, a)
+    assert not tdl.same_params({"length_ratio": 0.6}, a)
+    assert not tdl.same_params({"curved": True}, a)
+    assert not tdl.same_params({}, None)
+    assert not tdl.same_params({}, dict(a, enabled=False))
+    # a key the block lacks reads as ITEM_PARAMS
+    assert tdl.same_params({"two_tracks": True}, {"enabled": True})
+    assert not tdl.same_params({"two_tracks": False}, {"enabled": True})
+
+
+def test_read_an_area_keeps_its_items_and_their_drops():
+    b = tdl.read(DROPPED, None, area=Point(18.8312, 20.7525).buffer(0.3))
+    assert [it.name for it in b.items] == [VIA_A]
+    assert b.items[0].drops == {"F.Cu": 1} and not b.items[0].missing()
+    assert b.drop_count == 1
 
 
 def test_config_refuses_unknown_keys():

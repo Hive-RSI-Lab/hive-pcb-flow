@@ -27,6 +27,7 @@ import env  # noqa: E402
 import geom  # noqa: E402
 import place_edit  # noqa: E402
 import route_edit  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 PD_DIR = REPO / "tests" / "fixtures" / "stages" / "pd_trigger" / "route"
@@ -521,6 +522,36 @@ def test_resolve_fill_vias_picks_vias_only(bg):
     assert [f["uuid"] for f in (flat[j] for j in spans[0])] == vias
     assert {f["filled"] for f in (flat[j] for j in spans[0])} == {True}
     assert {flat[j]["filled"] for j in spans[1]} == {False}
+
+
+# ------------------------------------------------------------ teardrops (#1138)
+
+_VIA = {"op": "add_via", "at": [1, 1], "size": 0.6, "drill": 0.3, "net": "A"}
+
+
+@pytest.mark.parametrize("td, msg", [
+    ([0.5], "must be an object"),
+    ({"length": 0.5}, "unknown keys"),
+    ({"curved": "yes"}, "must be true or"),
+    ({"two_tracks": 1}, "must be true or"),
+    ({"length_ratio": 0}, "positive"),
+    ({"max_length_mm": -1}, "positive"),
+    ({"width_ratio": True}, "positive"),
+    ({"filter_ratio": "0.9"}, "positive"),
+])
+def test_validate_refuses_teardrops(td, msg):
+    with pytest.raises(CheckError, match=msg):
+        _v(dict(_VIA, teardrops=td))
+
+
+def test_resolve_spells_out_every_teardrop_setting(bg):
+    flat, _ = route_edit.resolve_ops(bg, _v(
+        dict(_VIA, teardrops={"length_ratio": 0.6, "curved": True}),
+        dict(_VIA, teardrops={}), _VIA))
+    assert flat[0]["teardrops"] == dict(tdl.ITEM_PARAMS, length_ratio=0.6,
+                                        curved=True)
+    assert flat[1]["teardrops"] == tdl.ITEM_PARAMS
+    assert "teardrops" not in flat[2]
 
 
 def test_route_edit_fill_vias_apply(kicad, pd):

@@ -20,14 +20,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
-def _params(item, p: dict, mm) -> None:
+def set_params(item, p: dict, mm) -> None:
+    """Set a via's or pad's teardrop parameters (teardroplib.ITEM_PARAMS
+    names; mm converts mm to IU) and enable its teardrops. A ratio or size
+    left out takes route_teardrops' default; two_tracks / prefer_zones are
+    set only when given, else the item keeps its own. route_swig's add_via
+    calls this too (#1138)."""
     item.SetTeardropBestLengthRatio(float(p.get("length_ratio", 0.5)))
     item.SetTeardropMaxLength(mm(float(p.get("max_length_mm", 1.0))))
     item.SetTeardropBestWidthRatio(float(p.get("width_ratio", 1.0)))
     item.SetTeardropMaxWidth(mm(float(p.get("max_width_mm", 2.0))))
     item.SetTeardropMaxTrackWidth(float(p.get("filter_ratio", 0.9)))
     item.SetTeardropCurved(bool(p.get("curved", False)))
+    if "two_tracks" in p:
+        item.SetTeardropAllowSpanTwoTracks(bool(p["two_tracks"]))
+    if "prefer_zones" in p:
+        item.SetTeardropPreferZoneConnections(bool(p["prefer_zones"]))
     item.SetTeardropsEnabled(True)
+
+
+def get_params(item, to_mm) -> dict:
+    """The item's teardrop settings as set_params takes them, plus
+    "enabled" (to_mm converts IU to mm)."""
+    return {"enabled": bool(item.GetTeardropsEnabled()),
+            "length_ratio": float(item.GetTeardropBestLengthRatio()),
+            "max_length_mm": to_mm(item.GetTeardropMaxLength()),
+            "width_ratio": float(item.GetTeardropBestWidthRatio()),
+            "max_width_mm": to_mm(item.GetTeardropMaxWidth()),
+            "filter_ratio": float(item.GetTeardropMaxTrackWidth()),
+            "curved": bool(item.GetTeardropCurved()),
+            "two_tracks": bool(item.GetTeardropAllowSpanTwoTracks()),
+            "prefer_zones": bool(item.GetTeardropPreferZoneConnections())}
 
 
 def run(job: dict) -> dict:
@@ -42,7 +65,7 @@ def run(job: dict) -> dict:
             if t.GetClass() != "PCB_VIA":
                 continue
             if t.m_Uuid.AsString() in want_v:
-                _params(t, job.get("params") or {}, mm)
+                set_params(t, job.get("params") or {}, mm)
                 want_v.discard(t.m_Uuid.AsString())
                 nv += 1
         want_p = {(r, n, round(x, 3), round(y, 3))
@@ -55,7 +78,7 @@ def run(job: dict) -> dict:
                 key = (ref, pad.GetNumber(), round(pcbnew.ToMM(pos.x), 3),
                        round(pcbnew.ToMM(pos.y), 3))
                 if key in want_p:
-                    _params(pad, job.get("params") or {}, mm)
+                    set_params(pad, job.get("params") or {}, mm)
                     want_p.discard(key)
                     np_ += 1
         missing = sorted(want_v) + [f"{r}.{n}@{x},{y}" for r, n, x, y in

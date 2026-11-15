@@ -16,7 +16,10 @@ pass. (`route_critical.py --nets` is NOT a routing scope - it feeds the
 Validated against the board's real nets and layers, applied on a scratch copy,
 re-parsed to confirm every add landed and every removed uuid is gone, then
 swapped in atomically. An absent removal uuid is a no-op, so re-applying an op
-list is safe. Find the uuid by matching the segment's `start`/`end` in the board
+list is safe. A via you replace keeps no teardrops unless you ask: give the
+new one `"teardrops":{"length_ratio":0.5, ...}` (teardroplib.ITEM_PARAMS
+names, a key left out takes its default; `{}` is all defaults) and the next
+refill builds the drops. Find the uuid by matching the segment's `start`/`end` in the board
 text - violations carry coordinates, not always uuids.
 
 Widening: take the width from `max(required, the same-net copper abutting both
