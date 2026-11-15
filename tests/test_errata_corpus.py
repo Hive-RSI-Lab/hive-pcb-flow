@@ -442,18 +442,18 @@ def test_a_pre_kicad6_board_is_upgraded_once_into_the_run_dir(tmp_path, monkeypa
     b = {"id": "old", "rev_a": {"pcb": "old.kicad_pcb"}}
     empty = tmp_path / "run" / "constraints.json"
     empty.parent.mkdir()
-    got = ec._pcb(b, "rev_a", repo, empty)
+    got = ec._pins_pcb(b, "rev_a", repo, empty)
     assert got == empty.parent / "rev_a-upgraded.kicad_pcb"
     assert calls and calls[0][1:3] == ["pcb", "upgrade"]
     assert "footprint" in got.read_text() and "module" in src.read_text()
-    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 1
+    assert ec._pins_pcb(b, "rev_a", repo, empty) == got and len(calls) == 1
     src.write_text("(kicad_pcb (version 20171130) (module y))")
-    ec._pcb(b, "rev_a", repo, empty)
+    ec._pins_pcb(b, "rev_a", repo, empty)
     assert len(calls) == 2                       # source changed: redone
     # mdbt-micro-50q, zxdiag (#1123): a KiCad 6/7 board's references are
     # fp_text, which placelib reads none from, so it is upgraded too
     src.write_text("(kicad_pcb (version 20211014) (footprint y))")
-    ec._pcb(b, "rev_a", repo, empty)
+    ec._pins_pcb(b, "rev_a", repo, empty)
     assert len(calls) == 3
 
 
@@ -484,7 +484,7 @@ def test_the_sweep_reads_a_board_with_its_schematics_pin_names(tmp_path,
     import pin_backfill as pb
     repo, b, empty, calls = _pins_repo(tmp_path, monkeypatch)
     before = (repo / "b.kicad_pcb").read_bytes()
-    got = ec._pcb(b, "rev_a", repo, empty)
+    got = ec._pins_pcb(b, "rev_a", repo, empty)
     assert got == empty.parent / "rev_a-pins.kicad_pcb"
     u2 = {p["num"]: p["fn"] for fp in pb.footprints(got.read_text("utf-8"))
           if fp["ref"] == "U2" for p in fp["pads"]}
@@ -492,9 +492,9 @@ def test_the_sweep_reads_a_board_with_its_schematics_pin_names(tmp_path,
     assert (repo / "b.kicad_pcb").read_bytes() == before   # checkout untouched
     rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
     assert rep["status"] == "written"
-    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 1
+    assert ec._pins_pcb(b, "rev_a", repo, empty) == got and len(calls) == 1
     (repo / "b.kicad_sch").write_text("(kicad_sch (changed))")
-    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 2
+    assert ec._pins_pcb(b, "rev_a", repo, empty) == got and len(calls) == 2
 
 
 def test_a_schematic_that_is_not_the_boards_names_nothing(tmp_path,
@@ -505,11 +505,11 @@ def test_a_schematic_that_is_not_the_boards_names_nothing(tmp_path,
     renet = {f'{fp["ref"]}.{p["num"]}': "OTHER" for fp in fps
              for p in fp["pads"]}
     repo, b, empty, calls = _pins_repo(tmp_path, monkeypatch, renet)
-    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    assert ec._pins_pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
     assert not (empty.parent / "rev_a-pins.kicad_pcb").exists()
     rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
     assert rep["status"] == "mismatch"
-    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    assert ec._pins_pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
     assert len(calls) == 1                       # the verdict is kept too
 
 
@@ -520,7 +520,7 @@ def test_a_board_whose_netlist_will_not_export_is_read_as_it_is(tmp_path,
     def fail(*a):
         raise SystemExit("export failed")
     monkeypatch.setattr(ec, "_netlist", fail)
-    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    assert ec._pins_pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
     rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
     assert rep["status"] == "no_netlist"
 
@@ -886,3 +886,28 @@ def test_coverage_counts_ratings_parts_by_source():
         "coverage check_ratings: judged 2, nothing_to_judge 0, judged nothing "
         "(unsaid) 0, with not_judged items 0, crashed 0; parts judged 6 "
         "(distributor 2, part_number_code 2, datasheet 1, value 1)"]
+
+
+def test_the_sweep_gives_footprints_their_boms_part_numbers(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    pcb = repo / "ctrl.kicad_pcb"
+    pcb.write_text(
+        '(kicad_pcb (version 20240108)\n'
+        '  (footprint "R_0603" (layer "F.Cu")\n'
+        '    (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))\n'
+        '    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))))\n')
+    (repo / "ctrl-bom.csv").write_text("Designator,LCSC\nR1,C25804\n")
+    before = {p.name: p.read_bytes() for p in repo.iterdir()}
+    b = {"id": "x", "rev_a": {"pcb": "ctrl.kicad_pcb"}}
+    empty = tmp_path / "run" / "constraints.json"
+    empty.parent.mkdir()
+    got = ec._pcb(b, "rev_a", repo, empty)
+    assert got == empty.parent / "rev_a-partnum.kicad_pcb"
+    assert '(property "LCSC" "C25804"' in got.read_text()
+    rep = json.loads((empty.parent / "rev_a-partnum.json").read_text())
+    assert rep["counts"]["added_from"]["bom"] == 1
+    assert {p.name: p.read_bytes() for p in repo.iterdir()} == before
+    mtime = got.stat().st_mtime_ns
+    assert ec._pcb(b, "rev_a", repo, empty) == got
+    assert got.stat().st_mtime_ns == mtime     # reused, not rewritten

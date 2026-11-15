@@ -298,7 +298,60 @@ def _netlist(b: dict, rev: str, repo: Path, empty: Path) -> Path:
 
 
 def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
-    """The board a check reads: the revision's file (brought to KiCad 8 by
+    """The board a check reads: _pins_pcb's (the revision's file brought to
+    KiCad 8, with its schematic's pin names), then with the part numbers the
+    board's own sources name for the footprints that carry none, as
+    partnum_backfill gives them: the schematic's symbol fields, the BOM files
+    in the board's folder, parts.json. Every board gets the same step; it
+    only adds an LCSC or MPN field where the footprint has no such field.
+    The copy sits in the run dir (`{rev}-partnum.kicad_pcb`, with what
+    partnum_backfill said in `{rev}-partnum.json`), nothing is written into
+    the checkout, and it is reused while its inputs are unchanged."""
+    import hashlib
+    base = _pins_pcb(b, rev, repo, empty)
+    dest = empty.parent / f"{rev}-partnum.kicad_pcb"
+    report = empty.parent / f"{rev}-partnum.json"
+    stamp = dest.with_suffix(".src")
+    net = None
+    sch = repo / b[rev]["sch"] if b[rev].get("sch") else None
+    if sch is not None and sch.is_file():
+        try:
+            net = _netlist(b, rev, repo, empty)
+        except (SystemExit, subprocess.SubprocessError, OSError):
+            net = None
+    else:
+        sch = None
+    digest = hashlib.sha256(
+        base.read_bytes() + b"\0" + str(repo / b[rev]["pcb"]).encode()
+        + b"\0" + (net.read_bytes() if net else b"")
+        + b"\0" + (SCRIPTS / "partnum_backfill.py").read_bytes()).hexdigest()
+    if stamp.is_file() and stamp.read_text().split("\n")[0] == digest:
+        return dest if stamp.read_text().split("\n")[1:2] == ["written"] \
+            else base
+    stamp.unlink(missing_ok=True)
+    dest.unlink(missing_ok=True)
+    cmd = [sys.executable, str(SCRIPTS / "partnum_backfill.py"),
+           "--pcb", str(base), "--src-pcb", str(repo / b[rev]["pcb"]),
+           "--repo", str(repo), "--out", str(dest),
+           "--out-report", str(report)]
+    if net:
+        cmd += ["--netlist", str(net)]
+    if sch:
+        cmd += ["--sch", str(sch)]
+    subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    try:
+        status = json.loads(report.read_text(encoding="utf-8"))["status"]
+    except (OSError, ValueError, KeyError):
+        status = "error"
+    if status != "written" or not dest.is_file():
+        dest.unlink(missing_ok=True)
+        status = status if status != "written" else "error"
+    stamp.write_text(f"{digest}\n{status}")
+    return dest if status == "written" else base
+
+
+def _pins_pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The revision's file (brought to KiCad 8 by
     _upgraded where older), with the pin names its own schematic gives the
     pads that carry none, as pin_backfill gives a board board_init made
     before #1220. Every board gets the same step, from its own schematic
