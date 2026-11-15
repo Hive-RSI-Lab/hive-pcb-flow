@@ -1452,6 +1452,59 @@ def test_ordinary_board_does_not_walk_up(tmp_path_factory):
     assert checklib.find_constraints(pcb) is None
 
 
+# A working copy elsewhere in a board folder that keeps state_snapshots/
+# (a03cb 2026-11-15): lumina PCB-0004 routes in work/p7/kb3/, usb-buck PCB-0002
+# in kicad/route/auto/; both boards' files sit in kicad/constraints.json.
+
+def _work_tree(tmp_path_factory, name, sub, cons):
+    root = tmp_path_factory.mktemp(name)
+    board = root / "PCB-000X-A_board"
+    (board / "state_snapshots" / "tag").mkdir(parents=True)
+    (board / "kicad").mkdir()
+    (board / "kicad" / "constraints.json").write_text(
+        json.dumps(cons), encoding="utf-8")
+    copy = board.joinpath(*sub.split("/"))
+    copy.mkdir(parents=True, exist_ok=True)
+    bg = _board(tmp_path_factory, name + "b", _buck_out(0.2))
+    pcb = copy / "routed.kicad_pcb"
+    pcb.write_text(bg.path.read_text(encoding="utf-8"), encoding="utf-8")
+    return board, pcb
+
+
+def test_work_copy_keeps_real_hits_at_the_declared_load(tmp_path_factory):
+    # lumina work/p7/kb3/routed: the board states 1 A, so the 0.2 mm
+    # output is judged at 1 A, not screened at the part's rating
+    board, pcb = _work_tree(tmp_path_factory, "workcp", "work/p7/kb3",
+                            {"power": [{"net": "+3V3", "current_a": 1.0}]})
+    cf, p = _run_found(pcb)
+    assert cf == (board / "kicad" / "constraints.json").resolve()
+    [v] = [v for v in p["violations"] if v["kind"] == "undersized_track"]
+    assert v["load_source"] == "+3V3 power entry (L1 output)"
+    assert "no declared load" not in v["msg"]
+
+
+def test_route_copy_finds_the_boards_low_load(tmp_path_factory):
+    # usb-buck kicad/route/auto: the board states 0.1 A - quiet, no screen hit
+    board, pcb = _work_tree(tmp_path_factory, "routecp", "kicad/route/auto",
+                            {"power": [{"net": "+3V3", "current_a": 0.1}]})
+    cf, p = _run_found(pcb)
+    assert cf == (board / "kicad" / "constraints.json").resolve()
+    assert p["violations"] == []
+
+
+def test_walk_stops_at_the_board_folder(tmp_path_factory):
+    # a file above the board folder belongs to something else
+    from lib import checklib
+    root = tmp_path_factory.mktemp("walkstop")
+    (root / "constraints.json").write_text("{}", encoding="utf-8")
+    board = root / "B"
+    (board / "state_snapshots").mkdir(parents=True)
+    (board / "work" / "p1").mkdir(parents=True)
+    pcb = board / "work" / "p1" / "b.kicad_pcb"
+    pcb.write_text("", encoding="utf-8")
+    assert checklib.find_constraints(pcb) is None
+
+
 def test_snapshot_file_of_another_revision_is_a_mismatch(tmp_path_factory):
     # none of the file's power nets is on the copy: not judged, not screened
     _, pcb = _snapshot_tree(tmp_path_factory, "snapmis",
