@@ -284,12 +284,76 @@ AROUND = (_seg((4.4, 0), (6, 0), "D", "d8a") + _seg((6, 0), (6, -4), "D", "d8b")
 
 def test_dangling_keeps_a_dead_end_that_is_a_nets_only_link(tmp_path):
     """d1's two ends meet nothing, but d0 (from pad 4) and d4 (to U2's pad)
-    meet its middle: without d1, D falls in two, so it stays. With another
-    way round from pad 4 to U2, d1 goes, and d4 and d0 after it."""
+    meet its middle: without d1, D falls in two, so it stays, cut back to
+    the two joints (#1140). With another way round from pad 4 to U2, d1
+    goes, and d4 and d0 after it."""
     pcb, bg = _u1(tmp_path, U2D, "link")
+    cuts = {}
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, cuts=cuts) == ([], [])
+    was, now = cuts.pop("d1")
+    assert not cuts and (was.a, was.b) == ((3, -2), (5, -2))
+    assert (now.uuid, now.layer, now.width, now.a, now.b) \
+        == ("d1", "F.Cu", 0.25, (4, -2), (4.6, -2))
     assert pr._dangling(pcb, bg, {"D"}, seed=WIN) == ([], [])
+    # what a run leaves: dangling on the board as it is, cut back or not
+    assert pr._dead_on(pcb, bg, {"D"}) == {"d1"}
     pcb, bg = _u1(tmp_path, U2D + AROUND, "loop")
-    assert pr._dangling(pcb, bg, {"D"}, seed=WIN) == (["d1", "d4", "d0"], [])
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, cuts=cuts) \
+        == (["d1", "d4", "d0"], [])
+    assert cuts == {}
+
+
+def test_dangling_cuts_back_a_track_whose_partner_went(tmp_path):
+    """#1140 (R7, C216-C224): the run pushed c0 aside, so c1's end where c0
+    met it is dead, but a route of the run tees into c1, which alone joins
+    it to P6: c1 is cut back to the tee, as KiCad would leave no tail."""
+    pcb, bg = _u1(tmp_path, _fp("P6", 2, 4, "C") + _fp("P7", 3, 3, "C"),
+                  "tee")
+    tee = _add("C", (3, 3), (2, 3))
+    cuts = {}
+    assert pr._dangling(pcb, bg, {"C"}, seed=WIN, adds=[tee], cuts=cuts) \
+        == ([], [])
+    assert cuts == {}               # c0 holds both of c1's ends
+    assert pr._dangling(pcb, bg, {"C"}, seed=WIN, adds=[tee], cuts=cuts,
+                        gone={"c0"}) == ([], [])
+    was, now = cuts.pop("c1")
+    assert not cuts and (was.a, was.b, now.a, now.b) \
+        == ((2, 2.5), (2, 4), (2, 3), (2, 4))
+
+
+def test_dangling_cuts_the_routers_tail_past_its_joint(tmp_path):
+    """A route of the run from U2's pad that runs on past d1 to nothing is
+    the only link from U2 to D: it is cut back to d1 (by its add's index),
+    and d1, which it alone joins to d0, to the two joints."""
+    pcb, bg = _u1(tmp_path, _fp("U2", 4.6, -4, "D"), "over")
+    over = _add("D", (4.6, -4), (4.6, -1))
+    cuts = {}
+    assert pr._dangling(pcb, bg, {"D"}, seed=WIN, adds=[over], cuts=cuts) \
+        == ([], [])
+    assert sorted(cuts) == ["+0", "d1"]
+    assert (cuts["+0"][1].a, cuts["+0"][1].b) == ((4.6, -4), (4.6, -2))
+    assert (cuts["d1"][1].a, cuts["d1"][1].b) == ((4, -2), (4.6, -2))
+
+
+def test_set_ends_and_the_report_name_a_cut():
+    """A cut board track keeps its uuid: set_point moves the ends that
+    changed. The report counts the cuts."""
+    Seg = pr.route_cleanup.Seg
+    was = Seg("t1", "D", "F.Cu", 0.25, (3.0, -2.0), (5.0, -2.0))
+    assert pr._set_ends("t1", was, Seg("t1", "D", "F.Cu", 0.25, (4.0, -2.0),
+                                       (5.0, -2.0))) \
+        == [{"op": "set_point", "uuid": "t1", "which": "start",
+             "to": [4.0, -2.0]}]
+    assert [o["which"] for o in pr._set_ends("t1", was, Seg(
+        "t1", "D", "F.Cu", 0.25, (4.0, -2.0), (4.6, -2.0)))] \
+        == ["start", "end"]
+    note = pr._cut_note("t1", "D", "F.Cu", ((3, -2), (5, -2)),
+                        ((4, -2), (4.6, -2)))
+    assert note == {"uuid": "t1", "net": "D", "layer": "F.Cu",
+                    "from": [3, -2, 5, -2], "to": [4, -2, 4.6, -2]}
+    p = {"status": "pass", "board": "b", "refs": ["U1"], "ops": 1,
+         "applied": True, "shortened": [note]}
+    assert "Cut back 1 track with a dead end" in pr.report_md(p)
 
 
 def test_dangling_trims_the_routers_dead_tails(u1):

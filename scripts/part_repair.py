@@ -38,8 +38,10 @@ net back together, and keep the result only if the board got no worse.
      is. A track with an end that meets nothing of its net, a via that
      nothing meets on two of its layers; pours count, teardrops do not.
      The router's own dead tails are trimmed from its routes the same way.
-     What dangled on the base board stays, and so does a dead end that is
-     the only link between copper of its net: no removal splits a net.
+     What dangled on the base board stays. No removal splits a net: a
+     dead end that is the only link between copper of its net is cut back
+     instead, its dead end to the last copper it meets (a board track by
+     set_point, keeping its uuid).
   7. check: the routes go in, the board is refilled and DRC'd. The repair
      area is the windows, --margin round the copper pushed aside, and 1 mm
      round the copper the run added or removed. The run passes when no net
@@ -124,6 +126,8 @@ SHOWN = 40     # new violations listed in REPORT.md (all in part_repair.json)
 TOUCH = 1e-3   # mm: copper this close is one piece (as net_islands has it)
 NEAR = 0.05    # mm: a neighbour query's reach, past every rule's tol
 REPRUNE = 3    # peels after a refill, at most (#1140)
+CUT_MIN = 0.01  # mm: a dead end cut back leaves this much track, at least
+CUT_CAP = 4     # cuts of one track in one peel, at most
 RIP_FILE = "01-rip.route_edit.json"
 PLACE_FILE = "02-place.place_edit.json"
 ROUTE_FILE = "03-route.route_edit.json"
@@ -427,6 +431,17 @@ def _via_free(v, segs, arcs, pads, vias, fills, tol) -> bool:
     return len(hit) <= 1
 
 
+def _meet_at(line, g, last: bool) -> float:
+    """How far along `line` the copper core `g` meets it: the last (or,
+    last=False, the first) point of line inside or on g, else the point of
+    line nearest g."""
+    meet = line.intersection(g)
+    if not meet.is_empty:
+        ts = [line.project(Point(c)) for c in shapely.get_coordinates(meet)]
+        return max(ts) if last else min(ts)
+    return line.project(Point(shapely.shortest_line(line, g).coords[0]))
+
+
 def _net_copper(net, segs, vias, arcs, pads, fills, fixed) -> list:
     """_Cu pieces of one net: segs and vias (free unless their uid is in
     `fixed` or empty), and the arcs, pads and pour pieces, which stay."""
@@ -450,7 +465,7 @@ def _net_copper(net, segs, vias, arcs, pads, fills, fixed) -> list:
 
 
 def _dangling(pcb: Path, bg, nets, *, gone=(), adds=(), seed=None,
-              anchors=()) -> tuple[list, list]:
+              anchors=(), cuts: dict | None = None) -> tuple[list, list]:
     """The dead ends in `nets` on pcb, less `gone`, plus the `adds`
     (route_edit add ops), peeled off one by one as KiCad's DRC finds them:
     a track with an end that meets nothing of its net (route_cleanup
@@ -462,6 +477,11 @@ def _dangling(pcb: Path, bg, nets, *, gone=(), adds=(), seed=None,
     copper next to it, inside `seed` or not, so a dead chain goes to its
     end. A dead end that is the only link between copper it meets (no
     other way joins it across the net) stays: no removal splits a net.
+    Such a track is cut back instead, its dead end to the last copper it
+    meets (#1140: a route that tees into a track whose end lost its
+    partner), and `cuts`, when given, gets its uid (as the removals have
+    it) and its route_cleanup.Seg before and after, for the cut tracks
+    that stay.
     Returns (the removed uuids in order, the indices of the adds removed,
     sorted)."""
     cu = list(bg.copper_layers)
@@ -584,24 +604,99 @@ def _dangling(pcb: Path, bg, nets, *, gone=(), adds=(), seed=None,
             finally:
                 x.alive = True
 
+        def cut(x):
+            """Cut track x, which dangles but is the only link between
+            copper it meets, back from each dead end to the last copper
+            it meets there; False (x as it was) when no end is dead by
+            itself (one copper item meets both, KiCad's one-end rule), the
+            piece left would be shorter than CUT_MIN or would still
+            dangle, or something x met no longer meets it."""
+            s, line = x.item, x.core
+            if line.geom_type != "LineString":
+                return False
+            half = s.width / 2.0
+            hits = [m for m in touching(x) if m.alive]
+            nb = [m for m in near(x) if m.alive]
+            dead = [not any(m.core.distance(Point(p)) <= half + m.r + tol
+                            for m in nb) for p in (s.a, s.b)]
+            if not hits or not any(dead):
+                return False
+            lo, hi = 0.0, line.length
+            if dead[0]:
+                lo = min(_meet_at(line, m.core, last=True) for m in hits)
+            if dead[1]:
+                hi = max(_meet_at(line, m.core, last=False) for m in hits)
+            if hi - lo < CUT_MIN:
+                return False
+            a = tuple(round(v, 6) for v in line.interpolate(lo).coords[0])
+            b = tuple(round(v, 6) for v in line.interpolate(hi).coords[0])
+            if (a, b) == (tuple(s.a), tuple(s.b)):
+                return False
+            x.item = route_cleanup.Seg(s.uuid, s.net, s.layer, s.width, a, b)
+            x.core = route_cleanup._body(a, b)
+            x._grown, x.touch = None, None
+            if free(x) or not all(_cu_touch(x, m) for m in hits):
+                x.item, x.core = s, line
+                x._grown, x.touch = None, None
+                return False
+            return True
+
         start = [n for n in ns if n.free and (
             seed is None or shapely.dwithin(seed, n.core, n.r))]
         todo = deque(sorted(start, key=lambda n: n.uid))
         queued = {id(n) for n in todo}
+        short: dict = {}
+        ncut: dict = {}
         while todo:
             x = todo.popleft()
             queued.discard(id(x))
-            if not x.alive or not free(x) or splits(x):
+            if not x.alive or not free(x):
                 continue
-            x.alive = False
-            removed.append(x.uid)
+            if splits(x):
+                if x.kind != "seg" or ncut.get(id(x), 0) >= CUT_CAP:
+                    continue
+                was = x.item
+                if not cut(x):
+                    continue
+                # what met the tail it lost may dangle now
+                short.setdefault(id(x), (x, was))
+                ncut[id(x)] = ncut.get(id(x), 0) + 1
+            else:
+                x.alive = False
+                removed.append(x.uid)
             for m in sorted(near(x), key=lambda n: n.uid):
                 if m.alive and m.free and id(m) not in queued:
                     todo.append(m)
                     queued.add(id(m))
+        if cuts is not None:
+            cuts.update((x.uid, (was, x.item))
+                        for x, was in short.values() if x.alive)
     old = [u for u in removed if not u.startswith("+")]
     trimmed = sorted(int(u[1:]) for u in removed if u.startswith("+"))
     return old, trimmed
+
+
+def _dead_on(pcb: Path, bg, nets) -> set:
+    """The uuids of the tracks and vias of nets that dangle on pcb as it
+    is: what _dangling removes there or cuts back. A run leaves them."""
+    cuts: dict = {}
+    return set(_dangling(pcb, bg, nets, cuts=cuts)[0]) | set(cuts)
+
+
+def _set_ends(uuid: str, was, new) -> list:
+    """route_edit set_point ops that move track uuid's ends from where Seg
+    was has them to where Seg new has them (the same track, cut back)."""
+    return [{"op": "set_point", "uuid": uuid, "which": w, "to": list(q)}
+            for w, p, q in (("start", was.a, new.a), ("end", was.b, new.b))
+            if tuple(p) != tuple(q)]
+
+
+def _cut_note(uuid: str, net: str, layer: str, was, now) -> dict:
+    """One payload["shortened"] row: track uuid ("" for a route of this
+    run) cut back from the ends in was to those in now ([start, end])."""
+    return {"uuid": uuid, "net": net, "layer": layer,
+            "from": [_r(v) for q in was for v in q],
+            "to": [_r(v) for q in now for v in q]}
 
 
 def _made(ops: list, results: list, first: int) -> tuple[dict, set]:
@@ -1009,18 +1104,35 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     # each dead chain; what was dead on the base board stays
     seed = repair_area(reach, adds, ripped + [by_uuid[u] for u in pushed
                                               if u in by_uuid])
-    anchors = set(_dangling(base, bg0, nets)[0])
-    pruned, cut = _dangling(work, bgw, nets, gone=pushed, adds=adds,
-                            seed=seed, anchors=anchors)
+    anchors = _dead_on(base, bg0, nets)
+    cuts: dict = {}
+    pruned, trim = _dangling(work, bgw, nets, gone=pushed, adds=adds,
+                             seed=seed, anchors=anchors, cuts=cuts)
     payload["pruned"] = list(pruned)
-    payload["trimmed"] = [adds[i] for i in cut]
-    kept = [op for i, op in enumerate(adds) if i not in set(cut)] \
-        if cut else adds
-    route_ops = [{"op": "remove", "uuid": u}
-                 for u in dict.fromkeys(pushed + pruned)] + kept
-    payload["added"] = {
-        "tracks": sum(o["op"] == "add_track" for o in kept),
-        "vias": sum(o["op"] == "add_via" for o in kept)}
+    payload["trimmed"] = [adds[i] for i in trim]
+    # a dead tail the prune can't remove without splitting a net is cut
+    # back to its last joint (#1140): a board track by set_point, so it
+    # keeps its uuid, a route of this run in its add op; adds stays whole
+    # (the gate's area is round all the run put down)
+    moved = {u: c for u, c in cuts.items() if not u.startswith("+")}
+    shorter: dict = {}   # kept index -> (the add's ends before, now)
+    kept = []
+    for i, op in enumerate(adds):
+        if i in set(trim):
+            continue
+        c = cuts.get(f"+{i}")
+        if c:
+            op = dict(op, start=list(c[1].a), end=list(c[1].b))
+            shorter[len(kept)] = ((c[0].a, c[0].b), (c[1].a, c[1].b))
+        kept.append(op)
+
+    def ops_now():
+        return [{"op": "remove", "uuid": u}
+                for u in dict.fromkeys(pushed + pruned)] + [
+            o for u, (was, new) in moved.items()
+            for o in _set_ends(u, was, new)] + kept
+
+    route_ops = ops_now()
 
     # 7. check
     made: dict = {}
@@ -1036,7 +1148,7 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
 
     def gate_area():
         return repair_area(reach, adds, ripped + [
-            by_uuid[u] for u in dict.fromkeys(pushed + pruned)
+            by_uuid[u] for u in dict.fromkeys(pushed + pruned + list(moved))
             if u in by_uuid])
 
     def pour_nets(area):
@@ -1051,30 +1163,47 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     area = gate_area()
     late_nets = nets | pour_nets(area)
     extra = late_nets - nets
-    late_anchors = anchors | (set(_dangling(base, bg0, extra)[0])
-                              if extra else set())
+    late_anchors = anchors | (_dead_on(base, bg0, extra) if extra
+                              else set())
     drop: set = set()
     for _ in range(REPRUNE):
+        late: dict = {}
         dead = _dangling(work, bg1, late_nets, seed=area,
-                         anchors=late_anchors)[0]
-        if not dead:
+                         anchors=late_anchors, cuts=late)[0]
+        if not dead and not late:
             break
-        route_edit.apply_ops(work, [{"op": "remove", "uuid": u}
-                                    for u in dead])
-        pruned += [u for u in dead if u not in made]
-        drop |= {made[u] for u in dead if u in made}
+        step = [{"op": "remove", "uuid": u} for u in dead]
+        for u, (was, new) in late.items():
+            step += _set_ends(u, was, new)
+            if u in made:   # a route of this run: its add op is cut back
+                i = made[u]
+                ends = (tuple(kept[i]["start"]), tuple(kept[i]["end"]))
+                kept[i] = dict(kept[i], start=list(new.a), end=list(new.b))
+                shorter[i] = (shorter.get(i, (ends,))[0], (new.a, new.b))
+            else:
+                moved[u] = (moved.get(u, (was,))[0], new)
+        route_edit.apply_ops(work, step)
+        for u in dead:
+            if u in made:
+                drop.add(made[u])
+            else:
+                pruned.append(u)
+                moved.pop(u, None)
         drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
         bg1 = geom.BoardGeom.from_file(work)
         area = gate_area()
-    if drop or dup or len(pruned) != len(payload["pruned"]):
-        payload["trimmed"] += [kept[i] for i in sorted(drop)]
-        kept = [op for i, op in enumerate(kept) if i not in drop | dup]
-        payload["pruned"] = pruned
-        route_ops = [{"op": "remove", "uuid": u}
-                     for u in dict.fromkeys(pushed + pruned)] + kept
-        payload["added"] = {
-            "tracks": sum(o["op"] == "add_track" for o in kept),
-            "vias": sum(o["op"] == "add_via" for o in kept)}
+    payload["trimmed"] += [kept[i] for i in sorted(drop)]
+    payload["shortened"] = [
+        _cut_note(u, was.net, was.layer, (was.a, was.b), (new.a, new.b))
+        for u, (was, new) in moved.items()] + [
+        _cut_note("", kept[i]["net"], kept[i]["layer"], *shorter[i])
+        for i in sorted(shorter) if i not in drop | dup]
+    kept = [op for i, op in enumerate(kept) if i not in drop | dup]
+    payload["pruned"] = pruned
+    route_ops = ops_now()
+    payload["added"] = {
+        "tracks": sum(o["op"] == "add_track" for o in kept),
+        "vias": sum(o["op"] == "add_via" for o in kept)}
     pours = pour_nets(area)
     isl = {n: [base_count(n), len(rf.net_islands(bg1, n))]
            for n in sorted(nets | pours)}
@@ -1156,6 +1285,11 @@ def report_md(p: dict) -> str:
                   f" left (tracks and vias) and {len(p.get('trimmed') or [])}"
                   " the router added; what dangled on the board before"
                   " stays.", ""]
+    if p.get("shortened"):
+        n = len(p["shortened"])
+        lines += [f"Cut back {n} track{'' if n == 1 else 's'} with a dead"
+                  " end that is the only link between copper of its net, to"
+                  " the last copper it meets there.", ""]
     for key, head in (("failed", "Would not join"),
                       ("worse", "Worse than before")):
         if p.get(key):
