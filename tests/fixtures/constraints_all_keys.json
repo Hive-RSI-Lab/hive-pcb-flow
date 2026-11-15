@@ -182,7 +182,10 @@
     "allow_body_overlap": [{"refs": ["J1", "U1"], "why": "nested by design",
                             "up_to_mm": 0.5}],
     "allow_off_board": [{"refs": ["J1"], "why": "overhangs the edge"}],
-    "mounting": {"by": "clip", "why": "snaps into the case's clips"}
+    "mounting": {"by": "clip", "why": "snaps into the case's clips"},
+    "mount_heights": {"U1": {"height_mm": 16.0, "datum": "body_underside",
+                             "tol_mm": 0.3, "source": "README: 16 mm standoff",
+                             "model": "standoff"}}
   },
   "pinouts": [{"ref": "J4", "standard": "audio-trs"}],
   "testpoints": {

@@ -676,6 +676,30 @@ class _FileLint:
                              f"{path}: mechanical.mounting must be {{by: one "
                              f"of {', '.join(MOUNTS_BY)}, why: "
                              "text}", path)
+                mh = val.get("mount_heights") \
+                    if isinstance(val, dict) else None
+                if mh is not None and not (isinstance(mh, dict) and all(
+                        isinstance(e, dict)
+                        and isinstance(e.get("height_mm"), (int, float))
+                        and not isinstance(e["height_mm"], bool)
+                        and e.get("datum", "body_underside") in (
+                            "body_underside", "lead_protrusion")
+                        and (e.get("tol_mm") is None
+                             or (isinstance(e["tol_mm"], (int, float))
+                                 and not isinstance(e["tol_mm"], bool)
+                                 and e["tol_mm"] >= 0))
+                        and isinstance(e.get("source"), str)
+                        and e["source"].strip()
+                        and isinstance(e.get("model", ""), str)
+                        for e in mh.values())):
+                    # check_model_fit (#1191, #980): a raised part's stated
+                    # mounting height
+                    self.add("error", "bad_type",
+                             f"{path}: mechanical.mount_heights must be "
+                             "{ref: {height_mm: number, datum?: "
+                             "body_underside|lead_protrusion, tol_mm?: "
+                             "number >= 0, source: text, model?: text}}",
+                             path)
             elif key == "pinouts":
                 # check_pinouts (#1027): an off-board connector held to a row
                 # of reference/connector_pinouts.yaml

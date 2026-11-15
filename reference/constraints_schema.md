@@ -231,7 +231,10 @@ Consumers per key (script -> phase):
   // check_pinouts (#1027): an off-board connector with no standard of its
   // own (a harness to a part's leads) held to a "stated" row of
   // reference/connector_pinouts.yaml. Standard headers (JTAG, audio jacks)
-  // are found without this.
+  // are found without this. Power entry (#1190): an XT30 is judged on its
+  // own; a barrel jack only when its polarity is stated here
+  // (barrel-centre-positive | barrel-centre-negative) or in its value; a
+  // JST-PH battery lead is listed not_judged (no settled standard).
   "pinouts": [{"ref": "J8", "standard": "bedlift-lift-actuator"}],
 
   // check_body_clash (P8, #608): parts whose 3D bodies overlap on purpose (a
@@ -247,7 +250,16 @@ Consumers per key (script -> phase):
     // check_mounting (#1088): a board over 2500 mm^2 (or 80 mm long) with no
     // mounting hole says how it is held instead. by: clip | adhesive |
     // stack | rail | edge_card | castellated | cable | none; why is required.
-    "mounting": {"by": "rail", "why": "slides into the case by its side tabs"}},
+    "mounting": {"by": "rail", "why": "slides into the case by its side tabs"},
+    // check_model_fit (#1191, #980): a raised part's mounting height as
+    // built, against its placed 3D model. datum body_underside (the body's
+    // underside above the board top) | lead_protrusion (lead tips past the
+    // board bottom); tol_mm default 0.3; source (the drawing or build note)
+    // required; model, optional, a file-name substring picking one of the
+    // part's models (default the first shown). Off by more than tol_mm:
+    // model_mount_height, error. Unlisted parts are not judged.
+    "mount_heights": {"U1": {"height_mm": 16.0, "datum": "body_underside",
+                             "tol_mm": 0.3, "source": "README: 16 mm printed standoff"}}},
 
   // check_surge (P8, #492): IEC 61000-4-5 surge / 61000-4-4 EFT on cable
   // ports. Only declared ports are judged. kind picks the assumed level from

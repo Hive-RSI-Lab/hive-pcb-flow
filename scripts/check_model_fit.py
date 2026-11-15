@@ -44,6 +44,22 @@ Findings, one per footprint per kind, kind:
                      edge are outside the outline, so they pass.
   model_unmatched    warning: under half its pads are met and no slide or
                      turn fits better: a wrong model, or one tilted on X/Y
+  model_mount_height error: the part's stated mounting height (constraints
+                     mechanical.mount_heights, #980/#1191) and its model's
+                     disagree by more than tol_mm. The model is the part as
+                     the render, the STEP and the enclosure see it, so a
+                     standoff drawn at the wrong height there is a wrong
+                     part height everywhere. Datum body_underside: the
+                     lowest flat level of the model's faces above the
+                     seating band whose merged area is at least
+                     MOUNT_AREA_FRAC of the model's footprint box (a lead's
+                     shoulder is no underside); lead_protrusion: how far
+                     the model reaches below the board's bottom face. A
+                     part with no entry is not judged; one whose model
+                     can't be read or shows no such face is listed in
+                     facts mount_heights_not_judged. The check measures the
+                     model against the stated figure only: a stated figure
+                     that is itself wrong passes.
 A model with no file on disk is check_model_paths' / render's concern, and a
 hidden one is never drawn: both are skipped (counted in the report's facts).
 
@@ -51,7 +67,7 @@ The repair belongs in the footprint library (fix the (model) there and
 update the board from it, so the next update doesn't bring the old one
 back); `fit` in each finding is the (offset)/(rotate) to write.
 
-CLI: --pcb board.kicad_pcb [--out report.json]
+CLI: --pcb board.kicad_pcb [--constraints constraints.json] [--out report.json]
      exit 0 pass / 1 violations / 2 error, per SPEC section 6.
 """
 from __future__ import annotations
@@ -96,6 +112,8 @@ FLOAT_MM = 0.15          # mm: a model this far above the board floats
 SINK_MM = 0.3            # mm: a model detail this deep in the board is noise
 HOLE_SLACK_MM = 0.3      # a pin's corner may stand this far past its drill
 UNIT_EPS = 1e-3
+MOUNT_AREA_FRAC = 0.2    # a body underside covers this share of the xy box
+MOUNT_DATUMS = ("body_underside", "lead_protrusion")
 
 
 def _sval(x) -> str:
@@ -675,12 +693,94 @@ def fit_lib(pretty: Path, names: list[str] | None = None,
                        if r.get("error")}}
 
 
+# ------------------------------------------------------------ mount heights
+
+def mount_heights(constraints: dict | None) -> dict[str, dict]:
+    """constraints mechanical.mount_heights, checked: {ref: {height_mm,
+    datum, tol_mm, source[, model]}}. A malformed entry is a CheckError."""
+    mech = (constraints or {}).get("mechanical") or {}
+    raw = mech.get("mount_heights") or {}
+    if not isinstance(raw, dict):
+        raise checklib.CheckError("mechanical.mount_heights must be a mapping "
+                                  "{ref: {height_mm, datum, tol_mm, source}}")
+    out = {}
+    for ref, e in raw.items():
+        if not isinstance(e, dict):
+            raise checklib.CheckError(f"mount_heights.{ref}: not a mapping")
+        try:
+            h, tol = float(e["height_mm"]), float(e.get("tol_mm", 0.3))
+        except (KeyError, TypeError, ValueError):
+            raise checklib.CheckError(
+                f"mount_heights.{ref}: height_mm (and tol_mm) must be numbers")
+        datum = e.get("datum", "body_underside")
+        if datum not in MOUNT_DATUMS:
+            raise checklib.CheckError(f"mount_heights.{ref}: datum {datum!r} "
+                                      f"is not one of {', '.join(MOUNT_DATUMS)}")
+        if tol < 0 or not str(e.get("source") or "").strip():
+            raise checklib.CheckError(f"mount_heights.{ref}: tol_mm must be "
+                                      ">= 0 and source (the drawing) given")
+        out[str(ref)] = {"height_mm": h, "datum": datum, "tol_mm": tol,
+                         "source": str(e["source"]),
+                         "model": str(e.get("model") or "")}
+    return out
+
+
+def body_underside(faces) -> float | None:
+    """The lowest flat level above the seating band covering MOUNT_AREA_FRAC
+    of the model's xy box (merged level by level), or None."""
+    from shapely.geometry import MultiPoint
+    from shapely.ops import unary_union
+    if not faces:
+        return None
+    xs = [p[0] for f in faces for p in f]
+    ys = [p[1] for f in faces for p in f]
+    need = (max(xs) - min(xs)) * (max(ys) - min(ys)) * MOUNT_AREA_FRAC
+    flat: dict[int, list] = {}
+    for face in faces:
+        zs = [p[2] for p in face]
+        if len(face) >= 3 and max(zs) - min(zs) < FLAT_MM \
+                and min(zs) > SEAT_Z[1]:
+            flat.setdefault(round(min(zs) / FLAT_MM), []).append(
+                MultiPoint([(x, y) for x, y, _ in face]).convex_hull)
+    for lvl in sorted(flat):
+        if need > 0 and unary_union(flat[lvl]).area >= need:
+            return lvl * FLAT_MM
+    return None
+
+
+def judge_mount(entry: dict, mesh, offset, scale, rotate, back,
+                thickness) -> tuple[dict | None, str | None]:
+    """(finding or None, why not judged or None) for one stated height."""
+    faces = modelgeom.place(mesh, offset, scale, rotate, back)
+    if entry["datum"] == "body_underside":
+        got = body_underside(faces)
+        if got is None:
+            return None, "the model shows no flat body underside"
+    else:
+        zmin = min((p[2] for f in faces for p in f), default=0.0)
+        got = -zmin - thickness()
+    want, tol = entry["height_mm"], entry["tol_mm"]
+    if abs(got - want) <= tol + UNIT_EPS:
+        return None, None
+    what = "body underside" if entry["datum"] == "body_underside" else \
+        "lead protrusion below the board"
+    return {"kind": "model_mount_height", "severity": "error",
+            "msg": f"its {what} is {got:.2f} mm, the part is stated at "
+                   f"{want:g} mm +-{tol:g} ({entry['source']})",
+            "measured_mm": _r(got, 2), "height_mm": want,
+            "datum": entry["datum"], "tol_mm": tol,
+            "height_source": entry["source"]}, None
+
+
 # ------------------------------------------------------------ the check
 
-def check(pcb: Path) -> tuple[list[dict], dict]:
+def check(pcb: Path, constraints: dict | None = None
+          ) -> tuple[list[dict], dict]:
     resolve = resolver(pcb)
     facts = {"models": 0, "checked": 0, "hidden": 0, "missing": [],
              "unreadable": {}}
+    heights = mount_heights(constraints)
+    pending = dict(heights)   # refs whose height is still to be judged
     cache: dict = {}
     board = _Board(pcb)
     viols = []
@@ -710,6 +810,18 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
             mesh, found = cache[key] or (None, None)
             if found is None:
                 continue
+            entry = pending.get(ref)
+            if entry is not None and mesh is not None and (
+                    entry["model"] in path if entry["model"] else True):
+                del pending[ref]
+                h, why = judge_mount(entry, mesh, offset, scale, rotate, back,
+                                     lambda: board.thickness)
+                if why:
+                    facts.setdefault("mount_heights_not_judged", {})[ref] = why
+                elif h:
+                    found = found + [h]
+                else:
+                    facts.setdefault("mount_heights_ok", []).append(ref)
             if mesh is not None and not any(
                     h["kind"] in ("model_offset", "model_rotation")
                     for h in found) and modelgeom.placed_box(
@@ -738,18 +850,25 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
                     None, [ref], f"{ref}: 3D model {name}: {h['msg']}. "
                     f"Fix: {fix}", SOURCE, kind=h["kind"], model_path=path,
                     fix=fix, **extra))
+    for ref in pending:
+        facts.setdefault("mount_heights_not_judged", {})[ref] = \
+            "no shown, readable 3D model for this part on the board"
     return viols, facts
 
 
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pcb", required=True)
+    ap.add_argument("--constraints", help="constraints.json "
+                    "(mechanical.mount_heights)")
     ap.add_argument("--out", help="write the JSON report here")
     args = ap.parse_args(argv)
     pcb = Path(args.pcb)
     if not pcb.is_file():
         raise checklib.CheckError(f"board not found: {pcb}")
-    viols, facts = check(pcb)
+    cons = checklib.load_json(args.constraints, "constraints") \
+        if args.constraints else None
+    viols, facts = check(pcb, cons)
     return checklib.report(SCRIPT, pcb, viols, **facts,
                            nothing_to_judge=None if facts.get("checked") else
                            "no 3D model could be read"), args.out
