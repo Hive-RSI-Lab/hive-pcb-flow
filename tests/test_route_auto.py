@@ -696,3 +696,48 @@ def test_run_freerouting_interrupt_kills_the_process(tmp_path, monkeypatch):
         routelib.run_freerouting(None, None, dsn, ses, cmd=cmd,
                                  timeout=30, stall_s=5)
     assert procs[0].poll() is not None and procs[0].stdout.closed
+
+
+_TD_BOARD = """(kicad_pcb
+  (version 20260206) (generator "test")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal)
+    (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup)
+  (gr_rect (start 0 0) (end 20 20) (stroke (width 0.1)) (fill no)
+    (layer "Edge.Cuts"))
+  (via (at 5 5) (size 0.5) (drill 0.2) (layers "F.Cu" "B.Cu") (net "/A")
+    (uuid "0b8c4f3e-1a2b-4c3d-8e9f-0a1b2c3d4e5f")%s)
+  (via (at 10 10) (size 0.5) (drill 0.2) (layers "F.Cu" "B.Cu") (net "/B")
+    (uuid "1c9d5a4f-2b3c-4d4e-9f0a-1b2c3d4e5f60"))
+)
+"""
+_TD_ON = (" (teardrops (best_length_ratio 0.5) (max_length 1)"
+          " (best_width_ratio 1) (max_width 2) (curved_edges no)"
+          " (filter_ratio 0.9) (enabled yes) (allow_two_segments yes)"
+          " (prefer_zone_connections yes))")
+
+
+def test_ses_import_keeps_the_escape_teardrop_setting(tmp_path):
+    """route_escape turns teardrops on for its inner-layer ring breakouts;
+    KiCad's SES import replaces every via and the setting went with it (the
+    6-layer bench: 12 set at escape, 0 on the routed board). route_auto
+    notes them before routing and turns them back on after, on the via at
+    the same spot and net only."""
+    pre = tmp_path / "pre.kicad_pcb"
+    pre.write_text(_TD_BOARD % _TD_ON, encoding="utf-8")
+    td = route_auto._teardrop_vias(pre)
+    assert td == [("/A", (5.0, 5.0))]
+    routed = tmp_path / "routed.kicad_pcb"
+    routed.write_text(_TD_BOARD % "", encoding="utf-8")
+    assert route_auto._teardrop_vias(routed) == []
+    cli = env.find_kicad_cli()
+    bp = env.find_kicad_python(cli) if cli else None
+    if bp is None:
+        pytest.skip("KiCad bundled python not installed")
+    work = tmp_path / "w"
+    work.mkdir()
+    assert route_auto._restore_teardrops(bp, routed, work, td) == 1
+    assert route_auto._teardrop_vias(routed) == [("/A", (5.0, 5.0))]
+    # a second pass finds nothing left to do
+    assert route_auto._restore_teardrops(bp, routed, work, td) == 0

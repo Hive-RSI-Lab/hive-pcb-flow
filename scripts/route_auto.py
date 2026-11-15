@@ -635,6 +635,52 @@ def _preexisting(bg) -> dict:
             "tracks": [(t.net, t.layer, t.shape) for t in bg.tracks_of()]}
 
 
+def _teardrop_vias(pcb: Path) -> list[tuple]:
+    """(net, at) of the vias with KiCad's teardrop setting on: the escape
+    sets it on its inner-layer ring breakouts (route_escape
+    enable_breakout_teardrops)."""
+    import sexpdata
+    import teardroplib as tdl
+    root = sexpdata.loads(Path(pcb).read_text(encoding="utf-8"))
+    out = []
+    for v in tdl._kids(root, "via"):
+        if not tdl._enabled(v):
+            continue
+        at, net = tdl._kid(v, "at"), tdl._kid(v, "net")
+        if at is None or net is None:
+            continue
+        nn = tdl._strs(net) or [str(x) for x in tdl._nums(net)]
+        out.append((nn[0] if nn else None, tuple(tdl._nums(at)[:2])))
+    return out
+
+
+def _restore_teardrops(bp, staged: Path, work: Path, td: list) -> int:
+    """KiCad's SES import replaces every via, the teardrop setting with it:
+    turn it back on for the vias that had it before routing (same net, same
+    spot). Returns how many."""
+    if not td:
+        return 0
+    import teardroplib as tdl
+
+    def near(net, at, pts):
+        return any(n == net and abs(at[0] - a[0]) <= PRE_TOL
+                   and abs(at[1] - a[1]) <= PRE_TOL for n, a in pts)
+    on = _teardrop_vias(staged)
+    uu = [v.uuid for v in geom.BoardGeom.from_file(staged).vias_of()
+          if v.uuid and near(v.net, v.at, td) and not near(v.net, v.at, on)]
+    if not uu:
+        return 0
+    cfg = tdl.config(None)
+    res = routelib.run_worker(bp, {
+        "verb": "enable", "board": str(staged), "out": str(staged),
+        "vias": uu, "pads": [],
+        "params": {k: cfg[k] for k in (
+            "length_ratio", "max_length_mm", "width_ratio", "max_width_mm",
+            "filter_ratio", "curved")}},
+        work, worker=SCRIPTS / "lib" / "teardrop_swig.py")
+    return len(uu) - len(res.get("missing") or [])
+
+
 def _pre_index(pre: dict) -> dict:
     import shapely
     by: dict = {}
@@ -810,6 +856,7 @@ def run(argv: list[str] | None = None):
     routable = _routable_nets(bg)
     tracks_before = len(bg.tracks_of())
     pre = _preexisting(bg)
+    td_vias = _teardrop_vias(staged)
 
     # 2. DSN export (plane layers marked power)
     if args.power_layers == "auto":
@@ -1052,6 +1099,7 @@ def run(argv: list[str] | None = None):
             maze_facts.pop("drc", None)
 
     # 6. sanity + swap the routed board in
+    teardrops_restored = _restore_teardrops(bp, staged, work, td_vias)
     bg2 = geom.BoardGeom.from_file(staged)
     tracks_after = len(bg2.tracks_of())
     if fr_ok and tracks_after <= tracks_before \
@@ -1097,6 +1145,7 @@ def run(argv: list[str] | None = None):
             "krt_finish": finish_facts,
             "ses_import_check": ses_check,
             "maze_finish": maze_facts,
+            "teardrops_restored": teardrops_restored,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),
             "neckdowns_snapped": dedup_facts.get("neckdowns_snapped", 0),
             "work_dir": str(work),
