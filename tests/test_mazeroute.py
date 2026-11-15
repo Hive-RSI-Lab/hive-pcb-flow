@@ -161,6 +161,52 @@ def test_reroute_keep_and_one_layer_refuse():
             "A", [14, 14, 16, 16], "A1.1", "A2.1")
 
 
+_B_SIZED = {
+    "width": """
+(rule "aiee_diff_w_B_F"
+\t(layer "F.Cu")
+\t(constraint track_width (min 0.15mm) (opt 0.17mm) (max 0.19mm))
+\t(condition "A.NetName == 'B' && !(A.intersectsCourtyard('B1'))")
+)
+""",
+    "gap": """
+(rule "aiee_diff_gap_B"
+\t(constraint diff_pair_gap (min 0.18mm) (opt 0.2mm))
+\t(condition "A.NetName == 'b*'")
+)
+""",
+    "iso": """
+(rule "aiee_iso_B_A"
+\t(constraint track_width (min 0.15mm) (max 0.19mm))
+\t(condition "A.NetName == 'B' && B.NetName == 'A'")
+)
+""",
+}
+
+
+@pytest.mark.parametrize("rule", sorted(_B_SIZED))
+def test_reroute_never_rips_a_net_a_rule_sizes(tmp_path, rule):
+    """#1140: a part move's push ripped the USB pairs, whose impedance
+    rules carry an (opt ..) and a (max ..) and a courtyard clause the
+    floor reader skips, and put them back at 0.2 mm, alone: 43 track
+    widths past the rule's 0.1778 max. A width rule of any shape, or a
+    pair's gap rule (KiCad's wildcard, any case), keeps the net now; a
+    barrier rule (aiee_iso_*) sizes nothing."""
+    pcb = _board(tmp_path, "reroute")
+    dru = pcb.with_suffix(".kicad_dru")
+    dru.write_text(dru.read_text() + _B_SIZED[rule])
+    r = mazeroute.Router(geom.BoardGeom.from_file(pcb))
+    assert "B" not in r.rules.net_width
+    if rule == "iso":
+        assert "B" not in r.keep_nets
+        removed, _, _ = r.reroute("A", [14, 14, 16, 16], "A1.1", "A2.1")
+        assert removed == [B_TRACK]
+        return
+    assert r.rules.sized_nets == {"B"} and "B" in r.keep_nets
+    with pytest.raises(CheckError):
+        r.reroute("A", [14, 14, 16, 16], "A1.1", "A2.1")
+
+
 def _zone(net, pts, uid, teardrop):
     attr = " (attr (teardrop (type padvia)))" if teardrop else ""
     xy = " ".join(f"(xy {x} {y})" for x, y in pts)

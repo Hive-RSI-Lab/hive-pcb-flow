@@ -685,8 +685,9 @@ class Closer:
         start = checklib.load_json(path, "start report")
         bg = geom.BoardGeom.from_file(self.pcb)
         # sized by rule, so never ripped (mazeroute.Router.keep_nets)
-        never = (rf.pour_nets(bg)
-                 | set(rf.board_rules(self.pcb, bg).net_width) | {""})
+        rules = rf.board_rules(self.pcb, bg)
+        never = (rf.pour_nets(bg) | set(rules.net_width)
+                 | rules.sized_nets | {""})
         margin = self.args.margin
         conns = []
         for v in start["violations"]:

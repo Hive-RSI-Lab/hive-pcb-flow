@@ -115,6 +115,7 @@ class Router:
         # power, pour and rule-width nets are never ripped (route_finish's
         # keep_nets): their copper is sized by rule. A teardrop is no pour.
         self.keep_nets = (rf.pour_nets(bg) | set(self.rules.net_width)
+                          | set(getattr(self.rules, "sized_nets", ()))
                           | {""})
         bans = getattr(self.rules, "bans", None)
         self.unread_rules = list(bans.unread) if bans else []

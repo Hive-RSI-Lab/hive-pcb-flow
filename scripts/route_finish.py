@@ -141,6 +141,8 @@ class Rules:
     #                    width)]}: where its tracks may narrow (#924)
     bans: object = None   # routelib.DruBans: the .kicad_dru's disallow
     #                       track and via rules (#1140)
+    sized_nets: frozenset = frozenset()   # nets a DRU width or gap rule
+    #       sizes, whatever its bounds: never ripped (#1140)
 
     def net_layers(self, net: str, layers) -> list:
         """Of `layers`, those the board's DRU lets the net have a track on
@@ -218,6 +220,7 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
         floors["via_diameter"], base.get("via_diameter", 0.0), 0.6))
     vd = via_drill or (common[1] if common else max(
         floors["via_drill"], base.get("hole_size", 0.0), 0.3))
+    classes = routelib.pro_net_classes(pro_json, bg.nets)
     build, entry = hdilib.board_build(bg)
     hdi: dict = {}
     if build:
@@ -245,9 +248,9 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
         necks=board_necks(pcb, bg, rc.dru_neck_rules(dru, "track_width")),
         bans=routelib.dru_layer_bans(
             dru.read_text(encoding="utf-8") if dru.is_file() else "",
-            list(bg.copper_layers),
-            net_classes=routelib.pro_net_classes(pro_json, bg.nets),
+            list(bg.copper_layers), net_classes=classes,
             layer_names=getattr(bg, "layer_user_names", None)),
+        sized_nets=frozenset(rc.dru_sized_nets(dru, bg.nets, classes)),
         margin=margin, **hdi)
 
 
@@ -1653,7 +1656,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
 
     # power and pour nets are never ripped: their copper is sized by rule
     # nor are constraints diff pairs: a pair ripped here comes back single-ended (#613)
-    keep_nets = pour_nets(bg) | set(rules.net_width) | {""}
+    keep_nets = pour_nets(bg) | set(rules.net_width) | rules.sized_nets | {""}
     keep_nets |= set(keep_nets_extra or ())
 
     def expired():
@@ -2184,6 +2187,7 @@ def _rules_facts(rules: Rules) -> dict:
     if facts.get("spans"):
         facts["spans"] = [dataclasses.asdict(s) for s in facts["spans"]]
     facts["via_in_pad_refs"] = sorted(facts.get("via_in_pad_refs", ()))
+    facts["sized_nets"] = sorted(facts.get("sized_nets", ()))
     if facts.get("bans") is not None:
         facts["bans"] = facts["bans"].facts()
     return facts
