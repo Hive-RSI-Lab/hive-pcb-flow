@@ -62,6 +62,10 @@ per LCSC number) and fits it onto the board footprint:
             that give no A1 (a mirrored land pattern, a skewed grid) stay
             `no_model`. A fetch that failed, or an LCSC number not yet fetched
             under --offline, gets no footprint verdict: the model can answer.
+            Offline, EasyEDA's earlier "no model" answer is read from the
+            `<LCSC>.none` kept beside the cached models, so a test or score
+            run judges such a part as an online run does; a part never asked
+            about is `fetch_failed` with the offline reason, never no_model.
             Position isn't checked on this basis.
   offset    The model's pad centre vs the board's, both placed, is reported
             (`offset_mm`); over OFFSET_WARN_MM it is a warning only. The
@@ -928,7 +932,9 @@ def footprint_a1(fp: Footprint) -> dict | None:
 
 def footprint_basis(fp: Footprint, code: str, fetch: bool) -> dict | None:
     """footprint_a1 for a part with no model, unless a fetch could still get
-    one: an LCSC number left uncached under --offline keeps `no_model`."""
+    one. Callers pass fetch=True once easyeda.get returned None with no error
+    (EasyEDA answered "no model", now or kept as `<LCSC>.none`); an LCSC
+    number left uncached under --offline is `fetch_failed` before this."""
     return footprint_a1(fp) if fetch or not code else None
 
 
@@ -1236,9 +1242,11 @@ def verify(pcb: Path, cpl: dict[str, dict], lcsc: dict[str, str],
                           f"({row['fetch_error']}); cache dir "
                           f"{cache_dir} - this is not a pin-1 result")
         elif row["verdict"] == "no_model":
+            # no error: EasyEDA answered "no model" (now, or a kept .none
+            # under --offline); an offline miss is an error, above
             row = _footprint_row(fp, cpl[ref], row,
-                                 footprint_basis(fp, code, fetch))
-            if row["verdict"] == "no_model" and (fetch or not code):
+                                 footprint_basis(fp, code, True))
+            if row["verdict"] == "no_model":
                 row = _two_pad_row(fp, code, cpl[ref], row)
         mark = silk_mark(fp)
         row["silk_mark"] = mark["state"]
@@ -1371,7 +1379,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--parts", help="parts.json (LCSC numbers per ref)")
     ap.add_argument("--cache-dir", help="EasyEDA model cache directory")
     ap.add_argument("--offline", action="store_true",
-                    help="never fetch: an uncached part is no_model")
+                    help="never fetch: an uncached part is fetch_failed "
+                         "(offline), one kept as <LCSC>.none is no model")
     ap.add_argument("--visual", help="cpl_visual.json from the image pass")
     ap.add_argument("--vendor", help="the assembler the CPL goes to "
                     "(reference/vendors/<id>.yaml); its assembly.rotation "

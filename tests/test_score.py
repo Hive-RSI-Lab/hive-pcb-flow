@@ -125,6 +125,34 @@ def test_a_failed_model_fetch_is_not_judged_and_costs_nothing():
         score.NOT_JUDGED = old
 
 
+def test_not_judged_says_why_and_score_gates_run_offline(monkeypatch, tmp_path):
+    fetch = {"check": "dfm", "kind": "cpl_fetch_failed", "severity": "error",
+             "refs": ["L3"], "reason": "offline (HWDE_EASYEDA_OFFLINE): C844983"}
+    f = score.finding_of("dfm", fetch)
+    assert f["why"] == fetch["reason"]
+    # a judged finding carries no why: the ledger match is unchanged
+    assert "why" not in score.finding_of("dfm", {**fetch, "kind": "cpl_no_model"})
+    # every gate a score runs is offline: the network can't move a score
+    seen = {}
+
+    class Done:
+        returncode = 0
+
+    def run(cmd, **kw):
+        seen.update(kw["env"])
+        Path(cmd[cmd.index("--out") + 1]).write_text(
+            json.dumps({"failing": [fetch], "warnings": []}))
+        return Done()
+    monkeypatch.setattr(score.subprocess, "run", run)
+    monkeypatch.delenv("HWDE_EASYEDA_OFFLINE", raising=False)
+    monkeypatch.delenv("HWDE_STOCK_OFFLINE", raising=False)
+    monkeypatch.setattr(score, "board_file", lambda ws, n, ext: ws / f"b{ext}")
+    pin = type("P", (), {"name": "b"})()
+    fs, _ = score.run_gate(pin, tmp_path, "dfm", tmp_path)
+    assert seen["HWDE_EASYEDA_OFFLINE"] == "1" and seen["HWDE_STOCK_OFFLINE"] == "1"
+    assert fs[0]["why"].startswith("offline")
+
+
 def test_gate_charges_take_a_plain_string_warning():
     # a gate may report a warning (or a failing finding) as a plain string
     result = {"failing": ["board has no outline"],

@@ -49,6 +49,12 @@ INFO = "info"   # a note below the warning bar: never charged
 # nothing and is no catch. A part with no model at all (cpl_no_model) is a
 # finding and stays one.
 NOT_JUDGED = {"cpl_fetch_failed": "fetch failed"}
+# A score never touches the network: the gates read EasyEDA models (and
+# their kept "no model" answers, <LCSC>.none) and stock only from the
+# pinned boards' caches. A part missing from them is cpl_fetch_failed with
+# the offline reason (not judged, so the pin's cache wants filling), never
+# a result that moves with the network.
+OFFLINE = {"HWDE_EASYEDA_OFFLINE": "1", "HWDE_STOCK_OFFLINE": "1"}
 
 # The pinned boards and the sha256 of each one's pin and files (digest()).
 # bin/pin.py writes this block; don't edit it by hand.
@@ -59,7 +65,7 @@ PINS = {
     "hwde-led-test": "703f061b4277e434bddaa0acb388153ce3232eb6bd5e2908b44f78cdf7ae2b4f",
     "lite-main": "24bb9585f80136fdaa41d2033a0edddacc8c7042c10ab2b806892e0262f9b936",
     "minuet-v3": "4398651d7c738e2053181b74a93a6895adc356c58d42c4548efcdb62f90115be",
-    "oasis-v0-2": "af22f7bd587915f241ab4aa1e019f2aa952634a47d545b4a95b609d208e18529",
+    "oasis-v0-2": "171b2c3c3200b0c7ee3fd5f23e2da49fe4038a664705e661b827b6abf3b0edd2",
     "ultra-front": "2e9522c6817e638bc6b88d1b616d4ee15f0d80c551f3167c5566b3c7df085f51",
 }
 # pins:end
@@ -205,6 +211,8 @@ def finding_of(gate_name: str, v) -> dict:
         f["kind"] = v["kind"]
     if not (f["net"] or f["refs"] or pos):
         f["message"] = str(v.get("message") or v.get("msg") or v.get("description") or "")
+    if f.get("kind") in NOT_JUDGED and v.get("reason"):
+        f["why"] = str(v["reason"])  # why it couldn't judge, for the score line
     return f
 
 
@@ -377,7 +385,8 @@ def run_gate(pin: Pin, ws: Path, g: str, logs: Path, tries: int = 3
             rc = subprocess.run([HWDE, "gate", "--gate", g, inp, "--workspace", ".",
                                  "--out", str(out)], cwd=ws, stdout=f,
                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                env={**os.environ, "HWDE_GATE_WARNINGS_CAP": "100000"}).returncode
+                                env={**os.environ, **OFFLINE,
+                                     "HWDE_GATE_WARNINGS_CAP": "100000"}).returncode
         try:
             result = json.loads(out.read_text())
         except (OSError, ValueError):
@@ -427,6 +436,7 @@ def measure(p: Pin, ws: Path, logs: Path, draft: bool = False) -> int:
     if j.not_judged:
         parts.append(f"not judged {len(j.not_judged)} (" + ", ".join(
             f"{f['gate']}: {NOT_JUDGED[f['kind']]} {' '.join(f['refs'])}"
+            + (f" [{f['why']}]" if f.get("why") else "")
             for f in j.not_judged) + ", free)")
     parts.append(f"scripts {len(sc)}" + (f" ({', '.join(sc)})" if sc else ""))
     print(f"{p.name} ({p.project} {p.commit[:7]}): {n} charged: {'; '.join(parts)}", flush=True)

@@ -1914,12 +1914,16 @@ def check_placement(pcb: Path, cpl: Path, parts: Path | None,
         why = easyeda.rate_limited() or "; ".join(sorted(
             {r.get("fetch_error", "") for r in unfetched} - {""}))
         refs = [r["ref"] for r in unfetched]
+        remedy = (f"run dfm once online (HWDE_EASYEDA_OFFLINE unset) to "
+                  f"fill {rep['cache_dir']} and commit it" if not fetch
+                  else f"rerun once EasyEDA answers (a rate limit clears in "
+                       f"minutes) to fill {rep['cache_dir']}")
         vios.append(checklib.violation(
             CHECK, "error", None, None, None, refs,
-            f"could not fetch the LCSC model for {len(refs)} part(s) "
+            f"could not get the EasyEDA footprint model (the LCSC model "
+            f"fetch of the CPL pin-1 check) for {len(refs)} part(s) "
             f"({why}), so their CPL rotation is unverified - not a pin-1 "
-            f"result; rerun once EasyEDA answers (a rate limit clears in "
-            f"minutes) to fill {rep['cache_dir']}", SOURCE,
+            f"result; {remedy}", SOURCE,
             kind="cpl_fetch_failed", reason=why,
             rate_limited=bool(easyeda.rate_limited())))
     if rep.get("bottom_preview"):
