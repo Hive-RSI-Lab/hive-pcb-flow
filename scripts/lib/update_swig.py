@@ -16,6 +16,7 @@ One verb:
                  "adds": [{"ref": R, "value": V, "fpid": "Lib:Name",
                            "x": mm, "y": mm, "deg": d, "side": "front"|"back",
                            "fields": {n: v}, "pad_nets": {"1": "NET", ...},
+                           "pad_pins": {"1": [pin name, pin type], ...},
                            "dnp": bool, "inherit": {"texts": bool}?}],
                  "pad_nets": [{"ref": R, "pad_nets": {"1": "NET" | ""}}],
                  "fp_paths": [dir, ...],
@@ -225,8 +226,15 @@ def verb_apply_update(job):
         if add.get("inherit") and ref in replaced:
             inherit(fp, fps[ref], add["inherit"].get("texts"))
         pad_nets = add.get("pad_nets") or {}
+        pad_pins = add.get("pad_pins") or {}
         netted = 0
         for pad in fp.Pads():
+            # the schematic pin's name and type, as KiCad's update writes
+            # them (#1220)
+            pin = pad_pins.get(pad.GetNumber())
+            if pin:
+                pad.SetPinFunction(pin[0])
+                pad.SetPinType(pin[1])
             want = pad_nets.get(pad.GetNumber())
             if want:
                 pad.SetNet(net_of(board, want, nets_cache))

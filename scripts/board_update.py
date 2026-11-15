@@ -232,6 +232,7 @@ def build_plan(model: placelib.PlaceModel, board_fields: dict,
             continue
         plan["add"].append({"ref": ref, "fp": c["fp"], "value": c["value"],
                             "fields": c["fields"], "pads": pads_of_ref(ref),
+                            "pins": c.get("pins") or {},
                             "dnp": bool(c.get("dnp"))})
 
     for ref in sorted(set(board_fps) & set(by_ref)):
@@ -249,6 +250,7 @@ def build_plan(model: placelib.PlaceModel, board_fields: dict,
                 "ref": ref, "fp_old": f.fpid, "fp_new": c["fp"],
                 "value": c["value"], "fields": c["fields"],
                 "pads": pads_of_ref(ref), "dnp": bool(c.get("dnp")),
+                "pins": c.get("pins") or {},
                 "pos": [round(f.pos[0], 4), round(f.pos[1], 4)],
                 "deg": f.angle, "side": f.side,
                 "nets_old": sorted({p.net for p in f.pads if p.net})})
@@ -1165,6 +1167,7 @@ def apply_update(pcb: Path, plan: dict, resolved: dict, orphans: dict,
                      "x": want["x"], "y": want["y"], "deg": want["deg"],
                      "side": want["side"], "fields": entry["fields"],
                      "pad_nets": entry["pads"],
+                     "pad_pins": entry.get("pins") or {},
                      "dnp": bool(entry.get("dnp")),
                      # a swap keeps the old part's schematic link and,
                      # at the same spot, its field texts (swap_fp.py)

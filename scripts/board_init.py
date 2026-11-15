@@ -177,10 +177,12 @@ def _comp_sheet(comp) -> dict:
 
 def parse_netlist(path: Path) -> tuple[list[dict], dict]:
     """kicadsexpr netlist -> ([{ref, value, fp, dnp, exclude_from_bom,
-    fields, path, sheetname, sheetfile}], {"REF.PAD": net})."""
+    fields, path, sheetname, sheetfile, pins}], {"REF.PAD": net}); pins is
+    {pad number: [pin name, pin type]} from the netlist's nodes."""
     data = sexpdata.loads(path.read_text(encoding="utf-8"))
     components: list[dict] = []
     netmap: dict[str, str] = {}
+    pins: dict[str, dict[str, list[str]]] = {}
     for section in data[1:]:
         if _head(section) == "components":
             for comp in _find(section, "comp"):
@@ -209,6 +211,16 @@ def parse_netlist(path: Path) -> tuple[list[dict], dict]:
                     r = _sym(_find1(node, "ref")[1])
                     p = _sym(_find1(node, "pin")[1])
                     netmap[f"{r}.{p}"] = nm
+                    # The symbol pin's name and electrical type (#1220).
+                    # KiCad's "Update PCB from Schematic" copies both onto
+                    # the pad; without them every check that finds a pin by
+                    # name can't judge the board.
+                    pf, pt = _find1(node, "pinfunction"), _find1(node, "pintype")
+                    pins.setdefault(str(r), {})[str(p)] = [
+                        str(_sym(pf[1])) if pf and len(pf) > 1 else "",
+                        str(_sym(pt[1])) if pt and len(pt) > 1 else ""]
+    for c in components:
+        c["pins"] = pins.get(str(c["ref"]), {})
     missing = [c["ref"] for c in components if not c["fp"]]
     if missing:
         raise ValueError(f"netlist components without a footprint: {missing}")
