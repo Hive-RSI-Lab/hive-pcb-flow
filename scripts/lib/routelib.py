@@ -69,9 +69,15 @@ FR_MAIN_CLASS = "app.freerouting.Freerouting"
 # HWDE_FR_HEAP_MB sets it outright; 0 leaves Java's default. A JVM that runs
 # out exits at once (ExitOnOutOfMemoryError) instead of thrashing in GC, and
 # run_freerouting reports it as "oom".
+# Why the ceiling is 1536 and not 4096: the JVM fills whatever -Xmx allows
+# before a full GC, so the cap, not the board, sets its size. On a 6-layer
+# two-BGA bench (2026-11-15) the heap reached 2783 MB, a full GC left 157 MB
+# live, and the job's tree peaked at 4.3 GB, past heavy's 4500 MB job
+# reservation once Xvfb and python are added; memguard killed three such runs.
+# 1536 is ~10x that live set; full GCs come every few minutes at ~0.5 s each.
 FR_HEAP_SHARE = 0.5     # the rest is the JVM's own overhead and our process
 FR_HEAP_MIN_MB = 512
-FR_HEAP_MAX_MB = 4096
+FR_HEAP_MAX_MB = 1536
 FR_OOM_EXIT = "-XX:+ExitOnOutOfMemoryError"
 _OOM_RE = re.compile(r"java\.lang\.OutOfMemoryError")
 

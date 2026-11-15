@@ -16,7 +16,7 @@ never silently ignored - a wrong pin must fail loudly):
   HWDE_JAVA             full path to a java executable (for Freerouting)
   HWDE_FREEROUTING_JAR  full path to a freerouting jar
   HWDE_FR_HEAP_MB       Freerouting JVM heap cap in MB (default: half the job's
-                        memory budget, 512-4096; 0 = Java's default; #897)
+                        memory budget, 512-1536; 0 = Java's default; #897)
   HWDE_PDFLATEX         full path to a pdflatex executable (for report_gen)
   HWDE_NGSPICE_DLL      full path to a shared ngspice library (for sim_run)
   HWDE_BOARDS_ROOT      where board workspaces live (default ~/dev/boards, the
