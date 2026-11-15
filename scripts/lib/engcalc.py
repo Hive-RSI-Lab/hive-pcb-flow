@@ -6,6 +6,8 @@ and a test pins each one to a worked example:
 
   parse_value         "4k7" -> 4700, "2.2uF" -> 2.2e-6, "100R" -> 100,
                       "10uH 8A" -> 1e-5 (first token); "1M" is mega here
+  part_value          parse_value plus a package code ("0805,C0.1"), and a
+                      bare number on a capacitor in uF ("0.1" -> 1e-7)
   package_code        footprint -> imperial chip size ("0603"), or None
   resistor_rating_w   the usual thick-film rating for a chip size (P70)
   resistor_umax_v     a chip size's limiting element voltage (Umax)
@@ -73,6 +75,35 @@ def parse_value(text) -> float | None:
         num = f"{num}.{frac}"
     mult = 1e6 if unit and unit.lower() == "meg" else _SI.get(unit or "", 1.0)
     return float(num) * mult
+
+
+# an imperial chip size written into a value field ("0805", "C0603")
+_PKG_TOKEN = re.compile(r"^[CRL]?(?:01005|0201|0402|0603|0805|1206|1210|1812|"
+                        r"2010|2512)$", re.I)
+_BARE_NUM = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def part_value(text, kind: str | None = None) -> float | None:
+    """A two-pin part's value in base units, reading the forms a BOM writes
+    beyond parse_value's: a package code before the value ("0805,C0.1",
+    "0603 100n"), the kind letter before a capacitor's number ("C0.1"), and
+    a bare number on a capacitor in uF ("0.1" = 100 nF, "10" = 10 uF).
+    kind is "C", "R" or "L" (None: parse_value's reading). None when no
+    value can be read, so a caller can say not judged, not off-value."""
+    if text is None:
+        return None
+    toks = [x for x in re.split(r"[\s/,;]+", str(text).strip()) if x]
+    toks = [x for x in toks if not _PKG_TOKEN.match(x)] if len(toks) > 1 \
+        else toks
+    if not toks or (kind and len(toks) == 1 and _PKG_TOKEN.match(toks[0])):
+        return None
+    tok = toks[0]
+    if kind == "C":
+        if re.match(r"^C\d", tok, re.I):
+            tok = tok[1:]
+        if _BARE_NUM.match(tok):
+            return float(tok) * 1e-6
+    return parse_value(tok)
 
 
 _VOLT = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*V(?![a-zA-Z])")

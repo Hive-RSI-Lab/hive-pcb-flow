@@ -217,3 +217,34 @@ def test_drafter_ignores_a_capacitor_with_no_pins():
     assert part_rows._pin_parts(
         ["For most applications, 4.7-μF input capacitor is sufficient."],
         "x.pdf", "0" * 64) == []
+
+
+# ------------------------------------- a package code in the value (#1160)
+
+def _bst(cap):
+    comps = {"U1": "TPS563201DDCR", "L1": "4.7u", "C1": cap}
+    nets = {"/SW": [_m("U1", "2", "SW", "power_out"), _m("L1", "1"),
+                    _m("C1", "2")],
+            "/BST": [_m("U1", "6", "VBST", "input"), _m("C1", "1")],
+            "GND": [_m("U1", "1", "GND", "power_in")]}
+    return _audit(comps, nets)
+
+
+@pytest.mark.parametrize("cap", ["0805,C0.1", "0603 100n", "C0.1", "0.1"])
+def test_a_package_code_and_a_bare_uf_number_read_as_the_value(cap):
+    viol, _ = _bst(cap)   # quiet: 0.1 uF written the BOM's way
+    assert _parts(viol) == []
+
+
+@pytest.mark.parametrize("cap", ["0805,C0.01", "0805,10n"])
+def test_a_real_off_value_cap_behind_a_package_code_is_caught(cap):
+    viol, _ = _bst(cap)
+    assert _parts(viol) == [("error", "U1", "CBST")]
+
+
+@pytest.mark.parametrize("cap", ["0805", "TBD"])
+def test_a_cap_value_that_cannot_be_read_is_not_judged(cap):
+    viol, facts = _bst(cap)
+    assert _parts(viol) == []
+    nj = [n for n in facts["not_judged"] if n.startswith("pin_part_missing")]
+    assert len(nj) == 1 and "can't be read" in nj[0] and "C1" in nj[0]
