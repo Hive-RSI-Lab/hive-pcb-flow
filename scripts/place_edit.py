@@ -1189,6 +1189,8 @@ def _verify_delete(staged: Path, before_bg, before_refs: set, refs: list,
     """Read the staged copy back: the parts gone, every other part kept,
     copper == before - the planned orphans, and (ripping) no copper on the
     parts' nets that netconn now finds unanchored and did not before."""
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
     import board_update as bu
     import geom
     problems = []
