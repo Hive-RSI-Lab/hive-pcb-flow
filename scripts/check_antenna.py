@@ -424,10 +424,13 @@ def _parts_under(model, ref: str, name: str, over, body) -> list[dict]:
     (a can, a crystal, a connector shell) in the antenna's near field. A
     courtyard that holds the whole module's is not a part under it but an
     outline around it (mdbt-micro-50q's J1 "ProMicro" is the board's own
-    pin-out drawn as a footprint), so it is skipped."""
+    pin-out drawn as a footprint), so it is skipped; so is one on the
+    module's side that holds the module's centre, since no real part can sit
+    there (that J1 again, where the module's courtyard pokes past it)."""
     out = []
     if over.is_empty or over.area <= TOL_MM2:
         return out
+    side = model.footprints[ref].side
     for other in sorted(model.footprints):
         o = model.footprints[other]
         if other == ref or "board_only" in o.attrs or not o.pads or \
@@ -436,7 +439,8 @@ def _parts_under(model, ref: str, name: str, over, body) -> list[dict]:
         cy = _to_board(o.courtyard_local, o).buffer(-PART_INSET_MM)
         if cy.is_empty or not cy.intersects(over):
             continue
-        if cy.buffer(PART_INSET_MM).contains(body.buffer(-PART_INSET_MM)):
+        if cy.buffer(PART_INSET_MM).contains(body.buffer(-PART_INSET_MM)) \
+                or (o.side == side and cy.contains(body.centroid)):
             continue
         hit = cy.intersection(over)
         if hit.area <= TOL_MM2:

@@ -192,6 +192,23 @@ def test_an_outline_footprint_around_the_module_is_not_a_part_under_it(
     assert kinds == {"antenna_part"}, json.dumps(payload["violations"])
 
 
+def test_an_outline_the_module_pokes_past_is_not_a_part_under_it(tmp_path):
+    """#1188: on both mdbt-micro-50q revs J1's courtyard is on the module's
+    side and holds its centre, but U2's courtyard pokes past J1's edge, so
+    it does not hold the whole module. No real part sits round a module's
+    centre on its own side; an outline does."""
+    outline = """  (footprint "t:ProMicro" (at 30 10) (layer "F.Cu")
+    (property "Reference" "J1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "ProMicro" (at 0 0 0) (layer "F.Fab"))
+    (fp_rect (start -12 -15) (end 8 15) (stroke (width 0.05)) (fill no)
+      (layer "F.CrtYd"))
+    (pad "1" smd rect (at -11 14) (size 0.5 0.5) (layers "F.Cu")
+      (net "GND")))
+"""
+    payload, _ = _antenna(_pcb(tmp_path, _module("30 10") + outline))
+    assert payload["status"] == "pass", json.dumps(payload["violations"])
+
+
 def test_datasheet_antenna_area_replaces_the_guess(tmp_path):
     """#1188: a WROOM-32E row carries its datasheet's 18 x 6.19 mm antenna
     area (§11.1 Fig. 13) on the 25.5 mm outline, so the 26 mm courtyard's
