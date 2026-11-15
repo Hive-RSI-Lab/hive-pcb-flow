@@ -449,12 +449,21 @@ def _key(v: dict) -> tuple:
     return (v.get("kind"), v.get("net"), tuple(sorted(v.get("refs") or ())))
 
 
+# Findings that say what a check could not judge, not that something is wrong.
+# The sweep lists them under `coverage_gone_on_rev_b`, apart from the triage
+# rows in `gone_on_rev_b`; a part list that changed between revisions is
+# enough to make one disappear on rev B.
+COVERAGE_KINDS = {"check_ratings": {"rating_unrated", "rating_no_datasheet_read"}}
+
+
 def sweep(cache: Path, b: dict) -> dict:
     """Every check the corpus runs, on both revisions, with nothing said about
     the defects: the blind run a holdout board gets before its errata are read
     against the findings. dfm runs only where the revision published a CPL.
     What comes back per check: the rev A findings with no twin on rev B (same
-    kind, net and refs), the ones the fix could have removed, and the counts."""
+    kind, net and refs), the ones the fix could have removed, and the counts.
+    A check's coverage notes (COVERAGE_KINDS) go under coverage_gone_on_rev_b,
+    not among those rows."""
     res: dict = {}
     for script in RUNNERS:
         if script == "dfm" and not (b["rev_a"].get("cpl") and b["rev_b"].get("cpl")):
@@ -470,8 +479,13 @@ def sweep(cache: Path, b: dict) -> dict:
             res[script] = {"error": str(e)[:300]}
             continue
         zk = {_key(v) for v in z}
+        gone = [v for v in a if _key(v) not in zk]
+        cov = COVERAGE_KINDS.get(script, set())
         res[script] = {"rev_a": len(a), "rev_b": len(z),
-                       "gone_on_rev_b": [v for v in a if _key(v) not in zk]}
+                       "gone_on_rev_b": [v for v in gone if v.get("kind") not in cov]}
+        if cov:
+            res[script]["coverage_gone_on_rev_b"] = [
+                v for v in gone if v.get("kind") in cov]
     out = cache / "runs" / b["id"] / "sweep.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(res, indent=1))
