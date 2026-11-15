@@ -1,0 +1,253 @@
+{
+  "mpn": "LQFP48-CCW",
+  "lcsc": "C9900003",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    },
+    {
+      "pin": "5",
+      "name": "P5",
+      "type": "passive"
+    },
+    {
+      "pin": "6",
+      "name": "P6",
+      "type": "passive"
+    },
+    {
+      "pin": "7",
+      "name": "P7",
+      "type": "passive"
+    },
+    {
+      "pin": "8",
+      "name": "P8",
+      "type": "passive"
+    },
+    {
+      "pin": "9",
+      "name": "P9",
+      "type": "passive"
+    },
+    {
+      "pin": "10",
+      "name": "P10",
+      "type": "passive"
+    },
+    {
+      "pin": "11",
+      "name": "P11",
+      "type": "passive"
+    },
+    {
+      "pin": "12",
+      "name": "P12",
+      "type": "passive"
+    },
+    {
+      "pin": "13",
+      "name": "P13",
+      "type": "passive"
+    },
+    {
+      "pin": "14",
+      "name": "P14",
+      "type": "passive"
+    },
+    {
+      "pin": "15",
+      "name": "P15",
+      "type": "passive"
+    },
+    {
+      "pin": "16",
+      "name": "P16",
+      "type": "passive"
+    },
+    {
+      "pin": "17",
+      "name": "P17",
+      "type": "passive"
+    },
+    {
+      "pin": "18",
+      "name": "P18",
+      "type": "passive"
+    },
+    {
+      "pin": "19",
+      "name": "P19",
+      "type": "passive"
+    },
+    {
+      "pin": "20",
+      "name": "P20",
+      "type": "passive"
+    },
+    {
+      "pin": "21",
+      "name": "P21",
+      "type": "passive"
+    },
+    {
+      "pin": "22",
+      "name": "P22",
+      "type": "passive"
+    },
+    {
+      "pin": "23",
+      "name": "P23",
+      "type": "passive"
+    },
+    {
+      "pin": "24",
+      "name": "P24",
+      "type": "passive"
+    },
+    {
+      "pin": "25",
+      "name": "P25",
+      "type": "passive"
+    },
+    {
+      "pin": "26",
+      "name": "P26",
+      "type": "passive"
+    },
+    {
+      "pin": "27",
+      "name": "P27",
+      "type": "passive"
+    },
+    {
+      "pin": "28",
+      "name": "P28",
+      "type": "passive"
+    },
+    {
+      "pin": "29",
+      "name": "P29",
+      "type": "passive"
+    },
+    {
+      "pin": "30",
+      "name": "P30",
+      "type": "passive"
+    },
+    {
+      "pin": "31",
+      "name": "P31",
+      "type": "passive"
+    },
+    {
+      "pin": "32",
+      "name": "P32",
+      "type": "passive"
+    },
+    {
+      "pin": "33",
+      "name": "P33",
+      "type": "passive"
+    },
+    {
+      "pin": "34",
+      "name": "P34",
+      "type": "passive"
+    },
+    {
+      "pin": "35",
+      "name": "P35",
+      "type": "passive"
+    },
+    {
+      "pin": "36",
+      "name": "P36",
+      "type": "passive"
+    },
+    {
+      "pin": "37",
+      "name": "P37",
+      "type": "passive"
+    },
+    {
+      "pin": "38",
+      "name": "P38",
+      "type": "passive"
+    },
+    {
+      "pin": "39",
+      "name": "P39",
+      "type": "passive"
+    },
+    {
+      "pin": "40",
+      "name": "P40",
+      "type": "passive"
+    },
+    {
+      "pin": "41",
+      "name": "P41",
+      "type": "passive"
+    },
+    {
+      "pin": "42",
+      "name": "P42",
+      "type": "passive"
+    },
+    {
+      "pin": "43",
+      "name": "P43",
+      "type": "passive"
+    },
+    {
+      "pin": "44",
+      "name": "P44",
+      "type": "passive"
+    },
+    {
+      "pin": "45",
+      "name": "P45",
+      "type": "passive"
+    },
+    {
+      "pin": "46",
+      "name": "P46",
+      "type": "passive"
+    },
+    {
+      "pin": "47",
+      "name": "P47",
+      "type": "passive"
+    },
+    {
+      "pin": "48",
+      "name": "P48",
+      "type": "passive"
+    }
+  ],
+  "land_pattern": {
+    "pad_count": 48,
+    "pin1": "1",
+    "pitch_mm": 0.5,
+    "numbering": "ccw_top",
+    "source": "planted fault"
+  }
+}

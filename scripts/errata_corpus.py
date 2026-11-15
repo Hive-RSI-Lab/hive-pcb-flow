@@ -36,7 +36,9 @@ from net names: no parts/ and no power tree), check_pinouts on the
 schematic, check_bom_sync on the board with --live (the package of each LCSC part
 comes from JLC's record, as nothing in the foreign tree holds it),
 check_fp_package on the board with --live (each part's package from JLC's
-record of its LCSC/JLC number or of the exact part its MPN names), check_thermal on the board
+record of its LCSC/JLC number or of the exact part its MPN names), fp_verify's
+board mode (pad numbering of each placed footprint against the record its LCSC
+number or MPN finds in hwde's extractions), check_thermal on the board
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
@@ -496,6 +498,13 @@ def _check_fp_geometry(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--live"]
 
 
+def _fp_verify(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """fp_verify's board mode (#1285): the pad-numbering checks on each
+    footprint as placed, against the record its LCSC number or MPN finds in
+    hwde's extractions (no parts/ in a foreign tree)."""
+    return ["fp_verify.py", "--pcb", str(_pcb(b, rev, repo, empty))]
+
+
 def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board alone: with no thermal entry it screens the power ICs
     reference/thermal_parts.yaml knows (#884)."""
@@ -542,6 +551,7 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_ratings": _check_ratings,
            "check_wicking": _check_wicking,
            "check_mounting": _check_mounting,
+           "fp_verify": _fp_verify,
            "dfm": _dfm}
 
 
@@ -657,6 +667,7 @@ EVIDENCE = {
     "check_fp_geometry": lambda r: sum(_n(v) for v in (r.get("judged") or {}).values())
     if isinstance(r.get("judged"), dict) else _n(r.get("judged")),
     "check_fp_package": lambda r: _n(r.get("judged")),
+    "fp_verify": lambda r: sum(_n(v) for v in (r.get("judged") or {}).values()),
     "check_ratings": lambda r: _n(r.get("pins_checked")) + _n(
         (r.get("operating_range") or {}).get("parts_checked"))
     + _n(r.get("listing_comparison")) + _n(r.get("parts_rated_unextracted")),
@@ -697,7 +708,7 @@ def coverage(rep: dict, script: str | None = None) -> dict:
     `parts_judged` and `parts_by_source` count the parts it rated."""
     n = _not_judged_count(rep.get("not_judged"))
     out: dict = {"not_judged": n}
-    if script in ("check_fp_geometry", "check_fp_package"):
+    if script in ("check_fp_geometry", "check_fp_package", "fp_verify"):
         out["parts_judged"] = EVIDENCE[script](rep)
         out["parts_not_judged"] = n
     if script == "check_ratings" and isinstance(rep.get("rated_from"), dict):

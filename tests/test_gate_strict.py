@@ -995,7 +995,7 @@ def test_verify_all_strict_with_declared_na_passes(tmp_path, monkeypatch,
                   "check_stackup", "check_body_clash", "check_current",
                   "check_thermal", "check_net_tie", "check_pinouts",
                   "check_mounting", "mlcc_dcbias", "check_rail_budget",
-                  "netlist_audit"]
+                  "netlist_audit", "fp_verify"]
     assert sorted(cov["required"]) == sorted(board_only)
     assert sorted(cov["ran"]) == sorted(board_only)
     assert cov["skipped_error"] == {}
