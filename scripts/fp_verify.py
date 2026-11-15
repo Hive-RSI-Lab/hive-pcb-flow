@@ -43,11 +43,15 @@ Checks (land_pattern fields drive which run):
 
   - pad_numbering: which pad carries which pin (#1102). With the     (error)
                 record's land_pattern.pads (top-view places from the land
-                drawing) the numbered pads must fit them under a quarter
-                turn, no mirror, within the size tolerance; else each pad
-                on another pin's place is named, with hint
-                bottom_view_numbering (the mirror fits) or numbering_rotated
-                (a one-step shift fits). A letter/number ball grid must be
+                drawing, cited in land_pattern.pads_source) each place
+                must find its numbered pad as the clear nearest (one to one,
+                nearest under 0.7 of the next) under a quarter turn, no
+                mirror; else each pad on another pin's place is named, with
+                hint bottom_view_numbering (the mirror fits) or
+                numbering_rotated (a one-step shift fits). Places that fit
+                the footprint and its mirror alike (a 2-pad land) and lands
+                of another shape (check_fp_geometry's job) go to
+                not_judged. A letter/number ball grid must be
                 numbered as its top view (A1 top left, numbers rising
                 rightwards, letters downwards, under any turn). With
                 land_pattern.numbering "ccw_top" the numeric pads must run
@@ -57,12 +61,18 @@ Checks (land_pattern fields drive which run):
                 POD-PQFN-004-X03225-002); numbering round the short side
                 puts VDD on OE and the clock never starts
 
+Coverage: the payload's `coverage` says, per check (pin1, pad_numbering,
+pitch), judged / not_judged / not_stated, so a check that judged nothing
+shows as such, not as a pass. `--pairs FILE` (FOOTPRINT<TAB>RECORD lines)
+runs the set and reports those counts plus every error.
+
 Exit (SPEC section 6): 0 = no error-severity findings (warnings allowed),
 1 = one or more errors, 2 = unreadable footprint/JSON.
 
 Examples:
   fp_verify.py --footprint lib/aiee.pretty/C0402.kicad_mod --datasheet-json parts/C1525.json
   fp_verify.py --footprint fp.kicad_mod --datasheet-json ds.json --svg out.svg
+  fp_verify.py --pairs pairs.tsv
 """
 from __future__ import annotations
 
@@ -295,13 +305,50 @@ def _number_centres(copper: list[fplib.Pad]) -> dict[str, tuple[float, float]]:
             for k, v in acc.items()}
 
 
-def _fit_turn(ref: dict, got: dict, tol: float) -> int | None:
-    """The quarter turn that puts every numbered pad of `got` on its pin
-    in `ref` (no mirror; centroids aligned), else None."""
-    for f in fpg._frames("top", TURNS):
-        if fpg._err(ref, got, f)[0] <= tol:
-            return f[1]
-    return None
+NEAR_RATIO = 0.7  # a pad's nearest drawing pin must be clearly nearer than the next
+
+
+def _assign(ref: dict, got: dict, deg: int) -> tuple[dict, float] | None:
+    """Pad -> the drawing pin nearest it, with `got` turned `deg` and the
+    centroids aligned, and the worst pad-to-pin distance; None unless the
+    map is one to one and each pad's nearest pin is clearly nearer than its
+    next (NEAR_RATIO). Nearest, not within a tolerance: a maker's land often
+    sits a little in or out of a footprint's pad centres (rows 3.85 mm apart
+    on the drawing, 5 mm on the footprint), and that is check_fp_geometry's
+    business, not numbering's."""
+    g = {k: fpg._turn(*xy, deg) for k, xy in got.items()}
+    rc = (sum(x for x, _ in ref.values()) / len(ref),
+          sum(y for _, y in ref.values()) / len(ref))
+    gc = (sum(x for x, _ in g.values()) / len(g),
+          sum(y for _, y in g.values()) / len(g))
+    out, worst = {}, 0.0
+    for k, (x, y) in g.items():
+        d = sorted((math.hypot(x - gc[0] - rx + rc[0], y - gc[1] - ry + rc[1]), r)
+                   for r, (rx, ry) in ref.items())
+        if len(d) > 1 and d[0][0] >= NEAR_RATIO * d[1][0]:
+            return None
+        out[k] = d[0][1]
+        worst = max(worst, d[0][0])
+    return (out, worst) if len(set(out.values())) == len(out) else None
+
+
+def _clean(ref: dict, got: dict, tol: float) -> list[tuple[int, dict]]:
+    """The quarter turns whose nearest-pin map is clean and whose worst
+    distance is within `tol` of the best turn's: a near-square body (3.2 x
+    2.5 mm) turned a quarter still maps cleanly, a little worse, and must
+    not stand in for the turn that really fits."""
+    maps = [(t, *m) for t in TURNS if (m := _assign(ref, got, t)) is not None]
+    if not maps:
+        return []
+    best = min(w for _, _, w in maps)
+    return [(t, m) for t, m, w in maps if w <= best + tol]
+
+
+def _fits(ref: dict, got: dict, tol: float) -> int | None:
+    """The quarter turn (no mirror) under which every pad's nearest drawing
+    pin is its own, else None."""
+    return next((t for t, m in _clean(ref, got, tol)
+                 if all(k == r for k, r in m.items())), None)
 
 
 def _shifted(got: dict, s: int) -> dict:
@@ -314,29 +361,19 @@ def _shifted(got: dict, s: int) -> dict:
     return out
 
 
-def _misplaced(ref: dict, got: dict, tol: float) -> list[tuple[str, str]]:
-    """(pad, the drawing's pin at that place) for each pad on another pin's
-    place, in the frame where the most pads land on their own pin; [] when
-    the pads as a set don't fit the drawing (the shape differs)."""
+def _misplaced(ref: dict, got: dict, tol: float) -> list[tuple[str, str]] | None:
+    """(pad, the drawing's pin at its place) for each pad on another pin's
+    place, in the clean quarter turn where most pads sit on their own pin;
+    None when no turn gives a clean one-to-one match (the shape differs)."""
     best = None
-    rc = (sum(x for x, _ in ref.values()) / len(ref),
-          sum(y for _, y in ref.values()) / len(ref))
-    for f in fpg._frames("top", TURNS):
-        if not fpg._set_fits(ref, got, f, tol):
-            continue
-        g = {k: fpg._turn(*f[0](*xy), f[1]) for k, xy in got.items()}
-        gc = (sum(x for x, _ in g.values()) / len(g),
-              sum(y for _, y in g.values()) / len(g))
-        pairs = []
-        for k, (x, y) in g.items():
-            near = min(ref, key=lambda r: math.hypot(
-                x - gc[0] - ref[r][0] + rc[0], y - gc[1] - ref[r][1] + rc[1]))
-            if near != k:
-                pairs.append((k, near))
+    for _, m in _clean(ref, got, tol):
+        pairs = [(k, r) for k, r in m.items() if k != r]
         if best is None or len(pairs) < len(best):
             best = pairs
-    return sorted(best or [], key=lambda kv: (not kv[0].isdigit(),
-                                             int(kv[0]) if kv[0].isdigit() else 0, kv[0]))
+    if best is None:
+        return None
+    return sorted(best, key=lambda kv: (not kv[0].isdigit(),
+                                        int(kv[0]) if kv[0].isdigit() else 0, kv[0]))
 
 
 def _grid_handedness(copper: list[fplib.Pad]) -> float | None:
@@ -379,6 +416,60 @@ def _ccw_turn(got: dict) -> float | None:
         bx, by = got[b][0] - cx, got[b][1] - cy
         tot += math.atan2(ax * by - ay * bx, ax * bx + ay * by)
     return tot
+
+
+COVERED = ("pin1", "pad_numbering", "pitch")
+
+
+def coverage(land: dict, not_judged: list[dict], numbering: dict | None,
+             numbered: int) -> dict[str, str]:
+    """Per check: judged, not_judged, or not_stated (the record gives it
+    nothing to judge). A check that comes out not_judged on every part
+    judges nothing: --pairs counts these over a set of parts so it shows
+    as a number, not a silent pass (#1102)."""
+    left = {n["check"] for n in not_judged}
+    out = {}
+    for c in COVERED:
+        if c in left:
+            out[c] = "not_judged"
+        elif c == "pad_numbering":
+            out[c] = "judged" if numbering else "not_stated"
+        elif c == "pitch" and land.get("pitch_mm") is None and not land.get(
+                "pitches_mm"):
+            out[c] = "not_stated"
+        else:
+            out[c] = "judged"
+    return out
+
+
+def coverage_report(pairs: list[tuple[str, str]], pitch_tol: float,
+                    size_tol: float) -> dict:
+    """fp_verify over (footprint, record) pairs: per check, how many were
+    judged, not judged (by why) or not stated, and each error found."""
+    count = {c: Counter() for c in COVERED}
+    why = {c: Counter() for c in COVERED}
+    errors, unread = [], []
+    for fp_path, rec in pairs:
+        try:
+            ds = checklib.load_json(rec, "datasheet-json")
+            viol, facts, _ = verify(Path(fp_path), ds, pitch_tol, size_tol)
+        except Exception as e:  # noqa: BLE001  (one bad pair, not the set)
+            unread.append({"footprint": fp_path, "record": rec, "why": str(e)})
+            continue
+        for c, st in facts["coverage"].items():
+            count[c][st] += 1
+        for n in facts["not_judged"]:
+            why[n["check"]][n["why"][:90]] += 1
+        errors += [{"footprint": fp_path, "record": rec, "kind": v.get("kind") or v["check"],
+                    "message": v["msg"]}
+                   for v in viol if v["severity"] == "error"]
+    return {"pairs": len(pairs),
+            "coverage": {c: {"judged": count[c]["judged"],
+                             "not_judged": count[c]["not_judged"],
+                             "not_stated": count[c]["not_stated"],
+                             "not_judged_why": dict(why[c].most_common())}
+                         for c in COVERED},
+            "errors": errors, "unreadable": unread}
 
 
 def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tuple[list[dict], dict]:
@@ -453,28 +544,32 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         common = sorted(set(ref_all) & set(got))
         ref = {k: ref_all[k] for k in common}
         mine = {k: got[k] for k in common}
+        mirror = {k: (-x, y) for k, (x, y) in ref.items()}
         if len(common) < 2:
             not_judged.append({"check": "pad_numbering", "why": (
                 "land_pattern.pads shares fewer than two pad numbers with "
                 "the footprint, so there is nothing to place")})
-        elif (turn := _fit_turn(ref, mine, size_tol)) is not None:
+        elif ((turn := _fits(ref, mine, size_tol)) is not None
+              and _fits(mirror, mine, size_tol) is not None):
+            not_judged.append({"check": "pad_numbering", "why": (
+                "the land drawing's places fit both the footprint and its "
+                "mirror image, so they can't tell a top-view numbering from "
+                "a bottom-view one")})
+        elif turn is not None:
             numbering_fact = {"from": "pads", "fit": True, "turn_deg": turn,
                               "pads": len(common)}
+        elif (moved := _misplaced(ref, mine, size_tol)) is None:
+            not_judged.append({"check": "pad_numbering", "why": (
+                "the footprint's pads don't fall one to one on the land "
+                "drawing's places under any quarter turn (the shape differs; "
+                "check_fp_geometry judges that), so numbering is unchecked")})
         else:
-            mirror = {k: (-x, y) for k, (x, y) in ref.items()}
-            hint = ("bottom_view_numbering"
-                    if _fit_turn(mirror, mine, size_tol) is not None else
-                    "numbering_rotated" if any(
-                        _fit_turn(ref, _shifted(mine, s), size_tol) is not None
-                        for s in (1, -1)) else None)
-            moved = _misplaced(ref, mine, size_tol)
-            if moved:
-                where = "; ".join(f"pad {a} sits where the drawing has pin {b}"
-                                  for a, b in moved[:6])
-            else:
-                worst, at = fpg._err(ref, mine, fpg._frames("top")[0])
-                where = (f"the pads don't match the drawing's places under "
-                         f"any quarter turn (pad {at} is {worst:.2f} mm off)")
+            hint = ("bottom_view_numbering" if _fits(mirror, mine, size_tol) is not None
+                    else "numbering_rotated" if any(
+                        _fits(ref, _shifted(mine, s), size_tol) is not None for s in (1, -1))
+                    else None)
+            where = "; ".join(f"pad {a} sits where the drawing has pin {b}"
+                              for a, b in moved[:6])
             why = {"bottom_view_numbering": (
                        ": the mirror image of the drawing fits, so the "
                        "pads were numbered from a bottom view"),
@@ -483,10 +578,10 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
                    }.get(hint, "")
             numbering_fact = {"from": "pads", "fit": False, "hint": hint,
                               "pads": len(common)}
-            v("error", got.get(moved[0][0]) if moved else None,
+            v("error", got.get(moved[0][0]),
               f"pad numbering differs from the record's land pattern{why}. "
-              f"{where} (tol {size_tol} mm)",
-              "pad_numbering", hint=hint,
+              f"{where}",
+              "pad_numbering", hint=hint, drawing=land.get("pads_source"),
               misplaced=[{"pad": a, "drawing_pin": b} for a, b in moved])
     elif (hand := _grid_handedness(copper)) is not None:
         numbering_fact = {"from": "ball_names", "fit": hand > 0}
@@ -692,6 +787,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "pin1": pin1_fact,
         "pad_numbering": numbering_fact,
         "not_judged": not_judged,
+        "coverage": coverage(land, not_judged, numbering_fact, len(got)),
     }
     return viol, facts, fp
 
@@ -770,9 +866,12 @@ def write_svg(path: Path, fp: fplib.Footprint, bad_pads: set[str],
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--footprint", required=True, help=".kicad_mod file")
-    ap.add_argument("--datasheet-json", required=True,
+    ap.add_argument("--footprint", help=".kicad_mod file")
+    ap.add_argument("--datasheet-json",
                     help="datasheet-extract JSON (uses its land_pattern block)")
+    ap.add_argument("--pairs", help="instead of one footprint: a file of "
+                    "FOOTPRINT<TAB>RECORD lines; reports per check how many "
+                    "were judged, not judged and not stated, and each error")
     ap.add_argument("--svg", help="write the overlay SVG here (default: "
                     "<report stem>.overlay.svg beside --out; none without "
                     "--out, so nothing is written into the library)")
@@ -782,6 +881,18 @@ def main(argv: list[str] | None = None) -> int:
 
     def run():
         args = ap.parse_args(argv)
+        if args.pairs:
+            rows = [ln.split("\t")[:2] for ln in Path(args.pairs).read_text(
+                encoding="utf-8").splitlines() if ln.strip()
+                and not ln.startswith("#")]
+            rep = coverage_report([(a.strip(), b.strip()) for a, b in rows],
+                                  args.pitch_tol_mm, args.size_tol_mm)
+            payload = checklib.report("fp_verify", Path(args.pairs), [], **rep)
+            payload["status"] = "violations" if rep["errors"] else "pass"
+            return payload, args.out
+        if not (args.footprint and args.datasheet_json):
+            raise checklib.CheckError(
+                "give --footprint and --datasheet-json, or --pairs")
         fp_path = Path(args.footprint)
         if not fp_path.exists():
             raise checklib.CheckError(f"footprint not found: {fp_path}")

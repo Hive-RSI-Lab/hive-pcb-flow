@@ -275,6 +275,9 @@ DATASHEET_SCHEMA: dict = {
                         },
                     },
                 },
+                # the datasheet page and figure the pads were read from, and
+                # where the numbers came from (a pin-configuration top view)
+                "pads_source": _SRC,
                 # the drawing's numbering direction seen from the top, when
                 # it gives no positions: "ccw_top" (pin 1 then counter-
                 # clockwise, as on a QFN/SOIC top view) (#1102)

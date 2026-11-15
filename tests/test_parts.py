@@ -1614,3 +1614,78 @@ def test_fp_verify_row_spacing_on_a_quad_and_unmeasurable(tmp_path, capsys):
     un = [v for v in payload["violations"]
           if v["kind"] == "row_spacing_unmeasured"]
     assert code == 0 and len(un) == 1 and un[0]["severity"] == "warning"
+
+
+SO8_PINS = {str(i): ((-2.5 if i <= 4 else 2.5),
+                     (-1.905 + 1.27 * (i - 1) if i <= 4 else 1.905 - 1.27 * (i - 5)))
+            for i in range(1, 9)}
+
+
+def _so8_ds(tmp_path, rows=3.85):
+    """The maker's land: rows `rows` apart, not the footprint's 5 mm."""
+    k = rows / 5.0
+    return write_ds(tmp_path, {"mpn": "SO8", "pinout": [
+        {"pin": str(i), "name": f"P{i}", "type": "passive"} for i in range(1, 9)],
+        "land_pattern": {"pad_count": 8, "pin1": "1",
+                         "pads_source": "p.33 example board layout",
+                         "pads": [{"number": n, "at_mm": [x * k, y]}
+                                  for n, (x, y) in SO8_PINS.items()]}})
+
+
+def test_fp_verify_pads_judged_by_nearest_pin_not_tolerance(tmp_path, capsys):
+    ds = _so8_ds(tmp_path)
+    right = _numbered_fp(tmp_path, "SO8", [(n, x, y, 1.5, 0.6)
+                                           for n, (x, y) in SO8_PINS.items()])
+    code, payload = _fpv(tmp_path, capsys, right, ds)
+    assert code == 0, payload["violations"]
+    assert payload["pad_numbering"]["fit"] is True
+    assert payload["coverage"]["pad_numbering"] == "judged"
+    mirror = _numbered_fp(tmp_path, "SO8", [(n, -x, y, 1.5, 0.6)
+                                            for n, (x, y) in SO8_PINS.items()])
+    code, payload = _fpv(tmp_path, capsys, mirror, ds)
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    assert v["hint"] == "bottom_view_numbering"
+    assert v["drawing"] == "p.33 example board layout"
+
+
+def test_fp_verify_pads_two_pad_land_and_other_shape_not_judged(tmp_path, capsys):
+    ds = write_ds(tmp_path, {"mpn": "D", "pinout": [], "land_pattern": {
+        "pad_count": 2, "pads": [{"number": "1", "at_mm": [-1.6, 0]},
+                                 {"number": "2", "at_mm": [1.6, 0]}]}})
+    fp = _numbered_fp(tmp_path, "D", [("1", 1.6, 0, 1, 1), ("2", -1.6, 0, 1, 1)])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and payload["pad_numbering"] is None
+    assert "mirror" in [n for n in payload["not_judged"]
+                        if n["check"] == "pad_numbering"][0]["why"]
+    # three pads in a line on the drawing, a triangle on the footprint
+    ds = write_ds(tmp_path, {"mpn": "Q", "pinout": [], "land_pattern": {
+        "pad_count": 3, "pads": [{"number": str(i), "at_mm": [i - 2.0, 0]}
+                                 for i in (1, 2, 3)]}})
+    fp = _numbered_fp(tmp_path, "Q", [("1", -0.95, 1, 1, 1), ("2", 0.95, 1, 1, 1),
+                                      ("3", 0, -1, 1, 1)])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and payload["coverage"]["pad_numbering"] == "not_judged"
+
+
+def test_fp_verify_pairs_coverage_counts(tmp_path, capsys):
+    ds = _so8_ds(tmp_path)
+    fp = _numbered_fp(tmp_path, "SO8", [(n, x, y, 1.5, 0.6)
+                                        for n, (x, y) in SO8_PINS.items()])
+    (tmp_path / "b").mkdir()
+    bare = write_ds(tmp_path / "b", {"mpn": "B", "pinout": [],
+                                     "land_pattern": {"pad_count": 8, "pin1": "1"}})
+    pairs = tmp_path / "pairs.tsv"
+    pairs.write_text(f"{fp}\t{ds}\n{fp}\t{bare}\n", encoding="utf-8")
+    code, payload = run_main(fp_verify, ["--pairs", str(pairs)], tmp_path, capsys)
+    assert code == 0
+    c = payload["coverage"]["pad_numbering"]
+    assert (c["judged"], c["not_judged"], payload["pairs"]) == (1, 1, 2)
+    assert payload["errors"] == []
+    # a one-step shift on a judged pair is listed with its kind and message
+    shifted = _numbered_fp(tmp_path / "b", "SO8s", [
+        (str(int(n) % 8 + 1), x, y, 1.5, 0.6) for n, (x, y) in SO8_PINS.items()])
+    pairs.write_text(f"{shifted}\t{ds}\n", encoding="utf-8")
+    code, payload = run_main(fp_verify, ["--pairs", str(pairs)], tmp_path, capsys)
+    assert [e["kind"] for e in payload["errors"]] == ["pad_numbering"]
+    assert code == 1 and payload["errors"][0]["message"]
