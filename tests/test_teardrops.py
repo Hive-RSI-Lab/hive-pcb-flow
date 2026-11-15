@@ -286,6 +286,44 @@ def test_chord_is_the_copper_the_centreline_crosses():
     assert tdl._chord([(0, 0), (0, 0)], c, (0, 0)) == math.inf
 
 
+def test_chord_of_reads_the_track_into_a_round_item():
+    """chord_of: the chord part_repair's neck reads a graze on (#1138),
+    on the 16-gon KiCad tests a 0.254 mm via with."""
+    import math
+    side = 0.254 * math.cos(math.pi / 16)
+    # radial from the centre: side to side, wherever the via is
+    assert 0.244 < tdl.chord_of((0, 0), (1, 0), (0, 0), 0.254) < 0.254
+    assert tdl.chord_of((0, 0), (1, 0), (0, 0), 0.254) \
+        == pytest.approx(side)
+    assert tdl.chord_of((5, 7), (6, 7), (5, 7), 0.254) \
+        == pytest.approx(side)
+    # 0.11 off the centre: under the true circle's chord there
+    ch = tdl.chord_of((0, 0.11), (1, 0.11), (0, 0), 0.254)
+    assert 0.1 < ch < 2 * (0.127 ** 2 - 0.11 ** 2) ** 0.5
+    # an end outside the copper: nothing to read
+    assert tdl.chord_of((0.5, 0), (1, 0), (0, 0), 0.254) == math.inf
+
+
+@pytest.mark.parametrize("width, chord, grazes", [
+    (0.2, 0.15, True), (0.2, 0.2, True), (0.2, 0.20009, True),
+    (0.2, 0.2002, False), (0.2, float("inf"), False)])
+def test_grazes_on_counts_a_tie_within_a_tenth_um(width, chord, grazes):
+    """KiCad compares whole nm: a chord within 0.1 um of the width is a
+    graze, and no chord (inf) never is."""
+    assert tdl.grazes_on(width, chord) is grazes
+
+
+@pytest.mark.parametrize("text, on", [
+    ("(via (at 0 0))", False),
+    ("(via (at 0 0) (teardrops (enabled no)))", False),
+    ("(via (at 0 0) (teardrops (enabled yes)))", True),
+    ("(via (at 0 0) (teardrops (best_length_ratio 0.5)))", False)])
+def test_enabled_reads_the_teardrop_block(text, on):
+    """_enabled (route_auto reads it): on only with (enabled yes)."""
+    import sexpdata
+    assert tdl._enabled(sexpdata.loads(text)) is on
+
+
 def test_join_band_runs_on_from_the_outer_end():
     """A track into the via and the track going on from its outer end
     share the band (two_tracks). A stub wholly inside, a track with

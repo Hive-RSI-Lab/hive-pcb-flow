@@ -809,20 +809,22 @@ def test_takes_drop_and_drop_length_read_an_items_settings():
 
 
 @pytest.mark.parametrize("widths, wide, floor, want", [
-    # the widest the removed via's drops took that takes one here
-    ([0.2, 0.15, 0.22], 0.3, 0.1, 0.22),
-    ([0.25, 0.2], 0.3, 0.1, 0.2),
-    # none of them: the net's width, then its floor
-    ([], 0.2, 0.1, 0.2),
-    ([0.25], 0.3, 0.12, 0.12),
-    # never under the floor
-    ([0.1], 0.3, 0.15, 0.15),
+    # the removed via's drops' widths that take one here, widest first,
+    # then the net's width and its floor
+    ([0.2, 0.15, 0.22], 0.3, 0.1, [0.22, 0.2, 0.15, 0.1]),
+    ([0.25, 0.2], 0.3, 0.1, [0.2, 0.1]),
+    ([], 0.2, 0.1, [0.2, 0.1]),
+    ([0.25], 0.3, 0.12, [0.12]),
+    # never under the floor, each once
+    ([0.1], 0.3, 0.15, [0.15]),
+    ([0.2, 0.2], 0.2, 0.2, [0.2]),
     # no width at or over the floor takes a drop: leave it to the gate
-    ([0.2], 0.3, 0.25, None),
+    ([0.2], 0.3, 0.25, []),
 ])
-def test_neck_width_is_the_widest_a_drop_takes(widths, wide, floor, want):
-    assert pr.neck_width(0.254, dict(tdl.ITEM_PARAMS), widths, wide,
-                         floor) == want
+def test_neck_widths_are_those_a_drop_takes_best_first(widths, wide, floor,
+                                                       want):
+    assert pr.neck_widths(0.254, dict(tdl.ITEM_PARAMS), widths, wide,
+                          floor) == want
 
 
 def test_neck_tracks_narrow_a_track_too_wide_for_a_new_vias_drop():
@@ -859,7 +861,7 @@ def test_neck_tracks_narrow_a_track_too_wide_for_a_new_vias_drop():
 
     def width_of(i, p):
         asked.append((i, p["filter_ratio"]))
-        return 0.2
+        return [0.2]
 
     n = len(kept)
     out = pr.neck_tracks(kept, td_src, {10: ((), ())}, width_of)
@@ -888,14 +890,163 @@ def test_neck_tracks_narrow_a_track_too_wide_for_a_new_vias_drop():
             ("In1.Cu", 0.2, 0.3, pytest.approx(at)),
             ("In2.Cu", 0.2, 0.3, pytest.approx(0.2))]
     assert {(o["net"], tuple(o["via"])) for o in out} == {("A", (0.0, 0.0))}
+    assert [o["ops"] for o in out] == [[1], [2], [3, 4], [5]]
     # run again: nothing in the via's copper is too wide now
     assert pr.neck_tracks(kept, td_src, {10: ((), ())}, width_of) == []
     assert asked == [(0, 0.9)]
     # no width to narrow to: nothing changes, the gate names the loss
     kept2 = [dict(via), tr("F.Cu", (0, 0), (1, 0))]
     src2 = ["s", None]
-    assert pr.neck_tracks(kept2, src2, {}, lambda i, p: None) == []
+    assert pr.neck_tracks(kept2, src2, {}, lambda i, p: []) == []
     assert kept2[1] == tr("F.Cu", (0, 0), (1, 0)) and src2 == ["s", None]
+
+
+def _neck_via(at=(0.0, 0.0)):
+    return {"op": "add_via", "net": "A", "at": list(at), "size": 0.254,
+            "drill": 0.15, "teardrops": {}}
+
+
+def _neck_tr(layer, a, b, w=0.3, net="A"):
+    return {"op": "add_track", "net": net, "layer": layer, "width": w,
+            "start": list(a), "end": list(b)}
+
+
+def _neck_run(kept, widths, shorter=None, board_at=None):
+    td_src = ["s"] + [None] * (len(kept) - 1)
+    out = pr.neck_tracks(kept, td_src, shorter or {}, lambda i, p: widths,
+                         board_at)
+    assert len(td_src) == len(kept)
+    return out
+
+
+def test_a_neck_takes_the_best_width_its_track_does_not_graze_at():
+    """A track off the via's centre crosses less of its copper (the 16-gon
+    KiCad tests on): at 0.1 mm off a 0.254 mm via it crosses 0.152 mm, so
+    a 0.2 mm neck would graze (no drop) and it takes 0.15; at 0.11 mm off
+    (0.120 mm) only 0.1 mm is narrow enough. With no width it does not
+    graze at, the track stays and the gate names the drop it lost."""
+    def kept_():
+        return [_neck_via(), _neck_tr("F.Cu", (0, 0.1), (1, 0.1)),
+                _neck_tr("B.Cu", (0, 0.11), (1, 0.11))]
+    kept = kept_()
+    out = _neck_run(kept, [0.2, 0.15, 0.1])
+    fx = round(0.127 ** 2 - 0.1 ** 2, 9) ** 0.5 + 0.127 + pr.NECK_PAST
+    bx = round(0.127 ** 2 - 0.11 ** 2, 9) ** 0.5 + 0.127 + pr.NECK_PAST
+    assert [(o["layer"], o["width"], o["length"]) for o in out] == [
+        ("F.Cu", 0.15, pytest.approx(fx, abs=1e-4)),
+        ("B.Cu", 0.1, pytest.approx(bx, abs=1e-4))]
+    assert kept[1]["width"] == 0.15 and kept[2]["width"] == 0.1
+    assert kept[1]["end"] == [pytest.approx(fx, abs=1e-4), 0.1]
+    kept = kept_()
+    out = _neck_run(kept, [0.2, 0.15])
+    assert [(o["layer"], o["width"]) for o in out] == [("F.Cu", 0.15)]
+    assert kept[2] == _neck_tr("B.Cu", (0, 0.11), (1, 0.11))
+    assert len(kept) == 4
+
+
+def test_necks_on_one_via_and_layer_are_one_entry():
+    """Two tracks of the via's net on one layer, each too wide: both
+    narrow, and Necks names them once with their lengths summed."""
+    kept = [_neck_via(), _neck_tr("F.Cu", (0, 0), (1, 0)),
+            _neck_tr("F.Cu", (-1, 0), (0, 0))]
+    out = _neck_run(kept, [0.2])
+    at = 0.127 + 0.127 + pr.NECK_PAST
+    assert len(out) == 1
+    assert (out[0]["layer"], out[0]["width"], out[0]["was"]) \
+        == ("F.Cu", 0.2, 0.3)
+    assert out[0]["length"] == pytest.approx(2 * at)
+    assert out[0]["ops"] == [1, 2]
+
+
+def test_a_neck_split_that_rounds_onto_an_end_splits_nothing():
+    """Where the neck ends rounds (0.1 um) onto the track's far end, the
+    track narrows whole and nothing is split off; where it rounds onto
+    the joint it walked on to, the next track keeps its width."""
+    at = 0.127 + 0.127 + pr.NECK_PAST
+    kept = [_neck_via(), _neck_tr("F.Cu", (0, 0), (at + 3e-5, 0))]
+    out = _neck_run(kept, [0.2])
+    assert len(kept) == 2
+    assert kept[1] == _neck_tr("F.Cu", (0, 0), (at + 3e-5, 0), w=0.2)
+    assert out[0]["length"] == pytest.approx(at, abs=1e-4)
+    kept = [_neck_via(), _neck_tr("F.Cu", (0, 0), (at - 1e-5, 0)),
+            _neck_tr("F.Cu", (at - 1e-5, 0), (1, 0))]
+    out = _neck_run(kept, [0.2])
+    assert len(kept) == 3
+    assert kept[1]["width"] == 0.2
+    assert kept[2] == _neck_tr("F.Cu", (at - 1e-5, 0), (1, 0))
+    assert out[0]["ops"] == [1]
+
+
+def test_a_neck_walk_stops_at_the_prunes_ops_board_copper_and_vias():
+    """A walk goes on only through the one track at a joint: a track the
+    prune cut back counts there (a branch, or a track it may not touch),
+    and board copper of the net or a via of the run at the joint ends it."""
+    def kept_(extra=()):
+        return [_neck_via(), _neck_tr("F.Cu", (0, 0), (0.2, 0)),
+                _neck_tr("F.Cu", (0.2, 0), (1, 0)), *extra]
+    # a cut-back track at the joint is a branch
+    kept = kept_([_neck_tr("F.Cu", (0.2, 0), (0.2, 1))])
+    out = _neck_run(kept, [0.2], shorter={3: ((), ())})
+    assert kept[2]["width"] == 0.3 and out[0]["ops"] == [1]
+    assert out[0]["length"] == pytest.approx(0.2)
+    # the one track going on was cut back: not walked onto
+    kept = kept_()
+    out = _neck_run(kept, [0.2], shorter={2: ((), ())})
+    assert kept[2]["width"] == 0.3 and out[0]["ops"] == [1]
+    # without either, the walk goes on to the neck's end
+    kept = kept_()
+    out = _neck_run(kept, [0.2])
+    assert kept[2]["width"] == 0.2 and out[0]["ops"] == [1, 2]
+    # board copper of the net at the joint
+    asked = []
+
+    def board_at(net, layer, pt):
+        asked.append((net, layer, pt))
+        return pt == (0.2, 0.0)
+    kept = kept_()
+    out = _neck_run(kept, [0.2], board_at=board_at)
+    assert kept[2]["width"] == 0.3 and out[0]["ops"] == [1]
+    assert ("A", "F.Cu", (0.2, 0.0)) in asked
+    # a via of the run at the joint
+    kept = kept_([{"op": "add_via", "net": "A", "at": [0.2, 0.0],
+                   "size": 0.4, "drill": 0.2}])
+    out = _neck_run(kept, [0.2])
+    assert kept[2]["width"] == 0.3 and out[0]["ops"] == [1]
+    # a stub wholly in the via walks on to the track that leaves it, but
+    # not past board copper at its far end: the stub stays, and the track
+    # from that joint, an end in the via's copper too, necks on its own
+    def stub():
+        return [_neck_via(), _neck_tr("B.Cu", (0, 0), (0.05, 0)),
+                _neck_tr("B.Cu", (0.05, 0), (1, 0))]
+    kept = stub()
+    out = _neck_run(kept, [0.2])
+    assert out[0]["ops"] == [1, 2] and kept[1]["width"] == 0.2
+    assert out[0]["length"] == pytest.approx(0.127 + 0.127 + pr.NECK_PAST)
+    kept = stub()
+    out = _neck_run(kept, [0.2], board_at=lambda n, la, pt: pt == (0.05, 0))
+    assert out[0]["ops"] == [2] and kept[1]["width"] == 0.3
+    assert kept[2]["width"] == 0.2
+
+
+def test_neck_lengths_read_what_the_re_prune_left():
+    """The re-prune after the refill may take a necked track off (or find
+    the board had it): each entry's length is read again from its ops
+    still there, an entry with none left goes, and ops is not reported."""
+    kept = [_neck_via(), _neck_tr("F.Cu", (0, 0), (0.3, 0), w=0.2),
+            _neck_tr("F.Cu", (-0.2, 0), (0, 0), w=0.2),
+            _neck_tr("B.Cu", (0, 0), (0, 0.25), w=0.2)]
+    e = {"via": [0.0, 0.0], "net": "A", "width": 0.2, "was": 0.3}
+    necks = [dict(e, layer="F.Cu", length=0.5, ops=[1, 2]),
+             dict(e, layer="B.Cu", length=0.25, ops=[3])]
+    assert pr.neck_lengths(necks, kept, set()) == [
+        dict(e, layer="F.Cu", length=0.5),
+        dict(e, layer="B.Cu", length=0.25)]
+    assert pr.neck_lengths(necks, kept, {2}) == [
+        dict(e, layer="F.Cu", length=0.3),
+        dict(e, layer="B.Cu", length=0.25)]
+    assert pr.neck_lengths(necks, kept, {3}) == [
+        dict(e, layer="F.Cu", length=0.5)]
+    assert pr.neck_lengths(necks, kept, {1, 2, 3}) == []
 
 
 @pytest.mark.parametrize("params, want", [

@@ -38,7 +38,11 @@ positions, never file hashes.
    new near the move (exit 1 and nothing written otherwise). A new via on a
    net whose removed vias had teardrops (ripped, pushed, or pruned before or
    after the refill) takes the nearest one's settings (route_edit's add_via
-   `teardrops`, carried in its route file). After the refill the run counts,
+   `teardrops`, carried in its route file). The joins lay a net at the widest
+   width ripped from it, so a track they end on such a via can be too wide
+   for its drop: it narrows from the via to just past where the drop ends,
+   to a width the drop takes, the net's floor allows and the track does not
+   graze the via at (Necks in the report). After the refill the run counts,
    per layer, the tracks into each via that a drop answers. It fails when a
    new via has fewer than the via it took them from had, as far as the
    tracks into it now allow (lost when answered `a1 < min(a0, n1)`), and

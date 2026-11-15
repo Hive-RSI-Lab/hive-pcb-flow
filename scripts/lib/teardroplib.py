@@ -185,6 +185,12 @@ def params_of(node) -> dict | None:
     return out
 
 
+def _enabled(node) -> bool:
+    """True when the via or pad node has teardrops on (params_of)."""
+    p = params_of(node)
+    return bool(p and p.get("enabled"))
+
+
 def via_params(root) -> dict:
     """Every via's uuid -> params_of (None: no teardrop block)."""
     out = {}
@@ -512,6 +518,23 @@ def _chord(coords, shape, inside) -> float:
     return math.inf
 
 
+def chord_of(a, b, at, size: float) -> float:
+    """The chord a straight track from a (its end in the copper) to b
+    crosses on a round item of this size at at, as KiCad 10.0.6 reads it
+    for the graze test (_kicad_circle, _chord): a track this wide or wider
+    gets no drop there (grazes). inf when there is no chord to read."""
+    return _chord([tuple(a[:2]), tuple(b[:2])],
+                  _kicad_circle(at, size / 2.0), tuple(a[:2]))
+
+
+def grazes_on(width: float, chord: float) -> bool:
+    """True when KiCad 10.0.6 makes no drop for a track this wide that
+    enters the copper on chord (chord_of): it compares whole nm, so a
+    chord within 0.1 um of the width counts as a graze, and a tie never
+    asks for a drop."""
+    return chord < width + 1e-4
+
+
 def _join_band(t, at, cu, chord_shape, ends) -> tuple:
     """(band, None): the band a drop for track t on this item lies in (see
     drop in the module docstring); or (None, why) when KiCad 10.0.6 makes
@@ -531,10 +554,8 @@ def _join_band(t, at, cu, chord_shape, ends) -> tuple:
         outer = (a, b)
     else:
         inside = a if ins[0] else b
-        # KiCad compares whole nm; a chord within 0.1 um of the width
-        # counts as a graze, so a tie never asks for a drop
-        if _chord(list(t.shape.coords), chord_shape, inside) \
-                < t.width + 1e-4:
+        if grazes_on(t.width, _chord(list(t.shape.coords), chord_shape,
+                                     inside)):
             return None, "grazes"
         outer = (b if ins[0] else a,)
     band = [(t.shape, t.width / 2.0 + BAND_MM)]
