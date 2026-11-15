@@ -468,8 +468,23 @@ boards:
     summary: no current limit on the panel drive, so large panels drain the output capacitor
     source_quote: "The driver does not limit the current to the panel so it exceeds the available charge in the output capacitor when driving larger panels and hiccups."
     fault_class: PI (load current limit)
-    verdict: missed
-    follow_up: "a switched capacitive load against the boost's output charge and current limit: needs the load's capacitance, which no schematic carries (#1030, survey)"
+    verdict: caught_with_constraints
+    catch:
+      script: netlist_audit
+      kind: switched_load_droop
+      net: VPDLC
+      constraints:
+        rev_a: {switched_loads: [{nets: ["/OUTA", "/OUTB"], capacitance_f: 1.23e-5}]}
+        rev_b: {switched_loads: [{nets: ["/PDLC_OUT_A", "/PDLC_OUT_B"], capacitance_f: 1.23e-5}]}
+    note: >-
+      #1093: the panel's capacitance is not on the schematic, so the catch
+      states it. v1's README asks for a "~60 V AC square wave at 100 Hz" and
+      "300 mA maximum continous load", so C = 0.3 / (4 x 61 x 100) = 12.3 uF.
+      Each edge swings it 2 x 61 V straight from VPDLC's ~105 uF through the
+      DMN10H120SE bridge; the LM5158 (3.26 A min limit) cannot refill it
+      before the output falls 21%, past its 90% FB undervoltage threshold,
+      so it hiccups. v1 trips from about 5.5 uF. v2 drives the panel through
+      L2 (68 uH), which the rule leaves not judged.
   - id: pdlc-3
     summary: the EN input is too sensitive when left floating
     source_quote: "The `EN` input is much too sensitive when left floating."

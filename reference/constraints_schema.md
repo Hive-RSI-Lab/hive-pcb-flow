@@ -466,6 +466,13 @@ Consumers per key (script -> phase):
   // (10 m of audio cable at ~100 pF/m); a board-to-board header is ~20.
   "cable_pf": {"J3": 1000, "J7": 20},
 
+  // netlist_audit switched_load_droop (#1093): a capacitive load a bridge
+  // or switch steps (a PDLC film, a piezo, an LCD segment), in farads. nets
+  // [a, b] for a load across two bridge legs, net for one leg to ground; the
+  // step charge is judged against its converter's current limit and output
+  // capacitance (reference/source_limits.yaml converters).
+  "switched_loads": [{"nets": ["/PANEL_A", "/PANEL_B"], "capacitance_f": 1.4e-7}],
+
   // check_thermal (P8), place_anneal spreading term (P6)
   "thermal": [{"ref": "U2", "power_w": 0.8, "net": "GND", "dt_c": 40,
                "min_vias": 4},
