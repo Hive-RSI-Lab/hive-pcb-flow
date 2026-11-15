@@ -76,24 +76,24 @@ parts on an ordinary board.
 
 ## Ranked
 
-| # | Class | Count | Gen. | Rank | Seen by | Data it needs |
-|---|---|---|---|---|---|---|
-| 1 | Footprint vs the part's package | 7 | 3 | 21 | footprint + BOM (LCSC/MPN, value) | each part's package, pad count and pitch from its LCSC record (EasyEDA footprint) or MPN ordering code; body widths of SSOP/SOIC/PowerPAK variants; case-size limits for passives (largest C or R a case holds) |
-| 4 | Board-level DFM | 5 | 3 | 15 | footprint, pcb, 3D | none beyond the board: vias inside SMD pads, vias under a part's body, mounting holes; plus body/courtyard collisions with socketed parts and module antenna keep-outs |
-| 2 | Connector mechanics vs the mate | 7 | 2 | 14 | footprint, 3D | lead sizes per connector footprint, the mate's gender and row pitch (a stated mating side), mounting heights of raised THT parts, power-connector pin order |
-| 12 | Footprint geometry vs the maker's drawing | 4 | 3 | 12 | footprint | the maker's land pattern: hole sizes, pin-1 corner, pin order seen from the mating face |
-| 14 | Active-low polarity across a connection | 3 | 3 | 9 | netlist | the active level of each pin (from its name: ~, /, N suffix; from the symbol) and of each net it is wired to |
-| 15 | I/O supply domain vs the bus level | 2 | 3 | 6 | netlist | each IC's I/O supply pins and the level each interface needs; which rail powers the parts on a bus |
-| 13 | Boot straps on modules | 2 | 3 | 6 | netlist | reference/reset_states.yaml rows for modules (ESP-12/ESP8266); check_straps exists, the rows don't |
-| 7 | Datasheet application circuit (part landed, #1158) | 3 | 2 | 6 | netlist | per-part required externals and reference networks from the typical-application figure; pins that must be connected (unused CMOS inputs, open-collector inputs' pulls) |
-| 10 | Silk pin labels and polarity marks (two-column legend rule landed, #1172) | 3 | 2 | 6 | footprint + silk | none; extends #1028 to pin-number legends and diode cathode marks |
-| 9 | Shared-bus drivers (strobe and I2C-master rules landed, #1087, #1170, #1171) | 5 | 1 | 5 | netlist | driver type per part (push-pull, open drain, tri-state), I2C masters per bus, bus strobes, a pull on a tri-state line |
-| 8 | Wiring against design intent (part landed, #1137) | 5 | 1 | 5 | netlist + a stated fact | netlist_audit rules 34-36 and design_intent (modules, bus_unread) judge a named bus, UART crossover and a '245's DIR; left: a jumper map, ISA IRQ per port, gp8b-v50-2 (pulse timing), ice1usb-r01-2 (E1 NT/TE pinouts) |
-| 5 | Symbol pin map vs the part (landed, #1134) | 1 | 3 | 3 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts |
-| 6 | Pin function on the wrong net (landed, #1155) | 1 | 3 | 3 | netlist | pin names of the stock symbols, protector cell/load pin names, reference/mcu_pins.yaml debug pins; input-only pins of CPLDs |
-| 11 | Load against a source's limit | 1 | 1 | 1 | netlist + a stated load | the off-board load's capacitance |
-| 3 | Off-board inputs (landed, #1139) | 0 | 2 | 0 | netlist | reference/pin_abs_max.yaml (abs-max, negative too, cited; part_rows drafts it): netlist_audit rules 23 and 28; identidem-1 by check_pinouts pulsed_load_no_bulk (#1090) |
-| - | Not static | 4 | - | - | not static | firmware, radio power, MCU timer and interrupt pin choice |
+| # | Class | Count | Gen. | Rank | Seen by | Data it needs | Why still missed |
+|---|---|---|---|---|---|---|---|
+| 1 | Footprint vs the part's package | 7 | 3 | 21 | footprint + BOM (LCSC/MPN, value) | each part's package, pad count and pitch from its LCSC record (EasyEDA footprint) or MPN ordering code; body widths of SSOP/SOIC/PowerPAK variants; case-size limits for passives (largest C or R a case holds) | a part named only by its value fits several packages, and parts with no LCSC or MPN number can't be decoded at all |
+| 4 | Board-level DFM | 5 | 3 | 15 | footprint, pcb, 3D | none beyond the board: vias inside SMD pads, vias under a part's body, mounting holes; plus body/courtyard collisions with socketed parts and module antenna keep-outs | no rule yet judges clearance between part bodies or the keep-out a module needs |
+| 2 | Connector mechanics vs the mate | 7 | 2 | 14 | footprint, 3D | lead sizes per connector footprint, the mate's gender and row pitch (a stated mating side), mounting heights of raised THT parts, power-connector pin order | the mate's pin order and orientation are in no design file and no row states them |
+| 12 | Footprint geometry vs the maker's drawing | 4 | 3 | 12 | footprint | the maker's land pattern: hole sizes, pin-1 corner, pin order seen from the mating face | custom footprints with no land-pattern row, stock match or cached model leave nothing to compare against |
+| 14 | Active-low polarity across a connection | 3 | 3 | 9 | netlist | the active level of each pin (from its name: ~, /, N suffix; from the symbol) and of each net it is wired to | no rule yet compares a pin's active level with the level the net idles or is driven at |
+| 15 | I/O supply domain vs the bus level | 2 | 3 | 6 | netlist | each IC's I/O supply pins and the level each interface needs; which rail powers the parts on a bus | no row gives each IC's I/O supply pins or the level each interface needs |
+| 13 | Boot straps on modules | 2 | 3 | 6 | netlist | reference/reset_states.yaml rows for modules (ESP-12/ESP8266); check_straps exists, the rows don't | parts with no reset-state row are skipped, and the findings it does make fire on both revisions, so it can't tell the fix apart |
+| 7 | Datasheet application circuit (part landed, #1158) | 3 | 2 | 6 | netlist | per-part required externals and reference networks from the typical-application figure; pins that must be connected (unused CMOS inputs, open-collector inputs' pulls) | the landed rule covers only parts with an application-circuit row; the missed parts have none |
+| 10 | Silk pin labels and polarity marks (two-column legend rule landed, #1172) | 3 | 2 | 6 | footprint + silk | none; extends #1028 to pin-number legends and diode cathode marks | the landed rule reads two-column legends only; other legend layouts and polarity marks aren't judged |
+| 9 | Shared-bus drivers (strobe and I2C-master rules landed, #1087, #1170, #1171) | 5 | 1 | 5 | netlist | driver type per part (push-pull, open drain, tri-state), I2C masters per bus, bus strobes, a pull on a tri-state line | the landed rules don't fire: no row gives each part's driver type |
+| 8 | Wiring against design intent (part landed, #1137) | 5 | 1 | 5 | netlist + a stated fact | netlist_audit rules 34-36 and design_intent (modules, bus_unread) judge a named bus, UART crossover and a '245's DIR; left: a jumper map, ISA IRQ per port, gp8b-v50-2 (pulse timing), ice1usb-r01-2 (E1 NT/TE pinouts) | the intended part or line is a stated fact, not something any design file holds |
+| 5 | Symbol pin map vs the part (landed, #1134) | 1 | 3 | 3 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts | the landed rule fires on another part; the missed part has no pin table to check against |
+| 6 | Pin function on the wrong net (landed, #1155) | 1 | 3 | 3 | netlist | pin names of the stock symbols, protector cell/load pin names, reference/mcu_pins.yaml debug pins; input-only pins of CPLDs | a programmable part's pin direction isn't in its symbol and no row gives it |
+| 11 | Load against a source's limit | 1 | 1 | 1 | netlist + a stated load | the off-board load's capacitance | the load is off the board and its size is in no file |
+| 3 | Off-board inputs (landed, #1139) | 0 | 2 | 0 | netlist | reference/pin_abs_max.yaml (abs-max, negative too, cited; part_rows drafts it): netlist_audit rules 23 and 28; identidem-1 by check_pinouts pulsed_load_no_bulk (#1090) | no round-3 member |
+| - | Not static | 4 | - | - | not static | firmware, radio power, MCU timer and interrupt pin choice | no design file holds the fact |
 
 Ties go to the check that judges more parts: 15 (every IC) before 13
 (MCUs and modules) before 7 (parts with a row) before 10 (connectors and
