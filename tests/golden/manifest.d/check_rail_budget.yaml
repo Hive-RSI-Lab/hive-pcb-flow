@@ -1,0 +1,14 @@
+# Seeded fault for check_rail_budget (#1118).
+mutants:
+  rail-bead-short:
+    board: usbbuck4
+    script: mutations/rail_bead_short.py
+    check: check_rail_budget
+    defect: >-
+      RAIL BUDGET fault: a ferrite bead FB98 (0.7 ohm max DCR) between the
+      buck U2 and +3V3; at the rail's 0.4 A it drops 280 mV, and U2's
+      3.234 V low limit leaves U1 2.951 V against its 3.0 V minimum; each
+      net's copper is fine on its own
+    expect:
+      kind: rail_budget_short
+      ref: U1

@@ -326,7 +326,7 @@ SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
     "placement", "coating", "antennas", "pcb_antennas", "si", "cable_pf",
     "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
     "isolation", "mechanical", "transformers", "pinouts",
-    "design_intent", "switched_loads"}
+    "design_intent", "switched_loads", "rail_budget"}
 PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
@@ -787,6 +787,20 @@ class _FileLint:
                     self.add("error", "bad_type",
                              f"{path}: switched_loads must be a list of "
                              "{nets: [a, b] | net: x, capacitance_f}", path)
+            elif key == "rail_budget":
+                # check_rail_budget (#1118): sources, series parts and loads
+                # by refdes, each an object of its terms
+                ok = isinstance(val, dict) and all(
+                    k in ("sources", "series", "loads", "note", "notes")
+                    for k in val) and all(
+                    isinstance(val.get(sec) or {}, dict) and all(
+                        isinstance(e, dict)
+                        for e in (val.get(sec) or {}).values())
+                    for sec in ("sources", "series", "loads"))
+                if not ok:
+                    self.add("error", "bad_type",
+                             f"{path}: rail_budget must be {{sources|series|"
+                             "loads: {ref: {...}}}}", path)
             elif key == "rf_match":
                 # check_rf_match (#488) validates its entries itself (exit 2)
                 if not (isinstance(val, (list, dict))):

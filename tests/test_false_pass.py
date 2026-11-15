@@ -584,6 +584,7 @@ def test_real_gerbers_inner_ring_is_read(tmp_path):
     ("check_si", [], "signal class"),
     ("check_diffpair", [], "differential pair"),
     ("check_cap_load", [], "op-amp"),
+    ("check_rail_budget", [], "minimum supply"),
     ("check_antenna", [], "rf_modules"),
     ("check_route_style", [], "no tracks"),
     ("check_silk", [], "no silk"),
