@@ -3562,3 +3562,27 @@ def test_a_rating_with_no_reference_is_measured_from_a_negative_ground(
     # +3V3 over -5V is 8.3 V, past the 6 V maximum
     assert _over(_neg_gnd(tmp_path / "c", vin="+3V3"))
     assert not _over(_neg_gnd(tmp_path / "d", gnd="GND", vin="+3V3"))
+
+
+def test_a_driver_on_a_rail_past_the_usb_level_leaves_the_net_unbounded(
+        tmp_path):
+    # a PD controller's CC pin on a VBUS-fed supply: its rail is what it is
+    # fed from, not what it drives CC to, so neither bound is taken
+    def run(sub, rail):
+        fps = [("J2", "C50", {"A6": "/DP", "A1": "GND"}, "USB_C",
+                "USB_C_Receptacle"),
+               ("U9", "C30", {"1": "/DP", "2": "GND"}),
+               ("U1", "C40", {"1": rail, "2": "GND", "3": "/DP"}),
+               ("J1", "C31", {"1": "+5V", "2": "GND"})]
+        conn = {"mpn": "TESTCONN", "pinout": [
+            {"pin": "A6", "name": "D+", "type": "passive"},
+            {"pin": "A1", "name": "GND", "type": "ground"}]}
+        return _run(_ws(tmp_path / sub, fps, {"C30": _sink(3.3),
+                                              "C40": DRIVER, "C50": conn}))
+    p = run("a", "+5V")
+    assert not _over(p)
+    assert any(n.startswith("/DP: U1.3 sits on a rail past J2.A6")
+               for n in p["not_judged"])
+    # a 3.3 V rail stays inside the level: the net is bounded at 3.6 V
+    hit = _over(run("b", "+3V3"))
+    assert hit and hit[0]["bound_v"] == [0.0, 3.6]

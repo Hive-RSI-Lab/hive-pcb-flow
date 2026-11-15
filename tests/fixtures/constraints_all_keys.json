@@ -80,6 +80,8 @@
     {"name": "ADDR", "nets": ["/A*"], "ref_nets": ["/CK_P", "/CK_N"]}
   ],
   "voltages": [{"net": "+12V", "voltage": 12, "min": 10.8}],
+  "interface_levels": [{"ref": "J3", "max": 5.0, "min": 0.0,
+                        "pins": ["2", "3"]}],
   "voltage_pairs": [{"a": "+12V", "b": "GND", "voltage": 12,
                      "why": "input to return"}],
   "nets": [{"net": "+12V", "voltage": 12}],

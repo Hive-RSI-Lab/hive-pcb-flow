@@ -1092,6 +1092,21 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
                 ok = False
                 break
             drv.append((ref, ptype, rail, pad, ext))
+        # a connector's declared level and a part on the board whose rail
+        # reaches past it (a PD controller's CC pin on a VBUS-fed supply):
+        # its rail says what it is fed from, not what it drives the line
+        # to, so the net is left unbounded rather than given that rail
+        lv = [d for d in drv if (d[0], d[3]) in levels]
+        past = sorted({f"{d[0]}.{d[3]}" for d in drv if d not in lv and any(
+            d[2][0] < l[2][0] - EPS or d[2][1] > l[2][1] + EPS for l in lv)})
+        if ok and lv and past:
+            ok = False
+            if not_judged is not None:
+                not_judged.append(
+                    f"{net}: {', '.join(past)} sits on a rail past "
+                    f"{lv[0][0]}.{lv[0][3]}'s {_fmt(lv[0][2][1])} V level "
+                    f"({levels[(lv[0][0], lv[0][3])][2]}), so the net was "
+                    "not bounded")
         # a bare hull of the board's rails proves nothing
         if ok and ((feeds and cl) or drv):
             info[net] = (feeds, cl, drv)
