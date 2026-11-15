@@ -215,7 +215,9 @@ smallest of: the power entry of the rail on an inductor's far pad (at that
 entry's dT), and the iout_a of a block whose name carries the regulator's
 ref; capped at the rating. With no load stated, a node at signal width
 (narrowest track <= SCREEN_WIDTH_MM, 0.25) on a part rated >=
-SCREEN_MIN_RATED_A (1 A) keeps its undersized_track findings, "no declared
+SCREEN_MIN_RATED_A (1 A) keeps its undersized_track and
+insufficient_transition_vias findings (SCREEN_KINDS: a node left at signal
+width also changes layer through a signal via, digits v1 U1), "no declared
 load; judged at the part's rated current"; any other failure at the rating
 is not judged (reason no_declared_load, report key "no_declared_load"). All
 inferred findings are warnings with extras inferred=true, from_part and
@@ -2580,6 +2582,7 @@ def inferred_switch_entries(entries: list[dict], bg: geom.BoardGeom,
 
 SCREEN_WIDTH_MM = 0.25         # default signal width: the no-load screen's ceiling
 SCREEN_MIN_RATED_A = 1.0       # ... on a regulator rated at least this
+SCREEN_KINDS = ("undersized_track", "insufficient_transition_vias")
 
 
 def declared_switch_load(bg: geom.BoardGeom, entry: dict,
@@ -2650,7 +2653,7 @@ def judge_switch_node(bg: geom.BoardGeom, entry: dict, cons: dict):
     narrow = min(widths) if widths else None
     screen = (rated >= SCREEN_MIN_RATED_A and narrow is not None
               and narrow <= SCREEN_WIDTH_MM + 1e-6)
-    kept = [v for v in vs if screen and v["kind"] == "undersized_track"]
+    kept = [v for v in vs if screen and v["kind"] in SCREEN_KINDS]
     for v in kept:
         v["severity"] = "warning"
         v["msg"] = v["items"][0]["msg"] = (
