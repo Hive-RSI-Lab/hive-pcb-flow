@@ -25,6 +25,11 @@ Router.reroute(net, region, ...) rip other signal nets' copper in a box,
                                  ripped net may end with more islands than it
                                  had (#927)
 Router.corridor(net, a, b, hw)   the route as a polygon, for a pour (#926)
+
+A net's routes keep off the layers the board's .kicad_dru disallows its
+tracks on, and take no via where it disallows those (#1140: Rules.bans);
+a disallow rule whose condition the reader can't follow is named on stderr
+and in Router.unread_rules, and left to DRC.
 """
 from __future__ import annotations
 
@@ -55,6 +60,7 @@ PRES_START = 1.0    # PathFinder: the price of a cell another net uses...
 PRES_GROW = 1.5     # ...grows this much each round
 HIST_STEP = 0.5     # and a cell shared at the end of a round keeps this
 REROUTE_TRIES = 6    # orders reroute tries before it gives up
+_WARNED: set = set()   # unread DRU rules already named on stderr
 
 
 def _side_union(side: dict):
@@ -91,6 +97,28 @@ class Router:
         # keep_nets): their copper is sized by rule
         self.keep_nets = ({z.net for z in bg.zones_of()}
                           | set(self.rules.net_width) | {""})
+        bans = getattr(self.rules, "bans", None)
+        self.unread_rules = list(bans.unread) if bans else []
+        new = [r for r in self.unread_rules if r not in _WARNED]
+        if new:
+            _WARNED.update(new)
+            print("mazeroute: the .kicad_dru's disallow rule(s) "
+                  f"{', '.join(new)} have a condition this router doesn't"
+                  " read: routes may break them, and DRC will say",
+                  file=sys.stderr)
+
+    def net_layers(self, net: str) -> list:
+        """The router's layers the net's tracks may use: the .kicad_dru's
+        disallow rules keep some nets off some (#1140)."""
+        return self.rules.net_layers(net, self.layers)
+
+    def _on(self, net: str) -> str:
+        """The net's layers, for an error."""
+        on = self.net_layers(net)
+        off = [ly for ly in self.layers if ly not in on]
+        return (", ".join(on) or "no layer") + (
+            f" (the .kicad_dru keeps {net} off {', '.join(off)})"
+            if off else "")
 
     # ------------------------------------------------------------ ends
 
@@ -113,6 +141,12 @@ class Router:
                     if ly not in self.layers:
                         raise CheckError(f"end {s!r}: {ly} is not a routable"
                                          f" layer ({', '.join(self.layers)})")
+                    if layer and ly not in self.net_layers(net):
+                        raise CheckError(
+                            f"end {s!r}: the .kicad_dru disallows {net}'s"
+                            f" tracks on {ly}; name the point on one of"
+                            f" {', '.join(self.net_layers(net)) or '-'},"
+                            " or with no layer")
                     side.setdefault(ly, []).append(
                         Point(x, y).buffer(self.g * 0.75, quad_segs=4))
                 continue
@@ -197,7 +231,7 @@ class Router:
         hit = self.find(net, sa, sb, width)
         if hit is None:
             raise CheckError(f"route {net} {a} -> {b}: no path on "
-                             f"{', '.join(self.layers)} at the board's rules")
+                             f"{self._on(net)} at the board's rules")
         ops = hit[0]
         if pull:
             ops = pulled_ops(hit[2], hit[1], ops,
@@ -299,7 +333,7 @@ class Router:
                     *[s for k, s in enumerate(sides) if k != j]), width)
             if hit is None:
                 raise CheckError(f"{net}: {len(isl)} islands, no path joins"
-                                 f" them on {', '.join(self.layers)}")
+                                 f" them on {self._on(net)}")
             self.commit(hit[0])
             ops += hit[0]
         raise CheckError(f"{net}: islands won't join")
@@ -408,6 +442,9 @@ class Router:
         grids = [self.grid(net, a, b, win, w) for net, a, b, w in prepared]
         gr0 = grids[0]
         K, ny, nx = len(self.layers), gr0.ny, gr0.nx
+        # a grid has only the layers its net may use (#1140): its layer kk
+        # is the router's lk[n][kk]
+        lk = [[self.layers.index(ly) for ly in gr.layers] for gr in grids]
         base = [[np.frombuffer(c, np.float64).reshape(ny, nx).copy()
                  for c in gr.cost] for gr in grids]
         hist = [np.zeros((ny, nx)) for _ in range(K)]
@@ -435,7 +472,7 @@ class Router:
             via = np.zeros((ny, nx), bool)
             for (i, j, k), nxt in zip(path, path[1:] + [None]):
                 if k >= 0:
-                    line[k][j, i] = True
+                    line[lk[n][k]][j, i] = True
                 if k < 0 or (nxt is not None and nxt[2] != k):
                     via[j, i] = True
             out = [ndimage.binary_dilation(m, disk(r)) if m.any() else m
@@ -445,10 +482,10 @@ class Router:
                 out = [o | vm for o in out]
             return out
 
-        def own(path):
+        def own(path, n):
             cells = [np.zeros((ny, nx), bool) for _ in range(K)]
             for i, j, k in path:
-                for kk in (range(K) if k < 0 else [k]):
+                for kk in (range(K) if k < 0 else [lk[n][k]]):
                     cells[kk][j, i] = True
             return cells
 
@@ -464,9 +501,9 @@ class Router:
                         for k in range(K):
                             occ[k] += cl[k]
                 gr = grids[n]
-                gr.cost = [array("d", (base[n][k] * (1 + hist[k])
+                gr.cost = [array("d", (base[n][kk] * (1 + hist[k])
                                        * (1 + pres * occ[k])).tobytes())
-                           for k in range(K)]
+                           for kk, k in enumerate(lk[n])]
                 path = self.search(gr, a, b)
                 if path is None:
                     raise CheckError(f"route_group {net}: no path even with"
@@ -475,7 +512,7 @@ class Router:
                 claim[n] = claims(path, n)
             shared = 0
             for n, path in enumerate(paths):
-                mine = own(path)
+                mine = own(path, n)
                 for m, cl in enumerate(claim):
                     if m == n:
                         continue

@@ -135,6 +135,19 @@ class Rules:
     #                                          take a via (filled + capped)
     necks: dict = field(default_factory=dict)  # net -> {layer: [(zone,
     #                    width)]}: where its tracks may narrow (#924)
+    bans: object = None   # routelib.DruBans: the .kicad_dru's disallow
+    #                       track and via rules (#1140)
+
+    def net_layers(self, net: str, layers) -> list:
+        """Of `layers`, those the board's DRU lets the net have a track on
+        (#1140: a route on a layer a disallow rule bans fails DRC)."""
+        banned = self.bans.track_layers(net) if self.bans else set()
+        return [ly for ly in layers if ly not in banned]
+
+    def via_bans(self, net: str) -> set:
+        """The via kinds (through, micro, blind, buried) a DRU disallow
+        rule keeps off the net."""
+        return self.bans.via_kinds(net) if self.bans else set()
 
     def width(self, net: str) -> float:
         w = max(self.net_width.get(net, 0.0) + 0.001, self.min_width)
@@ -224,6 +237,9 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
         net_width=rc.dru_net_floors(dru, "track_width"),
         net_clearance=rc.dru_net_floors(dru, "clearance"),
         necks=board_necks(pcb, bg, rc.dru_neck_rules(dru, "track_width")),
+        bans=routelib.dru_layer_bans(
+            dru.read_text(encoding="utf-8") if dru.is_file() else "",
+            list(bg.copper_layers)),
         margin=margin, **hdi)
 
 
@@ -414,8 +430,18 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
                rip_cost: float = 40.0, necks: bool = True) -> Grid:
     """The search grid of one connection. Where the net has a neck zone
     (Rules.necks) a cell is cleared for the neck width, and path_to_ops lays
-    the neck width there (#924). necks=False: the full width everywhere."""
+    the neck width there (#924). necks=False: the full width everywhere.
+    The grid's layers are `layers` less those a DRU disallow rule keeps the
+    net's tracks off (#1140; Grid.layers): a through via still crosses
+    them, held off their other-net copper by vblk; a side on one is reached
+    by a via into it, as a plane's is. A via kind the DRU disallows the
+    net (Rules.via_bans) is left out. CheckError when no layer is left."""
     bg = obs.bg
+    allowed = rules.net_layers(net, layers)
+    if not allowed:
+        raise CheckError(f"{net}: the board's .kicad_dru keeps its tracks"
+                         f" off every layer asked for ({', '.join(layers)})")
+    layers = allowed
     minx, miny, maxx, maxy = _on_board(window, bg.outline)
     x0 = math.floor(minx / g) * g
     y0 = math.floor(miny / g) * g
@@ -542,6 +568,12 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
                       neck, dict(pour_cost=pour_cost, inner_cost=inner_cost,
                                  rip_cost=rip_cost))
     span_moves = _span_moves(obs, rules, net, layers, win, args, K, blk, outline)
+    no_via = rules.via_bans(net)
+    if "through" in no_via:
+        vblk[:] = True
+    if no_via and span_moves:
+        span_moves = [[mv for mv in ms if mv[1].kind not in no_via]
+                      for ms in span_moves]
     return Grid(
         x0=x0, y0=y0, nx=nx, ny=ny, g=g, layers=list(layers),
         blk=[m.ravel().astype(np.uint8).tobytes() for m in blk],
@@ -1260,6 +1292,9 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
         the floor width from the start. hide: leave this pass's own routes
         out."""
         net = job["net"]
+        if not rules.net_layers(net, layers):
+            job["banned"] = sorted(layers)      # #1140: DRC would fail it
+            return None, None, None
         floor = rules.width_floor(net), rules.via_floor
         start = (floor if rules.spans and net not in keep_nets
                  else (rules.width(net), None))
@@ -1415,6 +1450,8 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                 job.update(status="skipped", reason="cut by the deadline")
             else:
                 job.update(status="failed", reason=(
+                    "the .kicad_dru keeps its tracks off every routable layer"
+                    if job.get("banned") else
                     "search stopped at --max-nodes; a path may exist"
                     if job.get("gave_up") else "no path on the grid"))
         if log:
@@ -1845,6 +1882,8 @@ def _rules_facts(rules: Rules) -> dict:
     if facts.get("spans"):
         facts["spans"] = [dataclasses.asdict(s) for s in facts["spans"]]
     facts["via_in_pad_refs"] = sorted(facts.get("via_in_pad_refs", ()))
+    if facts.get("bans") is not None:
+        facts["bans"] = facts["bans"].facts()
     return facts
 
 

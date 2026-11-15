@@ -796,6 +796,8 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                          " rips (a rip missed it; KiCad would put it on the"
                          " pad's net): " + "; ".join(shorts))
     router = mazeroute.Router(bgw)
+    if router.unread_rules:     # #1140: left to the DRC gate
+        payload["unread_dru_rules"] = router.unread_rules
     base_isl: dict = {}
 
     def base_count(n):
@@ -965,6 +967,10 @@ def report_md(p: dict) -> str:
         if len(nv) > SHOWN:
             lines.append(f"- and {len(nv) - SHOWN} more in part_repair.json")
         lines.append("")
+    if p.get("unread_dru_rules"):
+        lines += ["The router kept to the .kicad_dru's disallow rules but"
+                  " these, whose condition it doesn't read; DRC judged"
+                  " them: " + ", ".join(p["unread_dru_rules"]) + ".", ""]
     if p.get("drc"):
         b, a = p["drc"]["before"], p["drc"]["after"]
         lines += [f"DRC total {b.get('total')} -> {a.get('total')}.", ""]

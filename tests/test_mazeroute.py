@@ -247,6 +247,140 @@ def test_apply_refuses_unknown_net_and_layer(tmp_path):
                                         layers=["In1.Cu"])])
 
 
+# ------------------------------------------------------------ DRU bans (#1140)
+
+_FOUR = """(kicad_pcb (version 20260206) (generator "test")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal)
+    (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup)
+  (net 0 "") (net 1 "GND") (net 2 "A") (net 3 "B")
+"""
+_FLOOR = """(version 1)
+(rule "aiee_clearance_floor"
+\t(constraint clearance (min 0.1500mm))
+)
+(rule "aiee_hole_to_hole_floor"
+\t(constraint hole_to_hole (min 0.5000mm))
+)
+(rule "aiee_edge_clearance_floor"
+\t(constraint edge_clearance (min 0.3000mm))
+)
+"""
+_A_OFF_IN1 = """(rule "aiee_diff_outer_only_A_In1"
+\t(layer "In1.Cu")
+\t(constraint disallow track)
+\t(condition "A.NetName == 'A'")
+)
+"""
+_A_NO_VIA = """(rule "aiee_sw_novia_A"
+\t(constraint disallow via)
+\t(condition "A.NetName == 'A'")
+)
+(rule "aiee_sw_layer_A"
+\t(constraint disallow track)
+\t(condition "A.NetName == 'A' && A.Layer != 'F.Cu'")
+)
+"""
+
+
+def _four(tmp_path, dru="", f_gap=False):
+    """30 x 20, four layers: A's pads at (5,10), (25,10) and B's at (5,12),
+    (25,12) on F.Cu; a GND wall at x=15 on F.Cu and B.Cu from edge to edge
+    (f_gap: F.Cu's opens at the board's top edge, y < 1.7), on In2 with a
+    gap at y=14, none on In1. The straight way is a via down to In1."""
+    import make_fixture as mf
+    body = (mf.pad("A1", 5, 10, "A") + mf.pad("A2", 25, 10, "A")
+            + mf.pad("B1", 5, 12, "B") + mf.pad("B2", 25, 12, "B"))
+    top = 2.2 if f_gap else 0.5
+    body += mf.seg(15, top, 15, 19.5, 1.0, "F.Cu", "GND",
+                   "00000000-0000-0000-0000-0000000004f1")
+    body += mf.seg(15, 0.5, 15, 19.5, 1.0, "B.Cu", "GND",
+                   "00000000-0000-0000-0000-0000000004b1")
+    body += mf.seg(15, 0.5, 15, 12.8, 1.0, "In2.Cu", "GND",
+                   "00000000-0000-0000-0000-0000000004c1")
+    body += mf.seg(15, 15.2, 15, 19.5, 1.0, "In2.Cu", "GND",
+                   "00000000-0000-0000-0000-0000000004c2")
+    pcb = tmp_path / "four.kicad_pcb"
+    pcb.write_text(_FOUR + '  (gr_rect (start 0 0) (end 30 20) (stroke'
+                   ' (width 0.1)) (fill no) (layer "Edge.Cuts"))\n'
+                   + body + ")\n", encoding="utf-8")
+    pcb.with_suffix(".kicad_dru").write_text(_FLOOR + dru, encoding="utf-8")
+    return geom.BoardGeom.from_file(pcb)
+
+
+def _layers_of(ops, net):
+    return {o["layer"] for o in _tracks(ops, net)}
+
+
+@pytest.fixture
+def mf_path():
+    sys.path.insert(0, str(FIX))
+    yield
+    sys.path.remove(str(FIX))
+
+
+def test_a_track_ban_keeps_the_route_off_the_layer(tmp_path, mf_path):
+    """#1140: /USB0_DM went down to In1 though the DRU disallows its
+    tracks there; the router now reads the rule and takes In2's gap."""
+    free = mazeroute.Router(_four(tmp_path)).route("A", "A1.1", "A2.1")
+    assert "In1.Cu" in _layers_of(free, "A")
+    r = mazeroute.Router(_four(tmp_path, _A_OFF_IN1))
+    assert r.net_layers("A") == ["F.Cu", "In2.Cu", "B.Cu"]
+    assert r.net_layers("B") == r.layers
+    ops = r.route("A", "A1.1", "A2.1")
+    assert _layers_of(ops, "A") == {"F.Cu", "In2.Cu"}
+    assert [o for o in ops if o["op"] == "add_via"]  # vias still cross In1
+    assert len(r.islands("A")) == 1
+    assert r.unread_rules == []
+    with pytest.raises(CheckError, match="disallows A's tracks on In1"):
+        r.end("20,10@In1.Cu", "A")
+    assert set(r.end("20,10@In2.Cu", "A")) == {"In2.Cu"}
+    with pytest.raises(CheckError, match="keeps A off In1.Cu"):
+        mazeroute.Router(_four(tmp_path, _A_OFF_IN1),
+                         layers=["F.Cu", "In1.Cu"]).route("A", "A1.1", "A2.1")
+
+
+def test_a_via_ban_keeps_the_route_on_its_layer(tmp_path, mf_path):
+    """A switch node (rules_gen's sw_novia + sw_layer): no via, F.Cu only,
+    round the wall's open end (a margin that takes the window there)."""
+    free = mazeroute.Router(_four(tmp_path, f_gap=True), margin=8).route(
+        "A", "A1.1", "A2.1")
+    assert [o for o in free if o["op"] == "add_via"]
+    r = mazeroute.Router(_four(tmp_path, _A_NO_VIA, f_gap=True), margin=8)
+    ops = r.route("A", "A1.1", "A2.1")
+    assert not [o for o in ops if o["op"] == "add_via"]
+    assert _layers_of(ops, "A") == {"F.Cu"}
+    assert min(y for o in _tracks(ops) for y in (o["start"][1],
+                                                o["end"][1])) < 1.7
+    with pytest.raises(CheckError, match="no path"):   # walled: no way
+        mazeroute.Router(_four(tmp_path, _A_NO_VIA), margin=8).route(
+            "A", "A1.1", "A2.1")
+
+
+def test_group_with_one_banned_net(tmp_path, mf_path):
+    """route_group's grids differ in layers when a net is banned from one:
+    each claims cells on the router's layers, not its own grid's."""
+    r = mazeroute.Router(_four(tmp_path, _A_OFF_IN1))
+    ops = r.group([{"net": "A", "from": "A1.1", "to": "A2.1"},
+                   {"net": "B", "from": "B1.1", "to": "B2.1"}])
+    assert "In1.Cu" not in _layers_of(ops, "A")
+    assert _layers_of(ops, "A") and _layers_of(ops, "B")
+    assert _gap(ops, r.rules) >= -1e-6
+    for n in "AB":
+        assert len(r.islands(n)) == 1, n
+
+
+def test_an_unread_rule_is_named_once(tmp_path, mf_path, capsys):
+    dru = _A_OFF_IN1.replace("A.NetName == 'A'", "A.NetClass == 'USB'")
+    mazeroute._WARNED.discard("aiee_diff_outer_only_A_In1")
+    r = mazeroute.Router(_four(tmp_path, dru))
+    assert r.unread_rules == ["aiee_diff_outer_only_A_In1"]
+    assert r.net_layers("A") == r.layers           # left to DRC
+    mazeroute.Router(_four(tmp_path, dru))
+    assert capsys.readouterr().err.count("aiee_diff_outer_only_A_In1") == 1
+
+
 # ------------------------------------------------------------ live (KiCad)
 
 @pytest.fixture

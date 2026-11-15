@@ -179,6 +179,77 @@ def test_dru_track_bans():
     assert routelib.dru_track_bans("", _SIX) == {}
 
 
+_LAYER_DRU = """(version 1)
+# /SW: switch node of U3 - one run on F.Cu, no vias, no other layer (a
+# comment's (rule "x" (constraint disallow track)) is no rule)
+(rule "aiee_sw_novia__SW"
+\t(constraint disallow via)
+\t(condition "A.NetName == '/SW'")
+)
+(rule "aiee_sw_layer__SW"
+\t(constraint disallow track)
+\t(condition "A.NetName == '/SW' && A.Layer != 'F.Cu'")
+)
+(rule "usb_not_in"
+\t(layer "In?.Cu")
+\t(constraint disallow track micro_via)
+\t(condition "(A.NetName == '/USB*' || A.NetName == '/OTG_D?') && A.NetName != '/USB_VBUS'")
+)
+(rule "courtyard"
+\t(constraint disallow track)
+\t(condition "A.NetName == '/K' && !A.intersectsCourtyard('U1')")
+)
+(rule "nowhere_on_this_board"
+\t(layer "In9.Cu")
+\t(constraint disallow track)
+\t(condition "A.NetName == '/K'")
+)
+(rule "keepout_all"
+\t(layer "In4.Cu")
+\t(constraint disallow through_via track)
+)
+"""
+
+
+def test_dru_layer_bans():
+    """#1140: disallow track/via rules with A.NetName and A.Layer terms,
+    wildcards, KiCad's case rules and via kinds; a condition the reader
+    can't follow is named, not guessed."""
+    bans = routelib.dru_layer_bans(_LAYER_DRU, _SIX)
+    # sw_layer: every layer but F.Cu; sw_novia: every via kind
+    assert bans.track_layers("/SW") == set(_SIX) - {"F.Cu"}
+    assert bans.via_kinds("/SW") == {"through", "micro", "blind", "buried"}
+    assert bans.via_banned("/SW")
+    # wildcards on the name (any case) and the layer (case kept)
+    inner = {"In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu"}
+    for net in ("/USB0_DM", "/usb0_dp", "/OTG_D1"):
+        assert bans.track_layers(net) == inner, net
+        assert bans.via_kinds(net) == {"micro", "through"}, net
+    assert bans.track_layers("/USB_VBUS") == {"In4.Cu"}   # != kept it out
+    assert bans.track_layers("/OTG_D12") == {"In4.Cu"}    # ? is one char
+    assert bans.via_kinds("/USB_VBUS") == {"through"}
+    # a rule with no condition holds every net; In9 isn't on this board
+    assert bans.track_layers("GND") == {"In4.Cu"}
+    assert bans.track_layers("/K") == {"In4.Cu"}
+    assert bans.via_kinds("/K") == {"through"} and bans.via_banned("/K")
+    assert bans.unread == ["courtyard"]
+    facts = bans.facts()
+    assert facts["unread"] == ["courtyard"]
+    assert {"nets": ["/SW"], "not": [], "kinds": [
+        "blind", "buried", "micro", "through"]} in facts["via"]
+    assert json.loads(json.dumps(facts)) == facts
+    # a case-sensitive layer: 'f.cu' is no layer, so /SW is banned off all
+    low = _LAYER_DRU.replace("A.Layer != 'F.Cu'", "A.Layer != 'f.cu'")
+    assert routelib.dru_layer_bans(low, _SIX).track_layers("/SW") == set(_SIX)
+    # the DSN's per-net reader takes the plain named nets: route_auto now
+    # keeps a switch node on its layer too
+    assert routelib.dru_track_bans(_LAYER_DRU, _SIX) == {
+        "/SW": set(_SIX) - {"F.Cu"}}
+    assert routelib.dru_layer_bans("", _SIX).track == []
+    with pytest.raises(Exception, match="unbalanced"):
+        routelib.dru_layer_bans('(rule "x" (constraint disallow track)', _SIX)
+
+
 def test_dsn_apply_track_bans():
     """#1108: a banned layer leaves the class's use_layer; a class whose
     nets are banned differently is split, rules and vias kept."""

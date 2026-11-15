@@ -41,6 +41,7 @@ import os
 import re
 import subprocess
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import loadlib
@@ -597,34 +598,234 @@ def dsn_apply_layer_widths(dsn_text: str,
     return "".join(out), done
 
 
+# ------------------------------------------------ DRU layer bans (#1140)
+
+# The via kinds (route_finish's through via, hdilib.Span.kind) each item a
+# `disallow` constraint names keeps out: `via` and `hole` are every via,
+# KiCad's buried_via its blind and buried ones.
+_ALL_VIAS = frozenset({"through", "micro", "blind", "buried"})
+_VIA_KINDS = {"via": _ALL_VIAS, "hole": _ALL_VIAS,
+              "through_via": frozenset({"through"}),
+              "micro_via": frozenset({"micro"}),
+              "blind_via": frozenset({"blind", "buried"}),
+              "buried_via": frozenset({"blind", "buried"})}
+_DNF_CAP = 256          # alternatives one condition may expand to
+_COND_TOKEN = re.compile(
+    r"\s*(?:('[^']*')|(&&|\|\||==|!=|!|\(|\))|([A-Za-z_][A-Za-z0-9_.]*))")
+
+
+class _Unread(Exception):
+    """A DRU condition this reader does not follow."""
+
+
+def _kicad_match(pattern: str, text: str, case: bool = False) -> bool:
+    """KiCad's string `==` in a rule: case-insensitive, `*` and `?` wild
+    when the pattern has one (re, not fnmatch: a net name may hold [ ])."""
+    if "*" not in pattern and "?" not in pattern:
+        return pattern == text if case else pattern.lower() == text.lower()
+    rx = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+    return re.fullmatch(rx, text, 0 if case else re.I) is not None
+
+
+def _cond_dnf(cond: str) -> list[tuple]:
+    """A rule condition as alternatives (any one matches), each a tuple
+    (names, not_names, layers, not_layers) of patterns that must all hold:
+    the item's net matches every name and no not_name, its layer every
+    layer and no not_layer. Only `A.NetName` and `A.Layer` compared with
+    == or != to a quoted string, && || and brackets are read; anything else
+    raises _Unread."""
+    toks: list[tuple] = []
+    pos = 0
+    while pos < len(cond):
+        m = _COND_TOKEN.match(cond, pos)
+        if not m or m.end() == pos:
+            if cond[pos:].strip():
+                raise _Unread(cond[pos:pos + 20])
+            break
+        pos = m.end()
+        if m.group(1) is not None:
+            toks.append(("str", m.group(1)[1:-1]))
+        elif m.group(2) is not None:
+            toks.append(("op", m.group(2)))
+        elif m.group(3) is not None:
+            toks.append(("id", m.group(3)))
+    at = [0]
+
+    def peek():
+        return toks[at[0]] if at[0] < len(toks) else (None, None)
+
+    def take():
+        tok = peek()
+        at[0] += 1
+        return tok
+
+    def expr():
+        alts = conj()
+        while peek() == ("op", "||"):
+            take()
+            alts = alts + conj()
+            if len(alts) > _DNF_CAP:
+                raise _Unread("too many alternatives")
+        return alts
+
+    def conj():
+        alts = atom()
+        while peek() == ("op", "&&"):
+            take()
+            rhs = atom()
+            alts = [tuple(a + b for a, b in zip(x, y))
+                    for x in alts for y in rhs]
+            if len(alts) > _DNF_CAP:
+                raise _Unread("too many alternatives")
+        return alts
+
+    def atom():
+        kind, val = take()
+        if (kind, val) == ("op", "("):
+            alts = expr()
+            if take() != ("op", ")"):
+                raise _Unread("unbalanced brackets")
+            return alts
+        if kind != "id" or val not in ("A.NetName", "A.Layer"):
+            raise _Unread(str(val))
+        op = take()
+        lit = take()
+        if op not in (("op", "=="), ("op", "!=")) or lit[0] != "str":
+            raise _Unread(f"{val} {op[1]} {lit[1]}")
+        slot = (0 if val == "A.NetName" else 2) + (op[1] == "!=")
+        return [tuple((lit[1],) if i == slot else () for i in range(4))]
+
+    alts = expr() if toks else [((), (), (), ())]
+    if at[0] != len(toks):
+        raise _Unread(str(peek()[1]))
+    return alts
+
+
+def _sexp_bodies(text: str, head: str):
+    """(name, body) of each top-level `(head "name" ...)` in an
+    s-expression file, quote-aware; `#` comment lines dropped."""
+    text = "\n".join(ln for ln in text.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    for m in re.finditer(r"\(\s*" + head + r'\s+(?:"((?:[^"\\]|\\.)*)"|(\S+))',
+                         text):
+        name = m.group(1) if m.group(1) is not None else m.group(2)
+        try:
+            end = _sexp_end(text, m.start())
+        except CheckError:
+            raise CheckError(f"unbalanced s-expression at ({head} {name}"
+                             ")") from None
+        yield name, text[m.end():end - 1]
+
+
+@dataclass
+class DruBans:
+    """What a .kicad_dru's `disallow` rules keep the router from (#1140).
+    track: [(names, not_names, layers)]: a net whose name matches every
+        name pattern (any net when there are none) and no not_name may not
+        have a track on any of `layers`;
+    via: [(names, not_names, kinds)]: such a net may not have a via of
+        those kinds (through, micro, blind, buried);
+    unread: the disallow rules whose condition this can't follow (a
+        NetClass, B., Type or intersectsCourtyard term, `!`): DRC is left
+        to judge them."""
+    track: list = field(default_factory=list)
+    via: list = field(default_factory=list)
+    unread: list = field(default_factory=list)
+
+    @staticmethod
+    def _hits(names, not_names, net: str) -> bool:
+        return all(_kicad_match(p, net) for p in names) \
+            and not any(_kicad_match(p, net) for p in not_names)
+
+    def track_layers(self, net: str) -> set:
+        """The layers the net may not have a track on."""
+        out: set = set()
+        for names, not_names, layers in self.track:
+            if self._hits(names, not_names, net):
+                out |= layers
+        return out
+
+    def via_kinds(self, net: str) -> set:
+        """The via kinds the net may not have."""
+        out: set = set()
+        for names, not_names, kinds in self.via:
+            if self._hits(names, not_names, net):
+                out |= kinds
+        return out
+
+    def via_banned(self, net: str) -> bool:
+        """True when the net may have no through via."""
+        return "through" in self.via_kinds(net)
+
+    def facts(self) -> dict:
+        """JSON for a report."""
+        return {"track": [{"nets": list(n), "not": list(x),
+                           "layers": sorted(ly)} for n, x, ly in self.track],
+                "via": [{"nets": list(n), "not": list(x),
+                         "kinds": sorted(k)} for n, x, k in self.via],
+                "unread": list(self.unread)}
+
+
+def dru_layer_bans(dru_text: str, signal_layers: list[str]) -> DruBans:
+    """The .kicad_dru's `disallow track` and `disallow via` rules (rules_gen
+    writes aiee_diff_outer_only_*, aiee_z<Z>_outer_only*: an inner layer
+    with no solved stripline geometry; aiee_sw_layer_*, aiee_sw_novia_*: a
+    switch node on one layer, no vias), as DruBans. A rule's layer is a
+    quoted or bare layer name (KiCad's wildcards), `inner` or `outer`; a
+    rule with none is on every layer, one whose layer is no signal layer
+    here on none. A via ban on any of them is a ban of those via kinds
+    anywhere (a through via crosses every layer; a span that would miss
+    the layer is kept out too). signal_layers: the board's copper layer
+    names, front first. CheckError on an unbalanced file."""
+    signal = list(signal_layers)
+    outer = {ly for ly in signal if ly in ("F.Cu", "B.Cu")}
+    bans = DruBans()
+    for name, body in _sexp_bodies(dru_text or "", "rule"):
+        kinds: set = set()
+        for cm in re.finditer(r"\(\s*constraint\s+disallow\b([^()]*)\)", body):
+            kinds |= set(cm.group(1).split())
+        track = "track" in kinds
+        via = frozenset().union(*(_VIA_KINDS.get(k, ()) for k in kinds))
+        if not track and not via:
+            continue
+        layers = set(signal)
+        lm = re.search(r'\(\s*layer\s+(?:"([^"]*)"|([^\s()]+))\s*\)', body)
+        if lm:
+            ly = lm.group(1) if lm.group(1) is not None else lm.group(2)
+            layers = ({x for x in signal if x not in outer} if ly == "inner"
+                      else outer if ly == "outer"
+                      else {x for x in signal if _kicad_match(ly, x, True)})
+        cm = re.search(r'\(\s*condition\s+"((?:[^"\\]|\\.)*)"\s*\)', body)
+        try:
+            alts = _cond_dnf(cm.group(1) if cm else "")
+        except _Unread:
+            bans.unread.append(name)
+            continue
+        for names, not_names, eq, ne in alts:
+            on = {x for x in layers     # a layer compares case and all
+                  if all(_kicad_match(p, x, True) for p in eq)
+                  and not any(_kicad_match(p, x, True) for p in ne)}
+            if not on:
+                continue
+            if track:
+                bans.track.append((names, not_names, frozenset(on)))
+            if via:
+                bans.via.append((names, not_names, via))
+    return bans
+
+
 def dru_track_bans(dru_text: str, signal_layers: list[str]) -> dict[str, set]:
-    """The layers a .kicad_dru `disallow track` rule keeps each net off
-    (rules_gen's aiee_diff_outer_only_* / aiee_z<Z>_outer_only*: an inner layer with no solved
-    stripline geometry), as {net: {layer, ...}}. Only rules whose condition
-    is nothing but `A.NetName == '...'` alternatives are read, on a quoted
-    layer or KiCad's `inner`/`outer`; any other condition is left to DRC.
+    """The layers a .kicad_dru `disallow track` rule keeps each named net
+    off, as {net: {layer, ...}}, for the DSN (dsn_apply_track_bans, #1108):
+    dru_layer_bans' alternatives that name one net, no wildcard, and
+    nothing it must not be; any other condition is left to DRC.
     signal_layers: the board's copper layer names, front first."""
-    outer = {ly for ly in signal_layers if ly in ("F.Cu", "B.Cu")}
     bans: dict[str, set] = {}
-    for m in re.finditer(r'\(rule\s+"[^"]*"(.*?)\n\)', dru_text or "", re.S):
-        body = m.group(1)
-        if not re.search(r"\(constraint\s+disallow\s+[^)]*\btrack\b", body):
-            continue
-        lm = re.search(r'\(layer\s+("?)([^"\s)]+)\1\s*\)', body)
-        cm = re.search(r'\(condition\s+"(.*)"\s*\)', body)
-        if not lm or not cm:
-            continue
-        nets = re.findall(r"A\.NetName\s*==\s*'([^']+)'", cm.group(1))
-        rest = re.sub(r"A\.NetName\s*==\s*'[^']+'|\|\||\s", "", cm.group(1))
-        if not nets or rest:
-            continue
-        ly = lm.group(2)
-        layers = ({x for x in signal_layers if x not in outer} if ly == "inner"
-                  else outer if ly == "outer"
-                  else {ly} if ly in signal_layers else set())
-        for n in nets:
-            if layers:
-                bans.setdefault(n, set()).update(layers)
+    for names, not_names, layers in dru_layer_bans(
+            dru_text, signal_layers).track:
+        if len(names) == 1 and not not_names \
+                and not any(ch in names[0] for ch in "*?"):
+            bans.setdefault(names[0], set()).update(layers)
     return bans
 
 
