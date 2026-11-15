@@ -293,3 +293,119 @@ def test_cli_reads_sense_pads(tmp_path):
     assert rep["sense_taps"][0]["tap"] == "C1.1"
     for kind in ("sense_tap_off_pad", "sense_tap_missing", "sense_tap_bad"):
         assert (REPO / "reference" / "remediations" / f"{kind}.md").is_file()
+
+
+# ---- sense lines found from the netlist (#1077) -------------------------------
+
+def _pair_circuit(lines):
+    """R1 (5 mOhm) between A and B, fed by 2 mm rails from J1 and J2; U1's
+    IN+/IN- read it over `lines`, hand-routed with no aiee_sensew mark."""
+    return (_fp("R1", "5m", 30, 8, ("1", -2, "A", ""), ("2", 2, "B", ""))
+            + _fp("J1", "CONN", 28, 2, ("1", 0, "A", ""))
+            + _fp("J2", "CONN", 32, 2, ("1", 0, "B", ""))
+            + _seg("A", 28, 2, 28, 8, 2) + _seg("B", 32, 2, 32, 8, 2)
+            + _fp("U1", "INA240", 30, 26, ("1", -1, "A", "IN+"),
+                  ("2", 1, "B", "IN-"), size=1)
+            + lines)
+
+
+def _poly(net, pts, w=0.2):
+    return "".join(_seg(net, *a, *b, w) for a, b in zip(pts, pts[1:]))
+
+
+APART = (_poly("A", [(28, 8), (28, 12), (20, 12), (20, 26), (29, 26)])
+         + _poly("B", [(32, 8), (32, 12), (40, 12), (40, 26), (31, 26)]))
+TOGETHER = (_poly("A", [(28, 8), (28, 11), (29.6, 11), (29.6, 26), (29, 26)])
+            + _poly("B", [(32, 8), (32, 11), (30.4, 11), (30.4, 26), (31, 26)]))
+
+
+def _lines(pcb, cons=None):
+    return check_kelvin.judge_lines(geom.BoardGeom.from_file(pcb), cons or {})
+
+
+def test_sense_pair_routed_apart_is_caught(tmp_path):
+    """Two hand-routed lines from R1's pads to U1 that part 20 mm across:
+    the loop between them picks up the field of every switching edge."""
+    vios, (f,), left = _lines(_board(tmp_path, _pair_circuit(APART)))
+    assert not left and (f["shunt"], f["ic"]) == ("R1", "U1")
+    assert all(x["reached"] and not x["joins"] for x in f["lines"])
+    (v,) = vios
+    assert v["kind"] == "sense_pair_apart" and v["severity"] == "warning"
+    assert set(v["refs"]) == {"R1", "U1"}
+    # the loop: 20 x 14 mm between the lines; allowed 3 x 0.4 mm x 35 mm
+    # plus the pad ends
+    assert 200 < v["loop_mm2"] < 300 and v["allowed_mm2"] < 80
+    for kind in ("sense_pair_apart", "sense_line_unmarked",
+                 "sense_mark_refused"):
+        assert (REPO / "reference" / "remediations" / f"{kind}.md").is_file()
+
+
+def test_sense_pair_routed_together_is_quiet(tmp_path):
+    vios, (f,), left = _lines(_board(tmp_path, _pair_circuit(TOGETHER)))
+    assert not vios and not left
+    assert f["loop_mm2"] < f["allowed_mm2"]
+
+
+POWER = {"power": [{"net": "A", "current_a": 3}]}
+
+
+def test_thin_unmarked_sense_line_on_a_power_net_is_caught(tmp_path):
+    vios, _, _ = _lines(_board(tmp_path, _pair_circuit(TOGETHER)), POWER)
+    (v,) = vios
+    assert v["kind"] == "sense_line_unmarked" and v["net"] == "A"
+    assert v["width_mm"] == 0.2 and v["rail_width_mm"] > 0.2
+
+
+def test_sense_line_rule_area_quiets_it(tmp_path):
+    import sense_mark
+    pcb = _board(tmp_path, _pair_circuit(TOGETHER))
+    bg = geom.BoardGeom.from_file(pcb)
+    (_, _, _, lines), = check_kelvin.found_lines(bg, {})
+    zones = ""
+    for k, a in enumerate(sense_mark.mark_areas(lines["A"]["line"], "U1_1")):
+        pts = " ".join(f"(xy {x:.4f} {y:.4f})" for x, y in a["poly"])
+        zones += (f'  (zone (net 0) (net_name "") (layer "F.Cu") '
+                  f'(name "{a["name"]}") (hatch edge 0.5)\n'
+                  f'    (keepout (tracks allowed) (vias allowed) (pads allowed) '
+                  f'(copperpour allowed) (footprints allowed))\n'
+                  f'    (polygon (pts {pts})))\n')
+    vios, _, _ = _lines(_board(tmp_path, _pair_circuit(TOGETHER) + zones, "m"),
+                        POWER)
+    assert not vios
+
+
+@pytest.mark.smoke
+def test_live_sense_mark_lets_drc_pass_the_thin_line(tmp_path):
+    """#1077 end to end: at 3 A the rail rule wants A wider than the 0.2 mm
+    hand-routed line into U1's IN+, so DRC fails it; sense_mark.py marks the
+    line, rules_gen gives the mark the fab minimum, and DRC passes it."""
+    import env
+    import kc
+    import rules_gen
+    import sense_mark
+    cli = env.find_kicad_cli()
+    if cli is None:
+        pytest.skip("kicad-cli not installed")
+    pcb = _board(tmp_path, _pair_circuit(TOGETHER), "s")
+    cons = tmp_path / "constraints.json"
+    cons.write_text(json.dumps(POWER))
+    (tmp_path / "s.kicad_pro").write_text("{}")
+
+    def thin_errors():
+        assert rules_gen.main([
+            "--constraints", str(cons), "--pcb", str(pcb),
+            "--pro", str(tmp_path / "s.kicad_pro"),
+            "--out-dru", str(tmp_path / "s.kicad_dru"),
+            "--out", str(tmp_path / "rg.json")]) == 0
+        drc = kc.run_drc(cli, pcb, all_track_errors=True)
+        return [v for v in drc["violations"] if v["check"] == "track_width"
+                and any("[A]" in i["msg"] for i in v["items"])]
+
+    assert thin_errors()
+    assert sense_mark.main(["--pcb", str(pcb), "--constraints", str(cons),
+                            "--out-report", str(tmp_path / "m.json")]) == 0
+    rep = json.loads((tmp_path / "m.json").read_text())
+    assert {ln["from"] for ln in rep["facts"]["lines"]} == {"U1.1", "U1.2"}
+    assert thin_errors() == []
+    vios, _, _ = _lines(pcb, POWER)
+    assert not vios

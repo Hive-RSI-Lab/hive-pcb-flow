@@ -43,6 +43,15 @@ contact within SENSE_SLACK_MM of the named pad is the tap itself (the power
 track and the sense track may both end on it). The hit: the voice board's
 divider tops sat in their rails' pours, reading 6-16 mm from the pad named.
 
+Found sense lines (#1077): a line routed by hand carries no aiee_sensew mark
+and is declared nowhere. Each shunt whose two pads reach an amplifier's or
+ADC's input pair (found_lines: the reader's sense-named or input pins, from the
+netlist) is walked as a line per side, as a declared one is, and the two
+judged as a pair: the loop between them against PAIR_FACTOR input-pin pitches
+over their run, plus a 45 degree fan-in. On a power net (constraints power[]),
+a line thinner than the rail's width rule and not inside an aiee_sensew area
+fails DRC unless marked (sense_mark.py marks it).
+
 Findings:
   kelvin_error       error at ERROR_FRAC of the shunt or more across both taps,
                      warning at WARN_FRAC. Names each tap and the copper's mOhm.
@@ -53,6 +62,10 @@ Findings:
                      named pad (not routed).
   sense_tap_bad      error: a sense_pads entry names a pad not on the board,
                      or a tap pad not on the entry's net.
+  sense_pair_apart   warning: a found pair encloses more loop than a coupled
+                     pair (loop_mm2 vs allowed_mm2).
+  sense_line_unmarked  warning: a found line on a power net runs under the
+                     rail's width with no aiee_sensew mark round it.
 
 A shunt with no reader, a net too large to solve at CELL_MAX_MM and a side with
 nothing entering are listed in not_judged. Good to about +/-30 % on a neck
@@ -75,7 +88,7 @@ from scipy import sparse
 from scipy.sparse.csgraph import connected_components
 from scipy.sparse.linalg import splu
 import shapely
-from shapely.geometry import Point
+from shapely.geometry import Point, Polygon
 from shapely.strtree import STRtree
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -130,7 +143,7 @@ def shunts(bg) -> list[tuple[str, float, list[str]]]:
     return out
 
 
-def taps_on(bg, net: str, shunt: str) -> dict[str, list[dict]]:
+def taps_on(bg, net: str, shunt: str, pin=SENSE_PIN) -> dict[str, list[dict]]:
     """IC ref -> the taps on `net`: {pad (where the tap joins the net), via (the
     resistor, or None), pin (the IC's pin name)}."""
     out: dict[str, list[dict]] = {}
@@ -138,7 +151,7 @@ def taps_on(bg, net: str, shunt: str) -> dict[str, list[dict]]:
         if p.ref == shunt:
             continue
         if _kind(p.ref) in IC_KINDS and (
-                not p.pinfunction or SENSE_PIN.match(p.pinfunction)):
+                not p.pinfunction or pin.match(p.pinfunction)):
             out.setdefault(p.ref, []).append(
                 {"pad": p, "via": None, "pin": p.pinfunction})
             continue
@@ -150,7 +163,7 @@ def taps_on(bg, net: str, shunt: str) -> dict[str, list[dict]]:
             continue
         for q in bg.pads_of(net=next(iter(far))):
             if _kind(q.ref) in IC_KINDS and (
-                    not q.pinfunction or SENSE_PIN.match(q.pinfunction)):
+                    not q.pinfunction or pin.match(q.pinfunction)):
                 out.setdefault(q.ref, []).append(
                     {"pad": p, "via": p.ref, "pin": q.pinfunction or q.number,
                      "far": q.net})
@@ -176,10 +189,10 @@ def _by_name(taps: list[dict], other: list[dict], other_net: str) -> list[dict]:
     return hit or taps
 
 
-def readers(bg, shunt: str, nets: list[str]) -> list[dict]:
+def readers(bg, shunt: str, nets: list[str], pin=SENSE_PIN) -> list[dict]:
     """[{ic, sides: {net: [taps]}}]: ICs with a tap on both nets, paired by
     channel number where the pins carry one (INA3221 IN+1 / IN-1)."""
-    a, b = (taps_on(bg, n, shunt) for n in nets)
+    a, b = (taps_on(bg, n, shunt, pin) for n in nets)
     out = []
     for ic in sorted(set(a) & set(b)):
         ta, tb = a[ic], b[ic]
@@ -539,6 +552,12 @@ def root_block(neigh: dict, root) -> set:
 
 
 def sense_walk(bg, sense, tap) -> dict:
+    """{reached, joins} of _line_walk (below)."""
+    w = _line_walk(bg, sense, tap)
+    return {"reached": w["reached"], "joins": w["joins"]}
+
+
+def _line_walk(bg, sense, tap) -> dict:
     """Walk the copper joined to the sense pad, outward, until it meets the tap
     pad. Power copper is every pad and pour, and every track and via on a path
     between two of them (not a dead end); the first contact the sense line
@@ -546,7 +565,8 @@ def sense_walk(bg, sense, tap) -> dict:
     contact inside the tap pad's outline (or within SENSE_SLACK_MM of it, the
     overhang of a wide track ending on the pad) is the tap itself: the power
     track and the sense track may both end on it. Returns
-    {reached, joins: [{label, layer, at, mm}]}."""
+    {reached, joins: [{label, layer, at, mm}], line: [the tracks and vias
+    walked, the line's own copper]}."""
     nets = {sense.net, tap.net} - {None}
     items = _sense_items(bg, nets)
     by_layer: dict[str, list[tuple]] = {}
@@ -590,7 +610,7 @@ def sense_walk(bg, sense, tap) -> dict:
     power = terminal | root_block(neigh, _ROOT)
 
     seen, queue = {start}, [start]
-    joins, reached = [], False
+    joins, reached, line = [], False, []
     while queue:
         for other, contact in touching(queue.pop(0)):
             if other[1] == goal:
@@ -612,7 +632,9 @@ def sense_walk(bg, sense, tap) -> dict:
                               "mm": checklib.rnd(_far_mm(rest, tap.poly), 2)})
             else:
                 queue.append(other[1])
-    return {"reached": reached, "joins": joins}
+                if other[0] in ("track", "via"):
+                    line.append(other[5])
+    return {"reached": reached, "joins": joins, "line": line}
 
 
 def judge_sense(bg, power: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -666,6 +688,196 @@ def judge_sense(bg, power: list[dict]) -> tuple[list[dict], list[dict]]:
     return vios, facts
 
 
+# ---- sense lines found from the netlist (#1077) -----------------------------
+
+# an ADC's differential input, read like an amplifier's for the line's
+# geometry (not for kelvin_error, whose readers stay SENSE_PIN's)
+LINE_PIN = re.compile(SENSE_PIN.pattern[:-2] + r"|A?IN\d+[PN]?|AIN[PN]|"
+                      r"CH\d+[PN]?|ADC\d*[PN]?)$", re.I)
+SENSE_MARK = "aiee_sensew"   # route_critical / sense_mark's sense-width mark
+# a pair is judged against a coupled run: the two lines within
+# check_diffpair's COUPLING_FACTOR pitches of each other the whole way
+# (TI SLVA959B section 7.6: "tightly coupled, parallel from the shunt to the
+# CSA"), plus a 45-degree fan at each end from the pads' own spread
+PAIR_FACTOR = 3.0
+WIDTH_TOL_MM = 1e-3
+
+
+def _hull(pads) -> "shapely.Geometry":
+    return shapely.unary_union([p.poly for p in pads]).convex_hull
+
+
+def _best_line(bg, taps: list[dict], ends: list) -> dict | None:
+    """The tap and shunt pad whose line is clean (reached, no joins),
+    shortest first; else the first tried, for the reason."""
+    tried = []
+    for t in taps:
+        for sp in ends:
+            w = _line_walk(bg, t["pad"], sp)
+            mm = sum(x.length for x in w["line"] if isinstance(x, geom.Track))
+            tried.append((not w["reached"] or bool(w["joins"]), mm,
+                          {**w, "tap": t, "end": sp, "mm": mm}))
+    if not tried:
+        return None
+    return min(tried, key=lambda x: (x[0], x[1]))[2]
+
+
+def _far_copper(bg, t: dict) -> tuple[list, list]:
+    """A tap through a resistor: the far net's copper (tracks, vias, pads,
+    all sense-line copper on a net only the sense signal rides) and the
+    resistor's pads."""
+    if not t.get("via"):
+        return [], []
+    far = t.get("far")
+    items = list(bg.tracks_of(far)) + list(bg.vias_of(far)) \
+        + list(bg.pads_of(net=far)) if far else []
+    return items, list(bg.pads_of(ref=t["via"]))
+
+
+def _marked(bg, t) -> bool:
+    return any(ra["name"].startswith(SENSE_MARK) and t.layer in ra["layers"]
+               and ra["outline"].covers(t.poly) for ra in bg.rule_areas)
+
+
+def power_widths(bg, cons: dict) -> dict[str, float]:
+    """net -> the rail width rules_gen holds every track of it to."""
+    import rules_gen
+    outer = [l for l in bg.copper_layers if l in ("F.Cu", "B.Cu")] \
+        or bg.copper_layers
+    cu = min((bg.stackup.copper_thickness.get(l) or 0.035 for l in outer),
+             default=0.035)
+    try:
+        _, facts = rules_gen.power_rules(cons, cu)
+    except (KeyError, TypeError, ValueError):
+        return {}
+    return {f["net"]: f["min_width_mm"] for f in facts}
+
+
+def found_lines(bg, cons: dict):
+    """(shunt, reader, nets, {net: line walk}) for each shunt read by an
+    amplifier's or ADC's input pair; a tap pad declared in sense_pads is
+    judge_sense's, not walked here. A line walk is _line_walk's dict plus
+    tap (the taps_on entry), end (the shunt pad) and mm (its track length)."""
+    declared = {k for e in cons.get("power") or []
+                for k in (e.get("sense_pads") or {})}
+    for ref, _, nets in shunts(bg):
+        for r in readers(bg, ref, nets, LINE_PIN):
+            lines = {}
+            for net in nets:
+                taps = [t for t in r["sides"][net]
+                        if f"{t['pad'].ref}.{t['pad'].number}" not in declared]
+                w = _best_line(bg, taps, bg.pads_of(net=net, ref=ref))
+                if w is not None:
+                    lines[net] = w
+            yield ref, r["ic"], nets, lines
+
+
+def judge_lines(bg, cons: dict) -> tuple[list[dict], list[dict], list[str]]:
+    """Each shunt's two sense lines into an amplifier's or ADC's input pair,
+    found from the netlist: the copper from the reader's tap pad (its pin, or
+    the series resistor's pad) to the shunt pad, on the shunt's net, that is
+    no rail copper (_line_walk). Two findings:
+      sense_line_unmarked  a line's track on a power net narrower than the
+                           rail's width rule and inside no aiee_sensew mark:
+                           DRC holds it to the rail width
+      sense_pair_apart     the loop the two lines close through the shunt
+                           and the reader is wider than a coupled pair's."""
+    vios, facts, left = [], [], []
+    widths = power_widths(bg, cons) if cons.get("power") else {}
+    for ref, ic, nets, lines in found_lines(bg, cons):
+        fact = {"shunt": ref, "ic": ic, "lines": []}
+        for net, w in lines.items():
+            t = w["tap"]
+            fact["lines"].append({
+                "net": net, "from": f"{t['pad'].ref}.{t['pad'].number}",
+                "to": f"{ref}.{w['end'].number}", "reached": w["reached"],
+                "joins": len(w["joins"]), "mm": checklib.rnd(w["mm"], 2)})
+            floor = widths.get(net)
+            if floor is None or not w["reached"] or w["joins"]:
+                continue
+            thin = [x for x in w["line"] if isinstance(x, geom.Track)
+                    and x.width < floor - WIDTH_TOL_MM and not _marked(bg, x)]
+            if not thin:
+                continue
+            x = min(thin, key=lambda x: x.width)
+            c = x.shape.interpolate(0.5, normalized=True)
+            tap = fact["lines"][-1]["from"]
+            vios.append(checklib.violation(
+                SCRIPT, "warning", [c.x, c.y], x.layer, net,
+                [ref, ic],
+                f"{ic}'s sense line on {net} from {tap} to {ref} runs "
+                f"at {x.width:g} mm, under the rail's {floor:g} mm width "
+                f"rule, with no {SENSE_MARK} mark: DRC holds it to the "
+                f"rail's width. Run sense_mark.py to mark it (a sense line "
+                "carries microamps; the mark lets it down to the fab "
+                "minimum)", SCRIPT, kind="sense_line_unmarked",
+                tracks=len(thin), width_mm=x.width, rail_width_mm=floor))
+        p = _pair(bg, ref, ic, lines, nets)
+        if isinstance(p, str):
+            left.append(f"{ref} / {ic} pair: {p}")
+            fact["pair"] = p
+        else:
+            fact.update(p)
+            if p["loop_mm2"] > p["allowed_mm2"]:
+                vios.append(checklib.violation(
+                    SCRIPT, "warning", p["at"], None, nets[0],
+                    [ref, ic],
+                    f"{ic}'s two sense lines from {ref} enclose "
+                    f"{p['loop_mm2']:.1f} mm^2 between them, over the "
+                    f"{p['allowed_mm2']:.1f} mm^2 of a coupled pair "
+                    f"({PAIR_FACTOR:g} pitches apart over "
+                    f"{p['mm']:.1f} mm, fanning in at 45 degrees): a "
+                    "field through the loop reads as shunt voltage. Run "
+                    "them side by side from the shunt's pads to the "
+                    "reader (TI SLVA959B section 7.6)",
+                    SCRIPT, kind="sense_pair_apart",
+                    loop_mm2=p["loop_mm2"], allowed_mm2=p["allowed_mm2"]))
+        facts.append(fact)
+    return vios, facts, left
+
+
+def _pair(bg, ref, ic, lines: dict, nets: list[str]):
+    """{loop_mm2, allowed_mm2, mm, at} for a shunt's two clean lines, or
+    why not. The loop is the area the union of the two lines' copper, the
+    shunt pads' hull, the reader pins' hull (and any series resistors and
+    their far nets) closes: its holes."""
+    if len(lines) < 2:
+        return "a side has no tap to walk"
+    for net, w in lines.items():
+        if w["joins"]:
+            return (f"the {net} line joins rail copper first "
+                    "(kelvin_error judges where it reads)")
+        if not w["reached"]:
+            return f"the {net} line never reaches {ref} on copper of its own"
+    parts, widths, mm = [], [], []
+    ends, pins = [], []
+    for w in lines.values():
+        parts += [x.poly for x in w["line"]]
+        widths += [x.width for x in w["line"] if isinstance(x, geom.Track)]
+        mm.append(w["mm"])
+        ends.append(w["end"])
+        far, rpads = _far_copper(bg, w["tap"])
+        parts += [x.poly for x in far]
+        if rpads:
+            parts.append(_hull(rpads))
+        pins += [p for p in far if isinstance(p, geom.Pad) and p.ref == ic] \
+            or ([] if rpads else [w["tap"]["pad"]])
+    if not widths or not pins:
+        return "no track or reader pin to measure"
+    hull_s, hull_i = _hull(ends), _hull(pins)
+    shape = shapely.unary_union(parts + [hull_s, hull_i])
+    loop = sum(Polygon(i).area for g in getattr(shape, "geoms", [shape])
+               if g.geom_type == "Polygon" for i in g.interiors)
+    pitch = 2 * float(np.median(widths))
+    span = [shapely.minimum_bounding_radius(h) * 2 for h in (hull_s, hull_i)]
+    length = float(np.mean(mm))
+    allowed = PAIR_FACTOR * pitch * length + sum(d * d / 4 for d in span)
+    c = shape.centroid
+    return {"loop_mm2": checklib.rnd(loop, 2),
+            "allowed_mm2": checklib.rnd(allowed, 2),
+            "mm": checklib.rnd(length, 2), "at": [c.x, c.y]}
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pcb", required=True)
@@ -676,14 +888,15 @@ def run(argv=None):
     cons = checklib.load_json(a.constraints, "constraints") \
         if a.constraints else {}
     power = [e for e in cons.get("power") or [] if e.get("sense_pads")]
-    if power or any(readers(bg, r, n) for r, _, n in shunts(bg)):
+    if power or any(readers(bg, r, n, LINE_PIN) for r, _, n in shunts(bg)):
         bg.assert_fresh()
     vios, facts, left = judge(bg, cons.get("power_paths") or [])
     s_vios, sense = judge_sense(bg, power)
+    l_vios, lines, l_left = judge_lines(bg, cons)
     return checklib.report(
-        SCRIPT, a.pcb, vios + s_vios, shunts=facts, sense_taps=sense,
-        not_judged=left,
-        nothing_to_judge=None if facts or power else
+        SCRIPT, a.pcb, vios + s_vios + l_vios, shunts=facts, sense_taps=sense,
+        sense_lines=lines, not_judged=left + l_left,
+        nothing_to_judge=None if facts or power or lines else
         "no shunt read by an amplifier and no sense_pads declared on this "
         "board"), a.out
 
