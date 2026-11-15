@@ -4,18 +4,16 @@
  "fixture": "oasis_cpl_dfm",
  "board": "oasis",
  "metrics": {
-  "errors": 39,
-  "warnings": 29,
+  "errors": 24,
+  "warnings": 4,
   "by_kind": {
    "both_sides_needs_panel": 1,
    "cpl_no_model": 1,
    "cpl_rotation": 3,
    "dfm_annular_ring": 12,
-   "dfm_clearance": 2,
    "dfm_copper_to_edge": 5,
    "dfm_hole_to_hole_preferred": 1,
-   "dfm_net_short": 4,
-   "dfm_silk_over_pad": 37,
+   "dfm_net_short": 3,
    "dfm_silk_width": 2
   },
   "polarity": "checked",
@@ -23,12 +21,12 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 39.0,
-  "warnings": 29.0,
+  "errors": 24.0,
+  "warnings": 4.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 77.6,
+ "composite": 87.6,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",
@@ -38,7 +36,7 @@
  },
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-13",
+  "created": "2026-11-15",
   "kicad_version": null
  }
 }

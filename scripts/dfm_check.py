@@ -939,7 +939,7 @@ def check_holes(fab, rules, vios: list, cast=(), bg=None,
     # a board with no vias: every plated hole is a pad hole
     check_hole_to_track(fab, rules, vios, is_via or (
         (lambda h: False) if bg is not None else None), cast,
-        _npth_matcher(bg))
+        _npth_matcher(bg), _same_net_matcher(bg))
 
     lo_he = rules.get("min_hole_to_edge_mm")
     outline = fab.outline
@@ -997,7 +997,7 @@ def check_hole_to_inner(fab, rules, vios: list) -> None:
 
 
 def check_hole_to_track(fab, rules, vios: list, is_via=None,
-                        cast=(), is_npth=None) -> None:
+                        cast=(), is_npth=None, same_net=None) -> None:
     """A drill or routed slot to outer copper it isn't joined to (#454),
     from JLC's capabilities page (read 2026-11-15): 'Via hole to Track
     0.2mm', 'PTH to Track 0.28mm 0.35mm is recommended', 'NPTH to Track
@@ -1010,7 +1010,18 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
     hole that may be a via. is_npth: _npth_matcher(bg). KiCad's drill file
     is merged, and a non-plated hole the same size as a plated one shares
     its diameter, so the file alone reads it as plated (a USB-C peg at 0.65
-    mm beside 0.65 mm pad holes); the board's np_thru_hole pads settle it."""
+    mm beside 0.65 mm pad holes); the board's np_thru_hole pads settle it.
+
+    A via is only warned about, once per board (#454 follow-up). The page
+    names the hole, but JLC's own smallest via (0.15 mm hole, 0.25 mm pad)
+    with its 0.10 mm spacing sits 0.15 mm from the hole, so 0.2 mm from the
+    drill can't be a floor JLC holds every via to. glasgow's 0.3/0.2 vias at
+    0.11 mm copper spacing read 0.16 mm from the drill, about 1600 of them,
+    on a board that was built. Via copper spacing is the clearance check's.
+    same_net: _same_net_matcher(bg). Copper of the hole's own net that the
+    gerber shows apart from its pad on this layer (a via with its unused
+    outer pad left bare, beside its own pour) is the same conductor, so a
+    drill that breaks into it shorts nothing."""
     hard_p, lo_p = _floors(rules, "min_pth_to_track_mm")
     lo_v = rules.get("min_via_to_track_mm")
     lo_n = rules.get("min_npth_to_track_mm")
@@ -1024,7 +1035,7 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
         if not h.plated or (is_npth is not None and is_npth(h)):
             what, hard, lo = "non-plated hole", lo_n, lo_n
         elif is_via is None or is_via(h):
-            what, hard, lo = "via hole", lo_v, lo_v
+            what, hard, lo = "via hole", None, lo_v
         else:
             what, hard, lo = "plated hole", hard_p, lo_p
         if lo is not None:
@@ -1044,6 +1055,7 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
     reach = max(d[4] for d in drilled)
     tol = GEOM_TOL_MM + KICAD_ARC_ERROR_MM
     band: list = []
+    vband: list = []
     for name in names():
         if name not in ("F.Cu", "B.Cu"):
             continue
@@ -1056,11 +1068,15 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
         tree = STRtree(comps)
         for shape, pos, what, hard, lo in drilled:
             near = [comps[int(i)] for i in tree.query(shape.buffer(reach))]
-            gaps = [c.distance(shape) for c in near if not c.intersects(shape)]
+            gaps = [c.distance(shape) for c in near if not c.intersects(shape)
+                    and not (same_net is not None and same_net(pos, c, name))]
             if not gaps:
                 continue
             d = min(gaps)
-            if _below(d, hard, tol):
+            if hard is None:
+                if _below(d, lo, tol):
+                    vband.append((d, pos, name))
+            elif _below(d, hard, tol):
                 vios.append(checklib.violation(
                     CHECK, "error", pos, name, None, [],
                     f"{what} {d:.4f} mm from copper on {name}, JLC minimum "
@@ -1071,6 +1087,22 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
     if lo_p is not None and hard_p is not None:
         _band_warning(vios, band, "dfm_hole_to_track",
                       "plated holes near copper", hard_p, lo_p)
+    if vband:
+        vband.sort(key=lambda b: b[0])
+        worst, pos, layer = vband[0]
+        v = checklib.violation(
+            CHECK, "warning", pos, layer, None, [],
+            f"{len(vband)} via holes under JLC's 'Via hole to Track' "
+            f"{lo_v} mm from other copper (worst {worst:.4f} mm from the "
+            "drill): JLC's own smallest via at its minimum spacing reads "
+            "under it too, so this is advice, and copper spacing is judged "
+            "by clearance", SOURCE, kind="dfm_via_hole_to_track",
+            count=len(vband), preferred_mm=lo_v,
+            distance_mm=checklib.rnd(worst), hole="via hole")
+        v["items"] = [{"msg": f"via hole {b[0]:.4f} mm",
+                       "pos": [checklib.rnd(b[1][0]), checklib.rnd(b[1][1])]}
+                      for b in vband]
+        vios.append(v)
 
 
 def check_slots(fab, rules, vios: list) -> None:
@@ -1141,6 +1173,52 @@ def _via_matcher(bg):
                 return True
         return False
     return is_via
+
+
+def _same_net_matcher(bg):
+    """-> same_net(pos, comp, layer): is gerber copper `comp` on `layer` the
+    net of the via or pad hole at `pos`? None with no board. The gerber
+    has no nets; the board's tracks, pads, vias and zone fills give them."""
+    if bg is None or not all(hasattr(bg, f) for f in
+                             ("vias_of", "pads_of", "tracks_of", "zones_of")):
+        return None
+    holes = [(v.at, v.net) for v in bg.vias_of()]
+    holes += [(p.center, p.net) for p in bg.pads_of() if p.drill]
+    holes = [(at, n) for at, n in holes if n]
+    if not holes:
+        return None
+    htree = STRtree([Point(at) for at, _ in holes])
+    trees: dict = {}
+
+    def layer_tree(layer):
+        if layer not in trees:
+            items = [(t.poly, t.net) for t in bg.tracks_of(layer=layer)]
+            items += [(p.poly, p.net) for p in bg.pads_of(layer=layer)]
+            items += [(v.poly, v.net) for v in bg.vias_of(layer=layer)]
+            for z in bg.zones_of(layer=layer):
+                if z.filled:
+                    items.append((z.fill_on(layer), z.net))
+            items = [(g, n) for g, n in items if n and not g.is_empty]
+            trees[layer] = (STRtree([g for g, _ in items]) if items else None,
+                            items)
+        return trees[layer]
+
+    def same_net(pos, comp, layer) -> bool:
+        p = Point(pos)
+        nets = {holes[int(i)][1] for i in htree.query(p.buffer(0.01))
+                if Point(holes[int(i)][0]).distance(p) < 0.01}
+        if len(nets) != 1:
+            return False
+        net = nets.pop()
+        tree, items = layer_tree(layer)
+        if tree is None:
+            return False
+        probe = comp.buffer(-GEOM_TOL_MM) if comp.area > 1e-4 else comp
+        if probe.is_empty:
+            probe = comp
+        return any(items[int(i)][1] == net and items[int(i)][0].intersects(probe)
+                   for i in tree.query(probe))
+    return same_net
 
 
 def _npth_matcher(bg):

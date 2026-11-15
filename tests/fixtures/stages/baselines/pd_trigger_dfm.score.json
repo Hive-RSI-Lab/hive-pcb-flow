@@ -4,10 +4,12 @@
  "fixture": "pd_trigger_dfm",
  "board": "pd-trigger",
  "metrics": {
-  "errors": 47,
-  "warnings": 21,
+  "errors": 49,
+  "warnings": 22,
   "by_kind": {
    "dfm_clearance": 47,
+   "dfm_hole_to_track": 2,
+   "dfm_mask_dam": 1,
    "dfm_silk_over_pad": 19,
    "dfm_silk_width": 1,
    "dfm_via_fill_note_missing": 1
@@ -17,17 +19,17 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 47.0,
-  "warnings": 21.0,
+  "errors": 49.0,
+  "warnings": 22.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 74.4,
+ "composite": 73.3,
  "composite_inputs": "full",
  "known_answer": null,
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-05",
+  "created": "2026-11-15",
   "kicad_version": null
  }
 }
