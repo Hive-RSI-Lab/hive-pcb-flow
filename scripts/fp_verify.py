@@ -78,8 +78,9 @@ Checks (land_pattern fields drive which run):
                 a list, or a numbering other than ccw_top / cw_top
                 (ignored). `field` says which
 
-Pad numbering (lib/padnum.py; facts.pad_numbering says what was judged and
-why not). The geometry checks never read a pad number, so these catch a
+Pad numbering (lib/padnum.py; the report's pad_numbering says what was
+judged and why not; its direction is null when the numbers run neither
+way). The geometry checks never read a pad number, so these catch a
 footprint that matches the land pattern pad for pad with the pins on the
 wrong pads. Example: on SiTime's 3.2 x 2.5 mm PQFN-4 oscillator, pins 1 and 2
 share a LONG side (2.1 mm apart, SiT1602B drawing POD-PQFN-004-X03225-002);
