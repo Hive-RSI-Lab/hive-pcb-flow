@@ -243,3 +243,25 @@ parts:
          source: "SNOSD45B 10.1.2 Bypass Capacitor: VDD bypassed to GND by at least 0.1 uF, up to 1 uF, X7R or better",
          cite: [{doc: lmg1020.pdf, sha256: 4a25e40c21b910a8008e3e8b77a97fd16b42cc743cfbc0cacec37b2c5585c13d, page: 3, table: 'Pin Functions', quote: 'Decouple through a small size, low inductance capacitor to GND', fields: []},
                 {doc: lmg1020.pdf, sha256: 4a25e40c21b910a8008e3e8b77a97fd16b42cc743cfbc0cacec37b2c5585c13d, page: 16, table: '', quote: 'This bypass capacitor has to be at least a 0.1 µF, up to 1 µF', fields: [min, max]}]}
+
+  # PCB-0010 bb-buck (#1225).
+  - mpn: LMR33630
+    match: '^LMR3363[0-9]'
+    verified: true   # TI SNVSAN3F read 2026-11-15, Pin Functions and 9.2.2.6-9.2.2.8
+    aliases: {EP: AGND, PAD: AGND, GND: PGND}
+    requires:
+      - {id: CBOOT, pin: BOOT, to: SW, kinds: [C], value: 100n,
+         source: "SNVSAN3F Pin Functions BOOT and 9.2.2.7: a 100 nF ceramic bootstrap capacitor BOOT to SW is required",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 5, table: 'Pin Functions', quote: 'Connect a high-quality 100-nF', fields: [value]},
+                {doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'The LMR33630 requires a bootstrap capacitor connected between the BOOT pin and the SW pin.', fields: []}]}
+      - {id: CVCC, pin: VCC, to: PGND, kinds: [C], value: 1u,
+         source: "SNVSAN3F Pin Functions VCC and 9.2.2.8: VCC requires a 1 uF ceramic capacitor to GND",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 5, table: 'Pin Functions', quote: 'quality 1-µF capacitor from this pin to GND.', fields: [value]},
+                {doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'requires a 1-µF, 16-V ceramic capacitor connected from VCC to GND for proper operation.', fields: [value]}]}
+      - {id: CIN, pin: VIN, to: PGND, kinds: [C], min: 10.0e-6,
+         source: "SNVSAN3F 9.2.2.6: a minimum of 10 uF of ceramic capacitance is required at the input (held per part, nominal: the sum across parts is not judged)",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'A minimum of 10 µF of ceramic capacitance is required', fields: [min]}]}
+      - {id: CHF, pin: VIN, to: PGND, kinds: [C], value: 220n,
+         source: "SNVSAN3F 9.2.2.6: a small 220 nF ceramic capacitor must be used at the input as a high-frequency bypass",
+         cite: [{doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'In addition, a small case size, 220-nF', fields: [value]},
+                {doc: lmr33630.pdf, sha256: 3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a, page: 23, table: '', quote: 'ceramic capacitor must be used at the input, as close a possible to the regulator.', fields: []}]}

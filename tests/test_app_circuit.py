@@ -409,3 +409,49 @@ def test_pcb0007_as_wired_is_quiet():
 def test_de20m_part_rows_catch_each_planted_fault(values, drop, want):
     viol, _ = _audit(*_de20m(values, drop))
     assert _parts(viol) == want
+
+
+# ------------------------------------- LMR33630 (PCB-0010, #1225)
+
+def _bb(values=None, drop=()):
+    """PCB-0010 as wired: U1 LMR33630 buck from +VIN. `values` changes part
+    values, `drop` removes parts."""
+    comps = {"U1": "LMR33630ADDAR", "C1": "220nF 50V X7R",
+             "C2": "10uF 50V X7R", "C3": "10uF 50V X7R",
+             "C10": "10uF 50V X7R", "C6": "100nF 50V X7R",
+             "C7": "1uF 25V X7R", "L1": "15uH"}
+    comps.update(values or {})
+    nets = {
+        "+VIN": [_m("U1", "2", "VIN", "power_in"), 
+                 _m("U1", "3", "EN", "input")]
+        + [_m(r, "1") for r in ("C1", "C2", "C3", "C10")],
+        "/BST": [_m("U1", "7", "BOOT", "passive"), _m("C6", "1")],
+        "/SW": [_m("U1", "8", "SW", "power_out"), _m("C6", "2"),
+                _m("L1", "1")],
+        "/VCC": [_m("U1", "6", "VCC", "power_out"), _m("C7", "1")],
+        "GND": [_m("U1", "1", "PGND", "power_in"), _m("U1", "9", "EP")]
+        + [_m(r, "2") for r in ("C1", "C2", "C3", "C10", "C7")],
+    }
+    for r in drop:
+        del comps[r]
+        for n in nets:
+            nets[n] = [x for x in nets[n] if x["ref"] != r]
+    return comps, nets
+
+
+def test_pcb0010_as_wired_is_quiet():
+    viol, _ = _audit(*_bb())
+    assert _parts(viol) == []
+
+
+@pytest.mark.parametrize("values,drop,want", [
+    ({}, ("C6",), [("error", "U1", "CBOOT")]),
+    ({}, ("C7",), [("error", "U1", "CVCC")]),
+    ({}, ("C2", "C3", "C10"), [("error", "U1", "CIN")]),
+    ({"C2": "4.7uF", "C3": "4.7uF", "C10": "4.7uF"}, (),
+     [("error", "U1", "CIN")]),
+    ({}, ("C1",), [("error", "U1", "CHF")]),
+])
+def test_lmr33630_rows_catch_each_planted_fault(values, drop, want):
+    viol, _ = _audit(*_bb(values, drop))
+    assert _parts(viol) == want
