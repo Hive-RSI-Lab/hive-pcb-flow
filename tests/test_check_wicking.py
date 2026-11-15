@@ -221,3 +221,105 @@ def test_a_drill_grazing_the_pad_edge_is_not_a_via_in_pad(tmp_path):
     pcb = _board(tmp_path, _setup(), _r0603(), _via(11.175 + 0.15 - 0.08, 10.0),
                  name="c")
     assert _kinds(pcb)[0] == ["wick_via_in_pad"]
+
+
+# --- via_under_body (#1088) ---------------------------------------------
+
+def _body_fp(lib, x, y, w, h, ref="Y1", layer="F", crtyd=False) -> str:
+    """A footprint with one pad off to the side and its body drawn as a Fab
+    rectangle (or, with crtyd, only a courtyard 0.25 mm larger)."""
+    lay, g = (f"{layer}.CrtYd", 0.25) if crtyd else (f"{layer}.Fab", 0.0)
+    return (f'(footprint "{lib}" (layer "{layer}.Cu") (at {x} {y})\n'
+            f' (property "Reference" "{ref}" (at 0 -3 0) (layer "F.SilkS"))\n'
+            f' (fp_rect (start {-w / 2 - g} {-h / 2 - g}) '
+            f'(end {w / 2 + g} {h / 2 + g}) (stroke (width 0.1) (type solid)) '
+            f'(fill no) (layer "{lay}"))\n'
+            f' (pad "1" smd rect (at {w / 2 - 0.4} 0) (size 0.6 0.6) '
+            f'(layers "{layer}.Cu" "{layer}.Paste" "{layer}.Mask") '
+            f'(net "N1")))\n')
+
+
+XTAL = "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm"
+
+
+def test_open_via_under_a_crystal_warns(tmp_path):
+    pcb = _board(tmp_path, _setup(tent=("no", "no")),
+                 _body_fp(XTAL, 20, 20, 3.2, 2.5), _via(19.0, 20.0))
+    kinds, vios, seen = _kinds(pcb)
+    assert kinds == ["via_under_body"]
+    assert vios[0]["refs"] == ["Y1"] and vios[0]["body"] == "crystal"
+    assert seen["low_standoff_bodies"] == 1
+
+
+def test_tented_via_under_a_crystal_passes(tmp_path):
+    # the quiet twin: the same via, tented on top
+    pcb = _board(tmp_path, _setup(tent=("no", "no")),
+                 _body_fp(XTAL, 20, 20, 3.2, 2.5),
+                 _via(19.0, 20.0, extra="(tenting (front yes) (back no))"))
+    assert _kinds(pcb)[0] == []
+
+
+def test_plugged_or_filled_via_under_a_body_passes(tmp_path):
+    for setup in (_setup(tent=("no", "no"), plug=("yes", "no")),
+                  _setup(tent=("no", "no"), fill="yes", cap="yes")):
+        pcb = _board(tmp_path, setup, _body_fp(XTAL, 20, 20, 3.2, 2.5),
+                     _via(19.0, 20.0))
+        assert _kinds(pcb)[0] == []
+
+
+def test_gull_wing_parts_stand_off_and_pass(tmp_path):
+    pcb = _board(tmp_path, _setup(tent=("no", "no")),
+                 _body_fp("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", 20, 20,
+                          3.9, 4.9, ref="U1"), _via(19.0, 20.0))
+    assert _kinds(pcb)[0] == []
+
+
+def test_body_from_the_courtyard_and_classes(tmp_path):
+    cases = [("Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm", "belly"),
+             ("Package_SON:WSON-8-1EP_2x2mm_P0.5mm", "belly"),
+             ("Inductor_SMD:L_Bourns_SRN6045TA", "inductor"),
+             ("Connector_USB:USB_C_Receptacle_GCT_USB4085", "shell")]
+    for i, (lib, cls) in enumerate(cases):
+        pcb = _board(tmp_path, _setup(tent=("no", "no")),
+                     _body_fp(lib, 20, 20, 4, 4, ref="U1", crtyd=True),
+                     _via(18.5, 20.0), name=f"c{i}")
+        kinds, vios, _ = _kinds(pcb)
+        assert kinds == ["via_under_body"] and vios[0]["body"] == cls, lib
+    # a chip inductor (0603) is not a molded power inductor
+    assert check_wicking.body_class("Inductor_SMD:L_0603_1608Metric") is None
+
+
+def test_via_just_outside_the_body_passes(tmp_path):
+    # body edge at x = 18.4; a 0.6 mm via centred 0.35 mm out clears it
+    pcb = _board(tmp_path, _setup(tent=("no", "no")),
+                 _body_fp(XTAL, 20, 20, 3.2, 2.5), _via(18.05, 20.0))
+    assert _kinds(pcb)[0] == []
+
+
+def test_bottom_side_body_only_sees_the_back(tmp_path):
+    fp = _body_fp(XTAL, 20, 20, 3.2, 2.5, layer="B")
+    open_top = _board(tmp_path, _setup(tent=("no", "yes")), fp,
+                      _via(19.0, 20.0), name="t")
+    open_back = _board(tmp_path, _setup(tent=("yes", "no")), fp,
+                       _via(19.0, 20.0), name="k")
+    assert _kinds(open_top)[0] == []
+    assert _kinds(open_back)[0] == ["via_under_body"]
+
+
+def test_kicad5_viasonmask_plots_every_via_open(tmp_path):
+    setup = ("(setup (pad_to_mask_clearance 0) "
+             "(pcbplotparams (viasonmask true)))")
+    pcb = _board(tmp_path, setup, _body_fp(XTAL, 20, 20, 3.2, 2.5),
+                 _via(19.0, 20.0))
+    kinds, _, seen = _kinds(pcb)
+    assert kinds == ["via_under_body"] and not seen.get("tenting_assumed")
+
+
+def test_kicad6_fp_text_reference_names_the_part():
+    import sexpdata
+    k8 = sexpdata.loads('(footprint "X" (property "Reference" "U7"))')
+    k6 = sexpdata.loads('(footprint "X" (fp_text reference "U301" (at 0 0)))')
+    bare = sexpdata.loads('(footprint "X" (fp_text value "10k" (at 0 0)))')
+    assert check_wicking._fp_ref(k8) == "U7"
+    assert check_wicking._fp_ref(k6) == "U301"
+    assert check_wicking._fp_ref(bare) == "?"

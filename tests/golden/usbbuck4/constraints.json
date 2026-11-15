@@ -19,5 +19,8 @@
     "groups": [
       {"name": "xtal", "anchor": "Y1", "members": ["C7", "C8"]}
     ]
+  },
+  "mechanical": {
+    "mounting": {"by": "none", "why": "test fixture for the flow, never built or cased (check_mounting #1088 flags a 60 x 45 mm board with no holes)"}
   }
 }

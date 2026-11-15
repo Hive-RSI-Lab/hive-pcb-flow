@@ -385,7 +385,7 @@ fixtures:
         sha256: 60d3bbee96811efa0d4e8ae1a41bd8e1c81187724c8adf1fafacc704c6e72532
       constraints:
         path: tests/golden/usbbuck4/constraints.json
-        sha256: 8576cdd920259e23419fd5866093a774d5e2c6a4af1cda300291905e5d990070
+        sha256: 1e8964cdf86f81cea512b82f3b199a33264abfa93671bb37a7955cecc79eacd2
       decoupling:
         path: tests/golden/usbbuck4/decoupling.json
         sha256: f824f8231eae404995bb8ff06747ea2510a6e8aa82b529eee6d006dce5a5232a

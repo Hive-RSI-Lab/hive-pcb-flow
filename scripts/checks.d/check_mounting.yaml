@@ -1,0 +1,10 @@
+# check_mounting: a board of 50 x 50 mm or more (or 80 mm long) has a place
+# for a screw: a MountingHole footprint, a lone M2-M5 hole or a round
+# Edge.Cuts window (hive-pcb-flow #1088). Castellated modules and edge
+# cards are exempt; constraints mechanical.mounting {by, why} says a board
+# mounts another way. Board only.
+name: check_mounting
+needs: []
+args: []
+optional:
+  constraints: [--constraints, "{constraints}"]

@@ -340,6 +340,11 @@ SCOUT_MAX_CANDIDATES = 6
 ANNOTATION_SUFFIXES = {"note", "notes", "reason", "comment", "source"}
 
 
+# check_mounting.MOUNTS_BY (tests/test_check_mounting.py keeps them equal)
+MOUNTS_BY = ("clip", "adhesive", "stack", "rail", "edge_card", "castellated",
+             "cable", "none")
+
+
 def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
@@ -657,6 +662,18 @@ class _FileLint:
                     self.add("error", "bad_type",
                              f"{path}: mechanical.allow_off_board must be a "
                              "list of {refs: [A, ...], why: text}", path)
+                mnt = val.get("mounting") if isinstance(val, dict) else None
+                if mnt is not None and not (
+                        isinstance(mnt, dict)
+                        and mnt.get("by") in MOUNTS_BY
+                        and isinstance(mnt.get("why"), str)
+                        and mnt["why"].strip()):
+                    # check_mounting (#1088): how a board with no screw
+                    # hole is held
+                    self.add("error", "bad_type",
+                             f"{path}: mechanical.mounting must be {{by: one "
+                             f"of {', '.join(MOUNTS_BY)}, why: "
+                             "text}", path)
             elif key == "pinouts":
                 # check_pinouts (#1027): an off-board connector held to a row
                 # of reference/connector_pinouts.yaml
