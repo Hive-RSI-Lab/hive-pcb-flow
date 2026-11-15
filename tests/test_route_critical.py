@@ -423,6 +423,59 @@ def test_parse_dru_rules_and_net_floors(tmp_path):
     assert rc.dru_net_floors(tmp_path / "nope.kicad_dru", "clearance") == {}
 
 
+def _rules(text):
+    return [(r["name"], r["min_mm"], r["condition"])
+            for r in rc.parse_dru_rules(text)]
+
+
+J1 = "A.memberOfFootprint('J1')"
+
+
+def test_parse_dru_rules_closes_a_rule_anywhere():
+    """#1163: a rule closed on its own line (KiCad's help and eda_io write
+    one-line rules) used to swallow the rule after it, which kept the first
+    rule's name and the next one's condition, or lost the next rule."""
+    # a one-line floor, then a footprint rule (c_glue)
+    assert _rules('(rule "oneline_floor" (constraint clearance (min 0.18mm)))\n'
+                  '(rule "j1_keepout"\n'
+                  '\t(constraint clearance (min 0.16mm))\n'
+                  f'\t(condition "{J1}")\n)\n') == [
+        ("oneline_floor", 0.18, None), ("j1_keepout", 0.16, J1)]
+    # a one-line footprint rule, then a board-wide floor (c2_glue)
+    assert _rules(f'(rule "j1_hv" (condition "{J1}") '
+                  '(constraint clearance (min 0.5mm)))\n'
+                  '(rule "board_floor_018"\n'
+                  '\t(constraint clearance (min 0.18mm))\n)\n') == [
+        ("j1_hv", 0.5, J1), ("board_floor_018", 0.18, None)]
+    # closed by an indented paren
+    assert _rules('(rule "a"\n\t(constraint clearance (min 0.2mm))\n\t)\n'
+                  '(rule "j1"\n\t(constraint clearance (min 0.3mm))\n'
+                  f'\t(condition "{J1}")\n)\n') == [
+        ("a", 0.2, None), ("j1", 0.3, J1)]
+
+
+def test_parse_dru_rules_reads_parens_as_kicad_does():
+    """#1163: a comment line holds no rule and closes nothing, a paren inside
+    a string is text, a bare name is a name, and a rule left open runs to
+    the end of the file."""
+    assert _rules('(version 1)\n'
+                  '# (rule "ghost" (constraint clearance (min 9mm)))\n'
+                  '(rule "a"\n  # ) closes nothing\n'
+                  '\t(constraint clearance (min 0.2mm)))\n'
+                  '(rule "b" (constraint clearance (min 0.3mm)))\n') == [
+        ("a", 0.2, None), ("b", 0.3, None)]
+    assert _rules('(rule "x)y" (constraint clearance (min 0.2mm))\n'
+                  '  (condition "A.NetName == \'N)\'"))\n'
+                  '(rule HV (constraint clearance (min 0.5mm)))\n') == [
+        ("x)y", 0.2, "A.NetName == 'N)'"), ("HV", 0.5, None)]
+    assert _rules('(rule "a" (constraint clearance (min 0.2mm)))\n'
+                  '(rule "b" (constraint clearance (min 0.3mm))\n') == [
+        ("a", 0.2, None), ("b", 0.3, None)]
+    # a '#' after a token is text, as in KiCad's lexer; a stray ')' is dropped
+    assert rc.routelib.dru_forms('(a #b)) x\n(c "\\"(")\n') == [
+        "(a #b)", '(c "\\"(")']
+
+
 def test_build_net_clearances_class_plus_dru(tmp_path):
     pro = tmp_path / "b.kicad_pro"
     pro.write_text(json.dumps({"net_settings": {

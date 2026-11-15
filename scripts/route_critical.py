@@ -182,7 +182,7 @@ import mazeroute  # noqa: E402  (#1043 sense lines)
 import pairlaunch  # noqa: E402  (#546 pair stubs a coupled router can launch from)
 import route_edit  # noqa: E402  (width normalization ops)
 import zrules  # noqa: E402  (#489 rules_gen's per-layer impedance widths)
-import routelib  # noqa: E402  (fresh_work_dir / swap_in)
+import routelib  # noqa: E402  (fresh_work_dir / swap_in / dru_forms)
 from checklib import CheckError, violation  # noqa: E402
 
 SCRIPT = "route_critical"
@@ -440,7 +440,9 @@ def pair_via_size(floors: dict) -> float:
 
 # ------------------------------------------------------------ DRU parsing
 
-_DRU_RULE_RE = re.compile(r'\(rule\s+"([^"]+)"(.*?)\n\)', re.S)
+# the head of a (rule ...) form and its name, quoted or bare
+_DRU_RULE_HEAD_RE = re.compile(
+    r'\(\s*rule(?![^\s()"])\s*(?:"((?:[^"\\\n]|\\.)*)"?|([^\s()"]+))?')
 _DRU_CONSTRAINT_RE = re.compile(
     r'\(constraint\s+(\w+)\s+\(min\s+([\d.]+)\s*mm\)\)')
 _DRU_NETNAME_RE = re.compile(r"\.NetName\s*==\s*'([^']+)'")
@@ -453,14 +455,22 @@ def parse_dru_rules(text: str) -> list[dict]:
     [{name, constraint, min_mm, nets, condition, layer}]. nets = NetName
     literals in the condition ([] for unconditioned/baseline rules);
     condition = the raw condition string (None when absent); layer = the
-    (layer ...) clause token (None when absent). Only the shapes rules_gen
-    emits are recognized; anything else simply yields no row. A barrier rule
-    (aiee_iso_*) yields none on purpose: it holds between two domains, and every
-    reader here takes a NetName as net-wide, which would hold a net 8 mm from
-    its own domain. routelib.dru_barriers reads those."""
+    (layer ...) clause token (None when absent). The rules are the file's
+    top-level forms as KiCad reads them (routelib.dru_forms), so a rule may
+    close on any line and comment lines are skipped (#1163); inside a rule
+    only the shapes rules_gen emits are recognized, and anything else simply
+    yields no row. A barrier rule (aiee_iso_*) yields none on purpose: it
+    holds between two domains, and every reader here takes a NetName as
+    net-wide, which would hold a net 8 mm from its own domain.
+    routelib.dru_barriers reads those."""
     out: list[dict] = []
-    for m in _DRU_RULE_RE.finditer(text or ""):
-        name, body = m.group(1), m.group(2)
+    for form in routelib.dru_forms(text):
+        m = _DRU_RULE_HEAD_RE.match(form)
+        if not m:
+            continue
+        name = re.sub(r"\\(.)", r"\1", m.group(1)) \
+            if m.group(1) is not None else m.group(2) or ""
+        body = form[m.end():]
         if name.startswith("aiee_iso_"):
             continue
         c = _DRU_CONSTRAINT_RE.search(body)
@@ -674,12 +684,19 @@ def dru_condition_eval(tree, a, b, scope):
     return hit if hit is None or tree[2] == "==" else not hit
 
 
+def dru_rule_holds(tree, x, y, scope):
+    """Whether a parsed condition holds for the item pair x, y: True,
+    False, or None when this reader cannot tell. KiCad tries a condition
+    with each item as A (DRC_RULE_CONDITION::EvaluateFor), so it holds
+    when either way does and fails only when both ways do."""
+    return _or3((dru_condition_eval(tree, x, y, scope),
+                 dru_condition_eval(tree, y, x, scope)))
+
+
 def dru_rule_may_hold(tree, x, y, scope) -> bool:
-    """Whether a parsed condition may hold for the item pair x, y. KiCad
-    tries a condition with each item as A (DRC_RULE_CONDITION::EvaluateFor),
-    so only False both ways rules it out."""
-    return dru_condition_eval(tree, x, y, scope) is not False or \
-        dru_condition_eval(tree, y, x, scope) is not False
+    """Whether a parsed condition may hold for the item pair x, y: only
+    False both ways (dru_rule_holds) rules it out."""
+    return dru_rule_holds(tree, x, y, scope) is not False
 
 
 def _dru_text(dru_path: Path | None) -> str | None:

@@ -397,6 +397,47 @@ def dsn_apply_net_rules(dsn_text: str, widths: dict[str, float],
     return "".join(out), moved
 
 
+# one token of a .kicad_dru as KiCad's DSN lexer reads it: a line whose first
+# non-blank character is '#' is a comment, a "..." string takes backslash
+# escapes and ends at the end of its line if left open, and a paren inside a
+# string is text
+_DRU_TOKEN_RE = re.compile(
+    r'(?P<comment>^[ \t\r\f\v]*#[^\n]*)'
+    r'|(?P<str>"(?:[^"\\\n]|\\.)*"?)'
+    r'|(?P<open>\()|(?P<close>\))'
+    r'|(?P<text>[^()"\n]+|\n)', re.M)
+
+
+def dru_forms(dru_text: str) -> list[str]:
+    """The top-level (...) forms of a .kicad_dru in file order, each as its
+    own text with its comment lines dropped (#1163). Parens are balanced as
+    KiCad reads them, so a rule may close anywhere: on a line of its own in
+    column 0 (as rules_gen writes), indented, or at the end of a one-line
+    rule (as KiCad's own help and eda_io write). A form left open runs to the
+    end of the file; a stray ')' outside any form is dropped."""
+    forms: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for m in _DRU_TOKEN_RE.finditer(dru_text or ""):
+        kind, tok = m.lastgroup, m.group()
+        if kind == "comment":
+            continue
+        if kind == "open":
+            depth += 1
+        elif kind == "close":
+            if not depth:
+                continue
+            depth -= 1
+        if depth or kind == "close":
+            buf.append(tok)
+            if not depth:
+                forms.append("".join(buf))
+                buf = []
+    if buf:
+        forms.append("".join(buf))
+    return forms
+
+
 def dru_barriers(dru_text: str) -> list[dict]:
     """rules_gen's aiee_iso_<barrier>_* rules as [{a: [globs], b: [globs],
     clearance_mm}], one per pair of domains, at the larger of its outer and
