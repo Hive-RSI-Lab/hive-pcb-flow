@@ -1,7 +1,8 @@
 # Seeded faults for check_pinouts (#1027): off-board connectors wired against
 # their standard pinout (reference/connector_pinouts.yaml), one per real
 # erratum the check was seeded from (sizif-1, echoplayer-2, bedlift-6), and
-# one from a published standard (#1070: Qwiic).
+# one from a published standard (#1070: Qwiic), and two from what a shared
+# bus or an off-board load needs beyond its pinout (#1087, #1090).
 mutants:
   pinout-jtag-swap:
     board: usbbuck4
@@ -46,3 +47,25 @@ mutants:
     expect:
       kind: pinout_mismatch
       ref: J95
+  wired-or-push-pull:
+    board: usbbuck4
+    script: mutations/wired_or_push_pull.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: an SN74LVC8T245 U94 with OE and DIR on ground drives a
+      sensor's SDA and SCL from its push-pull A port (#1087, from the I2C
+      specification UM10204 and TI's function table); ERC sees an IC on an IC
+    expect:
+      kind: wired_or_push_pull
+      ref: U94
+  pulsed-load-no-bulk:
+    board: usbbuck4
+    script: mutations/pulsed_load_no_bulk.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: a LIDAR-Lite connector J93 on /3V3_LIDAR with only
+      100 nF beside it, where Garmin asks for 680 uF (#1090); ERC sees a
+      connector on a rail
+    expect:
+      kind: pulsed_load_no_bulk
+      ref: J93

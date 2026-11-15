@@ -1,0 +1,175 @@
+# mate_needs.yaml - what an off-board mate or a shared bus needs from the
+# board beyond its pinout, read by scripts/check_pinouts.py (#1087, #1090).
+# Every row was seeded from the bus specification or the part's own
+# datasheet, never from one board's wiring; rows with a `cite` list are
+# checked against their PDFs by `bin/hwde part_rows --verify`.
+#
+# wired_or (#1087): lines every device pulls low and a resistor pulls high,
+#   so a driver on them must be open-drain or open-collector.
+#   lines:
+#     i2c       - a net reaching an IC pin whose function names SDA or SCL,
+#                 or whose own name does (UM10204 3.1.1). UFm (USDA/USCL) is
+#                 push-pull by the same spec and is not matched.
+#     apple_ii_slot - pins of a connector whose value, footprint or symbol
+#                 names the Apple II peripheral slot.
+#   drivers: parts with push-pull outputs, matched by value (regex).
+#     transceiver - outputs enabled by `oe` (active low; none: always on),
+#                   direction by `dir`: low drives side `dir_low`, high the
+#                   other side. Side pins are A<n> / B<n>. A driver whose
+#                   OE and DIR are tied (to ground or a named rail) so the
+#                   side on the line always drives is an error; one whose
+#                   OE or DIR is driven by logic is listed, not judged.
+#     push_pull_auto - an auto-direction translator with push-pull
+#                   outputs (TXB): on such a line unless its OE is grounded.
+#     open_drain  - listed so the counterexample reads plainly: never judged.
+#   A driver one series resistor from the line is judged as on it.
+#
+# pulsed_loads (#1090): off-board loads that draw in pulses (a laser
+#   rangefinder's shot, a GSM burst, an LED strip's refresh). A connector
+#   (ref J/P/CN/X) whose value, footprint, symbol or pin nets match `match`
+#   needs a bulk capacitor (>= bulk_uf_min, the decoupling check's bulk
+#   class's top end) on one of its supply nets, within bulk_mm of the
+#   connector's supply pad when the board is read. `vendor_uf` is the
+#   capacitance the part's maker asks for, quoted in the finding.
+
+wired_or:
+  lines:
+    i2c:
+      words: [SDA, SCL]
+      source: "NXP UM10204 I2C-bus specification and user manual, Rev. 7.0, section 3.1.1"
+      url: https://www.pololu.com/file/0J435/UM10204.pdf
+      cite:
+      - doc: UM10204.pdf
+        sha256: dc91f00f65584e06ef36e26c93bf9d91a95fb3c8a1830a9223e53caf678b36af
+        page: 8
+        table: ""
+        quote: "The output stages of devices connected to the bus must have an open-drain or open-collector to perform the wired-AND function."
+        fields: []
+    apple_ii_slot:
+      connector: "APPLE.?II|APPLEII"
+      pins: {"21": RDY, "22": DMA, "29": NMI, "30": IRQ, "31": RES, "32": INH}
+      source: "Apple II Reference Manual (1979), Table 33 and p. 101; slot pin numbers from the Apple II slot pinout"
+      url: https://archive.org/details/Apple_II_Reference_Manual_1979_Apple
+      pins_url: "https://downloads.reactivemicro.com/Apple%20II%20Items/Hardware/IIe/Technical/Apple%20II%20Slot%20-%20Pinout.txt"
+      cite:
+      - doc: a2ref1979.pdf
+        sha256: f9b5e331fef48b1ce02cab11d7ab3aa600ed8c3b35262efac3bc99f0c5663340
+        page: 101
+        table: ""
+        quote: "are all held high by 3.3K Ohm resis- tors to +Sv. These lines also appear on the peripheral connectors"
+        fields: []
+      - doc: a2ref1979.pdf
+        sha256: f9b5e331fef48b1ce02cab11d7ab3aa600ed8c3b35262efac3bc99f0c5663340
+        page: 118
+        table: "Table 33"
+        quote: "Pulling this line low disables the 6592's address bus and halts the microprocessor. This line is held high by a 3K resistor to +5v."
+        fields: []
+      - doc: a2ref1979.pdf
+        sha256: f9b5e331fef48b1ce02cab11d7ab3aa600ed8c3b35262efac3bc99f0c5663340
+        page: 119
+        table: "Table 33"
+        quote: "When this line is pulled low, all ROMs on the Apple board are disabled. This line is held high by a 3K resistor to +Sv."
+        fields: []
+  drivers:
+    sn74lvc8t245:
+      match: "^(SN)?74(LVC|AVC|LVCH)8T245"
+      kind: transceiver
+      dir_low: A
+      source: "TI SN74LVC8T245 datasheet SCES584D, Table 7-1 and section 7.3.4"
+      url: https://www.ti.com/lit/ds/symlink/sn74lvc8t245.pdf
+      cite:
+      - doc: sn74lvc8t245.pdf
+        sha256: a2493b65471e5c873e3f71afbe152ac4d0f9233045c5ec289bda602a4b453cf0
+        page: 15
+        table: "Table 7-1. Function Table"
+        quote: "L L Enabled Hi-Z B data to A bus"
+        fields: []
+      - doc: sn74lvc8t245.pdf
+        sha256: a2493b65471e5c873e3f71afbe152ac4d0f9233045c5ec289bda602a4b453cf0
+        page: 15
+        table: ""
+        quote: "7.3.4 Balanced High-Drive CMOS Push-Pull Outputs"
+        fields: []
+    sn74lvc1t45:
+      match: "^(SN)?74(LVC|AVC|LVCH)[12]T45"
+      kind: transceiver
+      oe: false
+      dir_low: A
+      source: "TI SN74LVC1T45 datasheet SCES515N, Table 7-1"
+      url: https://www.ti.com/lit/ds/symlink/sn74lvc1t45.pdf
+      cite:
+      - doc: sn74lvc1t45.pdf
+        sha256: e6fbd8400161399554fe905326e73236e74bb3af0b546ea1942deed14310536e
+        page: 14
+        table: "Table 7-1. Function Table"
+        quote: "DIR OPERATION L B data to A bus H A data to B bus"
+        fields: []
+    hc245:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT|LS|ALS|F|ABT|LVC|LV|AC|ACT)245"
+      kind: transceiver
+      dir_low: A
+      source: "TI SN74HC245 datasheet SCLS131F, Table 8-1"
+      url: https://www.ti.com/lit/ds/symlink/sn74hc245.pdf
+      cite:
+      - doc: sn74hc245.pdf
+        sha256: 31514d936e53661d1c380603e5034b2958085359313986775b838d1f30fb8d3f
+        page: 9
+        table: "Table 8-1. Function Table"
+        quote: "OE DIR L L B data to A bus L H A data to B bus H X Isolation"
+        fields: []
+    txb0108:
+      match: "^TXB0(1|10|02|04|08|10)"
+      kind: push_pull_auto
+      source: "TI TXB0108 datasheet SCES643L, section 7.3"
+      url: https://www.ti.com/lit/ds/symlink/txb0108.pdf
+      cite:
+      - doc: txb0108.pdf
+        sha256: 8f8720b78129d8b4f2ba45ec53cfa16cb511185019ae24eb25253422cf650556
+        page: 17
+        table: ""
+        quote: "the TXB0108 should not be used in applications such as I2C or 1-Wire where an open-drain driver is connected on the bidirectional data I/O."
+        fields: []
+    lvc07:
+      match: "^(SN)?74(LVC|LV)?[12]?G?0?7($|[^0-9])"
+      kind: open_drain
+      source: "TI SN74LVC1G07 datasheet, Description"
+      url: https://www.ti.com/lit/ds/symlink/sn74lvc1g07.pdf
+      cite:
+      - doc: sn74lvc1g07.pdf
+        sha256: 0471dcddef6983c851c474963ea86075f98c26a2995b7337218aecfedf1ee9c4
+        page: 1
+        table: ""
+        quote: "The output of the SN74LVC1G07 device is open drain and can be connected to other open-drain outputs to implement active-low wired-OR or active-high wired- AND functions."
+        fields: []
+
+pulsed_loads:
+  bulk_uf_min: 10
+  bulk_mm: 30
+  kinds:
+    lidar_lite:
+      match: "LIDAR.?LITE"
+      vendor_uf: 680
+      source: "Garmin LIDAR-Lite v3 Operation Manual and Technical Specifications, connection diagrams"
+      url: https://static.garmin.com/pumac/LIDAR_Lite_v3_Operation_Manual_and_Technical_Specifications.pdf
+      cite:
+      - doc: LIDAR_Lite_v3_Operation_Manual_and_Technical_Specifications.pdf
+        sha256: ebe6c24ef8a85f50d28143048fdbd0f43e2d1b1660383d9a520c75648a1f06f0
+        page: 3
+        table: ""
+        quote: "680µF electrolytic capacitor You must observe the correct polarity"
+        fields: [vendor_uf]
+    tof_lidar:
+      match: "LIDAR|TF.?MINI|TF.?LUNA|TFS20|TF0[23]|DTS60[0-9]{2}|LASER.?RANG"
+      source: "a pulsed-laser rangefinder module; its makers give no figure, so the bulk class floor holds"
+    gsm_module:
+      match: "SIM800|SIM900|SIM7[0-9]{3}|GSM|GPRS"
+      vendor_uf: 100
+      source: "SIMCom SIM800 Hardware Design V1.10, section 4.1 Power Supply"
+      url: https://wirenboard.com/wiki/images/b/b2/SIM800_Hardware_Design_V1.10.pdf
+      cite:
+      - doc: SIM800_HW_Design.pdf
+        sha256: b206fd7e98af516516b46b9ba2fde2b4e7f1a89dc5cdea0499eb2b5bd68a593e
+        page: 20
+        table: ""
+        quote: "For the VBAT input, a bypass capacitor (low ESR) such as a 100µF is strongly recommended."
+        fields: [vendor_uf]
