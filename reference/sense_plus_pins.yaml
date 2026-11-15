@@ -1,0 +1,29 @@
+# Supply pins that are also a part's current-limit sense-plus input, for
+# check_kelvin (#1278). A hot-swap or eFuse controller's limit is the voltage
+# from its VIN to its SENSE pin, so VIN reads the shunt's supply side: its
+# Kelvin error moves the current limit. A supply pin counts as a tap ONLY
+# through a row here, citing the datasheet section that says the limit is
+# measured from that pin - there is no blanket pin-role rule.
+#
+# match: a regex tried against the part's value and its MPN-like properties
+# (case-insensitive). plus_pins / minus_pins: regexes on the pin's function
+# name (upper case; an en dash reads as '-'), the limit's two inputs; a
+# board with no pin names uses its pads as before.
+# limit_tol_pct: the limit threshold's stated tolerance, the larger side of
+# min/typ/max, in percent. The Kelvin finding's severity comes from it:
+# error under half of it is info, up to all of it a warning, above it an
+# error. source: the datasheet sections, by number, for both facts.
+# verified: true means the datasheet was read for this row (with the date).
+parts:
+  - match: '^LM5069'
+    plus_pins: '^VIN$'
+    minus_pins: '^SEN(SE)?$'
+    limit: 'current limit VCL, VIN to SENSE: 48.5 / 55 / 61.5 mV (min/typ/max)'
+    limit_tol_pct: 11.8
+    source: >-
+      TI SNVS452G (LM5069, rev. Jan 2020): 6 Pin Functions, SENSE "the voltage
+      across the current sense resistor (RS) is measured from VIN to this pin";
+      8.3.1 Current Limit "the voltage across the sense resistor RS (VIN to
+      SENSE) reaches 55 mV"; 7.5 Electrical Characteristics, CURRENT LIMIT VCL
+      48.5 min, 55 typ, 61.5 max mV (+/-11.8 %)
+    verified: true (2026-11-15, datasheet read)

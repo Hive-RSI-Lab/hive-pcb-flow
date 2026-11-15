@@ -21,7 +21,10 @@ resistance the amplifier reads as shunt.
             net, or through a resistor of at most TAP_MAX_OHMS from the net, where
             the pin is sense-named or the board stores no pin name. An IC whose
             named VIN sits on one net and its SENSE on the other (a hot-swap's
-            limit) has no pair, and is not judged. Several candidate pins on a
+            limit) has no pair, and is not judged - unless a row in
+            reference/sense_plus_pins.yaml (#1278) names the part and cites
+            the datasheet section saying the limit is measured from that VIN:
+            then its VIN and SENSE are the pair. Several candidate pins on a
             side (a board with no pin names, or a channel pair not picked by
             number) take the kindest.
   entering  constraints.json power_paths on this net that end at the shunt, split
@@ -55,6 +58,10 @@ fails DRC unless marked (sense_mark.py marks it).
 Findings:
   kelvin_error       error at ERROR_FRAC of the shunt or more across both taps,
                      warning at WARN_FRAC. Names each tap and the copper's mOhm.
+                     A part with a sense_plus_pins row (a current-limit
+                     controller) is judged against its limit's stated
+                     tolerance instead: info under half of it, warning up to
+                     all of it, error above it, the row's source cited.
   sense_tap_off_pad  error: a declared sense line touches a pour, another pad,
                      or a power track or via before the named pad. tap_mm is
                      how far from the pad the farthest such contact reaches.
@@ -112,6 +119,7 @@ CELL_BUDGET = 300_000
 IC_KINDS = ("U", "IC")
 EXTRA_SOURCE_KINDS = ("FB", "T", "NT")
 PAD_BOOST = 100.0
+SENSE_PLUS_YAML = SCRIPTS.parent / "reference" / "sense_plus_pins.yaml"
 SENSE_SLACK_MM = 0.5     # a contact this near the tap pad is the tap itself (#936)
 SENSE_PIN = re.compile(
     r"^[~/]?(V?IN\d*[-+−PN]\d*|[-+]\d*IN\d*|I?SENSE.*|I?SNS.*|ISEN.*|CS[-+PN]?\d*|"
@@ -125,6 +133,48 @@ def _pin(name: str) -> str:
     """The pin name as the regexes read it: an en dash or a minus sign in a
     symbol's "IN–" is the plain "-" (INA228 symbols use U+2013)."""
     return (name or "").translate(_DASHES)
+
+
+def load_sense_plus(path: Path = SENSE_PLUS_YAML) -> list[dict]:
+    """reference/sense_plus_pins.yaml rows, regexes compiled (#1278)."""
+    import yaml
+    if not path.is_file():
+        return []
+    rows = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) \
+        .get("parts") or []
+    return [{**r, "_m": re.compile(r["match"], re.I),
+             "_p": re.compile(f"(?:{r['plus_pins']})|(?:{r['minus_pins']})",
+                              re.I)} for r in rows]
+
+
+def limit_rows(bg, table: list[dict]) -> dict[str, dict]:
+    """IC ref -> its sense_plus_pins row, matched on the footprint's value or
+    a part-number property (MPN, Manufacturer Part ...)."""
+    out = {}
+    for ref, fp in bg.footprints.items():
+        if _kind(ref) not in IC_KINDS:
+            continue
+        props = fp.get("props") or {}
+        names = [fp.get("value") or ""] + [
+            str(v) for k, v in props.items()
+            if re.search(r"mpn|part\s*(no|num)|manufacturer.?part", k, re.I)]
+        row = next((r for r in table if any(r["_m"].search(n) for n in names
+                                            if n)), None)
+        if row:
+            out[ref] = row
+    return out
+
+
+def _tap_pin(ref: str, fn, pin, rows: dict | None) -> bool:
+    """A pin that taps a net: an IC pin with no name, a sense-named one, or
+    one its part's sense_plus_pins row names as a limit input."""
+    if not fn:
+        return True
+    name = _pin(fn)
+    if pin.match(name):
+        return True
+    row = (rows or {}).get(ref)
+    return bool(row and row["_p"].fullmatch(name))
 
 
 def _kind(ref: str) -> str:
@@ -151,15 +201,16 @@ def shunts(bg) -> list[tuple[str, float, list[str]]]:
     return out
 
 
-def taps_on(bg, net: str, shunt: str, pin=SENSE_PIN) -> dict[str, list[dict]]:
+def taps_on(bg, net: str, shunt: str, pin=SENSE_PIN,
+            rows: dict | None = None) -> dict[str, list[dict]]:
     """IC ref -> the taps on `net`: {pad (where the tap joins the net), via (the
     resistor, or None), pin (the IC's pin name)}."""
     out: dict[str, list[dict]] = {}
     for p in bg.pads_of(net=net):
         if p.ref == shunt:
             continue
-        if _kind(p.ref) in IC_KINDS and (
-                not p.pinfunction or pin.match(_pin(p.pinfunction))):
+        if _kind(p.ref) in IC_KINDS and _tap_pin(p.ref, p.pinfunction, pin,
+                                                 rows):
             out.setdefault(p.ref, []).append(
                 {"pad": p, "via": None, "pin": p.pinfunction})
             continue
@@ -170,8 +221,8 @@ def taps_on(bg, net: str, shunt: str, pin=SENSE_PIN) -> dict[str, list[dict]]:
         if len(far) != 1:
             continue
         for q in bg.pads_of(net=next(iter(far))):
-            if _kind(q.ref) in IC_KINDS and (
-                    not q.pinfunction or pin.match(_pin(q.pinfunction))):
+            if _kind(q.ref) in IC_KINDS and _tap_pin(q.ref, q.pinfunction,
+                                                     pin, rows):
                 out.setdefault(q.ref, []).append(
                     {"pad": p, "via": p.ref, "pin": q.pinfunction or q.number,
                      "far": q.net})
@@ -197,10 +248,12 @@ def _by_name(taps: list[dict], other: list[dict], other_net: str) -> list[dict]:
     return hit or taps
 
 
-def readers(bg, shunt: str, nets: list[str], pin=SENSE_PIN) -> list[dict]:
+def readers(bg, shunt: str, nets: list[str], pin=SENSE_PIN,
+            rows: dict | None = None) -> list[dict]:
     """[{ic, sides: {net: [taps]}}]: ICs with a tap on both nets, paired by
-    channel number where the pins carry one (INA3221 IN+1 / IN-1)."""
-    a, b = (taps_on(bg, n, shunt, pin) for n in nets)
+    channel number where the pins carry one (INA3221 IN+1 / IN-1). rows:
+    IC ref -> sense_plus_pins row, whose limit inputs count as taps."""
+    a, b = (taps_on(bg, n, shunt, pin, rows) for n in nets)
     out = []
     for ic in sorted(set(a) & set(b)):
         ta, tb = a[ic], b[ic]
@@ -415,11 +468,23 @@ def tap_mohm(bg, grids: dict, net: str, shunt: str, sources: list[str],
     return out, None, g.cell
 
 
-def judge(bg, paths: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
+def limit_severity(error_pct: float, tol_pct: float) -> str | None:
+    """A current-limit controller's Kelvin error against its limit's stated
+    tolerance (#1278): info under half of it, warning up to it, error above."""
+    if error_pct > tol_pct:
+        return "error"
+    if error_pct >= tol_pct / 2:
+        return "warning"
+    return "info" if error_pct >= 100 * WARN_FRAC else None
+
+
+def judge(bg, paths: list[dict], table: list[dict] | None = None
+          ) -> tuple[list[dict], list[dict], list[str]]:
     vios, facts, left = [], [], []
     grids: dict = {}
+    rows = limit_rows(bg, load_sense_plus() if table is None else table)
     for ref, ohms, nets in shunts(bg):
-        rs = readers(bg, ref, nets)
+        rs = readers(bg, ref, nets, rows=rows)
         if not rs:
             left.append(f"{ref} ({ohms * 1e3:g} mOhm): no amplifier with a tap "
                         "on both of its nets")
@@ -454,25 +519,47 @@ def judge(bg, paths: list[dict]) -> tuple[list[dict], list[dict], list[str]]:
             fact = {"shunt": ref, "ohms": ohms, "ic": r["ic"], "sides": sides,
                     "extra_mohm": checklib.rnd(total, 3),
                     "error_pct": checklib.rnd(100 * frac, 1)}
+            row = rows.get(r["ic"])
+            if row:
+                tol = float(row["limit_tol_pct"])
+                fact["limit_tol_pct"] = tol
+                fact["limit_source"] = ("reference/sense_plus_pins.yaml: "
+                                        f"{row.get('source', '')}")
             if why:
                 fact["partial"] = why
                 left.append(f"{ref} / {r['ic']}: {why}")
             facts.append(fact)
-            if frac < WARN_FRAC:
+            if row:
+                sev = limit_severity(100 * frac, tol)
+            elif frac >= WARN_FRAC:
+                sev = "error" if frac >= ERROR_FRAC else "warning"
+            else:
+                sev = None
+            if sev is None:
                 continue
             worst = max(sides, key=lambda s: s["mohm"])
             names = "; ".join(
                 f"{s['tap']} on {s['net']} joins {s['mohm']:.3g} mOhm from "
                 f"{ref}'s pad, with current from {', '.join(s['from'])}"
                 for s in sides if s["mohm"] > 0.1 * total)
+            msg = (f"{r['ic']} reads {ref} ({ohms * 1e3:g} mOhm) "
+                   f"{100 * frac:.0f}% high: {names}. ")
+            extra = {}
+            if row:
+                half = "under half" if sev == "info" else (
+                    "within" if sev == "warning" else "beyond")
+                msg += (f"Its current limit trips {100 * frac:.0f}% low, "
+                        f"{half} the limit's stated +/-{tol:g}% "
+                        f"({row.get('limit', 'limit tolerance')}; "
+                        f"{row.get('source', '')}). ")
+                extra = {"limit_tol_pct": tol}
+            msg += (f"Take each tap from {ref}'s own pad on a track that "
+                    "carries no other current")
             vios.append(checklib.violation(
-                SCRIPT, "error" if frac >= ERROR_FRAC else "warning",
-                worst["pad"], None, worst["net"], [ref, r["ic"]],
-                f"{r['ic']} reads {ref} ({ohms * 1e3:g} mOhm) "
-                f"{100 * frac:.0f}% high: {names}. Take each tap from {ref}'s "
-                "own pad on a track that carries no other current",
-                SCRIPT, kind="kelvin_error", extra_mohm=checklib.rnd(total, 3),
-                error_pct=checklib.rnd(100 * frac, 1)))
+                SCRIPT, sev, worst["pad"], None, worst["net"], [ref, r["ic"]],
+                msg, SCRIPT, kind="kelvin_error",
+                extra_mohm=checklib.rnd(total, 3),
+                error_pct=checklib.rnd(100 * frac, 1), **extra))
     return vios, facts, left
 
 
@@ -896,9 +983,12 @@ def run(argv=None):
     cons = checklib.load_json(a.constraints, "constraints") \
         if a.constraints else {}
     power = [e for e in cons.get("power") or [] if e.get("sense_pads")]
-    if power or any(readers(bg, r, n, LINE_PIN) for r, _, n in shunts(bg)):
+    table = load_sense_plus()
+    rows = limit_rows(bg, table)
+    if power or any(readers(bg, r, n, LINE_PIN, rows)
+                    for r, _, n in shunts(bg)):
         bg.assert_fresh()
-    vios, facts, left = judge(bg, cons.get("power_paths") or [])
+    vios, facts, left = judge(bg, cons.get("power_paths") or [], table)
     s_vios, sense = judge_sense(bg, power)
     l_vios, lines, l_left = judge_lines(bg, cons)
     return checklib.report(
