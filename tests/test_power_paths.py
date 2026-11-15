@@ -584,3 +584,127 @@ def test_soa_check_hotswap_uses_the_ramp_vds():
     _rc, at = _cli("soa_check.py", "--fet", "BSC010N04LS", "--at", "1m",
                    "--vds", "20")
     assert at["soa_power_w"] == pytest.approx(2 * 150 / 4.4, rel=1e-3)
+
+
+# ------------------------------------------------------- mlcc_dcbias floor
+
+def _mlcc_board(tmp_path, cap=("22uF 10V X5R", "C_0805_2012Metric"),
+                ldo=None):
+    """+3V3 (named rail, 3.3 V) with one cap; ldo=(value, cap) adds an
+    LDO from +3V3 onto +1V8 with that one output cap."""
+    board = [("J1", "CONN", "Conn", {"1": ("+3V3", "VCC"),
+                                     "2": ("GND", "GND")}),
+             ("C1", cap[0], cap[1], {"1": ("+3V3", ""), "2": ("GND", "")})]
+    if ldo:
+        board += [("U9", ldo[0], "X2SON-4", {"4": ("+3V3", "IN"),
+                                             "2": ("GND", "GND"),
+                                             "1": ("+1V8", "OUT")}),
+                  ("C9", ldo[1][0], ldo[1][1], {"1": ("+1V8", ""),
+                                                "2": ("GND", "")})]
+    return write_net(tmp_path / "b.net", board)
+
+
+def _mlcc(*args):
+    import mlcc_dcbias
+    payload, _ = mlcc_dcbias.run([*map(str, args)])
+    return payload
+
+
+def _kinds(p, sev=None):
+    return [(v["kind"], v["severity"]) for v in p["violations"]
+            if sev is None or v["severity"] == sev]
+
+
+def test_mlcc_floor_from_constraints_catches_the_issue_case(tmp_path):
+    # #1067: 15 uF effective asked; one 22u 0805 X5R 10V at 3.3 V keeps
+    # ~15.1 uF typical, ~12.5 uF low: below on the low curve, no --min-c
+    net = _mlcc_board(tmp_path)
+    cons = tmp_path / "c.json"
+    cons.write_text(json.dumps({"power": [
+        {"net": "+3V3", "current_a": 0.5, "voltage": 3.3,
+         "min_cout": 15e-6}]}))
+    p = _mlcc("--net", net, "--constraints", cons)
+    assert ("rail_c_below_min", "warning") in _kinds(p)
+    assert p["floors"]["+3V3"]["source"].startswith("constraints")
+    t = p["rail_totals"]["+3V3"]
+    assert 14e-6 < t["c_eff"] < 16e-6 and t["c_eff_low"] < 15e-6
+    # the twin: a 10 uF floor holds on the low curve; no finding
+    cons.write_text(json.dumps({"power": [
+        {"net": "+3V3", "current_a": 0.5, "voltage": 3.3,
+         "min_cout": 10e-6}]}))
+    p = _mlcc("--net", net, "--constraints", cons)
+    assert not _kinds(p, "error") and not _kinds(p, "warning")
+
+
+def test_mlcc_floor_from_the_regulator_row(tmp_path):
+    bad = _mlcc_board(tmp_path, ldo=("TPS7A2018PDQNR",
+                                     ("0.47uF 6.3V X5R", "C_0201_0603Metric")))
+    p = _mlcc("--net", bad)
+    errs = [v for v in p["violations"] if v["kind"] == "rail_c_below_min"]
+    assert errs and errs[0]["severity"] == "error"
+    assert "U9" in errs[0]["refs"] and errs[0]["net"] == "+1V8"
+    good = _mlcc_board(tmp_path, ldo=("TPS7A2018PDQNR",
+                                      ("1uF 6.3V X5R", "C_0402_1005Metric")))
+    p = _mlcc("--net", good)
+    assert not _kinds(p, "error") and not _kinds(p, "warning")
+    assert "+1V8" in p["floors"]
+
+
+def test_mlcc_no_floor_is_not_judged_and_50pct_is_info(tmp_path):
+    # an LDO with no pin_requirements row: its rail is not judged; a part
+    # under the generic 50 % line with no floor is info, not a warning
+    net = _mlcc_board(tmp_path, cap=("10uF 6.3V X5R", "C_0402_1005Metric"),
+                      ldo=("XYZ123LDO", ("1uF 6.3V X5R",
+                                          "C_0402_1005Metric")))
+    p = _mlcc("--net", net)
+    assert any(s.startswith("+1V8: fed by U9") for s in p["not_judged"])
+    assert not _kinds(p, "warning") and not _kinds(p, "error")
+    assert ("cap_dc_bias_low", "info") in _kinds(p)
+
+
+def test_mlcc_min_c_overrides_and_run_contract(tmp_path):
+    import mlcc_dcbias
+    net = _mlcc_board(tmp_path)
+    payload, out = mlcc_dcbias.run(["--net", str(net), "--min-c",
+                                    "+3V3=20u", "--out", "x.json"])
+    assert out == "x.json"
+    assert payload["floors"]["+3V3"]["source"] == "--min-c"
+    assert ("rail_c_below_min", "error") in _kinds(payload)
+
+
+def test_constraints_lint_knows_min_cout(tmp_path):
+    import constraints_lint
+    f = tmp_path / "constraints.json"
+    f.write_text(json.dumps({"power": [
+        {"net": "+3V3", "current_a": 0.5, "voltage": 3.3,
+         "min_cout": 15e-6}]}))
+    vios, _ = constraints_lint.lint_file(f)
+    assert vios == []
+
+
+def test_ldo_mutant_twin_is_quiet(tmp_path):
+    sys.path.insert(0, str(REPO / "tests" / "golden" / "mutations"))
+    import ldo_cout_derated_below_min as m
+    for quiet, bad in ((False, True), (True, False)):
+        net = tmp_path / f"q{int(quiet)}.net"
+        net.write_text(m.netlist(quiet=quiet), encoding="utf-8")
+        p = _mlcc("--net", net)
+        hit = [v for v in p["violations"] if v["kind"] == "rail_c_below_min"
+               and "U97" in v["refs"]]
+        assert bool(hit) is bad
+
+
+def test_mlcc_floor_on_a_rail_of_unknown_dc_is_not_judged():
+    # glasgow revD0/D1 VDDA (corpus sweep): U19 TPS7A20 states 0.47 uF,
+    # 25 uF nominal sits on the rail but its DC is not named. That is
+    # not_judged, not a missing-capacitor error; a rail with no cap is.
+    import mlcc_dcbias
+    caps = [{"ref": "C24", "nets": ["GND", "VDDA"], "vdc": None,
+             "c_nom": 4.7e-6, "kind": "class2"}]
+    fl = {"VDDA": {"min_c": 0.47e-6, "source": "U19 row", "refs": ["U19"]}}
+    skipped = []
+    vios, _ = mlcc_dcbias.findings(caps, fl, skipped)
+    assert vios == [] and skipped and skipped[0].startswith("VDDA:")
+    vios, _ = mlcc_dcbias.findings([], fl, [])
+    assert [(v["kind"], v["severity"]) for v in vios] == [
+        ("rail_c_below_min", "error")]

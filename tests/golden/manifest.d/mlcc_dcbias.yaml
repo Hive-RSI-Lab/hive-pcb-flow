@@ -1,0 +1,15 @@
+# Seeded fault for mlcc_dcbias (#1067): a rail held to its regulator's
+# effective output-capacitance floor, derated.
+mutants:
+  ldo-cout-derated-below-min:
+    board: usbbuck4
+    script: mutations/ldo_cout_derated_below_min.py
+    check: mlcc_dcbias
+    defect: >-
+      NETLIST fault: a TPS7A2018 LDO's only output cap is 0.47 uF in 0201,
+      the datasheet's minimum on its nominal value; at 1.8 V it keeps about
+      0.39 uF, under the 0.47 uF effective floor TI asks for stability;
+      pin_part_missing, ERC and DRC see the part present
+    expect:
+      kind: rail_c_below_min
+      ref: U97

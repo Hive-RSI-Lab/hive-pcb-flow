@@ -102,6 +102,19 @@ Consumers per key (script -> phase):
     "net": "+5V", "current_a": 2.0,
     "sense_pads": {"R113.1": "C114.1"}
   }, {
+    // Output-capacitance floor (#1067, mlcc_dcbias). "min_cout" is the
+    // EFFECTIVE capacitance, in farads, the rail must keep at its DC: the
+    // regulator datasheet's minimum Cout for stability (TPS7A20 SBVS338H:
+    // "Effective output capacitance of 0.47 uF minimum"), or a hold-up
+    // budget. mlcc_dcbias derates every ceramic to ground on the net
+    // (lib/mlcc.py, typical and low curves) and sums them: under the floor
+    // on the typical curve is an error, only on the low curve a warning,
+    // and each part keeping less than floor / the nominal total is named.
+    // Without it, a regulator's verified pin_requirements row with
+    // `effective: true` gives the floor; a regulator-fed rail with
+    // neither is listed under not_judged. --min-c NET=F overrides both.
+    "net": "+1V8", "current_a": 0.2, "min_cout": 15e-6
+  }, {
     // width-only entry: "pdn": false opts a net OUT of check_pdn's
     // decoupling inventory. Use for nets declared solely so rules_gen sizes
     // their trace (e.g. the raw-input stub BEFORE a reverse-polarity

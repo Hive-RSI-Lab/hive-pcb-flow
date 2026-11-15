@@ -83,6 +83,9 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
                      # check_pdn_z (pdnlib)
                      "voltage": "num", "pdn_target_mohm": "num",
                      "transient_a": "num", "ripple_pct": "num",
+                     # mlcc_dcbias (#1067): effective output-capacitance
+                     # floor, farads, judged on the derated parts
+                     "min_cout": "num",
                      "f_max_mhz": "num", "edge_ns": "num",
                      "package": "package", "vrm": "vrm"},
     },
