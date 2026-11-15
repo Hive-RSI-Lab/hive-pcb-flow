@@ -130,11 +130,82 @@ def test_en_dash_minus_pin_is_a_sense_pin(tmp_path):
 
 
 def test_named_supply_pin_is_not_a_tap(tmp_path):
-    """A hot-swap's VIN on one net and SENSE on the other has no pair."""
+    """A hot-swap's VIN on one net and SENSE on the other has no pair, for
+    a part with no sense_plus_pins row: no blanket pin-role rule (#1278)."""
     body = (_fp("R1", "10m", 20, 10, ("1", 2, "A", ""), ("2", -2, "B", ""))
-            + _fp("U1", "LM5069", 12, 20, ("1", 0, "A", "VIN"), ("2", 4, "B", "SENSE")))
+            + _fp("U1", "HSX100", 12, 20, ("1", 0, "A", "VIN"), ("2", 4, "B", "SENSE")))
     _, facts, left = _judge(_board(tmp_path, body))
     assert not facts and left
+
+
+# ---- a current-limit controller's VIN through a cited row (#1278) ---------
+
+def _hotswap(tap_x, shunt="10m", part="LM5069-2"):
+    """_circuit's copper, read by a hot-swap: VIN through R2 from A (the
+    supply side) and SEN on B, named as the hc-power board names them."""
+    return (_circuit(tap_x, shunt=shunt).replace(
+        '"INA240"', f'"{part}"').replace('"IN+"', '"VIN"').replace('"IN-"', '"SEN"'))
+
+
+def test_sense_plus_table_rows_are_cited():
+    rows = check_kelvin.load_sense_plus()
+    assert rows and any(r["_m"].search("LM5069-2") for r in rows)
+    for r in rows:
+        assert r["limit_tol_pct"] > 0 and r["source"] and r["plus_pins"]
+        # each row cites the section saying the limit is read from VIN and
+        # the one stating the threshold's tolerance
+        assert "8.3.1" in r["source"] or "Current Limit" in r["source"]
+        assert "Electrical Characteristics" in r["source"]
+
+
+def test_limit_severity_from_the_parts_tolerance():
+    sev = check_kelvin.limit_severity
+    assert sev(1.0, 11.8) is None
+    assert sev(4.0, 11.8) == "info"          # hc-power U2: 4 % on +/-11.8 %
+    assert sev(5.8, 11.8) == "info"
+    assert sev(5.9, 11.8) == "warning"
+    assert sev(11.8, 11.8) == "warning"
+    assert sev(12.0, 11.8) == "error"
+
+
+def test_hot_swap_vin_tap_far_down_the_neck_is_an_error(tmp_path):
+    """Planted fault: VIN tapped at the inductor's end of the neck, ~59 % on
+    10 mOhm, past the LM5069's +/-11.8 % limit tolerance."""
+    vios, facts, left = _judge(_board(tmp_path, _hotswap(tap_x=30)))
+    (f,) = facts
+    assert f["ic"] == "U1" and not left and f["limit_tol_pct"] == 11.8
+    assert "SNVS452" in f["limit_source"]
+    (v,) = vios
+    assert v["kind"] == "kelvin_error" and v["severity"] == "error"
+    assert v["error_pct"] > 11.8 and "SNVS452" in v["msg"]
+    assert {s["pin"] for s in f["sides"]} == {"VIN", "SEN"}
+
+
+def test_hot_swap_vin_tap_on_the_shunt_pad_is_quiet(tmp_path):
+    """The quiet twin: the same part, VIN taken from the shunt's own pad."""
+    vios, facts, left = _judge(_board(tmp_path, _hotswap(tap_x=22)))
+    assert not vios and not left and facts[0]["extra_mohm"] < 0.1
+
+
+def test_hot_swap_small_error_is_info_where_an_amplifier_warns(tmp_path):
+    """The same copper that warns for an INA240 (2-5 % on 100 mOhm) is under
+    half the LM5069's +/-11.8 %: info. Between half and all of it warns."""
+    vios, _, _ = _judge(_board(tmp_path, _hotswap(tap_x=28, shunt="100m")))
+    (v,) = vios
+    assert v["severity"] == "info" and 2 <= v["error_pct"] < 5.9
+    vios, _, _ = _judge(_board(tmp_path, _hotswap(tap_x=28, shunt="60m"), "w"))
+    (v,) = vios
+    assert v["severity"] == "warning" and 5.9 <= v["error_pct"] <= 11.8, v
+
+
+def test_part_number_property_finds_the_row(tmp_path):
+    """A footprint valued "HotSwap" with an MPN property still gets the row."""
+    body = _hotswap(tap_x=30, part="HotSwap").replace(
+        '(property "Value" "HotSwap" (at 0 0 0))',
+        '(property "Value" "HotSwap" (at 0 0 0)) '
+        '(property "MPN" "LM5069MM-2/NOPB" (at 0 0 0))')
+    vios, facts, _ = _judge(_board(tmp_path, body))
+    assert facts and facts[0]["limit_tol_pct"] == 11.8 and vios
 
 
 def test_channels_pair_by_number_and_by_net_name(tmp_path):
