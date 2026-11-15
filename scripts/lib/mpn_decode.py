@@ -2,13 +2,18 @@
 
 The makers' ordering-code tables (TI's package designators, ST's pin-count
 and package letters, Microchip's package codes, onsemi, Nexperia, Vishay
-and Infineon order numbers) are in reference/mpn_packages.yaml, each row
+and Infineon order numbers, Winbond, GigaDevice, Macronix and ISSI SPI
+flash, Diodes Inc and the JEDEC-registered diode names) are in
+reference/mpn_packages.yaml, each row
 cited to the maker's datasheet page it was read from (part_rows.py
 --verify checks every quote against the PDF).
 
-decode(mpn) -> None, or {package, desc, source, maker, cites} where desc is
-what lib/pkgname.describe() returns ({mount, family, pins, pitch, width,
-body, chip}), filled only with what the cited rows state. An MPN that no
+decode(mpn) -> None, or {package, desc, source, maker, cites, open, cut}
+where `cut` says the name ends at a code that starts a longer code of the
+same entry (TPS2552D: D, but DBV and DRV are codes too), as a Value cut
+short of its ordering code does, and desc is what lib/pkgname.describe()
+returns ({mount, family, pins, pitch, width, body, chip}), filled only with
+what the cited rows state. An MPN that no
 entry matches in full, or whose code letter has no row, is None: the
 caller says "not judged", never a guess.
 
@@ -18,11 +23,16 @@ Table entry (makers[]):
            spaces taken out; its named groups pick the rows
   groups   {group: {value: row}}
   row      a fixed row for every MPN the entry matches
+  open     true for a generic (JEDEC-registered) name such as 1N4007 or
+           1N5819: the row is the registered package, but other makers sell
+           the name in other bodies too (SMA, SOD-123FL), so the caller
+           takes it as one candidate, not as the part's package
   combos   [{when: {group: value}, part: optional regex on the MPN, ...row}]
            rows that hold only for that combination (a body size that
            depends on both the pin count and the package letter)
 A row: package (the name), family (a pkgname family), mount (smd/tht),
-pin_count, pitch, width (mm), width_in (inches), body ([a, b] mm), cite.
+pin_count, pitch, width (mm), width_in (inches) or width_mil (mils: "SOIC-8
+208-mil"), body ([a, b] mm), cite.
 """
 from __future__ import annotations
 
@@ -34,7 +44,7 @@ import yaml
 
 TABLE = Path(__file__).resolve().parents[2] / "reference" / "mpn_packages.yaml"
 _KEYS = ("package", "family", "mount", "pin_count", "pitch", "width",
-         "width_in", "body")
+         "width_in", "width_mil", "body")
 
 
 @lru_cache(maxsize=4)
@@ -84,7 +94,14 @@ def decode(mpn: str, path: str | None = None) -> dict | None:
                 _merge(acc, cb, cites)
         if not (acc.get("family") or acc.get("mount")):
             return None
-        return _record(e, acc, cites)
+        rec = _record(e, acc, cites)
+        # the name ends at a code letter that starts a longer code of the
+        # same group (TI's D before DBV, DRV): a Value cut short
+        rec["cut"] = any(
+            m.end(g) == len(m_pn) and any(
+                o != v and str(o).startswith(v) for o in e["groups"][g])
+            for g, v in got.items() if g in (e.get("groups") or {}))
+        return rec
     return None
 
 
@@ -92,6 +109,8 @@ def _record(e: dict, acc: dict, cites: list) -> dict:
     width = acc.get("width")
     if width is None and acc.get("width_in") is not None:
         width = round(acc["width_in"] * 25.4, 2)
+    if width is None and acc.get("width_mil") is not None:
+        width = round(acc["width_mil"] * 0.0254, 2)
     body = tuple(acc["body"]) if acc.get("body") else None
     desc = {"mount": acc.get("mount"), "family": acc.get("family"),
             "pins": acc.get("pin_count"), "pitch": acc.get("pitch"),
@@ -105,6 +124,6 @@ def _record(e: dict, acc: dict, cites: list) -> dict:
         if ref not in docs:
             docs.append(ref)
     return {"package": name, "desc": desc, "maker": e["name"],
-            "cites": cites,
+            "cites": cites, "open": e.get("open") is True,
             "source": f"its ordering code, {e['name']} "
                       f"(reference/mpn_packages.yaml: {'; '.join(docs[:3])})"}
