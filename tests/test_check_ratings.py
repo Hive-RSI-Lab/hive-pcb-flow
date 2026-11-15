@@ -265,6 +265,71 @@ def test_capacitor_voltage_attribute(tmp_path):
     assert _findings(_run(ws2)) == []
 
 
+def _us_ws(tmp_path: Path, pa0: str, mpn_prop: bool = True,
+           record: str | None = "TESTMCU", bom=None,
+           mpn: str = "TESTMCU") -> Path:
+    """A US-sourced board (#1119): U1 carries an MPN, no LCSC code."""
+    ws = _ws(tmp_path, [], {}, bom)
+    prop = f' (property "MPN" "{mpn}")' if mpn_prop else ""
+    (ws / "kicad" / "board.kicad_pcb").write_text(
+        '(kicad_pcb (version 20240108)\n'
+        f'  (footprint "x" (property "Reference" "U1"){prop}\n'
+        '    (pad "1" smd rect (net "+3V3"))\n'
+        '    (pad "2" smd rect (net "GND"))\n'
+        f'    (pad "3" smd rect (net "{pa0}")))\n'
+        '  (footprint "x" (property "Reference" "C1")\n'
+        '    (property "MPN" "GRM-6V3")\n'
+        '    (pad "1" smd rect (net "+12V"))\n'
+        '    (pad "2" smd rect (net "GND"))))')
+    if record:
+        (ws / "parts" / f"{record}.json").write_text(json.dumps(MCU))
+    return ws
+
+
+def test_mpn_keyed_records_load_on_a_us_sourced_board(tmp_path):
+    """#1119: a part with no LCSC code finds parts/<MPN>.json by its MPN
+    property, and a parts.json line by its mpn: the planted PA0 on +5V is
+    an error that names the key, its quiet twin on +3V3 is clean."""
+    bom = [{"mpn": "GRM-6V3", "refs": ["C1"],
+            "attributes": [{"name": "Voltage Rated", "value": "6.3V"}]}]
+    p = _run(_us_ws(tmp_path, "+5V", bom=bom))
+    errs = sorted(_errors(p), key=lambda e: e["refs"])
+    assert [(e["kind"], e["refs"], e.get("part_key")) for e in errs] == [
+        ("rating_over_voltage", ["C1"], "MPN GRM-6V3"),
+        ("rating_over_voltage", ["U1"], "MPN TESTMCU")]
+    assert errs[1]["pin"] == "U1.3"
+    assert p["keyed_by_mpn"] == {"C1": "GRM-6V3", "U1": "TESTMCU"}
+    bom[0]["attributes"][0]["value"] = "25V"
+    quiet = _run(_us_ws(tmp_path / "b", "+3V3", bom=bom))
+    assert _errors(quiet) == []
+    assert "TESTMCU" in quiet["extractions"]
+
+
+def test_mpn_key_from_the_parts_json_ref_and_none_without_a_record(tmp_path):
+    # no MPN property: the parts.json line that lists U1 gives the MPN
+    bom = [{"mpn": "TESTMCU", "refs": ["U1"]}]
+    p = _run(_us_ws(tmp_path, "+5V", mpn_prop=False, bom=bom))
+    assert [e["refs"] for e in _errors(p)] == [["U1"]]
+    # an MPN with no record under it stays unkeyed, as before
+    p = _run(_us_ws(tmp_path / "b", "+5V", record=None))
+    assert _errors(p) == []
+    assert p["keyed_by_mpn"] == {}
+    assert not any(v.get("part_key") for v in p["violations"])
+
+
+def test_mpn_key_finds_a_record_saved_under_a_sanitized_name(tmp_path):
+    # ABM8G-24.000MHZ is stored as ABM8G-24-000MHZ.json, a '#' as '-'
+    p = _run(_us_ws(tmp_path, "+5V", mpn="TEST.MCU#2A", record="TEST-MCU-2A"))
+    assert p["keyed_by_mpn"] == {"U1": "TEST-MCU-2A"}
+    assert [e["refs"] for e in _errors(p)] == [["U1"]]
+    p = _run(_us_ws(tmp_path / "b", "+3V3", mpn="TEST.MCU#2A",
+                    record="TEST-MCU-2A"))
+    assert _errors(p) == []
+    # an MPN with a '/' is looked up only under its safe name
+    p = _run(_us_ws(tmp_path / "c", "+5V", mpn="TEST/MCU", record="TEST-MCU"))
+    assert p["keyed_by_mpn"] == {"U1": "TEST-MCU"}
+
+
 def test_constraints_and_power_tree_outrank_net_names(tmp_path):
     tree = "| Rail | Nom V |\n|---|---|\n| /VA, /VB | 5.0 / 2.5 |\n"
     ws = _ws(tmp_path, [("U1", "C1", {"1": "/VB", "2": "GND", "3": "/VA",

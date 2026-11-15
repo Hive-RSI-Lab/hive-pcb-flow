@@ -233,8 +233,9 @@ def _load(path: Path):
 def screen(ws: Path, board_mm: tuple[float, float] | None = None,
            cap_class: str = DEFAULT_CAP_CLASS) -> dict:
     """Per-part implications for a workspace + conflicts with its
-    constraints. Reads parts/parts.json, parts/<lcsc>.json extractions and
-    architecture/constraints.json (kicad/ copies after P5)."""
+    constraints. Reads parts/parts.json, parts/<lcsc>.json extractions
+    (else parts/<mpn>.json) and architecture/constraints.json (kicad/
+    copies after P5)."""
     ws = Path(ws)
     cap = fab_row(cap_class)
     pj = next((p for p in (ws / "parts" / "parts.json",
@@ -247,9 +248,19 @@ def screen(ws: Path, board_mm: tuple[float, float] | None = None,
     cons = _load(cj) if cj else {}
     parts, by_ref = [], {}
     for part in _load(pj).get("parts", []):
-        ext_path = pj.parent / f"{part.get('lcsc')}.json"
-        extract = _load(ext_path) if part.get("lcsc") and ext_path.is_file() \
-            else None
+        # keyed by the LCSC code, else by the MPN on a US-sourced board
+        # (#1119: parts/<MPN>.json, or its safe name: '#', '/' and '.'
+        # made '-', as check_ratings.key_by_mpn reads it)
+        names = []
+        for k in ("lcsc", "mpn"):
+            v = str(part.get(k) or "").strip()
+            if v:
+                names += [v, re.sub(r"[^A-Za-z0-9._-]", "-", v),
+                          re.sub(r"[^A-Za-z0-9_-]", "-", v)]
+        key = next((n for n in names if "/" not in n and not n.startswith(".")
+                    and (pj.parent / f"{n}.json").is_file()), None)
+        ext_path = pj.parent / f"{key or part.get('lcsc')}.json"
+        extract = _load(ext_path) if key else None
         imp = implications(extract, part, cap)
         imp.update(lcsc=part.get("lcsc"), refs=part_refs(part),
                    qty=part.get("qty_per_board") or 1,

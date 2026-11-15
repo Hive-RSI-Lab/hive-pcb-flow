@@ -134,6 +134,27 @@ def test_screen_missing_ep_size_is_a_gap_not_a_pass(tmp_path):
                    for c in res["conflicts"])
 
 
+def test_screen_reads_an_mpn_keyed_extraction(tmp_path):
+    """#1119: a US-sourced parts.json line with no lcsc finds its
+    extraction at parts/<mpn>.json; with neither file it has none."""
+    ws = _ws(tmp_path)
+    pj = ws / "parts" / "parts.json"
+    data = json.loads(pj.read_text())
+    line = next(p for p in data["parts"] if p.get("lcsc") == "C2071691")
+    line["lcsc"] = ""
+    pj.write_text(json.dumps(data))
+    ext = ws / "parts" / "C2071691.json"
+    ext.rename(ws / "parts" / f"{line['mpn']}.json")
+    res = li.screen(ws, (50, 40))
+    u1 = next(p for p in res["parts"] if p["refs"] == ["U1"])
+    assert u1["extraction"] == f"{line['mpn']}.json"
+    assert u1["thermal_vias"]["max_vias"] == 12
+    (ws / "parts" / f"{line['mpn']}.json").unlink()
+    u1 = next(p for p in li.screen(ws, (50, 40))["parts"]
+              if p["refs"] == ["U1"])
+    assert u1["extraction"] is None and "thermal_vias" not in u1
+
+
 def test_screen_courtyard_budget(tmp_path):
     ws = _ws(tmp_path)
     # fixture courtyards: SO-8EP 32.4 + four 1206 at 10.58 = 74.7 mm2
