@@ -4,8 +4,9 @@ copper round them (rip, place, rejoin, gate).
 The fast tests run the pieces on a synthetic part U1 with four pads in a row
 and the copper shapes a rip has to tell apart: a chain through a via (net A),
 a junction (B), a track that leaves the window (C) and a T onto a track's
-middle (D); the gates on made-up DRC results; and join_net's push on a fake
-router. The live tests work on copies of the routed pd_trigger fixture: the
+middle (D); the gates on made-up DRC results; join_net's push on a fake
+router; and the teardrops a new via takes from a removed one and the drops
+the check finds lost (#1138), on made-up vias. The live tests work on copies of the routed pd_trigger fixture: the
 gates on real DRC of a dangling stub that moves; R6 re-padded by a renumber
 that swaps its two nets (applied), moved, rotated and flipped, each replayed
 from its op files on a fresh copy (copper and fills); R6 swapped to a larger
@@ -38,6 +39,7 @@ import geom  # noqa: E402
 import mazeroute  # noqa: E402
 import part_repair as pr  # noqa: E402
 import placelib  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 FIX = REPO / "tests" / "fixtures" / "stages" / "pd_trigger"
@@ -649,6 +651,135 @@ def test_made_maps_each_adds_uuid_to_its_index_and_names_the_dups():
     assert pr._made(ops, results, 1) == ({"t1": 0, "v1": 3}, {1})
     # results that stop short made nothing past their end
     assert pr._made(ops, results[:2], 1) == ({"t1": 0}, set())
+
+
+# ------------------------------------------------------------ teardrops (#1138)
+
+_FULL = {"enabled": True, "length_ratio": 0.6, "max_length_mm": 1.2,
+         "width_ratio": 0.9, "max_width_mm": 1.8, "filter_ratio": 0.8,
+         "curved": True, "two_tracks": False, "prefer_zones": True}
+
+
+@pytest.mark.parametrize("p, want", [
+    (None, None),
+    ({"enabled": False, "length_ratio": 0.6}, None),
+    ({"enabled": True}, {}),
+    (_FULL, {k: _FULL[k] for k in tdl.ITEM_PARAMS}),
+    # a value route_edit would refuse is left out: the default stands
+    ({"enabled": True, "length_ratio": 0, "max_length_mm": -1,
+      "width_ratio": float("nan"), "max_width_mm": True,
+      "filter_ratio": "0.9", "curved": 1, "two_tracks": "yes",
+      "prefer_zones": True}, {"prefer_zones": True}),
+])
+def test_td_params_are_add_vias_teardrops(p, want):
+    got = pr._td_params(p)
+    assert got == want
+    if got:
+        assert all(isinstance(v, bool) == isinstance(tdl.ITEM_PARAMS[k], bool)
+                   for k, v in got.items())
+
+
+def test_lands_on_is_an_add_route_edit_would_answer_exists():
+    vias = [SimpleNamespace(net="A", at=(1.0, 2.0), layers=("F.Cu", "B.Cu")),
+            SimpleNamespace(net="A", at=(7.0, 2.0),
+                            layers=("F.Cu", "In1.Cu", "In2.Cu", "B.Cu"))]
+    op = {"op": "add_via", "net": "A", "at": [1.0005, 2.0]}
+    assert pr._lands_on(op, vias)
+    assert pr._lands_on(dict(op, at=[7.0, 2.0], top="F.Cu", bot="B.Cu"),
+                        vias)
+    assert not pr._lands_on(dict(op, at=[1.002, 2.0]), vias)
+    assert not pr._lands_on(dict(op, net="B"), vias)
+    assert not pr._lands_on(dict(op, bot="In1.Cu"), vias)
+
+
+def test_restore_teardrops_gives_each_new_via_its_nets_nearest():
+    lost = [SimpleNamespace(uuid="b", net="A", at=(0.0, 0.0)),
+            SimpleNamespace(uuid="a", net="A", at=(4.0, 0.0)),
+            SimpleNamespace(uuid="c", net="B", at=(9.0, 9.0)),
+            SimpleNamespace(uuid="d", net="C", at=(1.0, 1.0)),
+            SimpleNamespace(uuid="e", net="C", at=(2.0, 2.0))]
+    on = {"enabled": True, "length_ratio": 0.5}
+    params = {"b": dict(on, length_ratio=0.6), "a": on, "c": on,
+              "d": dict(on, enabled=False), "e": None}
+    work = [SimpleNamespace(net="A", at=(5.0, 5.0), layers=("F.Cu", "B.Cu"))]
+    adds = [{"op": "add_via", "net": "A", "at": [1.0, 0.0]},
+            # as far from a as from b: the lower uuid
+            {"op": "add_via", "net": "A", "at": [2.0, 0.0]},
+            {"op": "add_track", "net": "A", "start": [0, 0], "end": [1, 0]},
+            # net C lost vias, none with teardrops on
+            {"op": "add_via", "net": "C", "at": [1.0, 1.0]},
+            # on a via already there: route_edit makes nothing
+            {"op": "add_via", "net": "A", "at": [5.0, 5.0]},
+            {"op": "add_via", "net": "B", "at": [0.0, 9.0]}]
+    src = pr.restore_teardrops(adds, lost, params, work)
+    assert src == ["b", "a", None, None, None, "c"]
+    assert adds[0]["teardrops"] == {"length_ratio": 0.6}
+    assert adds[1]["teardrops"] == adds[5]["teardrops"] == {
+        "length_ratio": 0.5}
+    assert [("teardrops" in o) for o in adds] == [
+        True, True, False, False, False, True]
+    # each op gets its own copy
+    adds[1]["teardrops"]["curved"] = True
+    assert adds[5]["teardrops"] == {"length_ratio": 0.5}
+
+
+def _via(uid, at, on=True, joins=None, held=(), drops=None):
+    return tdl.Item("via", "A", at, Point(at).buffer(0.3), ("F.Cu", "B.Cu"),
+                    0.15, 0.6, on, uuid=uid, joins=dict(joins or {}),
+                    held=set(held), drops=dict(drops or {}))
+
+
+def test_teardrop_loss_names_the_drops_the_run_lost():
+    both = {"F.Cu": 1, "B.Cu": 1}
+    b0 = SimpleNamespace(items=[
+        _via("s1", (0, 0), joins=both, drops=both),
+        _via("s2", (1, 0), joins=both, drops={"B.Cu": 1}),
+        _via("k2", (2, 0), joins=both, drops=both),
+        _via("k3", (3, 0), joins=both, drops=both),
+        _via("k4", (4, 0), joins=both, drops={"B.Cu": 1}),
+        _via("k5", (50, 50), joins=both, drops=both),
+        _via("k6", (6, 0), joins=both, drops=both),
+        _via("k7", (7, 0), on=False, joins=both)])
+    b1 = SimpleNamespace(items=[
+        _via("n1", (0, 1), joins=both, drops=both),
+        _via("n2", (2, 1), joins=both, drops={"F.Cu": 1}),
+        _via("n3", (3, 1), joins=both, drops={"B.Cu": 1}),
+        _via("n4", (4, 1), on=False, joins=both),
+        _via("k2", (2, 0), joins=both, drops={"B.Cu": 1}),
+        _via("k3", (3, 0), on=False, joins=both),
+        _via("k4", (4, 0), joins=both, drops={"B.Cu": 1}),
+        _via("k5", (50, 50), joins=both),
+        # a pour holds its F.Cu side now: no drop wanted there
+        _via("k6", (6, 0), joins=both, held={"F.Cu"}, drops={"B.Cu": 1}),
+        _via("k7", (7, 0), on=False, joins=both)])
+    new_src = {"n1": "s1", "n2": "s1", "n3": "s2", "n4": "s1",
+               "gone": "s1"}  # the re-prune took "gone"
+    lost, short = pr.teardrop_loss(b0, b1, new_src, box(-10, -10, 10, 10))
+    assert [(e["via"], e["layers"], e["why"]) for e in lost] == [
+        ("n2", ["B.Cu"], "has no drop on B.Cu"),
+        ("n4", [], "has its teardrops off"),
+        ("k2", ["F.Cu"], "lost its drop on F.Cu"),
+        ("k3", [], "had teardrops on and has them off")]
+    assert [(e["via"], e["layers"], e["why"]) for e in short] == [
+        ("n3", ["F.Cu"], "has no drop on F.Cu, and the via it took its"
+         " teardrops from had none on F.Cu")]
+    assert lost[0]["net"] == "A" and lost[0]["at"] == [2.0, 1.0]
+    assert pr._td_line(lost[0]) == "A via at (2.000, 1.000) has no drop on B.Cu"
+
+
+def test_report_says_how_many_new_vias_took_teardrops():
+    p = {"status": "pass", "board": "b.kicad_pcb", "refs": ["C1"],
+         "ops": 1, "applied": False,
+         "teardrops": {"restored": 2, "from": {}, "lost": [], "short": []}}
+    md = pr.report_md(p)
+    assert ("Teardrops: 2 new via(s) took them from the vias the run"
+            " removed.") in md
+    p["teardrops"] = {"restored": 0, "lost": [{"via": "x"}], "short": []}
+    assert ("Teardrops: 0 new via(s) took them from the vias the run"
+            " removed; 1 via(s) short of drops the base board had (below)."
+            ) in pr.report_md(p)
+    p["teardrops"] = {"restored": 0, "lost": [], "short": []}
+    assert "Teardrops:" not in pr.report_md(p)
 
 
 def test_gates_fail_on_a_new_violation_near_the_repair():

@@ -35,9 +35,11 @@ positions, never file hashes.
    `part_repair.py` instead: it rips the copper the move spoils in a window
    round each part, makes the move, routes every net back to as few islands as
    it had, and keeps the result only if DRC got no worse and no violation is
-   new near the move (exit 1 and nothing written otherwise). Its new vias have
-   no teardrops, so a via it rips and replaces loses its drops: turn them back
-   on in KiCad (`route_teardrops.py --force` would turn them on board-wide).
+   new near the move (exit 1 and nothing written otherwise). A new via on a
+   net whose removed vias had teardrops takes the nearest one's settings
+   (route_edit's add_via `teardrops`, carried in its route file), and the run
+   fails when a via round the repair has fewer drops than before: DRC has no
+   check for a missing drop. Pads are not checked.
    With bare place_edit, re-route the affected nets (`reroute-net`) before
    believing `drc_routed`. Unconnected items in DRC are the honest signal.
 2. **Neighbour silk does not move.** The footprint's own silk travels with it;

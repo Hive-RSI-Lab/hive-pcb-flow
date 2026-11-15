@@ -82,8 +82,16 @@ lists the pad as a waived thermal, not a fixed one. Only a pad the run did
 not move, with no fewer spokes from that zone than it had before, gets
 one, and the tracks stay only if DRC then finds nothing new; any other
 starved pad fails the gate, and the notes say why.
-The new vias have no teardrops (route_edit's add_via sets none), so a via
-that is ripped and replaced loses its drops, and DRC does not see it.
+Teardrops (#1138): when a via the run removes (ripped, pushed or pruned)
+had teardrops on, every new via on its net gets them, set as on the
+nearest such via (route_edit's add_via "teardrops"; the replay carries
+them), and the refill builds the drops. After it, the check reads the
+drops round the repair area (lib/teardroplib.py) and fails the run when a
+new via that took teardrops has them off or wants a drop it lacks, or a
+via on both boards that had teardrops on wants one it did not want
+before. A new via short of a drop where the via it took them from was
+short too is a note, not a failure. DRC has no check for a missing drop:
+this is the only one. Pads are not checked.
 
 Contract: --pcb is read only, except with --apply on a pass. Exit 0 pass,
 1 violations (a net would not join, or the board got worse: --pcb untouched,
@@ -112,6 +120,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
+import sexpdata  # noqa: E402
 import shapely  # noqa: E402
 from shapely.geometry import LineString, Point, box  # noqa: E402
 
@@ -129,6 +138,7 @@ import route_edit  # noqa: E402
 import route_finish as rf  # noqa: E402
 import route_improve  # noqa: E402
 import routelib  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 MARGIN = 2.0   # mm round a part's old and new pads: the rip window
@@ -140,6 +150,8 @@ REPRUNE = 3    # peels after a refill, at most (#1140)
 CUT_MIN = 0.01  # mm: a dead end cut back leaves this much track, at least
 LOST_NEAR = 1.0  # mm: how near what cut a pour back from copper is named
 CUT_CAP = 4     # cuts of one track in one peel, at most
+TD_READ = 3.0  # mm past the repair area the teardrop check reads (#1138)
+TD_SHOWN = 8   # vias short of drops named in the gate's line
 RIP_FILE = "01-rip.route_edit.json"
 PLACE_FILE = "02-place.place_edit.json"
 ROUTE_FILE = "03-route.route_edit.json"
@@ -869,6 +881,117 @@ def _made(ops: list, results: list, first: int) -> tuple[dict, set]:
     return made, dup
 
 
+def _td_params(p: dict | None) -> dict | None:
+    """A via's teardroplib.params_of as add_via's teardrops (#1138); None
+    when its teardrops are off. A value route_edit would refuse is left
+    out, so the default stands for it."""
+    if not p or not p.get("enabled"):
+        return None
+    out = {}
+    for k, d in tdl.ITEM_PARAMS.items():
+        v = p.get(k)
+        if isinstance(d, bool):
+            if isinstance(v, bool):
+                out[k] = v
+        elif isinstance(v, (int, float)) and not isinstance(v, bool) \
+                and math.isfinite(v) and v > 0:
+            out[k] = float(v)
+    return out
+
+
+def _lands_on(op: dict, vias) -> bool:
+    """True when add_via op lands on a via already there, which route_edit
+    answers "exists" without making one (same net and span, within TOL)."""
+    span = {op.get("top", "F.Cu"), op.get("bot", "B.Cu")}
+    x, y = op["at"]
+    return any(v.net == op["net"] and abs(v.at[0] - x) <= TOL + 1e-9
+               and abs(v.at[1] - y) <= TOL + 1e-9
+               and {v.layers[0], v.layers[-1]} == span for v in vias)
+
+
+def restore_teardrops(adds: list, lost: list, params: dict, vias) -> list:
+    """Teardrops for the run's new vias (#1138). When a via the run takes
+    off the board (lost) had them on, every add_via on its net gets the
+    settings of the nearest such via (the lower uuid on a tie): op
+    "teardrops", set in place. Returns, per op in adds, that via's uuid or
+    None. params: uuid -> teardroplib.params_of on the base board; vias:
+    the work board's. An add that lands on a via already there gets none:
+    route_edit would set them on that via and make nothing, and the replay
+    leaves such an add out, so it would differ from the work board."""
+    by_net: dict = {}
+    for v in lost:
+        p = _td_params(params.get(v.uuid))
+        if p is not None:
+            by_net.setdefault(v.net, []).append((v, p))
+    src: list = []
+    for op in adds:
+        cands = by_net.get(op.get("net")) if op["op"] == "add_via" else None
+        if not cands or _lands_on(op, vias):
+            src.append(None)
+            continue
+        v, p = min(cands, key=lambda c: (math.dist(c[0].at, op["at"]),
+                                          c[0].uuid))
+        op["teardrops"] = dict(p)
+        src.append(v.uuid)
+    return src
+
+
+def _td_entry(it, layers, why: str) -> dict:
+    return {"via": it.uuid, "net": it.net,
+            "at": [_r(it.at[0]), _r(it.at[1])], "layers": layers, "why": why}
+
+
+def _td_line(e: dict) -> str:
+    return (f"{e['net']} via at ({e['at'][0]:.3f}, {e['at'][1]:.3f})"
+            f" {e['why']}")
+
+
+def teardrop_loss(b0, b1, new_src: dict, area) -> tuple[list, list]:
+    """The drops the run lost (#1138), from teardroplib.read of the base
+    (b0) and work (b1) boards round the repair area: (lost, short), entries
+    of via, net, at, layers, why. A new via that took a lost via's
+    teardrops (new_src: its uuid -> that via's) must have them on and a
+    drop on every layer that wants one, unless the via it took them from
+    lacked a drop too (then it is short, not lost). A via on both boards,
+    in the area, with teardrops on, must want no drop on work that it did
+    not want on base."""
+    v0 = {it.uuid: it for it in b0.items if it.kind == "via" and it.uuid}
+    v1 = {it.uuid: it for it in b1.items if it.kind == "via" and it.uuid}
+    lost, short = [], []
+    for u, s in sorted(new_src.items()):
+        it = v1.get(u)
+        if it is None:  # the re-prune took it
+            continue
+        if not it.enabled:
+            lost.append(_td_entry(it, [], "has its teardrops off"))
+            continue
+        miss = it.missing()
+        if not miss:
+            continue
+        why = "has no drop on " + ", ".join(miss)
+        src = v0.get(s)
+        if src is not None and src.missing():
+            short.append(_td_entry(
+                it, miss, why + ", and the via it took its teardrops from"
+                " had none on " + ", ".join(src.missing())))
+        else:
+            lost.append(_td_entry(it, miss, why))
+    for u, it0 in sorted(v0.items()):
+        it1 = v1.get(u)
+        if it1 is None or not it0.enabled or u in new_src \
+                or not it0.poly.intersects(area):
+            continue
+        if not it1.enabled:
+            lost.append(_td_entry(it1, [], "had teardrops on and has them"
+                                  " off"))
+            continue
+        miss = sorted(set(it1.missing()) - set(it0.missing()))
+        if miss:
+            lost.append(_td_entry(it1, miss, "lost its drop on "
+                                  + ", ".join(miss)))
+    return lost, short
+
+
 def touch_shorts(bg, refs, before=frozenset()) -> list[str]:
     """Tracks and vias of another net whose copper touches a pad of refs on
     bg (KiCad would carry them onto the pad's net when it saves), less the
@@ -1567,6 +1690,17 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
             o for u, (was, new) in moved.items()
             for o in _set_ends(u, was, new)] + kept
 
+    # a new via on a net whose removed vias had teardrops gets them back,
+    # set as on the nearest of those (#1138)
+    lost = {it.uuid: it for it in ripped
+            if not isinstance(it, geom.Track) and it.uuid}
+    for u in pushed + pruned:
+        if isinstance(by_uuid.get(u), geom.Via):
+            lost.setdefault(u, by_uuid[u])
+    td_src = restore_teardrops(
+        kept, list(lost.values()),
+        tdl.via_params(sexpdata.loads(base.read_text(encoding="utf-8"))),
+        bgw.vias_of())
     route_ops = ops_now()
 
     # 7. check
@@ -1578,6 +1712,7 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         # from the replay too: else a later peel of that copper would
         # leave the replay with it and work without
         made, dup = _made(route_ops, res, len(route_ops) - len(kept))
+    new_src = {u: td_src[i] for u, i in made.items() if td_src[i]}
     drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
     bg1 = geom.BoardGeom.from_file(work)
 
@@ -1724,6 +1859,27 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     payload["islands"] = isl
     payload["drc"] = {"before": drc0["counts"], "after": drc1["counts"]}
     worse = gates(drc0, drc1, isl, area)
+    # the drops after the refill: DRC has no check for a missing one
+    reach_td = area.buffer(TD_READ)
+    td_lost, td_short = teardrop_loss(tdl.read(base, None, area=reach_td),
+                                      tdl.read(work, None, area=reach_td),
+                                      new_src, area)
+    on_work = {it.uuid for it in bg1.vias_of()}
+    payload["teardrops"] = {
+        "restored": sum(u in on_work for u in new_src),
+        "from": {u: s for u, s in new_src.items() if u in on_work},
+        "lost": td_lost, "short": td_short}
+    if td_short:
+        payload["notes"].append(
+            "teardrops: no drop where the via they came from had none"
+            " either: " + "; ".join(_td_line(e) for e in td_short))
+    if td_lost:
+        worse.append(
+            f"teardrops: {len(td_lost)} via(s) short of drops the base board"
+            " had (DRC does not see it): "
+            + "; ".join(_td_line(e) for e in td_lost[:TD_SHOWN])
+            + (f"; and {len(td_lost) - TD_SHOWN} more in part_repair.json"
+               if len(td_lost) > TD_SHOWN else ""))
     if worse:
         payload["status"] = "violations"
         payload["worse"] = worse
@@ -1817,6 +1973,13 @@ def report_md(p: dict) -> str:
             f" {w['spokes'][0]} before, {w['spokes'][1]} after; a"
             f" {w['track']['width']:.3f} mm {w['net']} track"
             for w in p["waived_thermals"]] + [""]
+    td = p.get("teardrops") or {}
+    if td.get("restored") or td.get("lost"):
+        lines += [f"Teardrops: {td.get('restored', 0)} new via(s) took them"
+                  " from the vias the run removed"
+                  + (f"; {len(td['lost'])} via(s) short of drops the base"
+                     " board had (below)" if td.get("lost") else "")
+                  + ".", ""]
     for key, head in (("failed", "Would not join"),
                       ("worse", "Worse than before")):
         if p.get(key):
