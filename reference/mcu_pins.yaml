@@ -19,6 +19,11 @@
 #               pin is debug_pin_wrong, an SWD pin wired to other parts with
 #               no header or pad is debug_pins_reused (netlist_audit rule 31)
 #   shared      a pin's other role at reset (PA14: BOOT0 on STM32G0/C0)
+#   uart        GPIO: the UART block and line (UART1_TX) its alternate
+#               function brings out; a net named RX_FROM_x or TX_TO_x on a
+#               pin that runs the other way is uart_direction (rule 35)
+#   module_of   a module row: the chip row (by mpn prefix) whose tables
+#               apply, through module_pins (header pin name -> chip GPIO)
 #
 # loads: parts whose inputs need an MCU function.
 #   pwm_group   the inputs that take PWM; every such input of every load of
@@ -257,6 +262,56 @@ mcus:
       GPIO27: I2C1_SCL
       GPIO28: I2C0_SDA
       GPIO29: I2C0_SCL
+    # uart: function 2 (GPIOn_CTRL_FUNCSEL_VALUE_UARTm_TX/RX in the same
+    # io_bank0.h, read at pico-sdk 2.1.1 2026-11-14); GPIOs 2-3 mod 4 are
+    # CTS/RTS, not listed
+    uart:
+      GPIO0: UART0_TX
+      GPIO1: UART0_RX
+      GPIO4: UART1_TX
+      GPIO5: UART1_RX
+      GPIO8: UART1_TX
+      GPIO9: UART1_RX
+      GPIO12: UART0_TX
+      GPIO13: UART0_RX
+      GPIO16: UART0_TX
+      GPIO17: UART0_RX
+      GPIO20: UART1_TX
+      GPIO21: UART1_RX
+      GPIO24: UART1_TX
+      GPIO25: UART1_RX
+      GPIO28: UART0_TX
+      GPIO29: UART0_RX
+
+  - mpn: Arduino Nano RP2040 Connect (ABX00053)
+    match: '^(ABX00053|Arduino[ _]?Nano[ _]?RP2040([ _]?Connect)?)$'
+    verified: true   # variant.cpp at that commit read 2026-11-14
+    source: >-
+      arduino/ArduinoCore-mbed b4ad4e7218a691989acf6c4479112eae183a5a50,
+      variants/NANO_RP2040_CONNECT/variant.cpp, g_APinDescription: the
+      RP2040 GPIO behind each header pin (D8 is p20, D9 is p21)
+    module_of: RP2040
+    module_pins:
+      D0: GPIO1
+      D1: GPIO0
+      RX: GPIO1
+      TX: GPIO0
+      D2: GPIO25
+      D3: GPIO15
+      D4: GPIO16
+      D5: GPIO17
+      D6: GPIO18
+      D7: GPIO19
+      D8: GPIO20
+      D9: GPIO21
+      D10: GPIO5
+      D11: GPIO7
+      D12: GPIO4
+      D13: GPIO6
+      A0: GPIO26
+      A1: GPIO27
+      A2: GPIO28
+      A3: GPIO29
 
 loads:
   - mpn: DRV8874

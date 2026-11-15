@@ -656,8 +656,23 @@ boards:
     source_quote: "Aux RX and TX should be flipped"
     fault_class: SCH (signal direction)
     blind: missed
-    verdict: missed
+    verdict: caught_with_constraints
+    caught_by: "#1137"
+    catch:
+      script: netlist_audit
+      kind: uart_direction
+      net: RX_FROM_AUX
+      constraints:
+        rev_a: {design_intent: {modules: [{ref: U1, is: Arduino Nano RP2040 Connect, why: "the README and firmware target the Nano RP2040 Connect; the symbol's ABX00027 is a Nano 33 IoT"}]}}
+        rev_b: {design_intent: {modules: [{ref: U1, is: Arduino Nano RP2040 Connect, why: "the README and firmware target the Nano RP2040 Connect; the symbol's ABX00027 is a Nano 33 IoT"}]}}
     follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
+    note: >-
+      Not an independent catch: rule 35 was written after this defect was
+      read. U1's Value is ABX00027, which is a Nano 33 IoT, so the catch
+      states the module it really is. Then the Nano RP2040 Connect's D8 and
+      D9 (GPIO20, UART1 TX; GPIO21, UART1 RX, ArduinoCore-mbed variant.cpp)
+      sit on RX_FROM_AUX and TX_TO_AUX on rev A, and the other way round on
+      rev B, which is quiet.
   - id: smart-lcc-2
     summary: no zener/diode protection on the RX and TX ports
     source_quote: "Add Zeners to RX, and diodes to TX (primary and auxilliary) to protect those ports from burning out accidentally"
@@ -730,8 +745,15 @@ boards:
     source_quote: "Missing off /IORQ was a mistake."
     fault_class: SCH (missing connection)
     blind: missed
-    verdict: missed
+    verdict: caught
+    caught_by: "#1137"
+    catch: {script: netlist_audit, kind: bus_member_dropped, net: ZXIORQ}
     follow_up: "a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137)"
+    note: >-
+      Not an independent catch: rule 34 was written after this defect was
+      read. U101 reads MREQ, RD and WR while ZXIORQ goes only to the edge
+      connector Z101 and the J201 breakout; v1.2 wires it to the Pico and
+      is quiet. zxdiag-v10's v1.1 (the same commit) carries the finding too.
   - id: zxdiag-v11-2
     summary: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V
     source_quote: "Due to the standard 1N4148 diodes I used for clamping the -5V input to the Pico, I have the possibility of -0.7V going into the ADC. The minimum allowed by the Pico is -0.5V."
@@ -976,6 +998,12 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "a stated jumper map for configuration headers, so their wiring can be checked"
+    note: >-
+      Read for #1137 and left missed: the NT/TE choice here is the order of
+      the RJ45 pairs that J4 and J5 carry through F1-F8 to U7 and U12, which
+      changes between revisions, not a jumper with a stated default. Only
+      the E1 NT and TE pinouts would judge it, and no design file holds
+      them.
 - id: ice1usb-r10
   url: https://github.com/osmocom/osmo-e1-hardware
   commit: 85acea8b6d656add7c098d51f816f4ac34084fa2
@@ -1077,8 +1105,16 @@ holdout:
     source_quote: "The direction for the data bus level shifter needs to be ROM_READ_INV, not /RD."
     fault_class: SCH (wrong net)
     blind: missed
-    verdict: missed
+    verdict: caught
+    caught_by: "#1137"
+    catch: {script: netlist_audit, kind: transceiver_drives_host_bus, net: ZXRD}
     follow_up: "a level shifter's DIR pin checked against a stated direction (read strobe) net"
+    note: >-
+      Not an independent catch: rule 36 was written after this defect was
+      read. U4 (74LS245) has OE on GND and DIR on the edge connector's raw
+      ZXRD, so it drives the Spectrum's data bus on every read, whoever is
+      addressed. v1.1 drives DIR from ROM_READ_INV, which the 4075 decodes
+      on this board, and is quiet.
   - id: pico-if1-v10-3
     summary: GND via for U4 pin 19 (/OE) sits under the chip where it can't be reached
     source_quote: "Move the GND via from pin 19 on U4, it's under the chip and I can't get to it. This is /OE."
@@ -1222,6 +1258,10 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "the erratum does not name the fault; read the v5.0 to v5.1 ADDSCR_CLK change to find a rule"
+    note: >-
+      Read for #1137 and left missed: what was wrong with ADDSCR_CLK is the
+      pulses the motherboard sees, a timing fact, not which pins the net
+      reaches, so no wiring rule against a stated fact can judge it.
 - id: mdbt-micro-50q
   url: https://github.com/siderakb/mdbt-micro
   commit: 7821d9046258f650ddf8d9424e21c6a3fc065c32
