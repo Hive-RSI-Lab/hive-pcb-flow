@@ -1604,6 +1604,12 @@ _NOT_A_READER_RE = re.compile(r"^(R|RN|C|L|FB|D|LED|TP|JP|SJ|H|MH)\d")
 # or leave it floating." Such a PG is a status output and is not judged.
 _LOAD_SWITCH_PIN_RE = re.compile(r"^(DVDT|IMON|ILIM|TIMER)$")
 _REGULATOR_PIN_RE = re.compile(r"^(SW\d*|LX\d*|PH|FB|VFB|FB\d|BOOT|BST|CB)$")
+# A battery charger has a current-limit pin too (BQ24074 ILIM, TMR) and no
+# converter pin, but it brings BAT into regulation and its PGOOD says the
+# input is good (#1223). A cell pin or a charge-set pin marks it: BQ24074
+# (SLUS810) BAT, ISET, ITERM, TS, CHG; MCP73831 PROG, STAT; TP4056 PROG.
+_CHARGER_PIN_RE = re.compile(
+    r"^(V?BAT\d*|BATT|ISET\d*|ITERM|ICHG|PROG|TS|CHG|STAT\d*)$")
 
 
 def _pg_unused(nets: dict, comps: dict,
@@ -1620,7 +1626,8 @@ def _pg_unused(nets: dict, comps: dict,
                 _norm_pin(m.get("pinfunction")))
     switches = {r for r, fs in funcs.items()
                 if any(_LOAD_SWITCH_PIN_RE.match(f) for f in fs)
-                and not any(_REGULATOR_PIN_RE.match(f) for f in fs)}
+                and not any(_REGULATOR_PIN_RE.match(f) for f in fs)
+                and not any(_CHARGER_PIN_RE.match(f) for f in fs)}
     for net, members in sorted(nets.items()):
         if net.startswith("unconnected-") or net in rails:
             continue
