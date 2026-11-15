@@ -470,7 +470,11 @@ substitution in the spawn ledger. Never silently drop to a weaker tier.
   no track or via touches them - an unrouted board, or pads not yet routed.
   A rewire or net rename on ROUTED pads it refuses (dry-run exit 1,
   `plan.unsupported[].routed_pads`): that is a schematic + re-route job, not
-  surgery. Its region scan for added parts is front-side only.
+  surgery. Its region scan for added parts is front-side only. A part whose
+  footprint was wrong (pad numbers, pad shapes) is re-padded in place with
+  `part_repair.py` (`swap_fp` from the fixed library, or `renumber`): it rips
+  the copper round the part, re-routes the nets and keeps it only if no net
+  gains an island, DRC is no worse and no violation is new near the part.
 - order_quote figures are estimated:true; the JLC cart is the only real quote.
 - JLCPCB Open API: PCB ordering only - there is NO assembly/PCBA API
   (BOM/CPL ordering stays the JLC web flow), and 4-layer boards are the

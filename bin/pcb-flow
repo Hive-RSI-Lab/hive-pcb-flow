@@ -339,7 +339,7 @@ check)
 	shift
 	# The scripts that run KiCad over a whole board, the router or a sim.
 	case $s in
-	route_auto | route_critical | route_escape | route_tune | place_anneal | gate | verify_all | bench | render | sim_run | sim_si | sim_solve | fab_export)
+	route_auto | route_critical | route_escape | route_tune | place_anneal | part_repair | gate | verify_all | bench | render | sim_run | sim_si | sim_solve | fab_export)
 		heavy="pcb-flow $s" ;;
 	esac
 	x "$py" "$here/scripts/$s.py" "$@"

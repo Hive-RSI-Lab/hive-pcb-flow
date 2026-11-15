@@ -13,6 +13,7 @@ An agent designs a PCB from a written brief: research, architecture, parts, sche
 - [docs/miss-taxonomy.md](docs/miss-taxonomy.md): the corpus misses grouped by the check that would see them, ranked by count times how much of a board the check judges
 - [docs/research/](docs/research/README.md): current research turned into checks: `bin/pcb-flow papers` scans the topics in `reference/research/watch.yaml`, reads legitimate open copies (the rest go on [the person's list](docs/research/paywalled.md)), and gives each claim pcb-flow's own verdict, with the test that reached it; only reproduced claims become [guidelines](docs/research/guidelines.md)
 - [docs/route-quality.md](docs/route-quality.md): a layout judged as good, not only legal: `route_quality` scores each net class against its shortest 45-degree routes, `route_improve` re-routes the worst nets in rounds and stops when a round stops gaining
+- `bin/pcb-flow part_repair`: move, rotate or re-pad parts on a routed board (place_edit's `swap_fp` puts a fixed library footprint in, `renumber` gives pads new numbers): it rips the copper the change spoils in a window round each part, makes the change, routes every net back to as few islands as it had, and keeps the result only if no net has more islands, DRC is no worse and no violation is new near the repair; it writes the op files that replay it (rip, place, route) and a REPORT.md
 
 ## Test and score
 

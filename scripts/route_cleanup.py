@@ -13,8 +13,10 @@ emits route_edit ops:
      INSIDE its copper - KiCad-connected, DRC 0 unconnected - and the old
      centerline test called them free and cut the net). On a DRC-clean board
      real gaps keep centerline distance >= (w1+w2)/2 + clearance, so the
-     widened test cannot join across a legal gap.
-     A free end INSIDE same-net fill is a legal pour termination (kept); a via
+     widened test cannot join across a legal gap. As in KiCad's own test, a
+     track touching BOTH ends of a segment counts for the nearer end only,
+     so a short jog or spur lying across a track is free (DRC flags it).
+     A free end in same-net fill is a legal pour termination (kept); a via
      is kept when it joins 2+ same-net items or sits in same-net fill on any
      layer it spans. Our own graph analysis is the source of truth; DRC's
      track_dangling/via_dangling warnings are reported as a cross-check only.
@@ -282,35 +284,134 @@ def _fill_touches(fillfn, net, layer, p, tol) -> bool:
 
 # ============================================================ pass 1: dangling
 
-def _endpoint_free(seg: Seg, p, segs, vias, pads, fillfn, arcs, tol) -> bool:
-    """True if endpoint p of `seg` touches no other same-net item.
+def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol) -> bool:
+    """True if `seg` dangles: one of its ends touches no other same-net item.
+
+    This is KiCad 10's rule (CONNECTIVITY_DATA::TestTrackEndpointDangling,
+    which DRC's track_dangling calls with aIgnoreTracksInPads=true): each
+    item counts for the end it touches. A track or arc that touches BOTH
+    ends counts only for the end nearer one of its own ends (KiCad's
+    getMinDist; a tie goes to `b`, KiCad's end), so a short jog or spur
+    lying across a track still dangles. A pad or via that touches both ends
+    counts for both (that is what aIgnoreTracksInPads=true does), and so
+    does a fill.
+
+    One exception keeps the safe side: when that one-end rule is all that
+    makes `seg` dangle, and the same-net copper `seg` meets falls into two
+    or more pieces that do not touch each other (`_bridges`), `seg` stays.
+    It is then the only local link between, say, the track it lies across
+    and a pad or track at its other end, and dropping it could split the
+    net. DRC may still flag it; route_cleanup leaves it rather than raise
+    an island count.
 
     "Touches" is COPPER overlap, not centerline proximity (T6/V13 fix): the
-    endpoint's round cap (radius seg.width/2) overlapping another item's
-    body counts as connected - exactly KiCad's connectivity model. On a
-    DRC-clean board this cannot join across a real gap (centerline distance
-    of legally separated copper >= (w1+w2)/2 + clearance > every reach used
-    here)."""
-    pt = Point(p)
+    end's round cap (radius seg.width/2) overlapping another item's body
+    counts as connected, as in KiCad's connectivity model. KiCad's test has
+    no tolerance and neither has the both-ends case here; every other
+    contact gets `tol` more, so this never drops a segment KiCad would keep.
+    On a DRC-clean board that cannot join across a real gap (centerline
+    distance of legally separated copper >= (w1+w2)/2 + clearance > every
+    reach used here)."""
     half = seg.width / 2.0
+    pa, pb = Point(seg.a), Point(seg.b)
+    hit_a = _fill_touches(fillfn, seg.net, seg.layer, seg.a, half + tol)
+    hit_b = _fill_touches(fillfn, seg.net, seg.layer, seg.b, half + tol)
+    if hit_a and hit_b:
+        return False
+    both = False                           # a track/arc touched both ends
+
+    def track(da, db, reach, ends) -> bool:
+        nonlocal hit_a, hit_b, both
+        if da < reach and db < reach:      # KiCad's hit at both ends
+            both = True
+            ma = min(math.dist(seg.a, e) for e in ends)
+            mb = min(math.dist(seg.b, e) for e in ends)
+            if ma < mb - 1e-6:
+                hit_a = True
+            else:
+                hit_b = True
+        else:
+            hit_a = hit_a or da <= reach + tol
+            hit_b = hit_b or db <= reach + tol
+        return hit_a and hit_b
+
     for o in segs:
         if o is seg or o.net != seg.net or o.layer != seg.layer:
             continue
-        if _pt_seg_dist(p, o.a, o.b) <= (seg.width + o.width) / 2.0 + tol:
+        if track(_pt_seg_dist(seg.a, o.a, o.b), _pt_seg_dist(seg.b, o.a, o.b),
+                 (seg.width + o.width) / 2.0, (o.a, o.b)):
             return False
     for net, layer, line, aw in arcs:
-        if net == seg.net and layer == seg.layer \
-                and line.distance(pt) <= (seg.width + aw) / 2.0 + tol:
+        if net == seg.net and layer == seg.layer and track(
+                line.distance(pa), line.distance(pb), (seg.width + aw) / 2.0,
+                (line.coords[0], line.coords[-1])):
             return False
     for v in vias:
-        if (v.net == seg.net and seg.layer in v.layers
-                and math.dist(p, v.at) <= v.size / 2.0 + half + tol):
-            return False
+        if v.net == seg.net and seg.layer in v.layers:
+            r = v.size / 2.0 + half + tol
+            hit_a = hit_a or math.dist(seg.a, v.at) <= r
+            hit_b = hit_b or math.dist(seg.b, v.at) <= r
     for pd in pads:
-        if (pd.net == seg.net and seg.layer in pd.layers
-                and pd.poly.distance(pt) <= half + tol):
-            return False
-    return not _fill_touches(fillfn, seg.net, seg.layer, p, tol)
+        if pd.net == seg.net and seg.layer in pd.layers:
+            hit_a = hit_a or pd.poly.distance(pa) <= half + tol
+            hit_b = hit_b or pd.poly.distance(pb) <= half + tol
+    if hit_a and hit_b:
+        return False
+    return not (both and _bridges(seg, segs, vias, pads, fillfn, arcs, tol))
+
+
+def _body(a, b):
+    """Centerline of a track as a shapely geometry (a point if it has no
+    length, which LineString would reject)."""
+    return LineString([a, b]) if tuple(a) != tuple(b) else Point(a)
+
+
+def _bridges(seg: Seg, segs, vias, pads, fillfn, arcs, tol) -> bool:
+    """True if the same-net copper meeting `seg` (within seg.width/2 + tol
+    of its centerline, on its layer) falls into 2+ pieces that do not
+    overlap one another: `seg` is then the only local link between them.
+
+    The pieces are the other tracks and arcs, the vias that span the layer,
+    the pads, and each polygon of the fill, grouped by real overlap. Copper
+    that joins further away still counts as two pieces here, so this errs
+    towards keeping `seg`."""
+    reach = seg.width / 2.0 + tol
+    body = _body(seg.a, seg.b)
+    shapes = []
+
+    def add(g):
+        if g is not None and not g.is_empty and g.distance(body) <= reach:
+            shapes.append(g)
+
+    for o in segs:
+        if o is not seg and o.net == seg.net and o.layer == seg.layer:
+            add(_body(o.a, o.b).buffer(o.width / 2.0))
+    for net, layer, line, aw in arcs:
+        if net == seg.net and layer == seg.layer:
+            add(line.buffer(aw / 2.0))
+    for v in vias:
+        if v.net == seg.net and seg.layer in v.layers:
+            add(Point(v.at).buffer(v.size / 2.0))
+    for pd in pads:
+        if pd.net == seg.net and seg.layer in pd.layers:
+            add(pd.poly)
+    fill = fillfn(seg.net, seg.layer)
+    if fill is not None and not fill.is_empty:
+        for piece in getattr(fill, "geoms", [fill]):
+            add(piece)
+    parent = list(range(len(shapes)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(shapes)):
+        for j in range(i + 1, len(shapes)):
+            if find(i) != find(j) and shapes[i].intersects(shapes[j]):
+                parent[find(i)] = find(j)
+    return len({find(i) for i in range(len(shapes))}) > 1
 
 
 def _via_keep(v: ViaItem, segs, pads, fillfn, tol, vias=()) -> bool:
@@ -356,10 +457,8 @@ def find_dangling(segs, vias, pads, fillfn, arcs=(), tol=TOL,
     gone_s: list[str] = []
     gone_v: list[str] = []
     for _ in range(cap):
-        drop_s = [s for s in alive_s if s.uuid and (
-            _endpoint_free(s, s.a, alive_s, alive_v, pads, fillfn, arcs, tol)
-            or _endpoint_free(s, s.b, alive_s, alive_v, pads, fillfn, arcs,
-                              tol))]
+        drop_s = [s for s in alive_s if s.uuid and _seg_free(
+            s, alive_s, alive_v, pads, fillfn, arcs, tol)]
         drop_v = [v for v in alive_v
                   if v.uuid and not _via_keep(v, alive_s, pads, fillfn, tol,
                                               alive_v)]
