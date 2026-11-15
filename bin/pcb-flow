@@ -288,6 +288,8 @@ test | test-slow | test-em | test-smoke)
 	# slowest tests. test-slow runs the `slow` ones it leaves out, test-em the
 	# long full-wave solves (`em`, also `slow`), test-smoke the `smoke` ones:
 	# whole flows on a live KiCad, which CI runs on every PR and daily.
+	# A published copy that can't see its module has no tests/ to run.
+	[ -d "$here/tests" ] || { echo "pcb-flow $1: $here has no tests/ (a published copy carries none): run it from the installed module, or give the copy its module in \$HIVE_MODULES" >&2; exit 2; }
 	marks="not smoke and not net and not slow"
 	[ "$1" = test-slow ] && marks="slow and not em and not smoke and not net"
 	[ "$1" = test-em ] && marks="em and not smoke and not net"
@@ -319,7 +321,11 @@ lint)
 	shift
 	"$py" -c 'import ruff' 2>/dev/null || { echo "pcb-flow lint: ruff is not in $py's packages (a copy published before #1149: publish again)" >&2; exit 1; }
 	cd "$here"
-	exec "$py" -m ruff check "$@" scripts bin tests
+	# A published copy carries no tests/ (publish doesn't ship them): lint the
+	# code it does carry rather than fail on the missing folder.
+	dirs="scripts bin"
+	[ -d tests ] && dirs="$dirs tests"
+	exec "$py" -m ruff check "$@" $dirs
 	;;
 check-all)
 	shift
