@@ -55,10 +55,10 @@ from dataclasses import dataclass, field
 for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_v, "1")
 
-import numpy as np
-import shapely
-from scipy.interpolate import CubicSpline
-from shapely.geometry import Polygon
+import numpy as np  # noqa: E402 (after the BLAS thread pin)
+import shapely  # noqa: E402
+from scipy.interpolate import CubicSpline  # noqa: E402
+from shapely.geometry import Polygon  # noqa: E402
 
 MU0 = 4e-7 * math.pi
 EPS0 = 8.8541878128e-12
