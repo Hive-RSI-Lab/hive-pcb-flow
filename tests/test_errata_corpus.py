@@ -494,3 +494,53 @@ def test_a_report_with_status_error_is_a_crash_not_a_pass(tmp_path, monkeypatch)
         "open(out, 'w').write(json.dumps({'status': 'error', 'error': 'x'}))\n"
         "sys.exit(2)\n"))
     assert e.check_error == "x" and "reported an error" in str(e)
+
+
+def _planted(tmp_path, monkeypatch, body):
+    """A check script `planted` whose source is `body`, run by the real
+    audit() through its runner, as a corpus check would be."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "planted.py").write_text(body)
+    monkeypatch.setattr(ec, "SCRIPTS", scripts)
+    monkeypatch.setattr(ec, "repo_dir", lambda c, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "RUNNERS", {"planted": lambda b, rev, repo, c: ["planted.py"]})
+    return tmp_path / "cache"
+
+
+CRASH = "import sys\nprint('boom: planted crash', file=sys.stderr)\nsys.exit(3)\n"
+
+
+def test_a_crashed_catch_reads_crashed_in_the_table(tmp_path, monkeypatch):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    d = {"id": "p-1", "verdict": "caught", "catch": {"script": "planted", "kind": "x"}}
+    b = {"id": "p", "rev_a": {}, "rev_b": {}, "defects": [d]}
+    res = ec.run(cache, b)
+    assert res["p-1"]["crashed"] == "planted" and res["p-1"]["rc"] == 3
+    assert ec.outcome(d, res["p-1"]) == "crashed: planted"
+    assert ec.outcome({**d, "caught_by": "#1"}, res["p-1"]).startswith("crashed: planted")
+
+
+def test_a_stale_report_does_not_stand_in_for_a_crash(tmp_path, monkeypatch):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    stale = cache / "runs" / "p" / "rev_a-planted.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text('{"violations": [{"kind": "old"}]}')
+    assert "error" in ec.sweep(cache, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
+
+
+def test_sweep_output_labels_the_crash(tmp_path, monkeypatch, capsys):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    monkeypatch.setattr(ec, "fetch", lambda c, b: None)
+    monkeypatch.setattr(ec, "_raw", lambda m, w: [{"id": "p", "rev_a": {}, "rev_b": {}}])
+    ec.main(["sweep", "p", "--cache", str(cache)])
+    out = capsys.readouterr().out
+    assert "p planted crashed: planted" in out and "1 errored" in out
+
+
+def test_run_cli_counts_a_crash_as_bad(tmp_path, monkeypatch):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    d = {"id": "p-1", "verdict": "caught", "catch": {"script": "planted", "kind": "x"}}
+    monkeypatch.setattr(ec, "load_all", lambda m: [{"id": "p", "rev_a": {}, "rev_b": {},
+                                                    "defects": [d]}])
+    assert ec.main(["run", "p", "--cache", str(cache)]) == 1
