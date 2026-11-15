@@ -77,7 +77,7 @@ def test_broker_stock_counts_only_when_asked():
                                brokers=True)["status"] == "ok"
     v = keyless_stock.judge(MPN, 100, fetch=page(only("Gamma Brokers")))
     assert v["status"] == "short"
-    assert "no authorized distributor lists it" in v["why"]
+    assert "no authorized distributor lists it on findchips" in v["why"]
 
 
 def test_one_distributors_rows_are_not_summed():

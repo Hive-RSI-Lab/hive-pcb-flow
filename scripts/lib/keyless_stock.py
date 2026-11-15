@@ -189,7 +189,7 @@ def judge(mpn: str, need: int, fetch=http_text, country: str | None = None,
         if held >= need:
             return {**v, "status": "ok",
                     "why": f"{best['distributor']} holds {held}{where} "
-                           f"(need {need})"}
+                           f"(need {need}, {page['source']})"}
     broker = max((o for o in mine if not o["authorized"]),
                  key=lambda o: _held(o, country), default=None)
     note = (f"; broker {broker['distributor']} lists "
@@ -200,5 +200,7 @@ def judge(mpn: str, need: int, fetch=http_text, country: str | None = None,
            f"({v['best']['distributor']})" if v["best"]
            else f"no {'' if brokers else 'authorized '}distributor lists "
                 f"it{where}")
+    # one source only: a distributor Findchips does not list (Verical and
+    # Arrow were missing for GRM32ER71H106KA12L) is not seen, so say where
     return {**v, "status": "short",
-            "why": f"need {need}, {top}{note}"}
+            "why": f"need {need}, {top} on {page['source']}{note}"}
