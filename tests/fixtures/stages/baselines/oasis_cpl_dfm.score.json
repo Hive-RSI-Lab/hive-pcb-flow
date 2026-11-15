@@ -4,7 +4,7 @@
  "fixture": "oasis_cpl_dfm",
  "board": "oasis",
  "metrics": {
-  "errors": 24,
+  "errors": 21,
   "warnings": 4,
   "by_kind": {
    "both_sides_needs_panel": 1,
@@ -13,7 +13,6 @@
    "dfm_annular_ring": 12,
    "dfm_copper_to_edge": 5,
    "dfm_hole_to_hole_preferred": 1,
-   "dfm_net_short": 3,
    "dfm_silk_width": 2
   },
   "polarity": "checked",
@@ -21,12 +20,12 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 24.0,
+  "errors": 21.0,
   "warnings": 4.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 87.6,
+ "composite": 89.1,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",

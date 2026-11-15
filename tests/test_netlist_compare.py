@@ -1039,3 +1039,48 @@ def test_roundrect_flash_is_one_pad_of_its_full_size(tmp_path):
     assert len(lg.pads) == 1
     x0, y0, x1, y1 = lg.pads[0].bounds
     assert x1 - x0 == pytest.approx(1.524, abs=0.01) and y1 - y0 == pytest.approx(1.778, abs=0.01)
+
+
+# #1281: the D-356 ref field holds 6 characters, so "mister1" reads back as
+# "mister". The point found no pad, kept its upper-cased D-356 name, and
+# stood beside its board-named neighbour as a short.
+def _long_ref_case(tmp_path, refs=("C1", "mister1")):
+    bg = _BG([_Pad(refs[0], "1", "/mist", (1, 1)),
+              _Pad(refs[1], "1", "/mist", (1, 3))])
+    fab = stack(tmp_path, {"F.Cu": [flash(1, 1), flash(1, 3), "D11*",
+                                    f"X{gx(1)}Y{gx(-1)}D02*",
+                                    f"X{gx(1)}Y{gx(-3)}D01*"],
+                           "B.Cu": []}, {})
+    text = d356(rec("327", "/MIST", refs[0], "1", 1, 1, 1),
+                rec("327", "/MIST", refs[1], "1", 1, 3, 1))
+    return fab, text, bg
+
+
+def test_a_ref_cut_to_six_characters_finds_its_pad(tmp_path):
+    fab, text, bg = _long_ref_case(tmp_path)
+    d = ipcd356.parse(text)
+    assert [p.ref for p in d.points] == ["C1", "mister"]
+    ipcd356.resolve(d, bg)
+    assert [p.board_net for p in d.points] == ["/mist", "/mist"]
+    assert ipcd356.compare(fab, d)["shorts"] == []
+
+
+def test_short_refs_and_cut_refs_off_their_pad_are_unchanged(tmp_path):
+    # quiet twin: a ref that fits the field resolves as before
+    fab, text, bg = _long_ref_case(tmp_path, ("C1", "R12"))
+    d = ipcd356.parse(text)
+    ipcd356.resolve(d, bg)
+    assert [p.board_net for p in d.points] == ["/mist", "/mist"]
+    assert ipcd356.compare(fab, d)["shorts"] == []
+    # two refs share the cut prefix: the point's position picks the pad
+    bg2 = _BG([_Pad("mister1", "1", "/a", (1, 1)),
+               _Pad("mister2", "1", "/b", (1, 3))])
+    d = ipcd356.parse(d356(rec("327", "/B", "mister2", "1", 1, 3, 1)))
+    ipcd356.resolve(d, bg2)
+    assert d.points[0].board_net == "/b"
+    # a cut ref with no pad under the point stays unresolved, and so does a
+    # short ref whose prefix happens to match a longer one
+    d = ipcd356.parse(d356(rec("327", "/B", "mister9", "1", 5, 5, 1),
+                           rec("327", "/B", "mist", "1", 1, 3, 1)))
+    ipcd356.resolve(d, bg2)
+    assert [p.board_net for p in d.points] == [None, None]

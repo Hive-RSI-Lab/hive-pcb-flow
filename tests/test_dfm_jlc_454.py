@@ -368,3 +368,55 @@ def test_a_mask_only_non_plated_pad_on_a_parsed_board_gets_npth_figure(tmp_path)
     is_npth = dfm_check._npth_matcher(bg)
     assert is_npth(SimpleNamespace(x=10.0, y=10.0, diameter=HOLE_D))
     assert not is_npth(SimpleNamespace(x=12.0, y=10.0, diameter=HOLE_D))
+
+
+# ------------------------------------------- non-plated hole to a pour
+def _npth_vios(copper, pour_at):
+    h = _hole(plated=False)
+    vios: list = []
+    dfm_check.check_hole_to_track(_fab(copper(h), [h]), R2, vios,
+                                  lambda h: False, (), None, None, pour_at)
+    return vios
+
+
+def test_a_pour_near_a_non_plated_hole_only_warns_pour_pullback():
+    """bedlift's J9 pegs: a GND pour 0.15 mm from a bare 1.02 mm hole, on a
+    board JLC built."""
+    vios = _npth_vios(lambda h: [_track(h, 0.15)], lambda pt, layer: True)
+    assert [(v["kind"], v["severity"], v.get("reason"), v["count"])
+            for v in vios] == [("dfm_hole_to_track", "warning",
+                                "pour_pullback", 1)]
+    assert vios[0]["distance_mm"] == pytest.approx(0.15, abs=2e-3)
+
+
+def test_a_track_near_a_non_plated_hole_still_fails_beside_a_pour():
+    """The pour at 0.12 on the left is advice; the track at 0.16 on the
+    right is an error, and the error gives the track's distance."""
+    def copper(h):
+        x1 = h.x - h.diameter / 2 - 0.12
+        return [box(x1 - 1, 0, x1, 20), _track(h, 0.16)]
+    vios = _npth_vios(copper, lambda pt, layer: pt.x < 10.0)
+    assert [(v["kind"], v["severity"], v.get("reason")) for v in vios] == [
+        ("dfm_hole_to_track", "error", None)]
+    assert vios[0]["distance_mm"] == pytest.approx(0.16, abs=2e-3)
+
+
+def test_a_pour_by_a_plated_hole_is_not_excused():
+    h = _hole()
+    vios: list = []
+    dfm_check.check_hole_to_track(_fab([_pad(h, 0.05), _track(h, 0.16)], [h]),
+                                  R2, vios, lambda h: False, (), None, None,
+                                  lambda pt, layer: True)
+    assert [(v["kind"], v["severity"]) for v in vios] == [
+        ("dfm_hole_to_track", "error")]
+
+
+def test_the_pour_matcher_reads_fills_and_drawn_copper_from_the_board():
+    track = SimpleNamespace(net="SIG", layer="F.Cu", poly=box(5, 0, 5.2, 20))
+    zone = SimpleNamespace(net="GND", filled=True,
+                           fill_on=lambda layer: box(0, 0, 4, 20))
+    pour_at = dfm_check._pour_matcher(_net_board(tracks=[track], zones=[zone]))
+    assert pour_at(Point(4, 10), "F.Cu")
+    assert not pour_at(Point(5, 10), "F.Cu")
+    assert not pour_at(Point(9, 10), "F.Cu")
+    assert dfm_check._pour_matcher(None) is None
