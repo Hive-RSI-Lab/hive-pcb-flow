@@ -101,6 +101,31 @@ def test_build_fr_cmd_flags():
     assert cmd[-4:] == ["-de", "in.dsn", "-do", "out.ses"]
 
 
+def test_freerouting_stops_itself_before_the_hard_kill():
+    """A rung still improving at the cap used to be killed with no SES; its
+    own --router.job_timeout ends the session and writes the SES so far
+    (Freerouting 2.2.4 checked on an escaped 6-layer bench: rc 0, SES
+    written, "session completed with timeout")."""
+    assert routelib.fr_job_timeout(600) == 540
+    assert routelib.fr_job_timeout(90) == 70
+    assert routelib.fr_job_timeout(5) == 10
+    cmd = routelib.build_fr_cmd(Path("java"), Path("fr.jar"), Path("in.dsn"),
+                                Path("out.ses"), {"mp": 20}, job_timeout_s=3725)
+    assert "--router.job_timeout=01:02:05" in cmd
+    assert cmd[-4:] == ["-de", "in.dsn", "-do", "out.ses"]
+    assert not any("job_timeout" in c for c in routelib.build_fr_cmd(
+        Path("java"), Path("fr.jar"), Path("in.dsn"), Path("out.ses")))
+    log = ("Auto-router pass #3 completed with a score of 886.87 (32 unrouted)\n"
+           "Auto-router session completed with timeout: started with 72 "
+           "unrouted nets, completed in 1 minute 30.60 seconds, final score: "
+           "886.87 (32 unrouted), using 46.13 total CPU seconds\n")
+    f = routelib.parse_fr_log(log)
+    assert f["session_completed"] and f["job_timeout_hit"]
+    assert (f["started_unrouted"], f["unrouted"]) == (72, 32)
+    assert routelib.completion_fraction(f) == 1 - 32 / 72
+    assert not routelib.parse_fr_log(FR_LOG_COMPLETE)["job_timeout_hit"]
+
+
 def test_default_ladder_escalates():
     mps = [r["mp"] for r in routelib.DEFAULT_LADDER]
     assert mps == sorted(mps) and len(set(mps)) == len(mps)
@@ -359,6 +384,71 @@ def test_route_auto_full_flow(seeded_poured_blinky, fr_tools, tmp_path):
     # the routed board replaced the input atomically
     bg = geom.BoardGeom.from_file(pcb)
     assert len(bg.tracks_of()) == facts["tracks_after"]
+
+
+def test_route_auto_every_rung_timed_out_is_not_judged(
+        seeded_poured_blinky, fr_tools, tmp_path, monkeypatch):
+    """An escaped 6-layer BGA board runs Freerouting passes of 30 s to
+    3.5 min, so every rung can hit the time limit before writing a session.
+    That must end with a clear not-judged report naming the time limit,
+    never a bare error with no SES (a03cb, 2026-11-15), and the board must
+    be untouched. Planted: every rung killed at the hard limit. Quiet twin:
+    a rung killed with a session written is not a timeout report."""
+    pcb = _copy_board(seeded_poured_blinky, tmp_path / "to")
+    before = pcb.read_bytes()
+    monkeypatch.setattr(routelib, "run_freerouting", lambda *a, **k: {
+        "timed_out": True, "kill_reason": "hard", "ses_written": False,
+        "passes": [{"pass": 1}, {"pass": 2}], "unrouted": 7, "rc": -9})
+    payload, _ = route_auto.run([
+        "--pcb", str(pcb), "--work-dir", str(tmp_path / "w"),
+        "--max-rungs", "2", "--timeout-s", "60", "--no-krt-finish"])
+    facts = payload["facts"]
+    assert payload["status"] == "violations"
+    assert facts["timed_out"] is True and facts["completion"] is None
+    assert "route_timeout" in facts["nothing_to_judge"]
+    assert "60 s limit" in facts["nothing_to_judge"]
+    (v,) = payload["violations"]
+    assert v["kind"] == "route_timeout"
+    assert [r["passes"] for r in v["rungs"]] == [2, 2]
+    assert pcb.read_bytes() == before
+    # quiet twin: a session was written, so this is not "all timed out"
+    assert not route_auto._all_timed_out(
+        [{"timed_out": True, "ses_written": True}])
+    assert not route_auto._all_timed_out([])
+    assert not route_auto._all_timed_out(
+        [{"timed_out": False, "ses_written": False}])
+
+
+def test_maze_finish_retries_without_rip_when_a_rip_split_a_net():
+    """The U1 dog-bone regression (a03cb, 2026-11-15): on the escaped
+    6-layer bench the maze finish ripped /A4_1, left it split, and the
+    island guard undid every pass, 19 unconnected kept where no escape
+    ends at 1 U1 net. Planted: the ripping try comes back split and undone,
+    so a second try runs with rip_board off and is the one kept. Quiet
+    twins: a kept first try, and an unkept one with no split, run once."""
+    calls = []
+
+    def maze(results):
+        def f(rip_board):
+            calls.append(rip_board)
+            return dict(results[rip_board])
+        return f
+
+    split = {"kept": False, "unconnected_before": 19,
+             "unconnected_after": 19, "rip_split_undone": {"/A4_1": [0, 1]},
+             "drc": {}}
+    good = {"kept": True, "unconnected_before": 19, "unconnected_after": 7}
+    f = route_auto._maze_no_rip_retry(maze({True: split, False: good}))
+    assert calls == [True, False]
+    assert f["kept"] and f["unconnected_after"] == 7
+    assert f["retry_no_rip_board"] == {
+        "unconnected_before": 19, "unconnected_after": 19,
+        "rip_split_undone": {"/A4_1": [0, 1]}}
+    for first in (good, {"kept": False, "unconnected_before": 5,
+                         "unconnected_after": 5}):
+        calls.clear()
+        f = route_auto._maze_no_rip_retry(maze({True: first, False: good}))
+        assert calls == [True] and "retry_no_rip_board" not in f
 
 
 @pytest.mark.smoke

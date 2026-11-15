@@ -691,6 +691,58 @@ def _lost_preexisting(pre: dict, bg) -> list[dict]:
     return lost
 
 
+def _all_timed_out(rungs: list[dict]) -> bool:
+    """Every rung that ran was killed at the time limit (hard or stall)
+    before Freerouting wrote its session."""
+    return bool(rungs) and all(r.get("timed_out") and not r.get("ses_written")
+                               for r in rungs)
+
+
+def _timeout_report(pcb: Path, rungs: list[dict], limit: int, work: Path,
+                    fallback: str, **facts) -> dict:
+    """The report of a run whose every Freerouting rung hit the time limit
+    with no session (an escaped board: passes of 30 s to 3.5 min on a
+    6-layer BGA field). Not a crash and not a routed board: the board is
+    untouched, the routing is NOT JUDGED, and the reason says why, with
+    the last pass each rung reached so the caller can raise --timeout-s."""
+    last = [{"rung": r["rung"], "passes": r.get("passes"),
+             "unrouted_at_kill": r.get("unrouted"),
+             "kill_reason": r.get("kill_reason")} for r in rungs]
+    why = (f"route_timeout: every Freerouting rung ({len(rungs)}) hit the "
+           f"{limit} s limit before writing a session and {fallback}; the "
+           "board is untouched and its routing not judged (raise "
+           "--timeout-s, or fewer passes per rung)")
+    v = checklib.violation("route_auto", "error", None, None, None, [], why,
+                           "route_auto", kind="route_timeout",
+                           rungs=last, limit_s=limit)
+    return {"script": "route_auto", "status": "violations",
+            "board": str(pcb), "counts": checklib.summarize([v]),
+            "violations": [v],
+            "facts": {"completion": None, "nothing_to_judge": why,
+                      "timed_out": True, "rungs": rungs, "best_rung": None,
+                      "work_dir": str(work), **facts}}
+
+
+def _maze_no_rip_retry(maze) -> dict:
+    """maze(rip_board) runs route_finish.finish_staged on the staged board.
+    When a rip of another net's track left that net split, the island guard
+    (#939) undoes every pass from the first rip on, the good joins with it
+    (kept False, rip_split_undone). On an escaped BGA field the dog-bones
+    crowd the channels, so the ripped net has no way back: the 6-layer
+    bench's U1 ripped /A4_1 and kept nothing, 19 left where the same pass
+    without ripping ends at 7. Once more without ripping the board's
+    tracks keeps the joins that need no rip; the first try's numbers ride
+    along as retry_no_rip_board."""
+    facts = maze(True)
+    if facts.get("kept") or not facts.get("rip_split_undone"):
+        return facts
+    first = {k: facts.get(k) for k in (
+        "unconnected_before", "unconnected_after", "rip_split_undone")}
+    facts = maze(False)
+    facts["retry_no_rip_board"] = first
+    return facts
+
+
 def run(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pcb", required=True)
@@ -936,6 +988,9 @@ def run(argv: list[str] | None = None):
     if not fr_ok:
         shutil.copy2(pristine, staged)
     if not fr_ok and (args.no_krt_finish or env.find_krt() is None):
+        if _all_timed_out(rungs):
+            return _timeout_report(pcb, rungs, args.timeout_s, work,
+                                   "the KRT fallback is off"), args.out_report
         raise CheckError("no Freerouting rung produced an importable session "
                          f"and the KRT fallback is unavailable; see {work} "
                          "logs (board untouched)")
@@ -965,6 +1020,11 @@ def run(argv: list[str] | None = None):
         if finish_facts and finish_facts.get("kept"):
             drc = finish_facts.pop("drc")
     if not fr_ok and not (finish_facts and finish_facts.get("kept")):
+        if _all_timed_out(rungs):
+            return _timeout_report(
+                pcb, rungs, args.timeout_s, work,
+                "the KRT fallback did not improve the board",
+                krt_finish=finish_facts), args.out_report
         raise CheckError("Freerouting produced nothing usable and the KRT "
                          f"fallback did not improve the board; see {work} "
                          "(board untouched)")
@@ -975,13 +1035,17 @@ def run(argv: list[str] | None = None):
     maze_facts = None
     if not args.no_maze_finish and (_drc_unrouted(drc) or _err_counts(drc)):
         import route_finish
-        maze_facts = route_finish.finish_staged(
-            cli, staged, drc, parity=sch.is_file(), refill=has_zones,
-            rip_errors=True,
-            protect_uuids=_protect_uuids(pre, geom.BoardGeom.from_file(staged)),
-            layers=(",".join(ly for ly in bg.copper_layers
-                             if ly not in power_layers)
-                    if power_layers else "auto"))
+
+        def _maze(rip_board):
+            return route_finish.finish_staged(
+                cli, staged, drc, parity=sch.is_file(), refill=has_zones,
+                rip_errors=True, rip_board=rip_board,
+                protect_uuids=_protect_uuids(
+                    pre, geom.BoardGeom.from_file(staged)),
+                layers=(",".join(ly for ly in bg.copper_layers
+                                 if ly not in power_layers)
+                        if power_layers else "auto"))
+        maze_facts = _maze_no_rip_retry(_maze)
         if maze_facts.get("kept"):
             drc = maze_facts.pop("drc")
         else:

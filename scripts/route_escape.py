@@ -1130,6 +1130,14 @@ def run(argv: list[str] | None = None):
     for r, p in zip(results, plans):
         r["via_in_pad"]["filled"] = sum(
             1 for v in filled if v.net in set(p["bga"].nets.values()))
+    teardropped = []
+    if kept_nets:
+        teardropped = enable_breakout_teardrops(
+            cli, staged, work, [x for x in new_items
+                                if isinstance(x, geom.Via)])
+    for r, p in zip(results, plans):
+        r["teardrops"] = sum(1 for v in teardropped
+                             if v.net in set(p["bga"].nets.values()))
 
     board_updated = (bool(kept_nets) or bool(moved)
                      or bool(power_first.get("placed")))
@@ -1149,6 +1157,44 @@ def run(argv: list[str] | None = None):
         "work_dir": str(work),
     })
     return payload, args.out_report
+
+
+def breakout_vias(vias: list) -> list:
+    """Escape vias whose ring is under the fab's absolute ring plus drill
+    wander (teardroplib: JLC 0.05 + 0.075): a fine field's 0.15/0.25 via
+    has 0.05. dfm_check flags each track join on one with no teardrop as
+    dfm_ring_breakout; the routers add the inner-layer joins later."""
+    import teardroplib as tdl
+    lim = tdl.MIN_RING_ABS_MM + tdl.DRILL_WANDER_MM
+    return [v for v in vias
+            if v.uuid and (v.diameter - v.drill) / 2.0 < lim - 1e-9]
+
+
+def enable_breakout_teardrops(cli, staged: Path, work: Path,
+                              vias: list) -> list:
+    """Turn on KiCad's per-via teardrop setting on the breakout_vias of the
+    escape (lib/teardrop_swig enable). It makes no copper here: every later
+    zone refill (drc_routed, route_teardrops) builds a drop on each track
+    joining the via, including the inner-layer ones the routers add. The
+    breakout vias that got it are returned."""
+    import env
+    import teardroplib as tdl
+    todo = breakout_vias(vias)
+    if not todo:
+        return []
+    bp = env.find_kicad_python(cli) if cli else None
+    if bp is None:
+        raise CheckError("KiCad bundled python not found (env.py)")
+    cfg = tdl.config(None)
+    job = {"verb": "enable", "board": str(staged), "out": str(staged),
+           "vias": [v.uuid for v in todo], "pads": [],
+           "params": {k: cfg[k] for k in (
+               "length_ratio", "max_length_mm", "width_ratio",
+               "max_width_mm", "filter_ratio", "curved")}}
+    res = routelib.run_worker(bp, job, work,
+                              worker=SCRIPTS / "lib" / "teardrop_swig.py")
+    missing = set(res.get("missing") or [])
+    return [v for v in todo if v.uuid not in missing]
 
 
 def filled_via_layers() -> set[int]:

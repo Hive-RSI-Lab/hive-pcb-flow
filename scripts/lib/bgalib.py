@@ -323,3 +323,70 @@ def _put_rule(dru_text: str, name: str, new: str, changed: list[str]) -> str:
         dru_text += new
     changed.append(name)
     return dru_text
+
+
+def via_sites(bga: Bga, ball_center, angle: float = 0.0) -> list[tuple]:
+    """Where a via for a ball can go: in the ball itself (via in pad), and
+    on a fine field only there; on a coarser one also the four dog-bone
+    spots half a pitch away on the diagonals (turned with the part)."""
+    x, y = ball_center
+    sites = [(x, y)]
+    if bga.pitch > FINE_PITCH_MM + 1e-9:
+        h = bga.pitch / 2
+        a = math.radians(angle)
+        c, s = math.cos(a), math.sin(a)
+        for dx, dy in ((h, h), (h, -h), (-h, h), (-h, -h)):
+            sites.append((x + dx * c + dy * s, y - dx * s + dy * c))
+    return sites
+
+
+def pads_under_balls(bg, bgas: list[Bga], via_d: float, clearance: float
+                     ) -> list[dict]:
+    """Balls whose via sites sit under a pad of another net (#994): a cap
+    placed in the field on the far side, its pad straight below a ball of
+    another rail. A through via at a site would short to that pad, so a
+    ball with every site covered has nowhere to escape at any via size -
+    a placement fault the escape step only finds when it runs out of
+    spots. One entry per (ball, pad) with the sites it covers and whether
+    any site of the ball is left. A pad of the ball's own net is welcome
+    (a decoupler's via in pad); a ball with no net needs no via."""
+    from shapely.geometry import Point
+
+    reach = via_d / 2 + clearance
+    out: list[dict] = []
+    for bga in bgas:
+        x0, y0, x1, y1 = bga.bbox
+        m = bga.pitch
+        others = [p for p in bg.pads_of() if p.ref != bga.ref
+                  and any(lay != bga.layer for lay in p.layers)
+                  and x0 - m <= p.center[0] <= x1 + m
+                  and y0 - m <= p.center[1] <= y1 + m]
+        if not others:
+            continue
+        angle = (bg.footprints.get(bga.ref, {}).get("angle") or 0.0)
+        for ball in bg.pads_of(ref=bga.ref):
+            if bga.nets.get(ball.number) is None or ball.net is None:
+                continue
+            sites = via_sites(bga, ball.center, angle)
+            covered: dict[int, set] = {}
+            for p in others:
+                if p.net == ball.net:
+                    continue
+                hit = {i for i, s in enumerate(sites)
+                       if p.poly.distance(Point(s)) < reach - 1e-6}
+                if hit:
+                    covered[id(p)] = hit
+            if not covered:
+                continue
+            free = set(range(len(sites))) - set().union(*covered.values())
+            for p in others:
+                if id(p) in covered:
+                    out.append({
+                        "bga": bga.ref, "ball": ball.number,
+                        "ball_net": ball.net, "pos": ball.center,
+                        "pad_ref": p.ref, "pad": p.number,
+                        "pad_net": p.net,
+                        "over_ball": 0 in covered[id(p)],
+                        "sites_covered": len(covered[id(p)]),
+                        "sites": len(sites), "sites_free": len(free)})
+    return out
