@@ -15,8 +15,11 @@ Contract:
     remove    {uuid}                         # track, via or zone; absent=noop
     set_net   {uuid, net}                            # worker-level (renet)
     set_via_fill {uuid, filled}                      # filling + capping
-    set_width {uuid, width} / set_point {uuid, which: start|end|at, to}
-                                     # the worker's, emitted by the driver only
+    set_point {uuid, which: start|end|at, to}  # a straight track's start
+                                     # or end, or a via's centre (at), goes to
+                                     # `to` and the uuid stays - part_repair
+                                     # cuts a dead tail back with it (#1140)
+    set_width {uuid, width}          # the worker's, emitted by the driver only
 
 Selector ops - the ECOs boards used to hand-script with pcbnew (U-ECO; the
 hi-fi boards carried ~45 rip/renet/add scripts because route_edit only took
@@ -90,7 +93,7 @@ worker ops above, so they share the atomic apply + verify:
   Every op in one list is resolved against the board as it was before the
   list ran, so an op can't select what an earlier op in it added or moved.
   The routing ops are the exception: each routes around what the ops before
-  it removed and added.
+  it removed and added (not what they moved: set_point, move_via).
   SELECTOR (all given keys must match; at least one of net, pads, at,
   region, uuid_prefix):
     net: NAME | [NAME...]       only these nets
@@ -152,6 +155,7 @@ OP_FIELDS = {  # op -> (required, optional)
     "remove": ({"uuid"}, set()),
     "set_net": ({"uuid", "net"}, set()),
     "set_via_fill": ({"uuid", "filled"}, set()),
+    "set_point": ({"uuid", "which", "to"}, set()),
 }
 SELECT_KEYS = {"net", "layer", "kind", "region", "at", "radius", "touch",
                "pads", "uuid_prefix"}
@@ -207,10 +211,12 @@ def validate_ops(doc: dict) -> list[dict]:
             raise CheckError(f"ops[{i}] ({kind}): unknown keys {sorted(unknown)}")
         if kind in ROUTE_OPS:
             _validate_route(i, op)
-        for k in ("start", "end", "at") + (("to",) if kind == "move_via"
-                                           else ()):
+        to_pt = kind in ("move_via", "set_point")
+        for k in ("start", "end", "at") + (("to",) if to_pt else ()):
             if k in op and not _pt(op[k]):
                 raise CheckError(f"ops[{i}]: {k} must be [x, y] mm")
+        if kind == "set_point" and op["which"] not in ("start", "end", "at"):
+            raise CheckError(f"ops[{i}]: which must be start, end or at")
         for k in ("width", "size", "drill"):
             if k in op and not (_num(op[k]) and op[k] > 0):
                 raise CheckError(f"ops[{i}]: {k} must be a positive number")
@@ -223,8 +229,7 @@ def validate_ops(doc: dict) -> list[dict]:
                 raise CheckError(f"ops[{i}]: a {op['kind']} via needs top and bot")
         if "uuid" in op and not (isinstance(op["uuid"], str) and op["uuid"]):
             raise CheckError(f"ops[{i}]: uuid must be a non-empty string")
-        for k in ("layer", "from", "pcb") + (("to",) if kind != "move_via"
-                                             else ()) \
+        for k in ("layer", "from", "pcb") + (("to",) if not to_pt else ()) \
                 + (("net",) if kind not in SELECTOR_OPS else ()):
             if k in op and not (isinstance(op[k], str) and op[k]):
                 raise CheckError(f"ops[{i}]: {k} must be a non-empty string")
@@ -426,6 +431,9 @@ def resolve_ops(bg, ops: list[dict], guards: dict | None = None
             flat += _resolve_join_end(bg, op)
         elif kind == "copy_from":
             flat += _resolve_copy_from(bg, op)
+        elif kind == "set_point":
+            _check_set_point(bg, op)
+            flat.append(dict(op))
         elif kind == "add_path":
             pts = op["points"]
             flat += [{"op": "add_track", "start": list(a), "end": list(b),
@@ -500,6 +508,25 @@ def check_guards(before_bg, after_bg, guards: dict) -> list[str]:
 
 def _straight(t) -> bool:
     return len(t.shape.coords) == 2
+
+
+def _check_set_point(bg, op: dict) -> None:
+    """A public set_point names a via (which: at) or a straight track
+    (start, end) on the board: an arc's end moved bends it through its old
+    mid point (move_via's drag refuses arcs the same way)."""
+    u, which = op["uuid"], op["which"]
+    via = next((v for v in bg.vias_of() if v.uuid == u), None)
+    trk = None if via else next((t for t in bg.tracks_of() if t.uuid == u),
+                                None)
+    if via is None and trk is None:
+        raise CheckError(f"set_point: no track or via {u} on the board")
+    if (via is not None) != (which == "at"):
+        raise CheckError(f"set_point: which {which} on a "
+                         f"{'via' if via else 'track'} {u} (at is a via's "
+                         "centre, start and end a track's)")
+    if trk is not None and not _straight(trk):
+        raise CheckError(f"set_point: {u} is an arc - set_point moves "
+                         "straight tracks only; rip the arc and add it again")
 
 
 def _resolve_move_via(bg, op: dict) -> list[dict]:

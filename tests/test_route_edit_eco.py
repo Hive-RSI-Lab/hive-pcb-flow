@@ -13,8 +13,10 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from shapely.geometry import LineString
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -364,6 +366,71 @@ def test_route_edit_eco2_apply(kicad, pd):
     assert sorted(seg(t) for t in after.tracks_of(net="/CFG1")) \
         == sorted(seg(t) for t in before.tracks_of(net="/CFG1"))
     assert len(after.vias_of(net="/CFG1")) == len(before.vias_of(net="/CFG1"))
+
+
+
+# ------------------------------------- set_point, public (#1140: part_repair
+# cuts a dead tail back with it, so its replay file carries it)
+
+@pytest.mark.parametrize("op, msg", [
+    ({"op": "set_point", "uuid": "u", "which": "mid", "to": [1, 1]},
+     "which must be start, end or at"),
+    ({"op": "set_point", "uuid": "u", "which": "end", "to": "x"},
+     "to must be"),
+    ({"op": "set_point", "uuid": "u", "to": [1, 1]}, r"missing \['which'\]"),
+    ({"op": "set_point", "uuid": "", "which": "at", "to": [1, 1]},
+     "uuid must be"),
+])
+def test_validate_refuses_set_point(op, msg):
+    with pytest.raises(CheckError, match=msg):
+        _v(op)
+
+
+def test_resolve_set_point_checks_the_item(bg):
+    stub = next(t for t in bg.tracks_of(net="/CFG3")
+                if t.uuid.startswith(CFG3_STUB))
+    via = next(v for v in bg.vias_of(net="/CC1") if v.uuid)
+    ok = [{"op": "set_point", "uuid": stub.uuid, "which": "end",
+           "to": [33.25, 30.6432]},
+          {"op": "set_point", "uuid": via.uuid, "which": "at",
+           "to": [22.0, 39.2]}]
+    flat, spans = route_edit.resolve_ops(bg, _v(*ok))
+    assert flat == ok and spans == [[0], [1]]
+    for op, msg in (({**ok[0], "which": "at"}, "which at on a track"),
+                    ({**ok[1], "which": "start"}, "which start on a via"),
+                    ({**ok[0], "uuid": "nope"}, "no track or via nope")):
+        with pytest.raises(CheckError, match=msg):
+            route_edit.resolve_ops(bg, _v(op))
+    # an arc's end moved would bend it through its old mid point
+    arc = SimpleNamespace(uuid="a1",
+                          shape=LineString([(0, 0), (1, 1), (2, 0)]))
+    fake = SimpleNamespace(vias_of=lambda: [], tracks_of=lambda: [arc])
+    with pytest.raises(CheckError, match="is an arc"):
+        route_edit.resolve_ops(fake, _v({"op": "set_point", "uuid": "a1",
+                                         "which": "end", "to": [2, 1]}))
+
+
+def test_route_edit_set_point_applies_and_replays(kicad, pd, tmp_path):
+    """A track's end moves and its uuid stays; an ops file carries the op
+    (the CLI validates it as part_repair's replay does), and a re-run
+    finds it done."""
+    before = geom.BoardGeom.from_file(pd)
+    stub = next(t for t in before.tracks_of(net="/CFG3")
+                if t.uuid.startswith(CFG3_STUB))
+    a, b = list(stub.shape.coords)
+    mid = [round((a[0] + b[0]) / 2, 4), round((a[1] + b[1]) / 2, 4)]
+    f = tmp_path / "cut.route_edit.json"
+    f.write_text(json.dumps({"version": 1, "ops": [
+        {"op": "set_point", "uuid": stub.uuid, "which": "end", "to": mid}]}))
+    for want in ("changed", "exists"):
+        payload, _ = route_edit.run(["--pcb", str(pd), "--ops", str(f)])
+        assert [r["status"] for r in payload["results"]] == [want]
+        got = next(t for t in geom.BoardGeom.from_file(pd).tracks_of()
+                   if t.uuid == stub.uuid)
+        ends = list(got.shape.coords)
+        assert len(ends) == 2 and all(
+            abs(p - q) < 1e-6 for e, w in zip(ends, (a, mid))
+            for p, q in zip(e, w))
 
 
 def test_place_edit_silk_clear_region(kicad, pd):

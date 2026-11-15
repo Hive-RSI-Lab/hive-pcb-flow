@@ -719,6 +719,33 @@ def _report(out) -> dict:
     return json.loads((out / "part_repair.json").read_text(encoding="utf-8"))
 
 
+def test_live_a_cut_applies_and_replays(kicad, tmp_path):
+    """#1140: the set_point ops part_repair writes for a cut (a board track
+    kept, its dead end cut back) apply as its run applies them, and replay
+    from its ops file. A sweep's R7 rot180 failed here: route_edit took
+    set_point from its own move_via only, so the run's apply raised after
+    the board was swapped in and the replay refused the op."""
+    import route_edit
+
+    pcb = _copy(tmp_path, "kicad")
+    t = min((t for t in geom.BoardGeom.from_file(pcb).tracks_of()
+             if t.uuid and len(t.shape.coords) == 2 and t.shape.length > 1),
+            key=lambda t: t.uuid)
+    a, b = (tuple(q) for q in t.shape.coords)
+    Seg = pr.route_cleanup.Seg
+    q = (round(a[0] + 0.75 * (b[0] - a[0]), 4),
+         round(a[1] + 0.75 * (b[1] - a[1]), 4))
+    ops = pr._set_ends(t.uuid, Seg(t.uuid, t.net, t.layer, t.width, a, b),
+                       Seg(t.uuid, t.net, t.layer, t.width, a, q))
+    assert [r["status"] for r in pr.route_edit.apply_ops(pcb, ops)] \
+        == ["changed"]
+    fresh = _copy(tmp_path, "fresh")
+    pr._write_ops(tmp_path / pr.ROUTE_FILE, ops)
+    assert route_edit.main(["--pcb", str(fresh), "--ops",
+                            str(tmp_path / pr.ROUTE_FILE)]) == 0
+    assert _copper(fresh) == _copper(pcb) != _copper(ROUTE / pcb.name)
+
+
 def test_live_renumber_r6_applies_and_replays(kicad, tmp_path,
                                               monkeypatch):
     pcb = _copy(tmp_path, "kicad")
