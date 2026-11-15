@@ -127,9 +127,21 @@ def test_an_entry_for_the_part_replaces_the_screen(tmp_path):
 
 
 def test_an_unknown_part_is_still_nothing_to_judge(tmp_path):
-    p = _run(_board(tmp_path, _driver(value="DRV8316")))
+    p = _run(_board(tmp_path, _driver(value="XYZ1234")))
     assert p["violations"] == [] and "thermal_parts.yaml" in p[
         "nothing_to_judge"]
+    assert "candidates" not in p
+
+
+def test_a_driver_family_with_no_row_is_a_candidate(tmp_path):
+    """DRV8316 is a motor driver (thermal_parts.yaml families) with no row:
+    not judged, and said so, rather than silently nothing to judge."""
+    p = _run(_board(tmp_path, _driver(value="DRV8316")))
+    assert p["violations"] == []
+    [c] = p["candidates"]
+    assert c["ref"] == "U5" and c["reason"] == "no_row"
+    assert "candidates" in p["nothing_to_judge"]
+    assert any(n.startswith("U5 (DRV8316): no_row") for n in p["not_judged"])
 
 
 def test_ambient_moves_the_warning_current(tmp_path):
