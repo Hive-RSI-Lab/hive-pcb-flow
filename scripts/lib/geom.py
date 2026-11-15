@@ -147,12 +147,13 @@ def _uuid_of(node) -> "Optional[str]":
     return None
 
 
-def _pts(node, arcs: bool = False) -> list[tuple[float, float]]:
+def _pts(node, arcs: bool = False,
+         tol: float | None = None) -> list[tuple[float, float]]:
     """Coordinates from a (pts (xy x y) ...) node. A KiCad 7+ outline may
     hold (arc (start x y) (mid x y) (end x y)) segments among its points (a
     custom pad with rounded corners); with `arcs` each is sampled in its
-    place, without it they are skipped, as zone and rule-area outlines are
-    still read."""
+    place (_arc_points, to within tol mm when given), without it they are
+    skipped, as zone and rule-area outlines are still read."""
     out = []
     for c in node[1:]:
         h = _head(c)
@@ -164,7 +165,7 @@ def _pts(node, arcs: bool = False) -> list[tuple[float, float]]:
             ends = [_kid(c, k) for k in ("start", "mid", "end")]
             ends = [_nums(e)[:2] if e else [] for e in ends]
             if all(len(e) == 2 for e in ends):
-                out += _arc_points(*(tuple(e) for e in ends))
+                out += _arc_points(*(tuple(e) for e in ends), tol=tol)
     return out
 
 
@@ -529,8 +530,11 @@ def _arc_radius(start, mid, end) -> Optional[float]:
     return math.hypot(x1 - cx, y1 - cy)
 
 
-def _arc_points(start, mid, end, n: int = 16) -> list[tuple[float, float]]:
-    """Sample a circular arc through three points (used for track/edge arcs)."""
+def _arc_points(start, mid, end, n: int = 16,
+                tol: float | None = None) -> list[tuple[float, float]]:
+    """Sample a circular arc through three points (used for track/edge
+    arcs) in n steps, or more where tol (mm) is given: enough that no
+    chord strays further than tol from the arc."""
     (x1, y1), (x2, y2), (x3, y3) = start, mid, end
     d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
     if abs(d) < 1e-12:
@@ -552,12 +556,10 @@ def _arc_points(start, mid, end, n: int = 16) -> list[tuple[float, float]]:
     a2u = norm(a2, a1)
     if not (a1 <= a2u <= a3u):  # sweep the other way
         a3u = a3 - 2 * math.pi if a3 > a1 else a3
-        pts = [(cx + math.cos(a1 + (a3u - a1) * t / n) * math.hypot(x1 - cx, y1 - cy),
-                cy + math.sin(a1 + (a3u - a1) * t / n) * math.hypot(x1 - cx, y1 - cy))
-               for t in range(n + 1)]
-        pts[0], pts[-1] = start, end
-        return pts
     r = math.hypot(x1 - cx, y1 - cy)
+    if tol is not None and tol > 0 and r > tol:
+        # a chord over angle t strays r * (1 - cos(t / 2)) from the arc
+        n = max(n, math.ceil(abs(a3u - a1) / (2 * math.acos(1 - tol / r))))
     pts = [(cx + r * math.cos(a1 + (a3u - a1) * t / n),
             cy + r * math.sin(a1 + (a3u - a1) * t / n)) for t in range(n + 1)]
     # Pin the sampled ends to the DECLARED endpoints. Recomputing them from the

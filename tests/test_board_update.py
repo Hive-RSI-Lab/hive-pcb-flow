@@ -1163,6 +1163,250 @@ def test_swap_clash_leaves_copper_the_old_pad_held(tmp_path):
         == [it for it, _ in found]
 
 
+def _c5_spot() -> dict:
+    fp = placelib.PlaceModel(PD_PCB).footprints["C5"]
+    return {"x": fp.pos[0], "y": fp.pos[1], "deg": fp.angle, "side": fp.side}
+
+
+def _c0603_court(tmp_path: Path, name: str, grow: bool = False,
+                 extra: str = "") -> Path:
+    """The .kicad_mod of aiee:<name>: C0603 with `extra` text, its F.CrtYd
+    outline (+-0.8 x +-0.4 mm) grown to +-1.5 x +-0.75 mm when grow."""
+    lib = _variant_lib(tmp_path, name, "C0603", extra)
+    mod = lib / "aiee.pretty" / f"{name}.kicad_mod"
+    if grow:
+        mod.write_text("".join(
+            ln.replace("0.80", "1.50").replace("0.40", "0.75")
+            if "F.CrtYd" in ln else ln
+            for ln in mod.read_text().splitlines(True)))
+    return mod
+
+
+def _dru_text_board(tmp_path: Path, name: str, text: str) -> Path:
+    """PD_PCB staged in tmp_path/name, `text` added to its .kicad_dru."""
+    (tmp_path / name).mkdir()
+    pcb = _stage(tmp_path / name, PD_PCB)
+    dru = pcb.with_suffix(".kicad_dru")
+    dru.write_text(dru.read_text(encoding="utf-8") + text, encoding="utf-8")
+    return pcb
+
+
+def _grown(pads: list) -> list:
+    """C5's pads at 0.83 x 0.93 mm: pad 2 comes 0.1683 mm from the /CFG2
+    track the 0.8 x 0.9 mm pad clears by 0.1895 mm."""
+    return [dataclasses.replace(p, size=(0.83, 0.93)) for p in pads]
+
+
+def test_swap_clash_reads_the_new_footprint(tmp_path):
+    """A footprint test reads the swapped part as the update leaves it
+    (#1163): its new library id and courtyard. The same pads in a library
+    a 0.5 mm rule names, or under a courtyard grown over the /CFG2 tracks,
+    need copper the old pad never did; a courtyard that cannot be read may
+    hold. KiCad's DRC agrees on each board (two /CFG2 tracks, 0.233 and
+    0.1895 mm off)."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    old = bg.pads_of(ref="C5")
+    spot = _c5_spot()
+    c0603 = PD_LIB / "aiee.pretty" / "C0603.kicad_mod"
+
+    def clash(pcb, fpid, mod):
+        return bu.swap_clash_details(
+            bg, "C5", old, pcb, old_pads=old,
+            new_fps={"C5": bu._placed_footprint("C5", fpid, mod, spot)})
+
+    pcb = _dru_board(tmp_path, "hv", (
+        "hv_member", 0.5, "A.memberOfFootprint('HV:*')"))
+    found = clash(pcb, "HV:C0603", c0603)
+    assert len(found) == 2 and _clash_nets(found) == {"/CFG2"}
+    assert {info["rule"] for _, info in found} == {"rule hv_member"}
+    assert clash(pcb, "aiee:C0603", c0603) == []
+    pcb = _dru_board(tmp_path, "court", (
+        "c5_court", 0.5,
+        "A.intersectsCourtyard('C5') && B.intersectsCourtyard('C5') "
+        "&& A.Type != 'Zone' && B.Type != 'Zone'"))
+    assert clash(pcb, "aiee:C0603", c0603) == []
+    grown = _c0603_court(tmp_path, "C0603_G", grow=True)
+    found = clash(pcb, "aiee:C0603_G", grown)
+    assert len(found) == 2 and _clash_nets(found) == {"/CFG2"}
+    # a courtyard line that does not close into the outline
+    odd = _c0603_court(tmp_path, "C0603_O", extra=(
+        "\n\t(fp_line (start 0.80 0.40) (end 1.20 0.80) (layer F.CrtYd) "
+        "(width 0.05))"))
+    assert _clash_nets(clash(pcb, "aiee:C0603_O", odd)) == {"/CFG2"}
+
+
+def test_swap_clash_reads_far_side_courtyards(tmp_path):
+    """A courtyard test reads both sides' courtyards, as KiCad does
+    (#1163): R4, a front part, carries a back courtyard over the /CFG2
+    track by C5's pad 2, so a 0.18 mm rule held to R4's courtyard holds
+    there, and not once the update deletes R4."""
+    pcb = _dru_board(tmp_path, "far", (
+        "r4_court", 0.18, "A.intersectsCourtyard('R4')"))
+    bg = geom.BoardGeom.from_file(pcb)
+    old = bg.pads_of(ref="C5")
+    assert bu.swap_clash_details(bg, "C5", _grown(old), pcb,
+                                 old_pads=old) == []
+    s = pcb.read_text(encoding="utf-8")
+    j = s.index("\n\t)\n", s.index('"Reference" "R4"')) + 1
+    pcb.write_text(s[:j] + (
+        '\t\t(fp_rect (start -3.2 -2.1) (end -2.6 -1.4) (stroke (width '
+        '0.05) (type solid)) (fill no) (layer "B.CrtYd"))\n') + s[j:],
+        encoding="utf-8")
+    found = bu.swap_clash_details(bg, "C5", _grown(old), pcb, old_pads=old)
+    assert [(it.net, info["pad"], info["clearance_mm"], info["gap_mm"],
+             info["rule"]) for it, info in found] \
+        == [("/CFG2", "2", 0.18, 0.1683, "rule r4_court")]
+    assert bu.swap_clash_details(bg, "C5", _grown(old), pcb, old_pads=old,
+                                 gone={"R4"}) == []
+
+
+def test_swap_clash_reads_one_line_rules(tmp_path):
+    """A rule written on one line is read as itself (#1163): one with no
+    condition raises the board floor, and one held to J1 neither lends its
+    condition to the rule after it nor sets the floor."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    old = bg.pads_of(ref="C5")
+    for name, text in (
+            ("floor_first",
+             '(rule "oneline_floor" (constraint clearance (min 0.18mm)))\n'
+             '(rule "j1_keepout"\n\t(constraint clearance (min 0.16mm))\n'
+             "\t(condition \"A.memberOfFootprint('J1')\")\n)\n"),
+            ("j1_first",
+             "(rule \"j1_hv\" (condition \"A.memberOfFootprint('J1')\") "
+             "(constraint clearance (min 0.5mm)))\n"
+             '(rule "board_floor_018"\n'
+             "\t(constraint clearance (min 0.18mm))\n)\n")):
+        pcb = _dru_text_board(tmp_path, name, text)
+        assert bu.swap_clash_details(bg, "C5", old, pcb, old_pads=old) == []
+        found = bu.swap_clash_details(bg, "C5", _grown(old), pcb,
+                                      old_pads=old)
+        assert [(it.net, info["pad"], info["clearance_mm"], info["rule"])
+                for it, info in found] \
+            == [("/CFG2", "2", 0.18, "board floor")], name
+
+
+def test_swap_clash_parts_without_a_known_footprint(tmp_path):
+    """A courtyard test of a part the update adds or swaps with no footprint
+    given, or of a reference two footprints carry, cannot be answered and
+    counts as holding (#1163); one given its footprint is read."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    old = bg.pads_of(ref="C5")
+    r4 = placelib.PlaceModel(PD_PCB).footprints["R4"]
+    pcb = _dru_board(tmp_path, "two", (
+        "r4_court", 0.5,
+        "A.intersectsCourtyard('R4') && B.intersectsCourtyard('R4')"), (
+        "d3_court", 0.5,
+        "A.intersectsCourtyard('D3') && B.intersectsCourtyard('D3')"))
+    assert bu.swap_clash_details(bg, "C5", old, pcb, pending={"R4"},
+                                 new_fps={"R4": r4}) == []
+    found = bu.swap_clash_details(bg, "C5", old, pcb, pending={"R4", "D3"},
+                                  new_fps={"R4": r4})
+    assert _clash_nets(found) == {"/CFG2"}
+    assert {info["rule"] for _, info in found} == {"rule d3_court"}
+    # R3 renamed R4: KiCad's test reads both footprints
+    s = pcb.read_text(encoding="utf-8")
+    assert s.count('"Reference" "R3"') == 1
+    pcb.write_text(s.replace('"Reference" "R3"', '"Reference" "R4"'),
+                   encoding="utf-8")
+    found = bu.swap_clash_details(bg, "C5", old, pcb)
+    assert _clash_nets(found) == {"/CFG2"}
+    assert {info["rule"] for _, info in found} == {"rule r4_court"}
+
+
+def test_swap_clash_loads_footprints_only_for_a_rule_that_reads_them(
+        tmp_path):
+    """model and new_fps may be given as functions, each called once and
+    only when a rule's footprint test first needs a part (#1163): with no
+    such rule, part_repair loads no board model."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    old = bg.pads_of(ref="C5")
+    r4 = placelib.PlaceModel(PD_PCB).footprints["R4"]
+    calls: list = []
+
+    def model():
+        calls.append("model")
+        return placelib.PlaceModel(PD_PCB)
+
+    def new_fps():
+        calls.append("new_fps")
+        return {"R4": r4}
+
+    kw = {"model": model, "pending": {"R4", "D3"}, "new_fps": new_fps}
+    assert bu.swap_clash_details(bg, "C5", old, PD_PCB, **kw) == []
+    assert calls == []
+    pcb = _dru_board(tmp_path, "two", (
+        "r4_court", 0.5,
+        "A.intersectsCourtyard('R4') && B.intersectsCourtyard('R4')"), (
+        "d3_court", 0.5,
+        "A.intersectsCourtyard('D3') && B.intersectsCourtyard('D3')"))
+    found = bu.swap_clash_details(bg, "C5", old, pcb, **kw)
+    assert sorted(calls) == ["model", "new_fps"]
+    # R4 read from new_fps: only D3, with no footprint, may hold
+    assert {info["rule"] for _, info in found} == {"rule d3_court"}
+
+
+def test_swap_clash_reads_net_tests_per_pair(tmp_path):
+    """A NetName test is read per pair as KiCad reads it (#1163): case
+    aside, and inside an || with a footprint test. A NetClass rule raises
+    the floor; copper the old pad held as close stays, and is reported in
+    kept."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    old = bg.pads_of(ref="C5")
+    for name, cond in (("or", "A.NetName == 'VBUS' || "
+                              "A.memberOfFootprint('C5')"),
+                       ("case", "A.NetName == '/cfg2'")):
+        pcb = _dru_board(tmp_path, name, (name, 0.5, cond))
+        found = bu.swap_clash_details(bg, "C5", old, pcb)
+        assert _clash_nets(found) == {"/CFG2"}, name
+        assert {info["rule"] for _, info in found} == {f"rule {name}"}, name
+    pcb = _dru_board(tmp_path, "class", (
+        "default_class", 0.5, "A.NetClass == 'Default'"))
+    kept: list = []
+    assert bu.swap_clash_details(bg, "C5", old, pcb, old_pads=old,
+                                 kept=kept) == []
+    assert _clash_nets(kept) == {"/CFG2"}
+    assert {(info["rule"], info["clearance_mm"]) for _, info in kept} \
+        == {("board floor", 0.5)}
+    assert _clash_nets(bu.swap_clash_details(bg, "C5", old, pcb)) \
+        == {"/CFG2"}
+
+
+def test_swap_clash_old_pad_on_an_open_net(tmp_path):
+    """An open pad's net name churns (_nets_equal): the old pad on its
+    unconnected-* net and the new one with no net are one net, so copper
+    the old pad held as close stays (#1163), unless a rule that reads the
+    name answers otherwise for the two."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    pads = bg.pads_of(ref="C5")
+    old = [dataclasses.replace(p, net="unconnected-(C5-Pad1)")
+           if p.number == "1" else p for p in pads]
+    new = [dataclasses.replace(p, net=None) if p.number == "1" else p
+           for p in pads]
+    kept: list = []
+    assert bu.swap_clash_details(bg, "C5", new, PD_PCB, old_pads=old,
+                                 kept=kept) == []
+    assert _clash_nets(kept) == {"/VDD"}
+    pcb = _dru_board(tmp_path, "open", (
+        "open_c5", 0.5, "A.NetName == 'unconnected-(C5-Pad1)'"))
+    found = bu.swap_clash_details(bg, "C5", new, pcb, old_pads=old)
+    assert _clash_nets(found) == {"/VDD"}
+    assert {info["rule"] for _, info in found} == {"board floor"}
+
+
+def test_swap_dry_run_notes_kept_copper(tmp_path):
+    """The dry run says which other-net copper a kept swap leaves closer
+    than the clearance because the old pad already came as close."""
+    lib, net = _swap_c5(tmp_path)
+    pcb = _dru_board(tmp_path, "k", (
+        "default_class", 0.5, "A.NetClass == 'Default'"))
+    payload = _run(pcb, net, "--lib", str(lib), "--dry-run")
+    entry = payload["plan"]["swap_new_fp"][0]
+    assert entry["ref"] == "C5" and entry["keep_copper"] is True
+    assert entry["clashes"] == []
+    assert any(n.startswith("C5: kept 2 track(s)/via(s) of other nets "
+                            "(/CFG2)") for n in payload["plan"]["notes"])
+
+
 def test_rule_layer_ok():
     ok = bu._rule_layer_ok
     assert ok(None, "In2.Cu") and ok("outer", "B.Cu")

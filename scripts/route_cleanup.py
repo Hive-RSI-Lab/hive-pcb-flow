@@ -1030,8 +1030,8 @@ def _rules_clearance(pcb: Path, nets, *, scoped: bool = True
     keeps a clearance rule held to a footprint (a courtyard or
     memberOfFootprint test, route_critical.dru_condition_scoped) out of
     the floor, for a caller that weighs such rules per pair itself
-    (board_update.swap_clash_details, #1146): there the safe reading is
-    the one that rips less."""
+    (board_update.swap_clash_details, #1146), which counts a rule it
+    cannot answer for a pair as holding there."""
     import json  # noqa: PLC0415
     import route_critical as rc  # noqa: PLC0415 - heavy, lazy
     pro, dru = pcb.with_suffix(".kicad_pro"), pcb.with_suffix(".kicad_dru")
