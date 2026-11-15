@@ -107,7 +107,9 @@ def test_the_mpn_suffix_beats_the_footprint_name():
 def test_an_ldo_is_listed_for_netlist_audit_not_left_unjudged(tmp_path):
     p = _run(_board(tmp_path, _sot23_6(value="AMS1117-3.3")))
     [c] = p["candidates"]
-    assert c["reason"] == "ldo_heat" and "netlist_audit" in c["detail"]
+    # its pads name no pins, so the candidate says which side it can't
+    # work out (test_thermal_stated_load judges the ones it can)
+    assert c["reason"] == "ldo_no_vin" and "(Vin - Vout)" in c["detail"]
     assert p.get("not_judged", []) == []
 
 

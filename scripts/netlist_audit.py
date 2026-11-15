@@ -3788,13 +3788,16 @@ def _sl_led_chains(net: str, nets: dict, comps: dict,
 
 def _sl_rail_load(net: str, nets: dict, comps: dict,
                   comp_pins: dict[str, dict[str, str]], table: dict,
-                  rails: dict, skip: set[str], _depth: int = 0) -> dict:
+                  rails: dict, skip: set[str], _depth: int = 0,
+                  given: dict[str, float] | None = None) -> dict:
     """What hangs on rail NET (and the nets one 0 ohm resistor away): the
     current its known loads draw (peak: every row; cont: rows not marked
     peak, LED chains, downstream LDOs' own continuous load), the parts it
-    can't tell, and the rows the sum rests on."""
+    can't tell, the rows the sum rests on, and the refs it counted. GIVEN
+    {ref: amps} (a load's stated current, check_thermal) outranks a row."""
+    given = given or {}
     res = {"peak": 0.0, "cont": 0.0, "known": [], "unknown": [],
-           "rows": []}
+           "rows": [], "refs": []}
     reach = _zero_ohm_reach(net, nets, comps, comp_pins)
     seen = set(skip)
     v_rail = next((rails[n] for n in reach if n in rails), None)
@@ -3803,6 +3806,15 @@ def _sl_rail_load(net: str, nets: dict, comps: dict,
             ref = m["ref"]
             comp = comps.get(ref, {})
             if not ref or ref in seen or comp.get("dnp"):
+                continue
+            if ref in given:
+                seen.add(ref)
+                i = float(given[ref])
+                res["peak"] += i
+                res["cont"] += i
+                res["refs"].append(ref)
+                res["known"].append(f"{ref} ({comp.get('value')}) "
+                                    f"{i * 1000:g} mA stated")
                 continue
             func = _norm_pin(m.get("pinfunction"))
             reg = _sl_row(table["regulators"], comp)
@@ -3815,11 +3827,13 @@ def _sl_rail_load(net: str, nets: dict, comps: dict,
                     res["unknown"].append(f"{ref} ({comp.get('value')})")
                     continue
                 sub = _sl_rail_load(sorted(outs)[0], nets, comps, comp_pins,
-                                    table, rails, seen | {ref}, _depth + 1)
+                                    table, rails, seen | {ref}, _depth + 1,
+                                    given)
                 seen |= {ref}
                 res["peak"] += sub["peak"]
                 res["cont"] += sub["cont"]
                 res["rows"] += [reg] + sub["rows"]
+                res["refs"] += [ref] + sub["refs"]
                 res["unknown"] += sub["unknown"]
                 if sub["peak"]:
                     res["known"].append(
@@ -3834,6 +3848,7 @@ def _sl_rail_load(net: str, nets: dict, comps: dict,
                 if not load.get("peak"):
                     res["cont"] += i
                 res["rows"].append(load)
+                res["refs"].append(ref)
                 res["known"].append(f"{ref} ({comp.get('value')}) "
                                     f"{i * 1000:g} mA")
                 continue
@@ -3858,6 +3873,7 @@ def _sl_rail_load(net: str, nets: dict, comps: dict,
             i = max(0.0, (v_rail - ch["vf"]) / ch["ohms"])
             res["peak"] += i
             res["cont"] += i
+            res["refs"] += [ch["r"], ch["led"]]
             res["known"].append(f"{ch['led']} via {ch['r']} "
                                 f"{i * 1000:.3g} mA")
     return res

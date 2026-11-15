@@ -268,7 +268,32 @@ exposed_pad), each with a cited datasheet table. Only an exposed-pad
 package is screened on copper: its heat goes into the pad's pour, so thin
 copper there is a board fault whatever the load. A leaded or no-pad part
 (SOT-23, SOIC) sheds its heat through its pins, so its temperature turns
-on its loss, and a board states no load: it is not_judged, never guessed.
+on its loss. A no-pad buck with r_on_ohm in its row is judged from a load
+the design states, never a guessed one, in this order:
+  1. rail_sum: the loads on its output rail (its VOUT/VOS/OUT pin's net,
+     else the far side of the 2-pad inductor on its SW/LX/PH pin), summed
+     as netlist_audit does, constraints rail_budget.loads[REF].current_a
+     and power[].sinks first, then source_limits rows. Conduction loss is
+     I^2 x the larger switch on-resistance x RDS_HOT_FACTOR (1.5, typical
+     at 25 C to a hot die; 1 when the row's figure is already a maximum);
+     switching loss is left out, so the loss is a floor. A continuous sum
+     past tj_max_c fires a thermal_stated_load warning (advisory). Under
+     it, the part is judged only when every part on the rail is counted
+     (`full`: the converter, its inductor and parts that draw nothing,
+     R / C / test point / hole / fiducial / a diode wholly on the rail or
+     ground, aside).
+  2. current_limit: else its datasheet current limit (i_limit_a, the
+     maximum) bounds the load: under tj_max_c there, a checked fact with
+     screen: true; over it, a candidate over_at_limit (the limit doesn't
+     bound it; a screen, not a finding).
+  3. else it stays a no_load candidate, its detail saying which of these
+     was missing.
+An LDO source_limits.yaml gives a theta_ja is worked the same way:
+(Vin - Vout) x I from the rail volts (net name or constraints voltages,
+Vout also from the part number) and its output rail's summed loads. It
+fires thermal_stated_load only where stated loads or warmer air put it
+past tj_max and netlist_audit's 25 C row sum (its ldo_heat check) does
+not, so the two never report one part twice.
 Every power IC the check sees and cannot judge is listed in
 extra["candidates"] with its reason, and its not_judged line says what is
 missing:
@@ -281,9 +306,15 @@ missing:
                     the part can shed on the JEDEC board, as check_current
                     does: a screen, not a verdict (advisory)
   no_heatsink_net   an exposed pad on no net
-  ldo_heat          an LDO, whose heat is (Vin - Vout) x I: netlist_audit's
-                    LDO dissipation check judges it, so it is listed but
-                    is not a not_judged line here
+  over_at_limit     a no-pad buck whose rail load can't all be counted and
+                    which would pass tj_max_c at its current limit
+  ldo_no_vin        an LDO whose input rail has no volts by name or
+                    constraints voltages
+  ldo_no_vout       an LDO whose output has no volts (name, constraints,
+                    part number)
+  ldo_no_load       an LDO with volts both sides but no load on its
+                    output with a stated current or a row
+  ldo_heat          an LDO with no source_limits.yaml regulator row
 A screened finding carries package, tj_max_c and p_max_screen_w and is
 advisory, like every inferred screen.
 
@@ -335,6 +366,7 @@ from pathlib import Path
 import yaml
 from shapely.geometry import Point
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import checklib  # noqa: E402
 import geom  # noqa: E402
@@ -1400,17 +1432,326 @@ REASON_TEXT = {
 }
 
 
-def screen_power_ics(bg: geom.BoardGeom, listed: set, air_c: float | None):
+def ldo_violation(bg, facts: dict) -> dict:
+    """The warning for an LDO stated loads or warmer air put over its
+    junction limit, where netlist_audit's 25 C row sum did not."""
+    ref = facts["ref"]
+    (cx, cy), side, _, _ = part_region(bg, ref)
+    msg = (f"{ref} ({facts['part']}) drops {facts['vin_v']:g} V to "
+           f"{facts['vout_v']:g} V at {facts['load_a'] * 1000:.3g} mA "
+           f"({', '.join(facts['loads'])}): {facts['power_w']:.3g} W, which "
+           f"at {facts['theta_ja_datasheet_cw']:g} C/W puts the junction at "
+           f"{facts['tj_c']:.0f} C from {facts['air_c']:g} C air, past its "
+           f"{facts['tj_max_c']:g} C. Drop the input volts, use a switcher, "
+           f"or cut the load [{facts['source']}]")
+    return violation(SCRIPT, "warning", (cx, cy), side, facts["rail"], [ref],
+                     msg, SCRIPT, kind="thermal_stated_load", inferred=True,
+                     power_w=facts["power_w"], tj_c=facts["tj_c"])
+
+
+# ---- stated loads (no_load / ldo_heat rerank) ----------------------
+RDS_HOT_FACTOR = 1.5     # typ-at-25 C on-resistance to a hot die (module doc)
+_OUT_PIN_RE = re.compile(r"^(VOUT|VOS|OUT)\d*$", re.I)
+_SW_PIN_RE = re.compile(r"^(SW|LX|PH)\d*$", re.I)
+# parts on an output rail that draw no load of their own: resistors (the
+# feedback divider), capacitors, test points, holes, fiducials
+_NO_LOAD_RE = re.compile(r"^(R|RN|C|TP|H|MH|FID)\d")
+# the same for a 2-pad R or C named by role (Rfbt1, Cout2; not CN1)
+_NO_LOAD_2PAD_RE = re.compile(r"^(R|C)(?!N\d)[A-Za-z_]*\d+$")
+
+
+def pin_name(nets, ref: str, pin: str, net: str) -> str:
+    """REF's pin name on the board, upper case, without the _N pin-number
+    suffix KiCad adds where a symbol repeats a name (VIN_1, VOUT_5)."""
+    import netlist_audit as na  # noqa: PLC0415
+    return re.sub(r"_\d+$", "",
+                  na._norm_pin(na._pin_func(nets, ref, pin, net)))
+
+
+def stated_loads(cons: dict) -> dict[str, float]:
+    """{ref: amps} the constraints state: rail_budget.loads[REF].current_a
+    and power[].sinks[{ref, current_a}] (the larger when both give one)."""
+    out: dict[str, float] = {}
+
+    def put(ref, amps):
+        try:
+            a = float(amps)
+        except (TypeError, ValueError):
+            return
+        if ref and a >= 0:
+            out[str(ref)] = max(a, out.get(str(ref), 0.0))
+    loads = (cons.get("rail_budget") or {}).get("loads") or {}
+    if isinstance(loads, dict):
+        for ref, ent in loads.items():
+            if isinstance(ent, dict):
+                put(ref, ent.get("current_a"))
+    for ent in cons.get("power") or []:
+        for s in (ent.get("sinks") or []) if isinstance(ent, dict) else []:
+            if isinstance(s, dict):
+                put(s.get("ref"), s.get("current_a"))
+    return out
+
+
+def board_netlist(bg: geom.BoardGeom):
+    """(nets, comps, comp_pins) in netlist_audit's form, from the board's
+    pads: the pins' names and types are the ones the board stores."""
+    nets: dict[str, list] = {}
+    comps: dict[str, dict] = {}
+    comp_pins: dict[str, dict[str, str]] = {}
+    for ref, fp in bg.footprints.items():
+        props = fp.get("props") or {}
+        mpn = next((str(props[k]) for k in MPN_PROPS if props.get(k)), "")
+        comps[ref] = {"value": fp.get("value") or "",
+                      "dnp": "dnp" in (fp.get("attrs") or ()),
+                      "libsource": ("", mpn)}
+        for p in bg.pads_of(ref=ref):
+            if not p.net or p.net.startswith("unconnected-") or not p.number:
+                continue
+            if comp_pins.setdefault(ref, {}).get(p.number) == p.net:
+                continue
+            comp_pins[ref][p.number] = p.net
+            nets.setdefault(p.net, []).append(
+                {"ref": ref, "pin": p.number, "pinfunction": p.pinfunction,
+                 "pintype": p.pintype})
+    return nets, comps, comp_pins
+
+
+def output_rail(ref: str, nets, comps, comp_pins) -> str | None:
+    """A buck's output rail: its VOUT/VOS/OUT pin's net, else the far net
+    of the 2-pad inductor on its SW/LX/PH pin."""
+    from check_ratings import is_ground  # noqa: PLC0415
+    pins = comp_pins.get(ref, {})
+    funcs = {p: pin_name(nets, ref, p, n) for p, n in pins.items()}
+    out = sorted({pins[p] for p, f in funcs.items() if _OUT_PIN_RE.match(f)})
+    if out:
+        return out[0]
+    for sw in sorted({pins[p] for p, f in funcs.items()
+                      if _SW_PIN_RE.match(f)}):
+        for m in nets.get(sw, []):
+            lp = comp_pins.get(m["ref"], {})
+            if (re.match(r"^L\d", m["ref"]) and len(lp) == 2
+                    and not comps.get(m["ref"], {}).get("dnp")):
+                far = next((n for p, n in lp.items() if p != m["pin"]), None)
+                # An inductor to ground is an inverting or boost stage:
+                # its far net is no output rail.
+                if far and far != sw and not is_ground(far):
+                    return far
+    return None
+
+
+class NetCtx:
+    """The board's netlist, rails and stated loads, built once per run."""
+
+    def __init__(self, bg: geom.BoardGeom, cons: dict):
+        import netlist_audit as na  # noqa: PLC0415
+        self.nets, self.comps, self.comp_pins = board_netlist(bg)
+        self.rails = na._rail_volts(cons, self.nets)
+        self.table = na.load_source_limits()
+        self.given = stated_loads(cons)
+
+    def rail_load(self, ref: str, out: str, given: bool = True) -> dict:
+        """netlist_audit's sum of what hangs on OUT, the stated loads
+        first, and whether it is full: every part on the rail counted but
+        the converter, its inductor and parts that draw nothing (DNP,
+        R / C / test point / hole / fiducial, a diode with every pad on
+        the rail or ground). `uncounted` names the rest."""
+        import netlist_audit as na  # noqa: PLC0415
+        from check_ratings import is_ground  # noqa: PLC0415
+        ld = na._sl_rail_load(out, self.nets, self.comps, self.comp_pins,
+                              self.table, self.rails, {ref},
+                              given=self.given if given else None)
+        reach = na._zero_ohm_reach(out, self.nets, self.comps,
+                                   self.comp_pins)
+        counted = set(ld["refs"]) | {ref}
+        unc = []
+        for n in reach:
+            for m in self.nets.get(n, []):
+                r = m["ref"]
+                c = self.comps.get(r, {})
+                pins = self.comp_pins.get(r, {})
+                if (r in counted or c.get("dnp") or _NO_LOAD_RE.match(r)
+                        or (len(pins) == 2 and _NO_LOAD_2PAD_RE.match(r))):
+                    continue
+                if re.match(r"^D\d", r) and all(
+                        nn in reach or is_ground(nn) for nn in pins.values()):
+                    continue
+                if (re.match(r"^L\d", r) and ref in {
+                        mm["ref"] for nn in pins.values()
+                        for mm in self.nets.get(nn, [])}):
+                    continue    # the converter's own inductor
+                counted.add(r)
+                unc.append(f"{r} ({c.get('value')})")
+        unk = [u for u in ld["unknown"] if u not in unc]
+        ld["uncounted"] = unc + unk
+        ld["full"] = not ld["uncounted"]
+        return ld
+
+
+def conduction_w(r_on, amps: float, r_on_max: bool) -> float:
+    """A buck's conduction loss at AMPS out: I^2 x the larger of the two
+    switches' on-resistance (D x Rhs + (1 - D) x Rls never exceeds it),
+    x RDS_HOT_FACTOR unless the figure is already a maximum. Switching
+    loss is left out (module doc)."""
+    r = max(float(x) for x in (r_on if isinstance(r_on, list) else [r_on]))
+    return amps ** 2 * r * (1.0 if r_on_max else RDS_HOT_FACTOR)
+
+
+def judge_stated(bg, ref: str, row: dict, pkg: dict, ctx: NetCtx,
+                 air: float):
+    """(violations, facts or None, candidate update) for a no-pad switcher
+    from a stated load (module doc): the rail's summed loads, else its
+    datasheet current limit as a ceiling. Facts None: still a candidate,
+    with the update's reason and detail."""
+    fp = bg.footprints[ref]
+    part = fp.get("value") or ref
+    theta = float(pkg["theta_ja_c_w"])
+    tj_max = float(row["tj_max_c"])
+    r_on = pkg.get("r_on_ohm", row.get("r_on_ohm"))
+    is_max = bool(pkg.get("r_on_max", row.get("r_on_max")))
+    out = output_rail(ref, ctx.nets, ctx.comps, ctx.comp_pins)
+    if r_on is None:
+        return [], None, {"why": "its thermal_parts.yaml row gives no "
+                          "on-resistance (r_on_ohm), so no buck loss model "
+                          "turns a load into heat"}
+    if out is None:
+        pins = ctx.comp_pins.get(ref, {})
+        if not any(pin_name(ctx.nets, ref, p, n) for p, n in pins.items()):
+            return [], None, {"why": "no output rail found: its pads carry "
+                              "no pin names, so its SW or VOUT pin can't "
+                              "be told"}
+        return [], None, {"why": "no output rail found (no VOUT/VOS/OUT "
+                          "pin, no SW pin to an inductor but to ground)"}
+    base = {"ref": ref, "part": part, "inferred": True, "rail": out,
+            "package": pkg.get("name", ""), "theta_ja_datasheet_cw": theta,
+            "tj_max_c": tj_max, "air_c": air, "r_on_ohm": r_on,
+            "rds_hot_factor": 1.0 if is_max else RDS_HOT_FACTOR,
+            "source": row["source"]}
+    ld = ctx.rail_load(ref, out)
+    p_cont = conduction_w(r_on, ld["cont"], is_max)
+    tj_cont = air + p_cont * theta
+    if ld["cont"] and tj_cont > tj_max:
+        facts = dict(base, load_source="rail_sum",
+                     load_a=checklib.rnd(ld["cont"]),
+                     power_w=checklib.rnd(p_cont), tj_c=checklib.rnd(tj_cont),
+                     loads=ld["known"], full=ld["full"], advisory=True)
+        (cx, cy), side, _, _ = part_region(bg, ref)
+        msg = (f"{ref} ({part}) feeds '{out}', whose loads draw "
+               f"{ld['cont'] * 1000:.3g} mA ({', '.join(ld['known'])}): "
+               f"{p_cont:.3g} W of conduction loss at its "
+               f"{max(r_on if isinstance(r_on, list) else [r_on]) * 1000:g}"
+               f" mOhm switch{'' if is_max else f' x{RDS_HOT_FACTOR:g} hot'},"
+               f" which at {theta:g} C/W puts the junction at "
+               f"{tj_cont:.0f} C from {air:g} C air, past its {tj_max:g} C; "
+               "switching loss adds to it. Use a part with lower "
+               "on-resistance or a better package, or split the rail - "
+               f"inferred from reference/thermal_parts.yaml "
+               f"({row['source'].split(':')[0]})")
+        v = violation(SCRIPT, "warning", (cx, cy), side, out, [ref], msg,
+                      SCRIPT, kind="thermal_stated_load", inferred=True,
+                      power_w=checklib.rnd(p_cont), tj_c=checklib.rnd(tj_cont))
+        return [v], facts, {}
+    p_peak = conduction_w(r_on, ld["peak"], is_max)
+    tj_peak = air + p_peak * theta
+    if ld["full"] and ld["peak"]:
+        return [], dict(base, load_source="rail_sum",
+                        load_a=checklib.rnd(ld["peak"]),
+                        power_w=checklib.rnd(p_peak),
+                        tj_c=checklib.rnd(tj_peak), loads=ld["known"],
+                        full=True), {}
+    lim = pkg.get("i_limit_a", row.get("i_limit_a"))
+    unc = ld["uncounted"] or ["no load the constraints or a row states"]
+    loads_why = (f"the loads on '{out}' can't all be counted "
+                 f"({', '.join(unc[:4])}{', ...' if len(unc) > 4 else ''})")
+    if lim is None:
+        return [], None, {"why": loads_why + ", and its row gives no "
+                          "current limit (i_limit_a) to bound them"}
+    lim = float(lim)
+    p_lim = conduction_w(r_on, lim, is_max)
+    tj_lim = air + p_lim * theta
+    nums = dict(load_source="current_limit", i_limit_a=lim,
+                power_at_limit_w=checklib.rnd(p_lim),
+                tj_at_limit_c=checklib.rnd(tj_lim))
+    if tj_lim <= tj_max:
+        return [], dict(base, **nums, screen=True, advisory=True), {}
+    return [], None, dict(nums, reason="over_at_limit", why=(
+        f"{loads_why}; at its {lim:g} A current limit (datasheet max) it "
+        f"would lose {p_lim:.3g} W and reach {tj_lim:.0f} C, past its "
+        f"{tj_max:g} C, so the limit doesn't bound it (a screen, not a "
+        "finding)"))
+
+
+def judge_ldo(ref: str, fp: dict, ctx: NetCtx, air: float):
+    """(facts or None, reason, detail) for an LDO source_limits.yaml gives
+    a theta_ja: (Vin - Vout) x I from the rails and the loads it can
+    count, stated loads first (module doc)."""
+    import netlist_audit as na  # noqa: PLC0415
+    from check_ratings import reg_out_volts  # noqa: PLC0415
+    comp = ctx.comps.get(ref, {})
+    reg = na._sl_row(ctx.table["regulators"], comp)
+    if reg is None:
+        return None, "ldo_heat", "no source_limits.yaml regulator row"
+    pins = ctx.comp_pins.get(ref, {})
+
+    def side(key):
+        return sorted({n for p, n in pins.items() if re.search(
+            reg[key], pin_name(ctx.nets, ref, p, n), re.I)})
+    ins, outs = side("in"), side("out")
+    val = str(comp.get("value") or "")
+    vout = (ctx.rails.get(outs[0], reg_out_volts(val)) if outs
+            else reg_out_volts(val))
+    vin = next((ctx.rails[n] for n in ins if n in ctx.rails), None)
+    if not any(pin_name(ctx.nets, ref, p, n) for p, n in pins.items()):
+        return None, "ldo_no_vin", (
+            "its pads carry no pin names, so neither its input nor its "
+            "output can be told")
+    if vin is None:
+        return None, "ldo_no_vin", (
+            f"its input ({', '.join(ins) or 'no input pin found'}) has no "
+            "volts by name or constraints voltages")
+    if not outs or vout is None:
+        return None, "ldo_no_vout", (
+            f"its output ({', '.join(outs) or 'no output pin found'}) has "
+            "no volts by name, constraints voltages or part number")
+    ld = ctx.rail_load(ref, outs[0])
+    if not ld["cont"]:
+        unc = ld["uncounted"] or ["nothing with a current"]
+        return None, "ldo_no_load", (
+            f"no load on '{outs[0]}' has a stated current or a row "
+            f"({', '.join(unc[:4])}{', ...' if len(unc) > 4 else ''})")
+    p = max(0.0, vin - vout) * ld["cont"]
+    theta = float(reg["theta_ja"])
+    tj = air + p * theta
+    # netlist_audit judges it from 25 C and the rows alone: over here only
+    # when stated loads or warmer air put it over, it fires here instead
+    ld0 = ctx.rail_load(ref, outs[0], given=False)
+    tj0 = 25.0 + max(0.0, vin - vout) * ld0["cont"] * theta
+    tjm = float(reg["tj_max"]) if reg.get("tj_max") is not None else None
+    over_here = tjm is not None and tj > tjm and not tj0 > tjm
+    return {"over_here": over_here, "ref": ref, "part": comp.get("value") or ref, "inferred": True,
+            "kind": "ldo", "rail": outs[0], "vin_v": vin, "vout_v": vout,
+            "load_a": checklib.rnd(ld["cont"]), "loads": ld["known"],
+            "full": ld["full"], "power_w": checklib.rnd(p),
+            "theta_ja_datasheet_cw": theta, "tj_c": checklib.rnd(tj),
+            "tj_max_c": (float(reg["tj_max"]) if reg.get("tj_max")
+                         is not None else None),
+            "air_c": air, "judged_by": ("check_thermal" if over_here else
+                                        "netlist_audit ldo_heat"),
+            "source": reg.get("source", "")}, "", ""
+
+
+def screen_power_ics(bg: geom.BoardGeom, listed: set, air_c: float | None,
+                     cons: dict | None = None):
     """(violations, checked facts, candidates) for the power ICs no thermal
     entry names (module doc). A row with an exposed-pad package is screened
     by check_inferred; every other power IC becomes a candidate with its
-    reason: no_row, no_package_theta, no_load (no exposed pad, no load
-    stated), no_heatsink_net, or ldo_heat (netlist_audit judges an LDO's
-    heat from its rail load and source_limits.yaml's theta_ja: listed, not
-    left out)."""
+    reason: no_row, no_package_theta, no_load / over_at_limit (no exposed
+    pad, no load stated that judges it), no_heatsink_net, or
+    ldo_no_vin / ldo_no_vout / ldo_no_load / ldo_heat (an LDO whose
+    (Vin - Vout) x I can't be worked out)."""
     rows, rules = thermal_rows(), candidate_rules()
     air = INFERRED_AIR_C if air_c is None else air_c
     violations, checked, candidates = [], [], []
+    ctx = None
     for ref in sorted(bg.footprints):
         fp = bg.footprints[ref]
         if ref in listed or not bg.pads_of(ref=ref):
@@ -1422,10 +1763,17 @@ def screen_power_ics(bg: geom.BoardGeom, listed: set, air_c: float | None):
         cand = {"ref": ref, "part": fp.get("value") or ref}
         if row is None:
             if rule.get("ldo_theta") is not None:
+                ctx = ctx or NetCtx(bg, cons or {})
+                facts, reason, why = judge_ldo(ref, fp, ctx, air)
+                if facts is not None:
+                    if facts.pop("over_here"):
+                        violations.append(ldo_violation(bg, facts))
+                    checked.append(facts)
+                    continue
                 candidates.append(dict(
-                    cand, reason="ldo_heat",
-                    detail="netlist_audit's ldo_heat judges it from its "
-                           "rail load (source_limits.yaml theta_ja "
+                    cand, reason=reason,
+                    detail=f"{why}, so (Vin - Vout) x I can't be worked "
+                           "out (source_limits.yaml theta_ja "
                            f"{float(rule['ldo_theta']):g} C/W)"))
                 continue
             cand.update(reason="no_row", seen_in=rule["where"])
@@ -1452,6 +1800,14 @@ def screen_power_ics(bg: geom.BoardGeom, listed: set, air_c: float | None):
                     continue
             else:
                 theta = float(pkg["theta_ja_c_w"])
+                upd = {}
+                if "tj_max_c" in row:
+                    ctx = ctx or NetCtx(bg, cons or {})
+                    vs, facts, upd = judge_stated(bg, ref, row, pkg, ctx, air)
+                    if facts is not None:
+                        violations.extend(vs)
+                        checked.append(facts)
+                        continue
                 cand.update(reason="no_load", package=pkg.get("name", ""),
                             theta_ja_datasheet_cw=theta)
                 if "tj_max_c" in row:
@@ -1463,6 +1819,12 @@ def screen_power_ics(bg: geom.BoardGeom, listed: set, air_c: float | None):
                                 detail=REASON_TEXT["no_load"].format(
                                     pkg=pkg.get("name") or "leaded",
                                     theta=theta, tj=tj, pmax=pmax, air=air))
+                    why = upd.pop("why", "")
+                    cand.update(upd)
+                    if why:
+                        cand["detail"] = (why if cand["reason"] ==
+                                          "over_at_limit" else
+                                          f"{why}; {cand['detail']}")
                 else:
                     cand["detail"] = (f"a {pkg.get('name') or 'leaded'} "
                                       "package with no exposed pad and no "
@@ -1513,7 +1875,7 @@ def run(argv=None):
     # a known power IC nobody gave a thermal entry: its datasheet's board;
     # one it can't judge goes into candidates with what's missing
     listed = {e.get("ref") for e in entries}
-    vs, inferred, candidates = screen_power_ics(bg, listed, air_c)
+    vs, inferred, candidates = screen_power_ics(bg, listed, air_c, cons)
     violations.extend(vs)
     checked.extend(inferred)
     not_judged.extend(c.pop("not_judged") for c in candidates
