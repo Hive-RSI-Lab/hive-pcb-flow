@@ -661,11 +661,19 @@ def _castellated_at(cast, x: float, y: float, r: float = 0.0) -> bool:
                for cx, cy, d in cast)
 
 
+# A pour keeps its clearance around another net's castellated pad, so the pad
+# splits the pour's run along the edge though the run goes on past it (#822).
+# Parts of one piece that come this close (mm) to the same such pad are one
+# run: above the usual pour clearances (0.2 to 0.5 mm), below a pad pitch.
+CAST_BRIDGE_MM = 0.6
+
+
 def check_copper_to_edge(fab, rules, vios: list, cast_pads=()) -> None:
     """cast_pads: castellation.edge_copper(). A castellated pad has to reach the
     edge, so a piece touching its drill loses the pad grown by the floor (the
     sides of a pad crossing the edge fall inside) before it is measured, and a
-    run going on past that cut stays one place."""
+    run going on past that cut stays one place. So does a run going on past
+    another net's castellated pad, which the piece keeps clear of (#822)."""
     hard, lo = _floors(rules, "min_copper_to_edge_mm")
     outline = fab.outline
     if lo is None or outline.is_empty:
@@ -679,8 +687,8 @@ def check_copper_to_edge(fab, rules, vios: list, cast_pads=()) -> None:
         if lg is None:
             continue
         for comp in lg.components():
-            at_holes = [area for drill, area in areas
-                        if comp.intersects(drill)]
+            mine = [comp.intersects(drill) for drill, _ in areas]
+            at_holes = [area for (_, area), m in zip(areas, mine) if m]
             cuts = []
             if at_holes:
                 cut = unary_union(at_holes)    # a close row is one cut
@@ -688,6 +696,10 @@ def check_copper_to_edge(fab, rules, vios: list, cast_pads=()) -> None:
                 comp = comp.difference(cut)    # on the edge by design
             if comp.is_empty or not _below(comp.distance(edge), lo):
                 continue
+            # other nets' pads: nothing is cut, they only join the run
+            cuts += [pad.buffer(CAST_BRIDGE_MM)
+                     for (_, pad), m in zip(cast_pads, mine)
+                     if not m and comp.distance(pad) <= CAST_BRIDGE_MM]
             # Copper crossing the outline reads as distance 0; both cases are
             # the same defect (copper too close to / past the board edge).
             pinches = _pinches(comp, edge, lo, cuts)
