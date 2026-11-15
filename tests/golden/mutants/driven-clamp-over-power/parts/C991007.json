@@ -1,0 +1,28 @@
+{
+  "mpn": "ZEN1V8-AK",
+  "lcsc": "C991007",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "A",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "K",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 1.8,
+      "ref": "A",
+      "source": "seeded: zener range top"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "mpn": "SEEDED-MCU-25MA",
+  "lcsc": "C991006",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "VDD",
+      "type": "power_in"
+    },
+    {
+      "pin": "9",
+      "name": "VDD",
+      "type": "power_in"
+    },
+    {
+      "pin": "24",
+      "name": "VDD",
+      "type": "power_in"
+    },
+    {
+      "pin": "36",
+      "name": "VDD",
+      "type": "power_in"
+    },
+    {
+      "pin": "48",
+      "name": "VDD",
+      "type": "power_in"
+    },
+    {
+      "pin": "8",
+      "name": "VSS",
+      "type": "ground"
+    },
+    {
+      "pin": "23",
+      "name": "VSS",
+      "type": "ground"
+    },
+    {
+      "pin": "35",
+      "name": "VSS",
+      "type": "ground"
+    },
+    {
+      "pin": "47",
+      "name": "VSS",
+      "type": "ground"
+    },
+    {
+      "pin": "15",
+      "name": "PA5",
+      "type": "output"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "PA5"
+      ],
+      "kind": "current",
+      "level": "abs_max",
+      "min": -0.025,
+      "max": 0.025,
+      "source": "seeded: IIO output current"
+    }
+  ]
+}

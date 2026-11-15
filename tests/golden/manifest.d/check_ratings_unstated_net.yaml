@@ -75,3 +75,16 @@ mutants:
     expect:
       kind: rating_over_voltage
       ref: C7
+  driven-clamp-over-power:
+    board: blinky2
+    script: mutations/driven_clamp_over_power.py
+    check: check_ratings
+    defect: >-
+      SIDECAR fault + board edits: D1 moves onto /LED (no stated voltage) as
+      a 1.8 V zener, cathode on /LED and anode on GND; U1 is extracted with
+      its supplies on +3V3/GND and pin 15 a push-pull output rated 25 mA, so
+      its 3.3 V rail drives past the zener and can force 25 mA through it,
+      45 mW against D1's 10 mW Pd (#1006)
+    expect:
+      kind: rating_over_current
+      ref: D1
