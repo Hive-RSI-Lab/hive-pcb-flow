@@ -30,7 +30,11 @@ Conventions (S1-proven against kicad-cli 10.0.3 ERC, see LEARNINGS [python]):
   sheets via hierarchical labels (child) + sheet pins (root).
 - Component references must be unique across ALL sheets (each sheet is its
   own file; nothing re-annotates). Give each sheet its own numbering range,
-  including pwr_base for the invisible #PWR/#FLG refs.
+  including pwr_base for the invisible #PWR/#FLG refs. The one exception is
+  an INSTANCED sheet (Project.add_sheet(child, instances=[...]), #563): one
+  child file placed N times, its refs renumbered per block by ref_base
+  (R1 -> R101/R201/..., #PWR9001 -> #PWR19001/...); keep the child's own
+  numbers under ref_step (default 100) or it raises.
 - Wiring/pinout facts come from datasheet-extract JSON, never from memory
   (SPEC section 5 grounding rule); `expect` pin-name checks are insurance.
 - save() finishes with an automatic schem_refdes field-placement pass
@@ -650,25 +654,85 @@ class Project:
     """Root sheet + hierarchical children; stitches sheet pins and saves
     the whole set (root's name names the project)."""
 
-    def __init__(self, root: Sheet):
+    def __init__(self, root: Sheet, ref_step: int = 100):
         self.root = root
         self.children: list[Sheet] = []
+        self.ref_step = ref_step
+        # child name -> [(sheet block name, ref_base)] for a repeated sheet
+        self.instances: dict[str, list[tuple[str, int]]] = {}
+        self._block_names: set[str] = set()
 
-    def add_sheet(self, child: Sheet, at, size, nets=(),
-                  label_stub: float = 3 * STUB) -> None:
+    def add_sheet(self, child: Sheet, at=None, size=None, nets=(),
+                  label_stub: float = 3 * STUB, *,
+                  instances: list[dict] | None = None,
+                  name: str | None = None,
+                  ref_base: int | None = None) -> None:
         """Instantiate `child` on the root at `at` (top-left) with `size`
         (w, h). `nets`: the child hier pins to expose, as names (root label
         = same name) or (child_net, root_label) pairs. Sheet pins stack on
         the LEFT edge top-down; each is wired outward to a root local label.
-        Rails via power symbols are global and need no entry here."""
-        assert_on_grid(at[:2], f"sheet {child.name}")
+        Rails via power symbols are global and need no entry here.
+
+        One channel, N copies (#563): `instances=[{"at": (x, y), "nets":
+        [...], "name": "ch2", "ref_base": 200}, ...]` puts N sheet blocks on
+        the root that all point at the ONE file `<child.name>.kicad_sch`.
+        Each block's parts are annotated from its `ref_base` (default 100*k
+        for the k-th, 1-based): R1 -> R101 / R201 / R301, #PWR9001 ->
+        #PWR19001 ...; a child ref numbered >= ref_step (default 100) raises.
+        `size` (and `nets`, `label_stub`) are the defaults for every entry;
+        `name` defaults to `<child.name><k>`. The same thing one block at a
+        time: add_sheet(child, at, size, nets, name=..., ref_base=...)."""
+        if instances is not None:
+            if at is not None or name is not None or ref_base is not None:
+                raise ValueError(f"sheet {child.name}: give at/name/ref_base "
+                                 "per entry in instances=, not beside it")
+            if not instances:
+                raise ValueError(f"sheet {child.name}: instances= is empty")
+            for k, inst in enumerate(instances, 1):
+                unknown = set(inst) - {"at", "size", "nets", "name",
+                                       "ref_base", "label_stub"}
+                if unknown:
+                    raise ValueError(f"sheet {child.name} instance {k}: "
+                                     f"unknown keys {sorted(unknown)}")
+                self.add_sheet(child, inst["at"], inst.get("size", size),
+                               inst.get("nets", nets),
+                               inst.get("label_stub", label_stub),
+                               name=inst.get("name", f"{child.name}{k}"),
+                               ref_base=inst.get("ref_base", 100 * k))
+            return
+        if at is None or size is None:
+            raise ValueError(f"sheet {child.name}: add_sheet needs at and size")
+        block = name or child.name
+        insts = self.instances.get(child.name)
+        if ref_base is None:
+            if insts or child in self.children:
+                raise ValueError(
+                    f"sheet {child.name}: placed twice without ref_base; a "
+                    "repeated sheet needs per-instance numbering")
+        else:
+            if child in self.children and not insts:
+                raise ValueError(
+                    f"sheet {child.name}: already placed without ref_base")
+            if not isinstance(ref_base, int) or ref_base <= 0 \
+                    or ref_base % self.ref_step:
+                raise ValueError(
+                    f"sheet {child.name}: ref_base {ref_base!r} must be a "
+                    f"positive multiple of ref_step {self.ref_step}")
+            taken = [(n, b) for ins in self.instances.values()
+                     for n, b in ins]
+            if any(b == ref_base for _n, b in taken):
+                raise ValueError(f"sheet {block}: ref_base {ref_base} "
+                                 "already used")
+        if block in self._block_names:
+            raise ValueError(f"sheet block name {block!r} used twice")
+        assert_on_grid(at[:2], f"sheet {block}")
         entries = [(n, n) if isinstance(n, str) else tuple(n) for n in nets]
         missing = [n for n, _ in entries if n not in child.hier_pins]
         if missing:
             raise ValueError(
                 f"sheet {child.name}: no hier_pin for {missing} "
                 f"(has {sorted(child.hier_pins)})")
-        suid = self.root.sch.add_sheet(child.name, f"{child.name}.kicad_sch",
+        suid = self.root.sch.add_sheet(block, f"{child.name}.kicad_sch",
                                        position=tuple(at[:2]),
                                        size=tuple(size[:2]))
         h = size[1]
@@ -679,7 +743,7 @@ class Project:
                                  f"height {h}")
             self.root.sch.add_sheet_pin(suid, net, child.hier_pins[net],
                                         "left", along)
-        sh = self.root.sch.sheets.get_sheet_by_name(child.name)
+        sh = self.root.sch.sheets.get_sheet_by_name(block)
         for (net, root_label), sp in zip(entries, sh["pins"]):
             px, py = sp["position"]["x"], sp["position"]["y"]
             assert_on_grid((px, py), f"sheet pin {net}")
@@ -687,14 +751,41 @@ class Project:
             seg = self.root._add_wire((px, py), end)
             self.root._assert_label_clear(end, root_label, own=seg)
             self.root.sch.add_label(root_label, position=end, rotation=180.0)
+        self._block_names.add(block)
+        if ref_base is not None:
+            self.instances.setdefault(child.name, []).append((block, ref_base))
         if child not in self.children:
             self.children.append(child)
+
+    def instance_ref(self, ref: str, ref_base: int) -> str:
+        """`ref` of a repeated sheet's part as annotated in the instance
+        numbered from `ref_base`: R1 -> R101 (ref_base 100). Power and flag
+        refs (#PWR9001) move up a whole range: #PWR19001."""
+        m = _REF_NUM.match(ref)
+        if not m:
+            raise ValueError(f"reference {ref!r}: no trailing number to "
+                             "annotate per instance")
+        pre, num = m.group(1), int(m.group(2))
+        if pre.startswith("#"):
+            return f"{pre}{ref_base * 100 + num}"
+        if num >= self.ref_step:
+            raise ValueError(
+                f"reference {ref}: number {num} >= ref_step {self.ref_step} "
+                "would run into the next instance's range")
+        return f"{pre}{ref_base + num}"
 
     @property
     def decoupling(self) -> list[dict]:
         out = list(self.root.decoupling)
         for c in self.children:
-            out.extend(c.decoupling)
+            insts = self.instances.get(c.name)
+            if not insts:
+                out.extend(c.decoupling)
+                continue
+            for _block, base in insts:
+                for a in c.decoupling:
+                    out.append({**a, "cap": self.instance_ref(a["cap"], base),
+                                "ic": self.instance_ref(a["ic"], base)})
         return out
 
     def save(self, out_dir: Path | str,
@@ -720,7 +811,122 @@ class Project:
                          encoding="utf-8")
         if readable:
             self.root.layout_report = _readable(path)
+        # Last, after the redraw (which renumbers power symbols): each
+        # repeated child's symbols get one (path) per sheet block.
+        if self.instances:
+            _write_instances(path, out_dir, self.instances,
+                             self.instance_ref)
         return path
+
+
+_REF_NUM = re.compile(r"^(#?[A-Za-z_]+)(\d+)$")
+
+
+def _form_end(text: str, i: int) -> int:
+    """Index just past the s-expression opening at text[i] == "("."""
+    depth = 0
+    for m in _SEXP_TOK.finditer(text, i):
+        tok = m.group(0)
+        if tok == "(":
+            depth += 1
+        elif tok == ")":
+            depth -= 1
+            if depth == 0:
+                return m.end()
+    raise ValueError("unbalanced s-expression")
+
+
+def _write_instances(root_path: Path, out_dir: Path,
+                     instances: dict[str, list[tuple[str, int]]],
+                     annotate) -> None:
+    """Rewrite every repeated child file's symbol (instances) as one
+    (path "/<root uuid>/<sheet block uuid>") per block, each with that
+    block's reference, and give the root's blocks the project name and
+    their own page numbers. KiCad annotates a reused sheet file this way;
+    without it every block would show the child's own refs and the
+    netlist would carry each part N times under one ref."""
+    root_text = root_path.read_text(encoding="utf-8")
+    top = next(f for f in _sexp(root_text) if isinstance(f, list)
+               and f and f[0] == "kicad_sch")
+    root_uuid = next(_unq(f[1]) for f in top
+                     if isinstance(f, list) and f and f[0] == "uuid")
+    project = root_path.stem
+    blocks: dict[str, str] = {}
+    for f in top:
+        if not (isinstance(f, list) and f and f[0] == "sheet"):
+            continue
+        uid = next(_unq(g[1]) for g in f
+                   if isinstance(g, list) and g and g[0] == "uuid")
+        for g in f:
+            if isinstance(g, list) and len(g) >= 3 and g[0] == "property" \
+                    and _unq(g[1]) == "Sheetname":
+                blocks[_unq(g[2])] = uid
+    seen: dict[str, str] = {}
+    for child, insts in instances.items():
+        missing = [b for b, _ in insts if b not in blocks]
+        if missing:
+            raise ValueError(f"{root_path.name}: no sheet block {missing}")
+        path = out_dir / f"{child}.kicad_sch"
+        text = path.read_text(encoding="utf-8")
+        out, pos = [], 0
+        for m in re.finditer(r"\(instances\b", text):
+            if m.start() < pos:
+                continue
+            end = _form_end(text, m.start())
+            body = text[m.start():end]
+            r = re.search(r'\(reference "([^"]*)"\)', body)
+            u = re.search(r"\(unit (\d+)\)", body)
+            if r is None:
+                raise ValueError(f"{path.name}: symbol instances without "
+                                 "a reference")
+            ind = text[text.rfind("\n", 0, m.start()) + 1:m.start()]
+            lines = ["(instances", f'{ind}\t(project "{project}"']
+            for block, base in insts:
+                ref = annotate(r.group(1), base)
+                if ref in seen:
+                    raise ValueError(f"{ref} annotated twice ({seen[ref]}, "
+                                     f"{block})")
+                seen[ref] = block
+                lines += [f'{ind}\t\t(path "/{root_uuid}/{blocks[block]}"',
+                          f'{ind}\t\t\t(reference "{ref}")',
+                          f'{ind}\t\t\t(unit {u.group(1) if u else 1})',
+                          f"{ind}\t\t)"]
+            lines += [f"{ind}\t)", f"{ind})"]
+            out.append(text[pos:m.start()])
+            out.append("\n".join(lines))
+            pos = end
+        out.append(text[pos:])
+        path.write_text("".join(out), encoding="utf-8")
+    # the root's own refs must not land in a repeated sheet's range
+    for m in re.finditer(r'\(reference "([^"]*)"\)', root_text):
+        if m.group(1) in seen:
+            raise ValueError(f"root reference {m.group(1)} collides with "
+                             f"sheet block {seen[m.group(1)]}")
+    # each repeated block: this project, a page of its own
+    want = {b for ins in instances.values() for b, _ in ins}
+    used = {1}
+    for m in re.finditer(r"\(sheet\b(?!_)", root_text):
+        body = root_text[m.start():_form_end(root_text, m.start())]
+        nm = re.search(r'\(property "Sheetname" "([^"]*)"', body)
+        if nm and nm.group(1) not in want:
+            used |= {int(p) for p in re.findall(r'\(page "(\d+)"\)', body)}
+    nxt = max(used) + 1
+    out, pos = [], 0
+    for m in re.finditer(r"\(sheet\b(?!_)", root_text):
+        if m.start() < pos:
+            continue
+        end = _form_end(root_text, m.start())
+        body = root_text[m.start():end]
+        nm = re.search(r'\(property "Sheetname" "([^"]*)"', body)
+        if nm and nm.group(1) in want:
+            body = re.sub(r'\(project "[^"]*"', f'(project "{project}"', body)
+            body = re.sub(r'\(page "\d+"\)', f'(page "{nxt}")', body)
+            nxt += 1
+        out.append(root_text[pos:m.start()])
+        out.append(body)
+        pos = end
+    out.append(root_text[pos:])
+    root_path.write_text("".join(out), encoding="utf-8")
 
 
 def _readable(path: Path) -> dict:
