@@ -4,7 +4,10 @@
 # still names the package: TI's package designator (SN74HC595D = SOIC-16
 # narrow, ...PW = TSSOP), ST's pin-count and package letters (STM32F103C8T6 =
 # LQFP-48), Microchip's package code (-SN 3.90 mm SOIC, -SM 5.28 mm SOIC),
-# and the onsemi, Nexperia, Vishay and Infineon order numbers.
+# the onsemi, Nexperia, Vishay and Infineon order numbers, the SPI flash
+# package codes (Winbond W25Q..SN 150 mil SOIC, ..SS 208 mil, ..ZP WSON 6x5;
+# GigaDevice, Macronix, ISSI) and Diodes Inc's diode order codes (B140-13-F
+# SMA, B140B-13-F SMB).
 #
 #   match   regex matched in full on the upper-cased MPN, spaces removed;
 #           its named groups pick rows from `groups`
@@ -14,7 +17,11 @@
 #   combos  rows that hold only when several groups agree (`when`), and,
 #           with `part`, only for MPNs that regex matches
 #   row     package, family (a lib/pkgname family), mount, pin_count, pitch,
-#           width (mm) or width_in (inches), body [a, b] mm, cite
+#           width (mm), width_in (inches) or width_mil (mils), body
+#           [a, b] mm, cite
+#   open    true on a generic JEDEC name (1N4007, 1N5819): its row is the
+#           registered package (DO-41), one candidate among the bodies other
+#           makers sell it in, never the part's package on its own
 #
 # Every row is read from the maker's own datasheet page (cite: doc, sha256,
 # page, the quote, the fields it fixes) and `scripts/part_rows.py --verify
@@ -2085,4 +2092,1292 @@ makers:
       sha256: 35dd1de78f490a5a4ef476395d08723d865f552f5b64b906421e17b1397589ad
       page: 1
       quote: BSC010N04LS PG‑TDSON‑8 010N04LS
+      fields: []
+- name: Winbond W25Q80DV
+  verified: true
+  match: ^W25Q80DV(?P<code>[A-Z]{2})[IJ][A-Z]?(?:TR|T)?$
+  groups:
+    code:
+      SN:
+        package: SOIC-8 150mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 150
+        cite:
+        - doc: Winbond W25Q80DV w25q80dv.pdf
+          sha256: bd7e65b1335bb21df77a21e8956925aa474dec1e01c3f85c5cf8186eaa548e31
+          page: 69
+          quote: SN = SOIC-8 150-mil
+          fields:
+          - pin_count
+          - width_mil
+      SS:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: Winbond W25Q80DV w25q80dv.pdf
+          sha256: bd7e65b1335bb21df77a21e8956925aa474dec1e01c3f85c5cf8186eaa548e31
+          page: 69
+          quote: SS = SOIC -8 208-mil
+          fields:
+          - pin_count
+          - width_mil
+      ZP:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Winbond W25Q80DV w25q80dv.pdf
+          sha256: bd7e65b1335bb21df77a21e8956925aa474dec1e01c3f85c5cf8186eaa548e31
+          page: 69
+          quote: ZP = WSON-8 6x5-mm
+          fields:
+          - pin_count
+          - body
+      UX:
+        package: USON-8 2x3mm
+        family: NOLEAD
+        mount: smd
+        body:
+        - 2
+        - 3
+        cite:
+        - doc: Winbond W25Q80DV w25q80dv.pdf
+          sha256: bd7e65b1335bb21df77a21e8956925aa474dec1e01c3f85c5cf8186eaa548e31
+          page: 69
+          quote: UX = 8 -pad USON 2x3-mm
+          fields:
+          - body
+      DA:
+        package: PDIP-8
+        family: DIP
+        mount: tht
+        pin_count: 8
+        cite:
+        - doc: Winbond W25Q80DV w25q80dv.pdf
+          sha256: bd7e65b1335bb21df77a21e8956925aa474dec1e01c3f85c5cf8186eaa548e31
+          page: 69
+          quote: DA = PDIP-8 300-mil
+          fields:
+          - pin_count
+- name: Winbond W25Q16JV
+  verified: true
+  match: ^W25Q16JV(?P<code>[A-Z]{2})[IJ][A-Z]?(?:TR|T)?$
+  groups:
+    code:
+      SN:
+        package: SOIC-8 150mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 150
+        cite:
+        - doc: Winbond W25Q16JV w25q16jv.pdf
+          sha256: ebb56256faa029672fcc69dc4cc2f4e091f1a74f2719c2fb624df62bbc68fc79
+          page: 72
+          quote: SN = 8-pin SOIC 150-mil
+          fields:
+          - pin_count
+          - width_mil
+      SS:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: Winbond W25Q16JV w25q16jv.pdf
+          sha256: ebb56256faa029672fcc69dc4cc2f4e091f1a74f2719c2fb624df62bbc68fc79
+          page: 72
+          quote: SS = 8-pin SOIC 208-mil
+          fields:
+          - pin_count
+          - width_mil
+      UX:
+        package: USON-8 2x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 2
+        - 3
+        cite:
+        - doc: Winbond W25Q16JV w25q16jv.pdf
+          sha256: ebb56256faa029672fcc69dc4cc2f4e091f1a74f2719c2fb624df62bbc68fc79
+          page: 72
+          quote: UX = 8 -pad USON 2x3-mm
+          fields:
+          - pin_count
+          - body
+      UU:
+        package: USON-8 4x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 3
+        cite:
+        - doc: Winbond W25Q16JV w25q16jv.pdf
+          sha256: ebb56256faa029672fcc69dc4cc2f4e091f1a74f2719c2fb624df62bbc68fc79
+          page: 72
+          quote: UU = 8-Pad USON 4x3mm
+          fields:
+          - pin_count
+          - body
+      ZP:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Winbond W25Q16JV w25q16jv.pdf
+          sha256: ebb56256faa029672fcc69dc4cc2f4e091f1a74f2719c2fb624df62bbc68fc79
+          page: 72
+          quote: ZP = WSON8 6x5 -mm
+          fields:
+          - pin_count
+          - body
+- name: Winbond W25Q32JV
+  verified: true
+  match: ^W25Q32JV(?P<code>[A-Z]{2})[IJ][A-Z]?(?:TR|T)?$
+  groups:
+    code:
+      SN:
+        package: SOIC-8 150mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 150
+        cite:
+        - doc: Winbond W25Q32JV w25q32jv.pdf
+          sha256: a835e8ae41ea71e950dac9a54e6c31237fc782f703a2584fc282ccd8e7fa6c5d
+          page: 77
+          quote: SN = 8-pin SOIC 150-mil
+          fields:
+          - pin_count
+          - width_mil
+      SS:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: Winbond W25Q32JV w25q32jv.pdf
+          sha256: a835e8ae41ea71e950dac9a54e6c31237fc782f703a2584fc282ccd8e7fa6c5d
+          page: 77
+          quote: SS = 8-pin SOIC 208-mil
+          fields:
+          - pin_count
+          - width_mil
+      SF:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: Winbond W25Q32JV w25q32jv.pdf
+          sha256: a835e8ae41ea71e950dac9a54e6c31237fc782f703a2584fc282ccd8e7fa6c5d
+          page: 77
+          quote: SF = 16-pin SOIC 300-mil
+          fields:
+          - pin_count
+          - width_mil
+      DA:
+        package: PDIP-8
+        family: DIP
+        mount: tht
+        pin_count: 8
+        cite:
+        - doc: Winbond W25Q32JV w25q32jv.pdf
+          sha256: a835e8ae41ea71e950dac9a54e6c31237fc782f703a2584fc282ccd8e7fa6c5d
+          page: 77
+          quote: DA = 8-pin PDIP 300-mil
+          fields:
+          - pin_count
+      ZP:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Winbond W25Q32JV w25q32jv.pdf
+          sha256: a835e8ae41ea71e950dac9a54e6c31237fc782f703a2584fc282ccd8e7fa6c5d
+          page: 77
+          quote: ZP = WSON8 6x5-mm
+          fields:
+          - pin_count
+          - body
+      ZE:
+        package: WSON-8 8x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 8
+        - 6
+        cite:
+        - doc: Winbond W25Q32JV w25q32jv.pdf
+          sha256: a835e8ae41ea71e950dac9a54e6c31237fc782f703a2584fc282ccd8e7fa6c5d
+          page: 77
+          quote: ZE = 8-pad WSON 8x6mm
+          fields:
+          - pin_count
+          - body
+- name: Winbond W25Q64JV
+  verified: true
+  match: ^W25Q64JV(?P<code>[A-Z]{2})[IJ][A-Z]?(?:TR|T)?$
+  groups:
+    code:
+      SS:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: Winbond W25Q64JV w25q64jv.pdf
+          sha256: 9f2073343ef0e6a913ba956ee44c6c56501c8285808d58bed0d3af4e3df8eec7
+          page: 75
+          quote: SS = 8-pin SOIC 208-mil
+          fields:
+          - pin_count
+          - width_mil
+      SF:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: Winbond W25Q64JV w25q64jv.pdf
+          sha256: 9f2073343ef0e6a913ba956ee44c6c56501c8285808d58bed0d3af4e3df8eec7
+          page: 75
+          quote: SF = 16-pin SOIC 300-mil
+          fields:
+          - pin_count
+          - width_mil
+      ZP:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Winbond W25Q64JV w25q64jv.pdf
+          sha256: 9f2073343ef0e6a913ba956ee44c6c56501c8285808d58bed0d3af4e3df8eec7
+          page: 75
+          quote: ZP = WSON8 6x5-mm
+          fields:
+          - pin_count
+          - body
+      ZE:
+        package: WSON-8 8x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 8
+        - 6
+        cite:
+        - doc: Winbond W25Q64JV w25q64jv.pdf
+          sha256: 9f2073343ef0e6a913ba956ee44c6c56501c8285808d58bed0d3af4e3df8eec7
+          page: 75
+          quote: ZE = WSON8 8x6-mm
+          fields:
+          - pin_count
+          - body
+- name: Winbond W25Q128JV
+  verified: true
+  match: ^W25Q128JV(?P<code>[A-Z])[IJ][A-Z]?(?:TR|T)?$
+  groups:
+    code:
+      S:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: Winbond W25Q128JV w25q128jv.pdf
+          sha256: 867d8910a15dec02d84642074affe6cd66cd969582ae71117d7cc24b0f51899d
+          page: 75
+          quote: S = 8-pin SOIC 208-mil
+          fields:
+          - pin_count
+          - width_mil
+      F:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: Winbond W25Q128JV w25q128jv.pdf
+          sha256: 867d8910a15dec02d84642074affe6cd66cd969582ae71117d7cc24b0f51899d
+          page: 75
+          quote: F = 16-pin SOIC 300-mil
+          fields:
+          - pin_count
+          - width_mil
+      P:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Winbond W25Q128JV w25q128jv.pdf
+          sha256: 867d8910a15dec02d84642074affe6cd66cd969582ae71117d7cc24b0f51899d
+          page: 75
+          quote: P = WSON8 6x5-mm
+          fields:
+          - pin_count
+          - body
+      E:
+        package: WSON-8 8x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 8
+        - 6
+        cite:
+        - doc: Winbond W25Q128JV w25q128jv.pdf
+          sha256: 867d8910a15dec02d84642074affe6cd66cd969582ae71117d7cc24b0f51899d
+          page: 75
+          quote: E = WSON8 8x6-mm
+          fields:
+          - pin_count
+          - body
+- name: GigaDevice GD25Q16C
+  verified: true
+  match: ^GD25Q16C(?P<code>[A-Z])I[GS][YR]?$
+  groups:
+    code:
+      S:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: GigaDevice GD25Q16C gd25q16c.pdf
+          sha256: e5567661d1ca628d074526654e0ab7b1545b96b6b4d1f18a5863579d1af44f56
+          page: 48
+          quote: S:SOP8 208mil
+          fields:
+          - pin_count
+          - width_mil
+      T:
+        package: SOIC-8 150mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 150
+        cite:
+        - doc: GigaDevice GD25Q16C gd25q16c.pdf
+          sha256: e5567661d1ca628d074526654e0ab7b1545b96b6b4d1f18a5863579d1af44f56
+          page: 48
+          quote: T:SOP8 150mil
+          fields:
+          - pin_count
+          - width_mil
+      P:
+        package: PDIP-8
+        family: DIP
+        mount: tht
+        pin_count: 8
+        cite:
+        - doc: GigaDevice GD25Q16C gd25q16c.pdf
+          sha256: e5567661d1ca628d074526654e0ab7b1545b96b6b4d1f18a5863579d1af44f56
+          page: 48
+          quote: 'P: DIP8 300mil'
+          fields:
+          - pin_count
+      W:
+        package: WSON-8 5x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 5
+        - 6
+        cite:
+        - doc: GigaDevice GD25Q16C gd25q16c.pdf
+          sha256: e5567661d1ca628d074526654e0ab7b1545b96b6b4d1f18a5863579d1af44f56
+          page: 48
+          quote: 'W: WSON8 (5*6mm)'
+          fields:
+          - pin_count
+          - body
+      N:
+        package: USON-8 4x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 3
+        cite:
+        - doc: GigaDevice GD25Q16C gd25q16c.pdf
+          sha256: e5567661d1ca628d074526654e0ab7b1545b96b6b4d1f18a5863579d1af44f56
+          page: 48
+          quote: 'N: USON8 (4*3mm)'
+          fields:
+          - pin_count
+          - body
+      J:
+        package: USON-8 4x4mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 4
+        cite:
+        - doc: GigaDevice GD25Q16C gd25q16c.pdf
+          sha256: e5567661d1ca628d074526654e0ab7b1545b96b6b4d1f18a5863579d1af44f56
+          page: 48
+          quote: 'J: USON8 (4*4mm)'
+          fields:
+          - pin_count
+          - body
+      E:
+        package: USON-8 2x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 2
+        - 3
+        cite:
+        - doc: GigaDevice GD25Q16C gd25q16c.pdf
+          sha256: e5567661d1ca628d074526654e0ab7b1545b96b6b4d1f18a5863579d1af44f56
+          page: 48
+          quote: 'E: USON8 (2*3mm'
+          fields:
+          - pin_count
+          - body
+- name: GigaDevice GD25Q32C
+  verified: true
+  match: ^GD25Q32C(?P<code>[A-Z])[IM][GS][YR]?$
+  groups:
+    code:
+      S:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: GigaDevice GD25Q32C gd25q32c.pdf
+          sha256: 0d8e1516de769ea88f3561ecbbf67884e93a68722f62093a8955cd97ecb66a0d
+          page: 52
+          quote: S:SOP8 208mil
+          fields:
+          - pin_count
+          - width_mil
+      T:
+        package: SOIC-8 150mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 150
+        cite:
+        - doc: GigaDevice GD25Q32C gd25q32c.pdf
+          sha256: 0d8e1516de769ea88f3561ecbbf67884e93a68722f62093a8955cd97ecb66a0d
+          page: 52
+          quote: 'T: SOP8 150mil'
+          fields:
+          - pin_count
+          - width_mil
+      P:
+        package: PDIP-8
+        family: DIP
+        mount: tht
+        pin_count: 8
+        cite:
+        - doc: GigaDevice GD25Q32C gd25q32c.pdf
+          sha256: 0d8e1516de769ea88f3561ecbbf67884e93a68722f62093a8955cd97ecb66a0d
+          page: 52
+          quote: 'P: DIP8 300mil'
+          fields:
+          - pin_count
+      W:
+        package: WSON-8 5x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 5
+        - 6
+        cite:
+        - doc: GigaDevice GD25Q32C gd25q32c.pdf
+          sha256: 0d8e1516de769ea88f3561ecbbf67884e93a68722f62093a8955cd97ecb66a0d
+          page: 52
+          quote: 'W: WSON8 (5*6mm)'
+          fields:
+          - pin_count
+          - body
+      N:
+        package: USON-8 4x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 3
+        cite:
+        - doc: GigaDevice GD25Q32C gd25q32c.pdf
+          sha256: 0d8e1516de769ea88f3561ecbbf67884e93a68722f62093a8955cd97ecb66a0d
+          page: 52
+          quote: 'N: USON8 (4*3mm)'
+          fields:
+          - pin_count
+          - body
+      H:
+        package: USON-8 3x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 3
+        - 3
+        cite:
+        - doc: GigaDevice GD25Q32C gd25q32c.pdf
+          sha256: 0d8e1516de769ea88f3561ecbbf67884e93a68722f62093a8955cd97ecb66a0d
+          page: 52
+          quote: 'H: USON8 (3*3mm)'
+          fields:
+          - pin_count
+          - body
+- name: GigaDevice GD25Q64C
+  verified: true
+  match: ^GD25Q64C(?P<code>[A-Z])I[GS][YR]?$
+  groups:
+    code:
+      S:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: GigaDevice GD25Q64C gd25q64c.pdf
+          sha256: 6320af7c99df3c65b93ce644fb8e9848c828e37b98922f3eaf0753da3ded21f7
+          page: 54
+          quote: GD25Q64CSIG 64Mbit SOP8 208mil
+          fields:
+          - pin_count
+          - width_mil
+      F:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: GigaDevice GD25Q64C gd25q64c.pdf
+          sha256: 6320af7c99df3c65b93ce644fb8e9848c828e37b98922f3eaf0753da3ded21f7
+          page: 54
+          quote: GD25Q64CFIG 64Mbit SOP16 300mil
+          fields:
+          - pin_count
+          - width_mil
+      P:
+        package: PDIP-8
+        family: DIP
+        mount: tht
+        pin_count: 8
+        cite:
+        - doc: GigaDevice GD25Q64C gd25q64c.pdf
+          sha256: 6320af7c99df3c65b93ce644fb8e9848c828e37b98922f3eaf0753da3ded21f7
+          page: 54
+          quote: GD25Q64CPIG 64Mbit DIP8 300mil
+          fields:
+          - pin_count
+      W:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: GigaDevice GD25Q64C gd25q64c.pdf
+          sha256: 6320af7c99df3c65b93ce644fb8e9848c828e37b98922f3eaf0753da3ded21f7
+          page: 54
+          quote: GD25Q64CWIG 64Mbit WSON8 (6*5mm)
+          fields:
+          - pin_count
+          - body
+      Q:
+        package: USON-8 4x4mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 4
+        cite:
+        - doc: GigaDevice GD25Q64C gd25q64c.pdf
+          sha256: 6320af7c99df3c65b93ce644fb8e9848c828e37b98922f3eaf0753da3ded21f7
+          page: 54
+          quote: GD25Q64CQIG 64Mbit USON8(4*4mm
+          fields:
+          - pin_count
+          - body
+- name: Macronix MX25L3233F
+  verified: true
+  match: ^MX25L3233F(?P<code>M[12]?|Z[BN2]|XC|BB)I-08[GQ]$
+  groups:
+    code:
+      M1:
+        package: SOIC-8 150mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 150
+        cite:
+        - doc: Macronix MX25L3233F mx25l3233f.pdf
+          sha256: 2d20cd46d0fd8a9b312d7d9e6a459b2cbb110796478a6b8db2efa6d1056891cc
+          page: 76
+          quote: MX25L3233FM1I-08G 133 -40°C to 85°C 8-SOP (150mil)
+          fields:
+          - pin_count
+          - width_mil
+      M2:
+        package: SOIC-8 200mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 200
+        cite:
+        - doc: Macronix MX25L3233F mx25l3233f.pdf
+          sha256: 2d20cd46d0fd8a9b312d7d9e6a459b2cbb110796478a6b8db2efa6d1056891cc
+          page: 76
+          quote: MX25L3233FM2I-08G 133 -40°C to 85°C 8-SOP (200mil)
+          fields:
+          - pin_count
+          - width_mil
+      M:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: Macronix MX25L3233F mx25l3233f.pdf
+          sha256: 2d20cd46d0fd8a9b312d7d9e6a459b2cbb110796478a6b8db2efa6d1056891cc
+          page: 76
+          quote: MX25L3233FMI-08G 133 -40°C to 85°C 16-SOP (300mil)
+          fields:
+          - pin_count
+          - width_mil
+      ZB:
+        package: USON-8 4x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 3
+        cite:
+        - doc: Macronix MX25L3233F mx25l3233f.pdf
+          sha256: 2d20cd46d0fd8a9b312d7d9e6a459b2cbb110796478a6b8db2efa6d1056891cc
+          page: 76
+          quote: MX25L3233FZBI-08G 133 -40°C to 85°C 8-USON (4x3mm)
+          fields:
+          - pin_count
+          - body
+      ZN:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Macronix MX25L3233F mx25l3233f.pdf
+          sha256: 2d20cd46d0fd8a9b312d7d9e6a459b2cbb110796478a6b8db2efa6d1056891cc
+          page: 76
+          quote: MX25L3233FZNI-08G 133 -40°C to 85°C 8-WSON (6x5mm)
+          fields:
+          - pin_count
+          - body
+- name: Macronix MX25L6433F
+  verified: true
+  match: ^MX25L6433F(?P<code>M[12]?|Z[BN2]|XC|BB)I-08[GQ]$
+  groups:
+    code:
+      M2:
+        package: SOIC-8 200mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 200
+        cite:
+        - doc: Macronix MX25L6433F mx25l6433f.pdf
+          sha256: edb75bc0e7ba9c247fca2f1d2297dda0af18a33557d33453c7157be70009ab87
+          page: 75
+          quote: MX25L6433FM2I-08G 133 -40°C to 85°C 8-SOP (200mil)
+          fields:
+          - pin_count
+          - width_mil
+      M:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: Macronix MX25L6433F mx25l6433f.pdf
+          sha256: edb75bc0e7ba9c247fca2f1d2297dda0af18a33557d33453c7157be70009ab87
+          page: 75
+          quote: MX25L6433FMI-08G 133 -40°C to 85°C 16-SOP (300mil)
+          fields:
+          - pin_count
+          - width_mil
+      Z2:
+        package: WSON-8 8x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 8
+        - 6
+        cite:
+        - doc: Macronix MX25L6433F mx25l6433f.pdf
+          sha256: edb75bc0e7ba9c247fca2f1d2297dda0af18a33557d33453c7157be70009ab87
+          page: 75
+          quote: MX25L6433FZ2I-08G 133 -40°C to 85°C 8-WSON (8x6mm)
+          fields:
+          - pin_count
+          - body
+      ZN:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Macronix MX25L6433F mx25l6433f.pdf
+          sha256: edb75bc0e7ba9c247fca2f1d2297dda0af18a33557d33453c7157be70009ab87
+          page: 75
+          quote: MX25L6433FZNI-08G 133 -40°C to 85°C 8-WSON (6x5mm)
+          fields:
+          - pin_count
+          - body
+- name: Macronix MX25L12835F
+  verified: true
+  match: ^MX25L12835F(?P<code>M[12]?|Z[BN2]|XC|BB)I-10G$
+  groups:
+    code:
+      M2:
+        package: SOIC-8 200mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 200
+        cite:
+        - doc: Macronix MX25L12835F mx25l12835f.pdf
+          sha256: e38a408ae4b58d504d08e1cb57b1568cdad66626850afd123c04c941337c49ed
+          page: 94
+          quote: MX25L12835FM2I-10G 104 -40 °C to 85°C 8-SOP (200mil)
+          fields:
+          - pin_count
+          - width_mil
+      M:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: Macronix MX25L12835F mx25l12835f.pdf
+          sha256: e38a408ae4b58d504d08e1cb57b1568cdad66626850afd123c04c941337c49ed
+          page: 94
+          quote: MX25L12835FMI-10G 104 -40 °C to 85°C 16-SOP (300mil)
+          fields:
+          - pin_count
+          - width_mil
+      Z2:
+        package: WSON-8 8x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 8
+        - 6
+        cite:
+        - doc: Macronix MX25L12835F mx25l12835f.pdf
+          sha256: e38a408ae4b58d504d08e1cb57b1568cdad66626850afd123c04c941337c49ed
+          page: 94
+          quote: MX25L12835FZ2I-10G 104 -40 °C to 85°C 8-WSON (8x6mm)
+          fields:
+          - pin_count
+          - body
+      ZN:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: Macronix MX25L12835F mx25l12835f.pdf
+          sha256: e38a408ae4b58d504d08e1cb57b1568cdad66626850afd123c04c941337c49ed
+          page: 94
+          quote: MX25L12835FZNI-10G 104 -40 °C to 85°C 8-WSON (6x5mm)
+          fields:
+          - pin_count
+          - body
+- name: ISSI IS25LP032D/IS25WP032D
+  verified: true
+  match: ^IS25[LW]P032D-[JRQ](?P<code>[A-Z])L(?:E|A3)?(?:-TR)?$
+  groups:
+    code:
+      B:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: ISSI IS25LP032D/IS25WP032D is25lp032d.pdf
+          sha256: b077eca835e3460ccebeedd1e440db53aad7ac8c5f1f3653e01cae26ab447824
+          page: 117
+          quote: B = 8-pin SOIC 208mil
+          fields:
+          - pin_count
+          - width_mil
+      N:
+        package: SOIC-8 150mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 150
+        cite:
+        - doc: ISSI IS25LP032D/IS25WP032D is25lp032d.pdf
+          sha256: b077eca835e3460ccebeedd1e440db53aad7ac8c5f1f3653e01cae26ab447824
+          page: 117
+          quote: N = 8-pin SOIC 150mil
+          fields:
+          - pin_count
+          - width_mil
+      M:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: ISSI IS25LP032D/IS25WP032D is25lp032d.pdf
+          sha256: b077eca835e3460ccebeedd1e440db53aad7ac8c5f1f3653e01cae26ab447824
+          page: 117
+          quote: M = 16-pin SOIC 300mil
+          fields:
+          - pin_count
+          - width_mil
+      T:
+        package: USON-8 4x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 3
+        cite:
+        - doc: ISSI IS25LP032D/IS25WP032D is25lp032d.pdf
+          sha256: b077eca835e3460ccebeedd1e440db53aad7ac8c5f1f3653e01cae26ab447824
+          page: 117
+          quote: T = 8-contact USON 4x3mm
+          fields:
+          - pin_count
+          - body
+      K:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: ISSI IS25LP032D/IS25WP032D is25lp032d.pdf
+          sha256: b077eca835e3460ccebeedd1e440db53aad7ac8c5f1f3653e01cae26ab447824
+          page: 117
+          quote: K = 8-contact WSON 6x5mm
+          fields:
+          - pin_count
+          - body
+      L:
+        package: WSON-8 8x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 8
+        - 6
+        cite:
+        - doc: ISSI IS25LP032D/IS25WP032D is25lp032d.pdf
+          sha256: b077eca835e3460ccebeedd1e440db53aad7ac8c5f1f3653e01cae26ab447824
+          page: 117
+          quote: L = 8-contact WSON 8x6mm
+          fields:
+          - pin_count
+          - body
+- name: ISSI IS25LP064A
+  verified: true
+  match: ^IS25LP064A-[JRQ](?P<code>[A-Z])L(?:E|A3)?(?:-TR)?$
+  groups:
+    code:
+      B:
+        package: SOIC-8 208mil
+        family: SO
+        mount: smd
+        pin_count: 8
+        pitch: 1.27
+        width_mil: 208
+        cite:
+        - doc: ISSI IS25LP064A is25lp064a.pdf
+          sha256: 731048e71fb8b296a25534a6c9147edba6405e16e84d48b7f29dfb141733dc7d
+          page: 99
+          quote: B = 8-pin SOIC 208mil
+          fields:
+          - pin_count
+          - width_mil
+      M:
+        package: SOIC-16 300mil
+        family: SO
+        mount: smd
+        pin_count: 16
+        pitch: 1.27
+        width_mil: 300
+        cite:
+        - doc: ISSI IS25LP064A is25lp064a.pdf
+          sha256: 731048e71fb8b296a25534a6c9147edba6405e16e84d48b7f29dfb141733dc7d
+          page: 99
+          quote: M = 16-pin SOIC 300mil
+          fields:
+          - pin_count
+          - width_mil
+      T:
+        package: USON-8 4x3mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 4
+        - 3
+        cite:
+        - doc: ISSI IS25LP064A is25lp064a.pdf
+          sha256: 731048e71fb8b296a25534a6c9147edba6405e16e84d48b7f29dfb141733dc7d
+          page: 99
+          quote: T = 8-contact USON 4x3mm
+          fields:
+          - pin_count
+          - body
+      K:
+        package: WSON-8 6x5mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 6
+        - 5
+        cite:
+        - doc: ISSI IS25LP064A is25lp064a.pdf
+          sha256: 731048e71fb8b296a25534a6c9147edba6405e16e84d48b7f29dfb141733dc7d
+          page: 99
+          quote: K = 8-contact WSON 6x5mm
+          fields:
+          - pin_count
+          - body
+      L:
+        package: WSON-8 8x6mm
+        family: NOLEAD
+        mount: smd
+        pin_count: 8
+        body:
+        - 8
+        - 6
+        cite:
+        - doc: ISSI IS25LP064A is25lp064a.pdf
+          sha256: 731048e71fb8b296a25534a6c9147edba6405e16e84d48b7f29dfb141733dc7d
+          page: 99
+          quote: L = 8-contact WSON 8x6mm
+          fields:
+          - pin_count
+          - body
+- name: Diodes Inc 1N4001-1N4007
+  verified: true
+  match: ^1N400(?P<dev>[1-7])-[BT]$
+  groups:
+    dev:
+      '1':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+          sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+          page: 2
+          quote: 1N4001-T DO-41 Plastic
+          fields: []
+      '2':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+          sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+          page: 2
+          quote: 1N4002-T DO-41 Plastic
+          fields: []
+      '3':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+          sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+          page: 2
+          quote: 1N4003-T DO-41 Plastic
+          fields: []
+      '4':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+          sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+          page: 2
+          quote: 1N4004-T DO-41 Plastic
+          fields: []
+      '5':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+          sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+          page: 2
+          quote: 1N4005-T DO-41 Plastic
+          fields: []
+      '6':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+          sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+          page: 2
+          quote: 1N4006-T DO-41 Plastic
+          fields: []
+      '7':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+          sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+          page: 2
+          quote: 1N4007-T DO-41 Plastic
+          fields: []
+- name: Diodes Inc 1N5817-1N5819
+  verified: true
+  match: ^1N581(?P<dev>[789])-T$
+  groups:
+    dev:
+      '7':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N5817-1N5819 ds23001.pdf
+          sha256: 973674801eaa0c18f5cca6da502ae8c9aa7dc2e05d051505e201d9629926e1c3
+          page: 1
+          quote: 1N5817-T DO-41 (Plastic)
+          fields: []
+      '8':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N5817-1N5819 ds23001.pdf
+          sha256: 973674801eaa0c18f5cca6da502ae8c9aa7dc2e05d051505e201d9629926e1c3
+          page: 1
+          quote: 1N5818-T DO-41 (Plastic)
+          fields: []
+      '9':
+        package: DO-41
+        family: DO-41
+        mount: tht
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc 1N5817-1N5819 ds23001.pdf
+          sha256: 973674801eaa0c18f5cca6da502ae8c9aa7dc2e05d051505e201d9629926e1c3
+          page: 1
+          quote: 1N5819-T DO-41 (Plastic)
+          fields: []
+- name: Diodes Inc B120/B-B160/B
+  verified: true
+  match: ^B1[2-6]0(?P<case>B?)-13-F$
+  groups:
+    case:
+      ? ''
+      : package: SMA
+        family: SMA
+        mount: smd
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc B120/B-B160/B ds13002.pdf
+          sha256: 644473009bcd66a754a1b20a1d677a58d50d9c83fdb60a8322d194ded65ee89f
+          page: 1
+          quote: B1XX-13-F SMA
+          fields: []
+      B:
+        package: SMB
+        family: SMB
+        mount: smd
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc B120/B-B160/B ds13002.pdf
+          sha256: 644473009bcd66a754a1b20a1d677a58d50d9c83fdb60a8322d194ded65ee89f
+          page: 1
+          quote: B1XXB-13-F SMB
+          fields: []
+- name: Diodes Inc S1A/B-S1M/B
+  verified: true
+  match: ^S1[ABDGJKM](?P<case>B?)-13-F$
+  groups:
+    case:
+      ? ''
+      : package: SMA
+        family: SMA
+        mount: smd
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc S1A/B-S1M/B ds16003.pdf
+          sha256: b02c2d1278212e6ce4486762b4fef19cd2e933f0452272557adf1bfbefe97d59
+          page: 1
+          quote: S1x-13-F Commercial SMA
+          fields: []
+      B:
+        package: SMB
+        family: SMB
+        mount: smd
+        pin_count: 2
+        cite:
+        - doc: Diodes Inc S1A/B-S1M/B ds16003.pdf
+          sha256: b02c2d1278212e6ce4486762b4fef19cd2e933f0452272557adf1bfbefe97d59
+          page: 1
+          quote: S1xB-13-F Commercial SMB
+          fields: []
+- name: Diodes Inc 1N5819HW
+  verified: true
+  match: ^1N5819HW-7-F$
+  row:
+    package: SOD-123
+    family: SOD-123
+    mount: smd
+    pin_count: 2
+    cite:
+    - doc: Diodes Inc 1N5819HW ds30217.pdf
+      sha256: b1b691357999f780fe33797554d591f25b33b780ee04ce911045e28f5d306365
+      page: 1
+      quote: 1N5819HW-7-F SOD123
+      fields: []
+- name: JEDEC 1N4001-1N4007 (as registered, DO-41; Diodes Inc datasheet)
+  verified: true
+  open: true
+  match: ^1N400[1-7]$
+  row:
+    package: DO-41
+    family: DO-41
+    mount: tht
+    pin_count: 2
+    cite:
+    - doc: Diodes Inc 1N4001-1N4007 ds28002.pdf
+      sha256: 9054d25e645ebdea0146193ca23609e117e3dde60e6423600c6515b2c0a9b391
+      page: 1
+      quote: 'Case: DO-41'
+      fields: []
+- name: JEDEC 1N5817-1N5819 (as registered, DO-41; Diodes Inc datasheet)
+  verified: true
+  open: true
+  match: ^1N581[789]$
+  row:
+    package: DO-41
+    family: DO-41
+    mount: tht
+    pin_count: 2
+    cite:
+    - doc: Diodes Inc 1N5817-1N5819 ds23001.pdf
+      sha256: 973674801eaa0c18f5cca6da502ae8c9aa7dc2e05d051505e201d9629926e1c3
+      page: 1
+      quote: 'Package: DO-41'
       fields: []

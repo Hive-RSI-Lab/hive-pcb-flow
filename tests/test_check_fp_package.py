@@ -135,11 +135,12 @@ def test_value_named_diode_judged_only_when_jlc_agrees(tmp_path):
     viols, _ = run(pcb, live=True, fetch=agree)
     assert [(v["kind"], v["severity"]) for v in viols] == [
         ("footprint_package_mismatch", "warning")]
+    # sold in DO-41 and SOD-123: the footprint fits exactly one, so it is
+    # judged and passes
     split = jlc([row("C2480", "1N5819", "DO-41"),
                  row("C9999", "1N5819", "SOD-123")])
     viols, facts = run(pcb, live=True, fetch=split)
-    assert viols == [] and facts["judged"] == 0
-    assert any("differ" in k for k in facts["not_judged"])
+    assert viols == [] and facts["judged"] == 1
 
 
 def test_quiet_cases(tmp_path):
@@ -194,7 +195,7 @@ def test_offline_names_what_it_could_not_judge(tmp_path):
     viols, facts = run(pcb)
     assert viols == [] and facts["judged"] == 0
     assert set(facts["not_judged"]) == {
-        "an MPN is looked up only with --live",
+        "a generic name sold in other packages too (--live asks JLC which)",
         "no record of the code (--live asks JLC)"}
 
 
@@ -428,3 +429,107 @@ def test_case_limit_table_is_cited():
             and cite["sha256"]
     for case, rows in data["res"].items():
         assert all(w > 0 and c["page"] for w, c in rows), case
+
+
+# ------------------------------- flash and diode makers, generic names (#1206)
+
+SO8N = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+SO8W = "Package_SO:SOIC-8_5.23x5.23mm_P1.27mm"
+
+
+@pytest.mark.parametrize("mpn,fpid,pads,hit", [
+    # Winbond SN is the 150 mil SOIC-8, SS the 208 mil one
+    ("W25Q80DVSNIG", SO8W, 8, "150 mil"),
+    ("W25Q80DVSNIG", SO8N, 8, None),
+    ("W25Q32JVSSIQ", SO8N, 8, "208 mil"),
+    ("W25Q32JVSSIQ", SO8W, 8, None),
+    ("W25Q128JVSIQ", SO8N, 8, "208 mil"),
+    # GigaDevice T is SOP8 150 mil, S 208 mil
+    ("GD25Q16CTIG", SO8W, 8, "150 mil"),
+    ("GD25Q16CTIG", SO8N, 8, None),
+    # Macronix M2I is the 208 mil SOP
+    ("MX25L3233FM2I-08G", SO8N, 8, "208 mil"),
+    ("MX25L3233FM2I-08G", SO8W, 8, None),
+    # ISSI B is the 208 mil SOIC
+    ("IS25LP064A-JBLE", SO8N, 8, "208 mil"),
+    ("IS25LP064A-JBLE", SO8W, 8, None),
+    # Diodes Inc: B140B is the SMB body, B140 the SMA
+    ("B140B-13-F", "Diode_SMD:D_SMA", 2, "SMB"),
+    ("B140B-13-F", "Diode_SMD:D_SMB", 2, None),
+    # 1N5819HW is the SOD-123 body, not the SOD-323 one
+    ("1N5819HW-7-F", "Diode_SMD:D_SOD-323", 2, "SOD-123"),
+    ("1N5819HW-7-F", "Diode_SMD:D_SOD-123", 2, None),
+])
+def test_flash_and_diode_ordering_codes(tmp_path, mpn, fpid, pads, hit):
+    pcb = board(tmp_path, footprint("U1", fpid, "x", {"MPN": mpn},
+                                    pads=pads))
+    viols, facts = run(pcb)
+    assert facts["judged"] == 1, facts
+    if hit is None:
+        assert viols == []
+    else:
+        assert [v["kind"] for v in viols] == ["footprint_package_mismatch"]
+        assert hit in viols[0]["msg"], viols[0]["msg"]
+
+
+def test_width_mil_rows_decode_to_mm():
+    assert mpn_decode.decode("W25Q80DVSNIG")["desc"]["width"] == \
+        pytest.approx(3.81)
+    assert mpn_decode.decode("W25Q80DVSSIG")["desc"]["width"] == \
+        pytest.approx(5.28)
+    # a package letter the table has no row for is not decoded
+    assert mpn_decode.decode("W25Q80DVSVIG") is None
+
+
+def test_generic_jedec_name_offline(tmp_path):
+    # 1N4007 is registered DO-41 but sold in SMA and SOD-123FL too: offline
+    # a DO-41 footprint fits the one package known; anything else is not
+    # judged, as another maker's body may fit
+    pcb = board(tmp_path, footprint(
+        "D1", "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal", "1N4007",
+        kind=THT, attr="through_hole"))
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 1
+    pcb = board(tmp_path, footprint("D1", "Diode_SMD:D_SOD-123", "1N4007"))
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 0
+    assert mpn_decode.decode("1N4007")["open"] is True
+
+
+def test_generic_name_live_candidates(tmp_path):
+    rows = [row("C2480", "1N5819", "DO-41"), row("C8598", "1N5819", "SMA")]
+    # flexgrid D1: SOD-123F fits neither DO-41 nor SMA
+    pcb = board(tmp_path, footprint("D1", "Diode_SMD:D_SOD-123F", "1N5819"))
+    viols, facts = run(pcb, live=True, fetch=jlc(rows))
+    assert [(v["kind"], v["severity"]) for v in viols] == [
+        ("footprint_package_mismatch", "warning")]
+    assert "DO-41" in viols[0]["msg"] and "SMA" in viols[0]["msg"]
+    # its twin: SMA fits exactly one
+    pcb = board(tmp_path, footprint("D1", "Diode_SMD:D_SMA", "1N5819"))
+    viols, facts = run(pcb, live=True, fetch=jlc(rows))
+    assert viols == [] and facts["judged"] == 1
+    # a footprint that fits two of the packages sold is not judged
+    rows2 = [row("C1", "1N5819", "SOD-123"), row("C2", "1N5819", "SOD-123F")]
+    pcb = board(tmp_path, footprint("D1", "Diode_SMD:D_SOD-123F", "1N5819"))
+    viols, facts = run(pcb, live=True, fetch=jlc(rows2))
+    assert viols == [] and facts["judged"] == 0
+    assert any("more than one" in k for k in facts["not_judged"])
+
+
+def test_value_cut_short_of_its_ordering_code_is_not_judged(tmp_path):
+    # #1211: TPS2552D is TPS2552DBVR with its ending dropped, not TI's D
+    # SOIC; the full code on the same footprint is judged and passes
+    sot = "Package_TO_SOT_SMD:SOT-23-6"
+    pcb = board(tmp_path, footprint("U1", sot, "TPS2552D", pads=6))
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 0
+    assert "the Value may be an ordering code cut short" in facts["not_judged"]
+    assert mpn_decode.decode("TPS2552D")["cut"] is True
+    pcb = board(tmp_path, footprint("U1", sot, "TPS2552DBVR", pads=6))
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 1
+    # an MPN field naming the D part is still judged: TI sells SN74HC595D
+    pcb = board(tmp_path, footprint("U1", SOIC16, "x",
+                                    {"MPN": "SN74HC595D"}, pads=16))
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 1
