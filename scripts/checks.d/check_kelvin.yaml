@@ -3,7 +3,9 @@
 # neck or on a plane reads the copper as shunt (hc-power R104 46 % high, R132 23 %;
 # iso-io R220 60 %), and nets being connected is all any other check asks. With
 # constraints power[].sense_pads it also walks each declared sense line to its pad
-# (#936: the voice board's divider tops read their pours, 6-16 mm off).
+# (#936: the voice board's divider tops read their pours, 6-16 mm off). Sense
+# lines routed by hand are found from the netlist (a shunt's pads into an amp's or
+# ADC's input pair) and judged as a pair and, on a power net, for a width mark (#1077).
 name: check_kelvin
 needs: []
 optional:
