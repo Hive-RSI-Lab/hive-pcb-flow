@@ -34,6 +34,12 @@ without trusting anything nobody read:
                                    several (the part's own and an EEPROM
                                    it masters), and address straps are
                                    left to the reader
+                      pin_abs_max  one row per input-voltage line on an
+                                   "absolute maximum" page: vmin from its
+                                   first negative number ("VSS - 0.3" is
+                                   -0.3), vmax_vdd from "VDD + n" (VCC,
+                                   IOVDD, VDDIOx too), else vmax from the
+                                   next number ("VI -0.5 7 V")
                     A draft is a lead list for a reader, not a table: the
                     reader fixes the fields, the match regex and the
                     source, then runs --verify, and only then sets
@@ -76,7 +82,8 @@ _NUM = re.compile(r"\d+(?:\.\d+)?")
 _SCALES = (1.0, 1e3, 1e6, 1e9, 1e-3, 1e-6)
 # The number fields of each table's rows that a cite can stand behind.
 _NUMERIC = ("ipd", "ipu", "leak", "rpu", "vil", "vih", "vil_frac", "vih_frac",
-            "voh_drop", "vin_max", "max_v")
+            "voh_drop", "vin_max", "max_v", "vmin", "vmax", "vmax_vdd",
+            "vf_min")
 
 
 def norm(text: str) -> str:
@@ -124,6 +131,15 @@ _ADDR = re.compile(
     r"(?:7-bit\s+)?(?:slave|target|device|I\s*2\s*C|SMBus)\s+address"
     r"(?:\s+(?:is|of|=|:))?\s*:?\s*"
     r"(?:([01]{7})\s*b\b|0x([0-9A-Fa-f]{2})\b|([0-9A-Fa-f]{2})h\b)", re.I)
+_ABS_PAGE = re.compile(r"absolute\s+maximum", re.I)
+_ABS_LINE = re.compile(r"input\s+voltage|voltage\s+on\s+any|\bV\s*PIN\b|"
+                       r"pin\s+voltage|^\s*V\s*I(?:N|/O)?\b", re.I)
+_ABS_SKIP = re.compile(r"output|current|differential|common.mode|"
+                       r"operating|recommended", re.I)
+_ABS_END = re.compile(r"recommended\s+operating|electrical\s+characteristics|"
+                      r"thermal\s+information|ESD\s+ratings", re.I)
+_ABS_VDD = re.compile(r"(?:IO)?V\s*(?:DD|CC)\w*\s*(?:\(\d\))?\s*\+\s*"
+                      r"(\d+(?:\.\d+)?)")
 
 
 def _window(lines: list[str], i: int, n: int) -> str:
@@ -244,12 +260,69 @@ def _addresses(pages, doc, digest, part) -> list[dict]:
     return out
 
 
+def _abs_max(line: str):
+    """{vmin, vmax|vmax_vdd} from one abs-max line, else None."""
+    t = unicodedata.normalize("NFKC", line).translate(_DASHES)
+    t = t.replace("\u26b6", "-")  # Espressif's minus glyph
+    t = re.sub(r"\(\d\)|(?<=[a-z\)])\d\b", " ", t)  # footnote markers
+    t = re.sub(r"(\d)\s*\.\s*(\d)", r"\1.\2", t)
+    out: dict = {}
+    m = re.search(r"-\s*(\d+(?:\.\d+)?)", t)
+    if m:
+        out["vmin"] = -float(m.group(1))
+    v = _ABS_VDD.search(t)
+    if v:
+        out["vmax_vdd"] = float(v.group(1))
+    else:
+        rest = t[m.end():] if m else t
+        n = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)\s*V\b", rest) or \
+            re.search(r"(?<![\w.])(\d+(?:\.\d+)?)(?![\w.])", rest)
+        if n:
+            out["vmax"] = float(n.group(1))
+    return out if ("vmax" in out or "vmax_vdd" in out) else None
+
+
+def _abs_rows(pages, part, doc, digest) -> list[dict]:
+    rows, seen = [], set()
+    for pno, text in enumerate(pages, 1):
+        if not _ABS_PAGE.search(text):
+            continue
+        lines = text.splitlines()
+        on = False
+        for line in lines:
+            # only lines inside the abs-max table: from its heading to the
+            # next table (recommended operating conditions, ...)
+            if _ABS_PAGE.search(line):
+                on = True
+            elif _ABS_END.search(line):
+                on = False
+            if not on:
+                continue
+            if (not _ABS_LINE.search(line) or _ABS_SKIP.search(line)
+                    or re.match(r"\s*\d+(\.\d+)+\s", line)  # TOC/heading
+                    or re.search(r"[<>≤≥]", line)):  # a condition, not a row
+                continue
+            vals = _abs_max(line)
+            q = line.strip()
+            if not vals or q in seen:
+                continue
+            seen.add(q)
+            rows.append({"mpn": part, "pins": "TODO", "supply": "TODO",
+                         **vals,
+                         "cite": [_cite(doc, digest, pno, _table_name(lines),
+                                        q, sorted(vals))]})
+            if len(rows) >= 8:
+                return rows
+    return rows
+
+
 def draft(part: str, pdf: Path) -> dict:
     pages = pdf_pages(pdf)
     doc, digest = pdf.name, sha256(pdf)
     out: dict = {"part": part, "doc": doc, "sha256": digest,
                  "pages": len(pages), "pin_states": [], "pin_leakage": [],
-                 "io_levels": [], "mcu_pins": [], "i2c_addresses": []}
+                 "io_levels": [], "mcu_pins": [], "i2c_addresses": [],
+                 "pin_abs_max": []}
     pins_seen = set()
     for pno, text in enumerate(pages, 1):
         for m in _FLOAT.finditer(text.replace("\n", " ")):
@@ -292,8 +365,9 @@ def draft(part: str, pdf: Path) -> dict:
         mcu["cite"] = tcites + ocites
         out["mcu_pins"].append(mcu)
     out["i2c_addresses"] = _addresses(pages, doc, digest, part)
+    out["pin_abs_max"] = _abs_rows(pages, part, doc, digest)
     for key in ("pin_states", "pin_leakage", "io_levels", "mcu_pins",
-                "i2c_addresses"):
+                "i2c_addresses", "pin_abs_max"):
         for r in out[key]:
             r["verified"] = False
     return out
@@ -432,7 +506,7 @@ def main(argv: list[str] | None = None) -> int:
             res = draft(a.part, a.pdf[0])
             code = 0 if any(res[k] for k in (
                 "pin_states", "pin_leakage", "io_levels", "mcu_pins",
-                "i2c_addresses")) else 1
+                "i2c_addresses", "pin_abs_max")) else 1
         else:
             ap.error("give PART --pdf FILE, or --verify YAML... --pdf FILE...")
     except (OSError, ValueError) as e:

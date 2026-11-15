@@ -147,6 +147,35 @@ def test_draft_rows_pass_their_own_verify(tmp_path, pdf):
     assert not any(c["verified"] for c in res["cites"])
 
 
+ABS_PAGES = [
+    ["Table 50. Absolute maximum ratings",
+     "VPIN Pin voltage with respect to GND -0.5 VDD+0.5 V",
+     "Input voltage on any other pin VSS - 0.3 4.0 V",
+     "VO Output voltage range -0.5 VCC + 0.5 V",
+     "VI Input voltage (1) 7 V",
+     "5.5V < Vpin <= 6.1V"],
+]
+
+
+def test_abs_max_rows_are_drafted_and_verify(tmp_path):
+    pdf = _pdf(tmp_path / "abs.pdf", ABS_PAGES)
+    d = part_rows.draft("TESTMCU", pdf)
+    got = [{k: r.get(k) for k in ("vmin", "vmax", "vmax_vdd")}
+           for r in d["pin_abs_max"]]
+    assert got == [{"vmin": -0.5, "vmax": None, "vmax_vdd": 0.5},
+                   {"vmin": -0.3, "vmax": 4.0, "vmax_vdd": None},
+                   {"vmin": None, "vmax": 7.0, "vmax_vdd": None}]
+    assert all(r["verified"] is False for r in d["pin_abs_max"])
+    y = tmp_path / "a.yaml"
+    y.write_text(yaml.safe_dump({"rows": d["pin_abs_max"]}))
+    res = part_rows.verify([y], [pdf])
+    assert res["counts"] == {"ok": 3, "fail": 0, "unchecked": 0}
+    # a wrong margin is caught
+    d["pin_abs_max"][0]["vmax_vdd"] = 0.3
+    y.write_text(yaml.safe_dump({"rows": d["pin_abs_max"]}))
+    assert part_rows.verify([y], [pdf])["counts"]["fail"] == 1
+
+
 # ------------------------------------------------- the audit's not_judged
 
 def _alert():

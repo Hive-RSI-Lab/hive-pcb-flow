@@ -11,6 +11,13 @@ catch the most. Read with [errata-corpus.md](errata-corpus.md).
 
 The count before #1134, on the same main, was 38 (6, 8 and 24).
 
+**Since then (#1139, rule 28, class 3).** smart-lcc, fc980c (holdout round
+1) and zxdiag-v11 (round 2) moved to training, since rule 28 was seeded from
+their defects; smart-lcc-2, fc980c-2, zxdiag-v11-2 and zxdiag-v11-3 are
+caught. That leaves 31 misses: training 9 (5 missed, 4 not_static;
+smart-lcc-1, fc980c-1 and zxdiag-v11-1 came with their boards), holdout
+round 1: 3, holdout round 2: 19.
+
 ## How classes are cut and ranked
 
 A class is **one check**: misses that a single rule with one data source
@@ -39,7 +46,6 @@ parts on an ordinary board.
 |---|---|---|---|---|---|---|
 | 1 | Footprint vs the part's package | 4 | 3 | 12 | footprint + BOM (LCSC/MPN, value) | each part's package, pad count and pitch from its LCSC record (EasyEDA footprint) or MPN ordering code; case-size limits for passives (largest C or R a case holds) |
 | 2 | Connector mechanics vs the mate | 6 | 2 | 12 | footprint, 3D | lead sizes per connector footprint, the mate's gender and row pitch (a stated mating side), mounting heights of raised THT parts |
-| 3 | Off-board inputs: protection, pulls, levels | 6 | 2 | 12 | netlist | pin abs-max (negative too), input leakage, which nets leave the board, which rail is reliable |
 | 4 | Board-level DFM | 3 | 3 | 9 | footprint, pcb | none beyond the board: vias inside SMD pads, vias under a part's body, mounting holes |
 | 6 | Pin function on the wrong net | 3 | 3 | 9 | netlist | pin roles (a pin named GND on a supply net), a protector's cell-side pins, MCU debug pins (mcu_pins.yaml) |
 | 7 | Datasheet application circuit | 3 | 2 | 6 | netlist | per-part required externals and reference networks from the typical-application figure; pins that must be connected |
@@ -48,6 +54,7 @@ parts on an ordinary board.
 | 10 | Silk pin labels (two-column legends) | 1 | 2 | 2 | footprint + silk | none; extends #1028 |
 | 11 | Load against a source's limit | 1 | 1 | 1 | netlist + a stated load | the off-board load's capacitance |
 | 5 | Symbol pin map vs the part (landed, #1134) | 0 | 3 | 0 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts |
+| 3 | Off-board inputs (landed, #1139) | 0 | 2 | 0 | netlist | reference/pin_abs_max.yaml (abs-max, negative too, cited; part_rows drafts it): netlist_audit rules 23 and 28; identidem-1 by check_pinouts pulsed_load_no_bulk (#1090) |
 | - | Not static | 4 | - | - | not static | firmware, radio power, MCU timer and interrupt pin choice |
 
 ## Members
@@ -76,13 +83,20 @@ parts on an ordinary board.
    - Row spacing against the mate: zxdiag-v10-1.
    - Raised-part height: minuet-7, in training.
 
-3. **Off-board inputs.**
-   - smart-lcc-2: no clamp on the UART port.
-   - fc980c-2: an open-collector input with no pull-up.
-   - pdlc-3: a floating EN, in training.
-   - zxdiag-v11-2: a 1N4148 clamp lets -0.7 V reach an ADC rated -0.5 V.
-   - zxdiag-v11-3: a divider referenced to an off-board rail.
-   - identidem-1: no decoupling at a connector feeding a pulsed load.
+3. **Off-board inputs.** Rule 28 (offboard_input_*) judges every IC pin
+   on a connector net, or one resistor from one, against its row in
+   reference/pin_abs_max.yaml (abs-max, negative included, drafted cited
+   by part_rows.py), the level a resistor solve gives with each off-board
+   rail present or absent, and the clamps that hold it. Caught, all by
+   training rules (the boards moved to training):
+   - smart-lcc-2: no clamp on the UART port (offboard_input_unprotected).
+   - fc980c-2: an open-collector input with no pull-up (offboard_input_floating).
+   - pdlc-3: a floating EN (rule 23, offboard_input_weak_pull).
+   - zxdiag-v11-2: a 1N4148 clamp lets -0.7 V reach an ADC rated -0.5 V (offboard_input_clamp).
+   - zxdiag-v11-3: a divider referenced to an off-board rail (offboard_input_rail_absent).
+   - identidem-1: no decoupling at a connector feeding a pulsed load
+     (check_pinouts pulsed_load_no_bulk, #1090; a power check, not an
+     input one).
 
 4. **Board-level DFM.**
    - flexgrid-v4-2: 29 vias in SMD pads.

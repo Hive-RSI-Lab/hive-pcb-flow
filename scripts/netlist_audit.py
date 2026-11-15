@@ -172,6 +172,26 @@ schematic-level structural problems BEFORE board work starts:
    pin of another part on it): the hardware block can't drive the bus
    unless firmware bit-bangs it (pico-if1 v1.3's OLED). An unverified row's
    finding is not judged (#1100).
+ - offboard_input_clamp / offboard_input_rail_absent / offboard_input_over
+   (error), offboard_input_unprotected / offboard_input_floating (warning):
+   every IC pin on a connector net, or one 2-pin resistor from one or from
+   an off-board rail (a rail on a connector no on-board power pin is on),
+   judged against its row in reference/pin_abs_max.yaml (abs-max, negative
+   included, rows drafted and cited by part_rows.py). A resistor-only
+   solve gives the pin's level with every rail present and with each
+   off-board rail gone; a listed silicon clamp diode reaches rail -/+ its
+   vf_max. clamp: the diode that holds the pin lets it past its rating
+   (zxdiag-v11's 1N4148 to -1 V on an RP2040 ADC rated -0.5 V); rail_absent:
+   with the far system's rail gone the divider takes the pin past it;
+   over: past it with every rail up; unprotected: a cable (not a header or
+   board-to-board part) that also carries a rail above the pin's rating,
+   wired straight to a pin with 0.5 V or less of margin, no clamp and no
+   series resistor (smart-lcc's J1 with +12V); floating: a status-named
+   net (STATE, DET, INT...) read by an IC input with no pull, driver or
+   clamp, on a cable that brings a rail above the reader's supply and is
+   not a host-bus edge (fc980c's KEY_STATE). Fact offboard_inputs_judged
+   counts the (net, pin) pairs a verified row covered (class 3 of
+   docs/miss-taxonomy.md).
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -1746,6 +1766,367 @@ def _dc_level(net: str, nets: dict, comps: dict,
     return g[0][k] / g[0][0], sorted(opened), ""
 
 
+# ------------------------------------------------------ off-board inputs (24)
+
+PIN_ABS_MAX = HERE.parent / "reference" / "pin_abs_max.yaml"
+# a connector that leaves the board: J/P/CN/X/CON and a card edge (Z)
+_OB_CONN_RE = re.compile(r"^(J|P|CN|X|CON|Z)\d")
+# a board-to-board or programming header, not a cable to the outside world
+_OB_HEADER_FP_RE = re.compile(
+    r"(PinHeader|PinSocket|Pin_?Header|Socket_Strip|IDC|FFC|FPC|TestPoint|"
+    r"FH\d\d|ZIF|Tag-Connect|TC20\d0|Pogo|Castellated|Module|Arduino|RaspberryPi|"
+    r"Shield|Edge|M\.2|SODIMM|Card)", re.I)
+_OB_USB_RE = re.compile(r"(USB|\bD[+-]|\bDP\b|\bDM\b|\bCC\d?\b|VBUS|SHIELD)",
+                        re.I)
+# an off-board line that reports state: someone else drives it, maybe open
+# collector, and nothing on this board holds it
+_OB_STATUS_RE = re.compile(r"(STATE|STATUS|DET(ECT)?|INT|IRQ|ALERT|"
+                           r"FAULT|READY|RDY|BUSY|FLAG)")
+_OB_WEAK_MARGIN = 0.5
+_OB_SERIES_MIN = 100.0
+
+
+def load_pin_abs_max(path: Path = PIN_ABS_MAX) -> dict:
+    """reference/pin_abs_max.yaml as {receivers: [...], diodes: [...]}."""
+    import yaml  # noqa: PLC0415
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise checklib.CheckError(f"pin abs max {path}: {exc}") from exc
+    return {"receivers": doc.get("receivers") or [],
+            "diodes": doc.get("diodes") or []}
+
+
+def _abs_row(table: dict, comp: dict, m: dict) -> dict | None:
+    """The pin_abs_max.yaml receiver row covering net member M, or None."""
+    if _base_type(m.get("pintype")) in _POWER_TYPES:
+        return None
+    func = _norm_pin(m.get("pinfunction"))
+    for r in table.get("receivers") or []:
+        if not _spec_matches(r, comp):
+            continue
+        if r.get("pins") and not re.search(r["pins"], func, re.I):
+            continue
+        if r.get("pintypes") and not re.search(
+                r["pintypes"], m.get("pintype") or "", re.I):
+            continue
+        return r
+    return None
+
+
+def _ob_solve(net: str, nets: dict, comps: dict,
+              comp_pins: dict[str, dict[str, str]],
+              rails: dict[str, float],
+              absent: str | None = None) -> float | None:
+    """DC volts on `net` from 2-pin resistors alone, every other pin high-Z
+    and connectors open; the `absent` rail is open (a resistor to it leads
+    nowhere). None: no resistive
+    path to a known rail (the net floats) or the cluster is too large."""
+    unknown, edges, seen, stamped = [], [], {net}, set()
+    todo = [net]
+    while todo:
+        n = todo.pop()
+        unknown.append(n)
+        if len(unknown) > _DC_CLUSTER_MAX:
+            return None
+        for m in nets.get(n, []):
+            ref = m["ref"] or ""
+            pins = comp_pins.get(ref, {})
+            if _part_kind(ref) != "R" or len(pins) != 2 or ref in stamped:
+                continue
+            stamped.add(ref)
+            ohm = engcalc.parse_value(comps.get(ref, {}).get("value"))
+            far = next((x for p, x in pins.items() if p != m["pin"]), None)
+            if not ohm or not far or far == n or far == absent:
+                continue
+            if far in rails:
+                edges.append((n, far, float(ohm)))
+            elif far.startswith("unconnected-"):
+                continue
+            else:
+                edges.append((n, far, float(ohm)))
+                if far not in seen:
+                    seen.add(far)
+                    todo.append(far)
+    idx = {n: i for i, n in enumerate(unknown)}
+    k = len(unknown)
+    g = [[0.0] * (k + 1) for _ in range(k)]
+    for a, b, ohm in edges:
+        y = 1.0 / ohm
+        for x, o in ((a, b), (b, a)):
+            if x not in idx:
+                continue
+            g[idx[x]][idx[x]] += y
+            if o in idx:
+                g[idx[x]][idx[o]] -= y
+            else:
+                g[idx[x]][k] += y * rails[o]
+    for c in range(k):
+        piv = max(range(c, k), key=lambda r: abs(g[r][c]))
+        if abs(g[piv][c]) < 1e-15:
+            return None
+        g[c], g[piv] = g[piv], g[c]
+        for r in range(k):
+            if r != c and g[r][c]:
+                f = g[r][c] / g[c][c]
+                g[r] = [x - f * y for x, y in zip(g[r], g[c])]
+    return g[0][k] / g[0][0]
+
+
+def _ob_clamps(net: str, nets: dict, comps: dict,
+               comp_pins: dict[str, dict[str, str]],
+               rails: dict[str, float], diodes: list[dict]) -> list[dict]:
+    """The diodes and protectors on `net`: one dict per part with 'side'
+    ('low': it holds the net from going below its far rail, 'high': above),
+    'reach' (the volts the net can get to past that rail through a listed
+    silicon diode's vf_max, None for a part not listed: a Schottky, zener
+    or TVS, taken to hold within the pin's rating) and 'row'."""
+    out = []
+    for m in nets.get(net, []):
+        ref = m["ref"] or ""
+        val = str(comps.get(ref, {}).get("value") or "")
+        lib = (comps.get(ref, {}).get("libsource") or ("", ""))[1]
+        pins = comp_pins.get(ref, {})
+        if ref.startswith("U") and _CLAMP_VALUE_RE.search(val):
+            out.append({"ref": ref, "side": "both", "reach": None,
+                        "row": None})
+            continue
+        if not (ref.startswith(("D", "TVS", "ESD")) and not
+                ref.startswith(("DS", "DISP"))) or "LED" in (lib + val).upper():
+            continue
+        if len(pins) != 2:
+            out.append({"ref": ref, "side": "both", "reach": None,
+                        "row": None})
+            continue
+        far = next((x for p, x in pins.items() if p != m["pin"]), None)
+        fv = 0.0 if far and _is_ground_name(far) else rails.get(far)
+        func = _norm_pin(m.get("pinfunction"))
+        side = ("low" if func in ("K", "C", "CATHODE") else
+                "high" if func in ("A", "ANODE") else "both")
+        row = next((d for d in diodes if _spec_matches(d, comps[ref])), None)
+        reach = None
+        if row and fv is not None and side != "both":
+            vf = float(row["vf_max"])
+            reach = fv - vf if side == "low" else fv + vf
+        out.append({"ref": ref, "side": side, "reach": reach, "row": row,
+                    "far": far, "fv": fv})
+    return out
+
+
+def _offboard_inputs(nets: dict, comps: dict,
+                     comp_pins: dict[str, dict[str, str]],
+                     rails: dict[str, float], table: dict):
+    """Yield one dict per off-board input fault (rule 28, class 3 of
+    docs/miss-taxonomy.md); the last item is {'checked': n, 'pairs': [...]},
+    the (net, receiver pin) pairs judged against a pin_abs_max.yaml row.
+
+    An IC pin a receiver row covers is off-board when its net is on a
+    connector, or one 2-pin resistor away from a connector net or from an
+    off-board rail (a rail on a connector that no on-board part's power pin
+    is on: the far system's +5V). Kinds:
+      clamp  a listed silicon clamp diode is what holds the pin and its
+             vf_max lets the pin past its rating, at a level the resistors
+             reach with one off-board rail absent (or all present)
+      rail   with an off-board rail absent the resistors take the pin past
+             its rating and no clamp holds it within
+      over   with every rail present the resistors take it past its rating
+      bare   a cable connector (not a header or board-to-board part) that
+             also carries a rail above the pin's rating, wired straight to a
+             pin with 0.5 V or less of margin over its rail, with no clamp
+             of any kind and no series resistor of 100R+
+      float  a status-named connector net (STATE, DET, INT...) read by an
+             IC input with no pull, no driver and no clamp, on a cable that
+             also brings a rail above the reader's supply (not a host-bus
+             edge): the far end is open collector at its own level, or
+             unplugged, and the pin floats"""
+    from check_ratings import volts_from_name  # noqa: PLC0415
+    diodes = table.get("diodes") or []
+    rails = dict(rails)
+    # a negative rail named only on the connector's pin (Z101.A20 "-5V")
+    for net, members in nets.items():
+        if net in rails or net.startswith("unconnected-"):
+            continue
+        for m in members:
+            if _OB_CONN_RE.match(m["ref"] or ""):
+                pv = volts_from_name(_norm_pin(m.get("pinfunction")))
+                if pv is not None and pv < 0:
+                    rails[net] = pv
+                    break
+
+    def on_conn(net):
+        return [m for m in nets.get(net, [])
+                if _OB_CONN_RE.match(m["ref"] or "")]
+
+    offrails = set()
+    for net, v in rails.items():
+        if v == 0 or _is_ground_name(net) or not on_conn(net):
+            continue
+        if not any(_base_type(m.get("pintype")) in _POWER_TYPES
+                   and not _OB_CONN_RE.match(m["ref"] or "")
+                   for m in nets.get(net, [])):
+            offrails.add(net)
+
+    def series_rs(net):
+        for m in nets.get(net, []):
+            ref = m["ref"] or ""
+            pins = comp_pins.get(ref, {})
+            if _part_kind(ref) == "R" and len(pins) == 2:
+                far = next((x for p, x in pins.items() if p != m["pin"]),
+                           None)
+                ohm = engcalc.parse_value(comps.get(ref, {}).get("value"))
+                if far and ohm is not None:
+                    yield ref, far, float(ohm)
+
+    checked, pairs = 0, []
+    for net, members in sorted(nets.items()):
+        if (net.startswith("unconnected-") or _is_ground_name(net)
+                or _supply_net(net, members, rails)):
+            continue
+        direct = on_conn(net)
+        via = [(r, far, ohm) for r, far, ohm in series_rs(net)
+               if on_conn(far) or far in offrails]
+        status = None
+        # a host bus edge (Z) drives its own lines (the ZX ULA's /INT)
+        if (direct and _OB_STATUS_RE.search(net.upper())
+                and not any((c["ref"] or "").startswith("Z") for c in direct)
+                and not any(_OUTPUT_TOKEN_RE.match(t) for t in
+                            re.split(r"[^A-Z0-9]+", net.upper()) if t)):
+            status = net
+        if not direct and not via:
+            continue
+        clamps = _ob_clamps(net, nets, comps, comp_pins, rails, diodes)
+        for m in members:
+            ref = m["ref"] or ""
+            if not ref.startswith("U") or ref not in comps:
+                continue
+            row = _abs_row(table, comps[ref], m)
+            if not row:
+                continue
+            func = _norm_pin(m.get("pinfunction")) or m["pin"]
+            vdd = row.get("vdd")
+            if vdd is None and row.get("supply"):
+                sup = [rails[n] for p, n in comp_pins.get(ref, {}).items()
+                       if n in rails and re.search(
+                           row["supply"], _norm_pin(next(
+                               (x.get("pinfunction") for x in nets[n]
+                                if x["ref"] == ref and x["pin"] == p), "")),
+                           re.I)]
+                vdd = max(sup) if sup else None
+            vmax = (float(row["vmax"]) if row.get("vmax") is not None
+                    else float(vdd) + float(row["vmax_vdd"])
+                    if vdd is not None and row.get("vmax_vdd") is not None
+                    else None)
+            vmin = None if row.get("vmin") is None else float(row["vmin"])
+            if vmax is None and vmin is None:
+                continue
+            checked += 1
+            pairs.append((net, ref, m["pin"]))
+            base = {"net": net, "receiver": ref, "rpin": m["pin"],
+                    "rfunc": func, "row": row, "vmin": vmin, "vmax": vmax,
+                    "vdd": vdd, "connectors": [f"{c['ref']}.{c['pin']}"
+                                               for c in direct],
+                    "via": [(r, far) for r, far, _ in via]}
+
+            def beyond(level):
+                return ((vmax is not None and level > vmax + 1e-3)
+                        or (vmin is not None and level < vmin - 1e-3))
+
+            def held(level):
+                """(volts after the clamps, the clamp that set it)"""
+                lo = [c for c in clamps if c["side"] in ("low", "both")]
+                hi = [c for c in clamps if c["side"] in ("high", "both")]
+                if vmin is not None and level < vmin and lo:
+                    if any(c["reach"] is None for c in lo):
+                        return vmin, None
+                    c = max(lo, key=lambda c: c["reach"])
+                    return max(level, c["reach"]), c
+                if vmax is not None and level > vmax and hi:
+                    if any(c["reach"] is None for c in hi):
+                        return vmax, None
+                    c = min(hi, key=lambda c: c["reach"])
+                    return min(level, c["reach"]), c
+                return level, None
+
+            scen = [(None, _ob_solve(net, nets, comps, comp_pins, rails))]
+            for r in sorted(offrails):
+                scen.append((r, _ob_solve(net, nets, comps, comp_pins,
+                                          rails, absent=r)))
+            seen_kinds = set()
+            for gone, level in scen:
+                if level is None or not beyond(level):
+                    continue
+                after, clamp = held(level)
+                if not beyond(after):
+                    continue
+                kind = ("clamp" if clamp else "over" if gone is None
+                        else "rail")
+                if clamp and gone is not None and "rail" not in seen_kinds:
+                    seen_kinds.add("rail")
+                    yield dict(base, kind="rail", absent=gone, level=level,
+                               after=after, clamp=clamp)
+                if kind in seen_kinds:
+                    continue
+                seen_kinds.add(kind)
+                yield dict(base, kind=kind, absent=gone, level=level,
+                           after=after, clamp=clamp)
+            # bare: a cable connector straight onto a weak pin
+            margin = (float(row["vmax_vdd"]) if row.get("vmax_vdd")
+                      is not None else (vmax - float(vdd))
+                      if vmax is not None and vdd is not None else None)
+            # the far system's own rail on the same cable sets the level
+            # a fault on it can put on the pin (smart-lcc's +12V on J1)
+            cables = [c for c in direct if not _OB_HEADER_FP_RE.search(
+                str(comps.get(c["ref"], {}).get("footprint") or ""))
+                and not _OB_CONN_RE.match(c["ref"]).group(1) == "Z"
+                and vmax is not None
+                and any(rails.get(n, 0) > vmax for n in
+                        comp_pins.get(c["ref"], {}).values())]
+            if (cables and margin is not None and margin <= _OB_WEAK_MARGIN
+                    and not clamps and not _OB_USB_RE.search(net)
+                    and not _OB_USB_RE.search(func)):
+                hot = sorted({n for c in cables for n in comp_pins.get(
+                    c["ref"], {}).values() if rails.get(n, 0) > vmax})
+                yield dict(base, kind="bare", margin=margin, hot=hot,
+                           cables=[f"{c['ref']}.{c['pin']}" for c in cables])
+        # float: a status line nothing on this board holds
+        if status:
+            pulls = [1 for r, far, _ in series_rs(net)
+                     if _is_ground_name(far) or far in rails]
+            drivers = [x for x in members
+                       if not _OB_CONN_RE.match(x["ref"] or "")
+                       and (_base_type(x.get("pintype")) in _OB_DRIVE_TYPES
+                            or (x["ref"] or "").startswith("Q"))]
+            readers = [x for x in members if (x["ref"] or "").startswith("U")
+                       and _base_type(x.get("pintype")) in (
+                           "input", "bidirectional")]
+            # an internal pull at the reader's own level serves a line
+            # whose far end idles there; the cable that brings a higher
+            # rail (fc980c's +5V keyboard) needs a pull at that level, and
+            # a host-bus edge (an Apple II or ZX slot) holds its own lines
+            def supply(ref):
+                vs = [rails[n] for n, ms in nets.items() if n in rails
+                      for y in ms if y["ref"] == ref
+                      and _base_type(y.get("pintype")) in _POWER_TYPES]
+                return max(vs) if vs else None
+            rvdd = [supply(x["ref"]) for x in readers]
+            rvdd = max((v for v in rvdd if v is not None), default=None)
+            hot = sorted({n for c in direct
+                          for n in comp_pins.get(c["ref"], {}).values()
+                          if rvdd is not None and rails.get(n, 0) > rvdd + 0.5})
+            higher = bool(hot)
+            edge = any("EDGE" in str(comps.get(c["ref"], {}).get(
+                "footprint") or "").upper() for c in direct)
+            if (readers and higher and not edge and not pulls
+                    and not drivers and not clamps):
+                yield {"net": net, "kind": "float", "hot": hot, "rvdd": rvdd,
+                       "connectors": [f"{c['ref']}.{c['pin']}"
+                                      for c in direct],
+                       "readers": [f"{x['ref']}."
+                                   f"{_norm_pin(x.get('pinfunction')) or x['pin']}"
+                                   for x in readers], "row": None}
+    yield {"checked": checked, "pairs": pairs}
+
+
 # ------------------------------------------------------------ min stable gain
 
 OPAMP_MIN_GAIN_YAML = HERE.parent / "reference" / "opamp_min_gain.yaml"
@@ -2359,7 +2740,8 @@ def audit(parsed: dict, constraints: dict,
           pin_leakage: list[dict] | None = None,
           io_levels: dict | None = None,
           bus_load: dict | None = None,
-          stock_symbols: Path | str | None = None
+          stock_symbols: Path | str | None = None,
+          pin_abs_max: dict | None = None
           ) -> tuple[list[dict], dict]:
     """stock_symbols: KiCad's stock symbol dir for the pin-map rule;
     None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off."""
@@ -3224,6 +3606,97 @@ def audit(parsed: dict, constraints: dict,
            f"[{' '.join(row['source'].split()).split(',')[0]}]",
            mcu=ref, block=block, part=row["mpn"])
 
+    # 28. every net that leaves the board, against the receiving pin's
+    # absolute maximum ratings both ways, its level and its clamps
+    # (reference/pin_abs_max.yaml; class 3 of docs/miss-taxonomy.md;
+    # errata corpus: zxdiag v1.1's 1N4148 clamps let -1 V reach the Pico
+    # ADC from a divider topped by the system under test's +5V, smart-lcc
+    # rev A ran its TX straight out a cable, fc980c rev1's KEY_STATE had
+    # no pull)
+    abs_table = load_pin_abs_max() if pin_abs_max is None else pin_abs_max
+    obi_ok, obi_judged = set(), 0
+    for h in _offboard_inputs(nets, comps, comp_pins, pl_rails,
+                              _verified_only(abs_table)):
+        if "checked" in h:
+            obi_judged = h["checked"]
+        elif h["kind"] != "float":
+            obi_ok.add((h["net"], h["receiver"], h["kind"]))
+    for hit in _offboard_inputs(nets, comps, comp_pins, pl_rails, abs_table):
+        if "checked" in hit:
+            continue
+        kind = hit["kind"]
+        if kind == "float":
+            v("warning", "offboard_input_floating", hit["net"],
+              sorted({c.split(".")[0] for c in hit["connectors"]}
+                     | {r.split(".")[0] for r in hit["readers"]}),
+              f"'{hit['net']}' comes in at {', '.join(hit['connectors'])} "
+              f"and goes to {', '.join(hit['readers'])} with no pull "
+              f"resistor, no driver and no clamp on this board, on a cable "
+              f"that also brings {', '.join(hit['hot'])} (the reader runs "
+              f"at {hit['rvdd']:g} V): a status line whose far end is open "
+              f"collector at its own level, or unplugged, leaves the input "
+              f"floating, and a pull inside the reader isn't at that level. "
+              f"Pull it to the level it idles at "
+              f"[TI SPRACK9 App. A Table 2: 4.7K to 10K on a line that may "
+              f"be disconnected]",
+              connectors=hit["connectors"])
+            continue
+        row = hit["row"]
+        rc = comps[hit["receiver"]]
+        pin = f"{hit['receiver']} ({rc.get('value')}) {hit['rfunc']}"
+        lim = (f"{hit['vmin']:g} V to {hit['vmax']:g} V" if hit["vmin"]
+               is not None and hit["vmax"] is not None
+               else f"at most {hit['vmax']:g} V" if hit["vmax"] is not None
+               else f"at least {hit['vmin']:g} V")
+        src = " ".join(row["source"].split())
+        where = (f"at {', '.join(hit['connectors'])}" if hit["connectors"]
+                 else "through " + ", ".join(f"{r} from {far}"
+                                             for r, far in hit["via"]))
+        refs = sorted({hit["receiver"]}
+                      | {c.split(".")[0] for c in hit["connectors"]}
+                      | {r for r, _ in hit["via"]})
+        judged = (hit["net"], hit["receiver"], kind) in obi_ok
+        if kind == "bare":
+            vt(judged, "warning", "offboard_input_unprotected", hit["net"],
+               refs,
+               f"'{hit['net']}' runs from the cable connector "
+               f"{', '.join(hit['cables'])} straight to {pin}, which takes "
+               f"only {hit['margin']:g} V past its rail ({lim}), with no "
+               f"series resistor and no clamp, on a cable that also carries "
+               f"{', '.join(hit['hot'])}: a miswire, a hot plug or "
+               f"ESD on the cable lands on the pin. Put a series resistor "
+               f"and a clamp (TVS, zener or Schottky) between the connector "
+               f"and the pin [{src}; Microchip AN2587 PCB rule 8: TVS on "
+               f"all external connector I/O pins]",
+               margin_v=hit["margin"], connectors=hit["cables"])
+            continue
+        why = ("with every rail present" if hit["absent"] is None
+               else f"with the off-board rail '{hit['absent']}' absent "
+                    f"(nothing on this board powers it)")
+        c = hit.get("clamp")
+        ctext = (f"; the clamp {c['ref']} ({comps[c['ref']].get('value')}, "
+                 f"{float(c['row']['vf_max']):g} V at "
+                 f"{c['row']['if_ma']:g} mA) to {c['far']} lets it reach "
+                 f"{hit['after']:.3g} V" if c else "")
+        kname = {"clamp": "offboard_input_clamp",
+                 "rail": "offboard_input_rail_absent",
+                 "over": "offboard_input_over"}[kind]
+        fix = {"clamp": "clamp with Schottky diodes (or a part whose "
+                        "drop is inside the margin), or add series "
+                        "resistance so the pin's own limit holds",
+               "rail": "reference the divider to a rail this board makes, "
+                       "or clamp the pin within its rating",
+               "over": "change the divider or clamp the pin"}[kind]
+        vt(judged, "error", kname, hit["net"],
+           refs + ([c["ref"]] if c and c["ref"] not in refs else []),
+           f"'{hit['net']}' leaves the board {where} into {pin}, rated "
+           f"{lim}: {why} the resistors take it to {hit['level']:.3g} V"
+           f"{ctext}. {fix[0].upper()}{fix[1:]} [{src}"
+           + (f"; {' '.join(c['row']['source'].split())}" if c else "")
+           + "]",
+           level_v=round(hit["level"], 3), held_v=round(hit["after"], 3),
+           vmin=hit["vmin"], vmax=hit["vmax"], absent_rail=hit["absent"])
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -3257,6 +3730,7 @@ def audit(parsed: dict, constraints: dict,
         "symbol_pinmaps_checked": pm_checked,
         "channel_parts_checked": ch_checked,
         "mcu_i2c_parts_checked": i2c_checked,
+        "offboard_inputs_judged": obi_judged,
     }
     if not_judged:
         facts["not_judged"] = not_judged
