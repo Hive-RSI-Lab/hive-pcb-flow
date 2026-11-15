@@ -715,6 +715,8 @@ def match_mpn(mpn: str, texts: list[str]) -> tuple[dict | None, str | None]:
     or its base family on pages 1-2; the whole MPN on a later page that lists
     parts; the series' ordering table decoding it (#755). A base family deeper
     in the document never counts: other parts' datasheets cite families.
+    Failing all three, an MPN ending in bracketed packaging codes ("(LF)(SN)")
+    is tried again without them; the match then says what was cut.
     Returns (match, why not)."""
     form = mpn_in_text(mpn, " ".join(texts[:2]))
     if form:
@@ -725,7 +727,18 @@ def match_mpn(mpn: str, texts: list[str]) -> tuple[dict | None, str | None]:
         for n, t in enumerate(texts, 1):
             if whole in _norm(t) and _PART_LIST.search(t):
                 return {"how": "document", "form": whole, "page": n}, None
-    return series_match(mpn, " ".join(texts))
+    got = series_match(mpn, " ".join(texts))
+    # a packaging or finish code in brackets at the end (JST's "(LF)(SN)")
+    # is no part of the name the datasheet lists the part under (#1263)
+    base = PACKAGING_SUFFIX.sub("", mpn)
+    if got[0] is None and base and base != mpn:
+        match, _ = match_mpn(base, texts)
+        if match:
+            return {**match, "cut": mpn[len(base):].strip()}, None
+    return got
+
+
+PACKAGING_SUFFIX = re.compile(r"(?:\s*\([A-Za-z0-9]{1,4}\))+\s*$")
 
 
 def assess_pdf(data: bytes, mpn: str | None = None) -> dict:
@@ -829,7 +842,8 @@ _ASSESSED = ("status", "reasons", "pages", "chars_per_page", "text_chars",
 
 # Bump when a change to assess_pdf or match_mpn can change a verdict: the next
 # read of each index judges its PDFs again. 2: the family match keeps to words.
-ASSESS_VERSION = 2
+# 3: a bracketed packaging code at the end of the MPN is cut and tried again.
+ASSESS_VERSION = 3
 _VERDICTS: dict = {}    # this process's verdicts, for a tree it cannot write
 
 

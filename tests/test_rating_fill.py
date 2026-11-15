@@ -242,3 +242,163 @@ def test_filled_connector_over_its_rating_is_caught_and_the_twin_is_quiet(
     assert ("rating_over_voltage", "error") in \
         _kinds(_ws(tmp_path / "b", "+150V", rec))
     assert _kinds(_ws(tmp_path / "c", "+12V", rec)) == []
+
+
+# ------------------------------------------- --fetch: a datasheet the board lacks
+
+URL = ("https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/"
+       "2301111010_Murata-GRM155R71C104KA88D_C307331.pdf")
+BODY = b"%PDF-1.7\n" + b"x" * 2000
+
+
+def _fetch_board(tmp_path: Path, monkeypatch, verdict: str = "ok"):
+    """A board whose GRM record (file C307331.json, as an LCSC part is
+    named) has a datasheet URL but no PDF; assess_pdf and the PDF reader are
+    stubbed so the body need not be a real datasheet."""
+    parts = tmp_path / "parts"
+    parts.mkdir(parents=True)
+    rec = _rec(GRM, datasheet=URL)
+    (parts / "C307331.json").write_text(json.dumps(rec))
+    monkeypatch.setattr(datasheet_extract, "assess_pdf", lambda d, m=None: {
+        "status": verdict, "match": "exact" if verdict == "ok" else None,
+        "reasons": [] if verdict == "ok" else ["no text layer"],
+        "pages": 3, "chars_per_page": 900, "text_chars": 2700})
+    monkeypatch.setattr(datasheet_extract, "extract_pdf_text",
+                        lambda p: GRM_PAGES)
+    monkeypatch.setattr(rf, "_sleep", lambda s: None)
+    asks: list[str] = []
+
+    def transport(u):
+        asks.append(u)
+        return {"status": 200, "final_url": u, "hops": [u], "body": BODY}
+    return parts, transport, asks
+
+
+def test_fetch_brings_the_datasheet_cites_it_and_fills(tmp_path, monkeypatch):
+    parts, transport, asks = _fetch_board(tmp_path, monkeypatch)
+    out = tmp_path / "rep.json"
+    assert rf.main(["--parts", str(parts), "--fetch", "--write",
+                    "--out", str(out)], transport=transport) == 0
+    assert asks == [URL]
+    assert (parts / "datasheets" / "C307331.pdf").read_bytes() == BODY
+    ent = json.loads((parts / "datasheets" / "index.json").read_text())[
+        "C307331"]
+    assert (ent["url"], ent["status"], ent["file"]) == \
+        (URL, "ok", "parts/datasheets/C307331.pdf")
+    rep = json.loads(out.read_text())["records"]
+    r = next(r for r in rep if r["file"] == "C307331.json")
+    assert r["status"] == "rated" and r["fetch"]["status"] == "fetched"
+    new = json.loads((parts / "C307331.json").read_text())
+    v = [x for x in new["pin_ratings"] if x["kind"] == "voltage"]
+    assert v and URL in v[0]["source"] and "index.json C307331" in \
+        v[0]["source"]
+    # cached: a second run reads the PDF it has and asks nothing
+    assert rf.main(["--parts", str(parts), "--fetch"],
+                   transport=transport) == 0
+    assert asks == [URL]
+
+
+def test_without_fetch_nothing_is_asked(tmp_path, monkeypatch):
+    parts, transport, asks = _fetch_board(tmp_path, monkeypatch)
+    out = tmp_path / "rep.json"
+    assert rf.main(["--parts", str(parts), "--out", str(out)],
+                   transport=transport) == 0
+    assert asks == []
+    r = json.loads(out.read_text())["records"][0]
+    assert r["status"] == "not_judged" and r["notes"] == ["no datasheet PDF"]
+
+
+def test_a_suspect_datasheet_is_not_read(tmp_path, monkeypatch):
+    parts, transport, _ = _fetch_board(tmp_path, monkeypatch, "suspect")
+    out = tmp_path / "rep.json"
+    assert rf.main(["--parts", str(parts), "--fetch", "--write",
+                    "--out", str(out)], transport=transport) == 0
+    r = json.loads(out.read_text())["records"][0]
+    assert r["status"] == "not_judged" and r["fetch"]["status"] == "suspect"
+    assert r["notes"] == ["datasheet suspect, not read: no text layer"]
+    assert "pin_ratings" not in json.loads(
+        (parts / "C307331.json").read_text())
+
+
+def test_no_url_is_not_judged_with_the_reason(tmp_path, monkeypatch):
+    parts, transport, asks = _fetch_board(tmp_path, monkeypatch)
+    (parts / "C307331.json").write_text(json.dumps(_rec(GRM)))
+    out = tmp_path / "rep.json"
+    rf.main(["--parts", str(parts), "--fetch", "--out", str(out)],
+            transport=transport)
+    r = json.loads(out.read_text())["records"][0]
+    assert asks == [] and r["status"] == "not_judged"
+    assert "no datasheet URL" in r["notes"][0]
+
+
+def test_url_comes_from_parts_json_by_lcsc_code(tmp_path):
+    (tmp_path / "parts.json").write_text(json.dumps({"parts": [
+        {"lcsc": "C9", "mpn": "OTHER", "datasheet": "https://a/x.pdf"},
+        {"lcsc": "C307331", "mpn": GRM, "datasheet": URL}]}))
+    assert rf.datasheet_url(_rec(GRM), "C307331", tmp_path) == URL
+    assert rf.datasheet_url(_rec(GRM), GRM, tmp_path) == URL   # by MPN
+    assert rf.datasheet_url(_rec("NONE"), "NONE", tmp_path) is None
+
+
+def test_an_ic_is_listed_not_judged(tmp_path):
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    rec = _rec("USBLC6-2SC6")
+    rec["pinout"] += [{"pin": str(n), "name": "IO", "type": "bidirectional"}
+                      for n in range(3, 7)]
+    (parts / "C7519.json").write_text(json.dumps(rec))
+    out = tmp_path / "rep.json"
+    rf.main(["--parts", str(parts), "--out", str(out)])
+    r = json.loads(out.read_text())["records"][0]
+    assert r["status"] == "not_judged" and "by hand" in r["notes"][0]
+
+
+def test_a_parts_line_with_no_record_is_listed_not_judged(tmp_path):
+    # r9-opus-snapshot: TPD2E2U06DRLR is in parts.json with no record
+    # file, so nothing is filled and the report says why; a line whose
+    # record is there by LCSC code is not listed
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    (parts / "C7519.json").write_text(json.dumps(_rec("USBLC6-2SC6")))
+    (parts / "parts.json").write_text(json.dumps({"parts": [
+        {"mpn": "TPD2E2U06DRLR"}, {"mpn": "USBLC6-2SC6", "lcsc": "C7519"}]}))
+    out = tmp_path / "rep.json"
+    rf.main(["--parts", str(parts), "--out", str(out)])
+    nr = json.loads(out.read_text())["no_record"]
+    assert [x["mpn"] for x in nr] == ["TPD2E2U06DRLR"]
+    assert nr[0]["status"] == "not_judged" and "no part record" in \
+        nr[0]["notes"][0]
+
+
+def test_pacing_spaces_asks_and_backs_off_on_429(monkeypatch):
+    waits: list[float] = []
+    monkeypatch.setattr(rf, "_sleep", waits.append)
+    monkeypatch.setattr(rf, "_last_ask", {})
+    answers = iter([{"status": 429, "retry_after": "7"},
+                    {"status": 503}, {"status": 200, "body": b"ok"}])
+    get = rf.paced(lambda u: next(answers))
+    assert get("https://h.example/a.pdf")["status"] == 200
+    # Retry-After honoured, then BACKOFF doubled (no Retry-After), and each
+    # retry also keeps PACE from the ask before
+    assert 7.0 in waits and rf.BACKOFF * 2 in waits
+    assert sum(1 for w in waits if 0 < w <= rf.PACE) == 2
+    # a host that keeps throttling is asked TRIES times, then answered
+    monkeypatch.setattr(rf, "_last_ask", {})
+    n = []
+    get = rf.paced(lambda u: n.append(u) or {"status": 429,
+                                              "retry_after": "9999"})
+    assert get("https://h.example/b.pdf")["status"] == 429
+    assert len(n) == rf.TRIES and rf.MAX_WAIT in waits
+
+
+def test_fetched_cap_over_its_rating_is_caught_and_the_twin_is_quiet(
+        tmp_path, monkeypatch):
+    """Planted fault: a 16 V cap rated only from a --fetch'd datasheet sits
+    on +24V; the quiet twin sits on +5V."""
+    parts, transport, _ = _fetch_board(tmp_path / "f", monkeypatch)
+    rf.main(["--parts", str(parts), "--fetch", "--write"],
+            transport=transport)
+    rec = json.loads((parts / "C307331.json").read_text())
+    assert ("rating_over_voltage", "error") in \
+        _kinds(_ws(tmp_path / "a", "+24V", rec))
+    assert _kinds(_ws(tmp_path / "b", "+5V", rec)) == []
