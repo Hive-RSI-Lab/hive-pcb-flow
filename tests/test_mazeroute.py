@@ -803,42 +803,65 @@ def test_spoke_count_as_drc_counts_it(tmp_path, mf_path):
 
 
 def test_a_starved_pad_gets_a_track_on_its_live_spoke(tmp_path, mf_path):
-    """#1140 (C221 on the voice board): a pad whose pour reaches it by one
-    live spoke gets a track of its net from its centre along that spoke
-    into the fill, which the spoke model (as DRC) counts as the second."""
+    """#1140 (C210.2 on the voice board): a pad whose pour reaches it by
+    one live spoke gets a track of its net from its centre along that
+    spoke into the fill, which the spoke model (as DRC) counts as the
+    second. The track waives the check, it adds no path, so it is laid
+    only on a pad the run did not move whose spokes it did not cut (bg0,
+    the board before the run, against bg); each is an entry of waived."""
     import make_fixture as mf
     import part_repair as pr
     via = mf.via(15, 10, "GND", "00000000-0000-0000-0000-0000000005b1")
     bg = _thermal(tmp_path, via)               # the right half is tied
     assert _obs(bg).spoke_count(0) == 1
     zid = "00000000-0000-0000-0000-0000000005a1"
+    starved = [("G1", "1", "F.Cu", zid)]
     rules = SimpleNamespace(net_layers=lambda net, lys: list(lys),
                             width_floor=lambda net: 0.101)
-    ops, notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid)], rules)
+    ops, notes, waived = pr.spoke_tracks(bg, bg, starved, rules)
     [op] = ops
     assert (op["op"], op["net"], op["layer"]) == ("add_track", "GND", "F.Cu")
     assert op["start"] == [10.0, 10.0]
     assert op["end"][1] == pytest.approx(10.0)
     assert 11.0 < op["end"][0] < 11.4               # just past the spoke
     assert op["width"] == pytest.approx(0.48)       # in the 0.5 mm spoke
-    assert "adds no new path" in notes[0]
+    assert notes == [] and waived == [
+        {"pad": "G1.1", "layer": "F.Cu", "zone": zid, "net": "GND",
+         "spokes": [1, 1], "track": op}]
     track = mf.seg(*op["start"], *op["end"], op["width"], "F.Cu", "GND",
                    "00000000-0000-0000-0000-0000000005c1")
     assert _obs(_thermal(tmp_path, via + track)).spoke_count(0) == 2
+    # the pour held off the pad before the run (no spokes there): a track
+    held = _thermal(tmp_path, cut=Point(10, 10).buffer(2.0))
+    ops, notes, waived = pr.spoke_tracks(held, bg, starved, rules)
+    assert ops == [op] and notes == [] and waived[0]["spokes"] == [0, 1]
     # none for a net the .kicad_dru keeps off the layer, or a pad that is
     # not there: a note each
     banned = SimpleNamespace(net_layers=lambda net, lys: [],
                              width_floor=rules.width_floor)
-    ops, notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid),
-                                      ("G9", "1", "F.Cu", zid)], banned)
-    assert ops == []
+    ops, notes, waived = pr.spoke_tracks(
+        bg, bg, starved + [("G9", "1", "F.Cu", zid)], banned)
+    assert ops == [] and waived == []
     assert "keeps GND off F.Cu" in notes[0]
     assert notes[1].startswith("G9.1 on F.Cu starves")
     # both halves tied: no live spoke short, nothing to lay
     left = mf.via(5, 10, "GND", "00000000-0000-0000-0000-0000000005b2")
-    ops, notes = pr.spoke_tracks(_thermal(tmp_path, via + left),
-                                 [("G1", "1", "F.Cu", zid)], rules)
+    both = _thermal(tmp_path, via + left)
+    ops, notes, _ = pr.spoke_tracks(both, both, starved, rules)
     assert ops == [] and "the spoke model counts 2" in notes[0]
+    # the run cut a spoke (2 before, 1 after): the run starves the pad,
+    # and a track would only pass the count
+    ops, notes, waived = pr.spoke_tracks(both, bg, starved, rules)
+    assert ops == waived == []
+    assert "the run cut its spokes from 2 to 1" in notes[0]
+    # the run moved the pad, or flipped it (C221): no track either
+    pad = mf.pad("G1", 10, 10, "GND")
+    for name, body in (("moved", mf.pad("G1", 10, 12, "GND")),
+                       ("flipped", pad.replace('"F.Cu"', '"B.Cu"'))):
+        bg0 = geom.BoardGeom.from_file(
+            mf.write(tmp_path / f"{name}.kicad_pcb", body, 20, 20))
+        ops, notes, waived = pr.spoke_tracks(bg0, bg, starved, rules)
+        assert ops == waived == [] and "the run moved it" in notes[0], name
 
 
 def test_a_spoke_track_narrows_past_a_notch(tmp_path, mf_path):
@@ -857,9 +880,10 @@ def test_a_spoke_track_narrows_past_a_notch(tmp_path, mf_path):
     zid = "00000000-0000-0000-0000-0000000005a1"
     rules = SimpleNamespace(net_layers=lambda net, lys: list(lys),
                             width_floor=lambda net: 0.101)
-    [op], notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid)], rules)
-    assert op["width"] == pytest.approx(0.38)
-    assert 11.0 < op["end"][0] < 11.4 and "a 0.380 mm GND track" in notes[0]
+    [op], notes, [w] = pr.spoke_tracks(bg, bg, [("G1", "1", "F.Cu", zid)],
+                                       rules)
+    assert op["width"] == pytest.approx(0.38) and w["track"] is op
+    assert 11.0 < op["end"][0] < 11.4 and notes == []
     track = mf.seg(*op["start"], *op["end"], op["width"], "F.Cu", "GND",
                    "00000000-0000-0000-0000-0000000005c1")
     assert _obs(_thermal(tmp_path, via + track, cut=notch)).spoke_count(0) \
@@ -867,8 +891,10 @@ def test_a_spoke_track_narrows_past_a_notch(tmp_path, mf_path):
     # a floor above every width that fits: no track, and the note says so
     thick = SimpleNamespace(net_layers=rules.net_layers,
                             width_floor=lambda net: 0.4)
-    ops, notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid)], thick)
-    assert ops == [] and "none fits in the spoke and the fill" in notes[0]
+    ops, notes, waived = pr.spoke_tracks(bg, bg, [("G1", "1", "F.Cu", zid)],
+                                         thick)
+    assert ops == waived == []
+    assert "none fits in the spoke and the fill" in notes[0]
 
 
 def test_zone_join():

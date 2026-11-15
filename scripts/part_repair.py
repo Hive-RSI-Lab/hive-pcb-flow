@@ -77,8 +77,11 @@ one more island of the net) is removed in 03-route, and the report names
 the pads it met. A pad the run leaves starved, its pour reaching it by one
 spoke (as when the prune takes copper that held the pour off it), gets a
 track of its net on that spoke, from its centre into the fill: KiCad's DRC
-counts the track as a second spoke, but it adds no new path, and the notes
-say so.
+counts the track as a second spoke, but it adds no new path, so the report
+lists the pad as a waived thermal, not a fixed one. Only a pad the run did
+not move, with no fewer spokes from that zone than it had before, gets
+one, and the tracks stay only if DRC then finds nothing new; any other
+starved pad fails the gate, and the notes say why.
 The new vias have no teardrops (route_edit's add_via sets none), so a via
 that is ripped and replaced loses its drops, and DRC does not see it.
 
@@ -977,37 +980,52 @@ def _drop_patch(z, pads: list, gone: list, marks: list, payload: dict,
            f" {z.net} --layer {lys[0]}" if met else ""))
 
 
-# KiCad's item descriptions (PAD and ZONE GetItemDescription): "Pad 2
-# [GND] of C210 on B.Cu", "PTH pad 1 [GND] of J1", "Zone [GND] on B.Cu,
-# priority 0", "Zone 'P' [GND] on F.Cu and 3 more, priority 0"
+# KiCad's pad description (PAD::GetItemDescription): "Pad 2 [GND] of
+# C210 on B.Cu", "PTH pad 1 [GND] of J1". A zone's own description lists
+# its layers ("on F.Cu and B.Cu", "on F.Cu, In1.Cu and B.Cu"), past three
+# only the first ("on F.Cu and 3 more"), so the layer is read from the
+# violation's text instead
+# (drc_test_provider_zone_connections.cpp in KiCad 10.0.6): "Thermal
+# relief connection to zone incomplete (layer B.Cu; zone min spoke count
+# 2; actual 1)", by the board's own name for the layer.
 _PAD_RE = re.compile(r"^(?:PTH pad|Pad) (.+?) \[.*\] of (\S+)(?: on (.+))?$")
-_ZONE_RE = re.compile(r"^Zone .*\] on (.+), priority -?\d+$")
+_STARVED_LAYER_RE = re.compile(r"\(layer (.+?);")
 
 
-def starved_pads(drc0: dict, drc1: dict) -> list:
+def layer_names(bg) -> dict:
+    """{a name KiCad's DRC may give a layer of bg: the canonical name}: a
+    renamed layer's own name (`(1 "In1.Cu" signal "SIG1")`), and a KiCad 5
+    board's user name for a copper layer (geom's layer_aliases)."""
+    names = {own: canon for canon, own in bg.layer_user_names.items()}
+    names.update(bg.layer_aliases)
+    return names
+
+
+def starved_pads(drc0: dict, drc1: dict, names: dict | None = None) -> list:
     """(ref, pad number, layer, zone uuid) of each starved thermal on the
-    after board that no before violation matches (unmatched). The layer is
-    the pad's, else the zone's; None for a PTH pad in a zone on more than
-    one layer (KiCad names neither): spoke_tracks takes the layers the
-    pad is short on."""
+    after board that no before violation matches (unmatched). The layer
+    is the one the violation's text names, else the pad's (an SMD pad's
+    description names it), mapped to its canonical name by names
+    (layer_names); None when neither names one."""
+    names = names or {}
     out = []
     for v in unmatched(drc0, drc1):
         if v.get("check") != "starved_thermal":
             continue
-        pad = zone = None
-        lys = [None, None]
+        pad = zone = layer = None
         for it in v.get("items") or []:
             msg = it.get("msg") or ""
             m = _PAD_RE.match(msg)
             if m:
-                pad, lys[0] = (m.group(2), m.group(1)), m.group(3)
+                pad, layer = (m.group(2), m.group(1)), m.group(3)
             elif msg.startswith("Zone"):
                 zone = it.get("uuid")
-                m = _ZONE_RE.match(msg)
-                if m and not re.search(r" and \d+ more$", m.group(1)):
-                    lys[1] = m.group(1)
+        m = _STARVED_LAYER_RE.search(v.get("msg") or "")
+        if m:
+            layer = m.group(1)
         if pad and zone:
-            out.append((*pad, lys[0] or lys[1], zone))
+            out.append((*pad, names.get(layer, layer) if layer else None,
+                        zone))
     return out
 
 
@@ -1016,39 +1034,64 @@ SPOKE_STEP = 0.05
 SPOKE_NARROW = 0.02  # mm a spoke track narrows by a try, to the width floor
 
 
-def spoke_tracks(bg, starved: list, rules) -> tuple[list, list]:
-    """(add_track ops, notes) for the starved thermals of bg (starved_pads)
-    that one live spoke joins: a track of the pad's net from its copper
-    centre along that spoke into the fill. KiCad's DRC counts a net track
-    from inside the pad's ring to the fill as a spoke when the live ones
-    fall short (rf.Obstacles.spoke_count), so the pad passes with two. The
-    track lies on the spoke's own copper, so it adds no new path: what
-    else joins the pad (a solid patch zone, a route) is its real join.
-    rules: the router's (width_floor, net_layers). A pad no track can be
-    laid for gets a note."""
+def _at(p) -> tuple:
+    return (round(p.center[0], 3), round(p.center[1], 3))
+
+
+def _unmoved(p, bg0) -> bool:
+    """Whether bg0 has pad p as it is: a pad of its ref and number on the
+    same layers with the same copper."""
+    return any(q.number == p.number and set(q.layers) == set(p.layers)
+               and q.poly.symmetric_difference(p.poly).area < 1e-6
+               for q in bg0.pads_of(ref=p.ref))
+
+
+def spoke_tracks(bg0, bg, starved: list, rules) -> tuple[list, list, list]:
+    """(add_track ops, notes, waived) for the starved thermals of bg
+    (starved_pads) that one live spoke joins: a track of the pad's net
+    from its copper centre along that spoke into the fill. KiCad's DRC
+    counts a net track from inside the pad's ring to the fill as a spoke
+    when the live ones fall short (rf.Obstacles.spoke_count), so the pad
+    passes with two. The track lies on the spoke's own copper and adds no
+    new path: it waives the check, it does not mend the join. So it is
+    laid only where the run is not what starves the pad: on a pad the run
+    did not move (bg0, the board before the run, has it with the same
+    copper on the same layers) that has no fewer spokes from that zone on
+    that layer than it had on bg0 (the run took copper that held the pour
+    off it, C210.2 on the voice board: 0 spokes before, 1 after). Each
+    track is an entry of waived: pad, layer, zone, net, spokes [before,
+    after] and the op; the caller notes those. rules: the router's
+    (width_floor, net_layers). A pad that gets no track gets a note."""
     obs = rf.Obstacles(bg, spokes=True)
+    obs0 = rf.Obstacles(bg0, spokes=True)
+    was = {(p.ref, p.number, layer, z.uuid, _at(p)): i
+           for i, (p, z, layer, *_) in enumerate(obs0._thermal_index())}
     want = set(starved)
     found = set()
-    ops, notes = [], []
+    ops, notes, waived = [], [], []
     for i, (p, z, layer, gap, sw, mt) in enumerate(obs._thermal_index()):
         key = (p.ref, p.number, layer, z.uuid)
         if key not in want:
-            key = (p.ref, p.number, None, z.uuid)     # a layer of a PTH pad
-            if key not in want:
-                continue
-        n = obs.spoke_count(i)
-        if key[2] is None and not 0 < n < rf.SPOKES_MIN:
             continue
         found.add(key)
+        n = obs.spoke_count(i)
+        i0 = was.get((*key, _at(p)))
+        n0 = -1 if i0 is None else obs0.spoke_count(i0)
         where = f"{p.ref}.{p.number} on {layer}"
         live = [s for s in rf.thermal_spokes(
             p, z.fills.get(layer, ()), gap, sw, mt,
             joined=obs._joined(p, z, layer), mids=True) if s[0][0]]
         why, op = "", None
-        if p.custom is not None and not p.custom.is_empty:
+        if not _unmoved(p, bg0):
+            why = ("the run moved it, so the run starves it and a track"
+                   " would only pass the count")
+        elif p.custom is not None and not p.custom.is_empty:
             why = "it is a custom pad (KiCad's proxy spokes)"
         elif not 0 < n < rf.SPOKES_MIN:
             why = f"the spoke model counts {n}"
+        elif n < n0:
+            why = (f"the run cut its spokes from {n0} to {n}, so a track"
+                   " would only pass the count")
         elif not live:
             why = "no live spoke into fill that meets other copper of it"
         elif not rules.net_layers(p.net, [layer]):
@@ -1064,15 +1107,17 @@ def spoke_tracks(bg, starved: list, rules) -> tuple[list, list]:
                 " pad solid")
             continue
         ops.append(op)
+        waived.append({"pad": f"{p.ref}.{p.number}", "layer": layer,
+                       "zone": z.name or z.uuid, "net": p.net,
+                       "spokes": [max(n0, 0), n], "track": op})
+    for r, num, ly, _ in sorted(want - found,
+                                key=lambda k: (k[0], k[1], k[2] or "")):
         notes.append(
-            f"{where} starves after the run (the pour reaches it by one"
-            f" spoke): a {op['width']:.3f} mm {p.net} track on that spoke"
-            " gives DRC the second join it counts; it adds no new path")
-    notes += [f"{r}.{num}{f' on {ly}' if ly else ''} starves, but the"
-              " spoke model finds no thermal pad like it short of spokes to"
-              " lay a track for" for r, num, ly, _ in
-              sorted(want - found, key=lambda k: (k[0], k[1], k[2] or ""))]
-    return ops, notes
+            f"{r}.{num} starves, but DRC names no layer for it, so no track"
+            " was laid on its spoke" if ly is None else
+            f"{r}.{num} on {ly} starves, but the spoke model finds no"
+            " thermal pad like it short of spokes to lay a track for")
+    return ops, notes, waived
 
 
 def _spoke_track(p, z, layer, gap, sw, mt, mid, rules):
@@ -1606,19 +1651,60 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         bg1 = geom.BoardGeom.from_file(work)
     # a pad the run left starved, its pour reaching it by one spoke now
     # (the prune took copper that held the pour off it): a track of its
-    # net on that spoke gives DRC the second join it counts (#1140)
-    starved = starved_pads(drc0, drc1)
+    # net on that spoke makes DRC count two (#1140). That waives the
+    # check, it does not mend the join, so spoke_tracks lays one only
+    # where the run neither moved the pad nor cut its spokes; the tracks
+    # stay only when DRC finds nothing new with them, and the report
+    # lists each as a waived thermal, not a fixed one
+    starved = starved_pads(drc0, drc1, layer_names(bg1))
     payload["spoke_tracks"] = []
+    payload["waived_thermals"] = []
     if starved:
-        sp_ops, sp_notes = spoke_tracks(bg1, starved, router.rules)
+        sp_ops, sp_notes, waived = spoke_tracks(bg0, bg1, starved,
+                                                router.rules)
         payload["notes"] += sp_notes
-        payload["spoke_tracks"] = sp_ops
         if sp_ops:
+            aside = work.with_name(f".{work.name}.spokes")
+            shutil.copy2(work, aside)
             route_edit.apply_ops(work, sp_ops)
-            kept += sp_ops
-            adds = adds + sp_ops   # the gate's area takes them in
-            drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
-            bg1 = geom.BoardGeom.from_file(work)
+            drc2 = kc.run_drc(cli, work, refill=True, save_board=True)
+            new = unmatched(drc1, drc2)
+            if new:
+                shutil.copy2(aside, work)
+                what = ", ".join(sorted({_key(v) for v in new}))
+                payload["notes"] += [
+                    f"{w['pad']} on {w['layer']} starves: a"
+                    f" {w['track']['width']:.3f} mm {w['net']} track on its"
+                    f" spoke was laid and taken back (with the spoke tracks"
+                    f" DRC finds {what} that it did not before); move the"
+                    " copper that holds the pour off it, or join the pad"
+                    " solid" for w in waived]
+            else:
+                drc1 = drc2
+                bg1 = geom.BoardGeom.from_file(work)
+                kept += sp_ops
+                adds = adds + sp_ops   # the gate's area takes them in
+                payload["spoke_tracks"] = sp_ops
+                still = {(f"{r}.{num}", ly) for r, num, ly, _ in
+                         starved_pads(drc0, drc1, layer_names(bg1))}
+                for w in waived:
+                    tr = (f"a {w['track']['width']:.3f} mm {w['net']} track"
+                          " on its spoke")
+                    if (w["pad"], w["layer"]) in still:
+                        payload["notes"].append(
+                            f"{w['pad']} on {w['layer']} still starves with"
+                            f" {tr}; move the copper that holds the pour off"
+                            " it, or join the pad solid")
+                        continue
+                    payload["waived_thermals"].append(w)
+                    n0, n = w["spokes"]
+                    payload["notes"].append(
+                        f"{w['pad']} on {w['layer']}: the run left it {n}"
+                        f" spoke{'' if n == 1 else 's'} from {w['zone']},"
+                        f" where it had {n0}; {tr} makes DRC count {n + 1}."
+                        " That waives the starved-thermal check, it does"
+                        " not fix the join: the track adds no new path")
+            aside.unlink()
     area = gate_area()
     payload["trimmed"] += [kept[i] for i in sorted(drop)]
     payload["shortened"] = [
@@ -1723,11 +1809,14 @@ def report_md(p: dict) -> str:
                   f" {'/'.join(z['layers'])}): it met"
                   f" {', '.join(z['met']) or 'copper of its net'} and joins"
                   " none after the run (isolated copper).", ""]
-    if p.get("spoke_tracks"):
-        n = len(p["spoke_tracks"])
-        lines += [f"Laid {n} track{'' if n == 1 else 's'} on the live spoke"
-                  " of a pad the run left starved: DRC counts each as a"
-                  " second spoke; none adds a new path (see the notes).", ""]
+    if p.get("waived_thermals"):
+        lines += ["Waived thermals: a track of the pad's net on its one"
+                  " live spoke makes DRC count one more spoke; it adds no"
+                  " path, so each is waived, not fixed:", ""] + [
+            f"- {w['pad']} on {w['layer']} ({w['zone']}): spokes"
+            f" {w['spokes'][0]} before, {w['spokes'][1]} after; a"
+            f" {w['track']['width']:.3f} mm {w['net']} track"
+            for w in p["waived_thermals"]] + [""]
     for key, head in (("failed", "Would not join"),
                       ("worse", "Worse than before")):
         if p.get(key):

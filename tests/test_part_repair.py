@@ -514,37 +514,64 @@ def test_orphan_patches_find_a_patch_left_joining_nothing(tmp_path):
 
 
 def _starved(ref, num, zone, *, layer="B.Cu", pos=(1, 1), pth=False,
-             zlayer=None):
+             zlayers="B.Cu", said=True):
+    """A starved_thermal as kc.run_drc reads it from KiCad 10.0.6: the
+    message names the layer (said), the items the zone and the pad."""
     pad = (f"PTH pad {num} [GND] of {ref}" if pth
            else f"Pad {num} [GND] of {ref} on {layer}")
+    msg = "Thermal relief connection to zone incomplete" + (
+        f" (layer {layer}; zone min spoke count 2; actual 1)" if said
+        else "")
     return {"source": "drc", "check": "starved_thermal", "severity": "error",
-            "net": "GND", "layer": zlayer or layer, "msg": "starved",
+            "net": "GND", "layer": layer, "msg": msg,
             "pos": [0, 0], "items": [
-                {"msg": f"Zone [GND] on {zlayer or layer}, priority 0",
+                {"msg": f"Zone [GND] on {zlayers}, priority 0",
                  "pos": [0, 0], "uuid": zone},
                 {"msg": pad, "pos": list(pos), "uuid": f"p-{ref}-{num}"}]}
 
 
 def test_starved_pads_name_the_pad_its_layer_and_zone():
-    """#1140: KiCad names a starved thermal's zone and pad in its items;
-    only those the run made count. The layer is the pad's, else the
-    zone's; a PTH pad in a zone on more layers has none."""
+    """#1140: KiCad names a starved thermal's zone and pad in its items
+    and the layer in its message; only those the run made count. A zone's
+    text lists its layers and a PTH pad's names none, so the layer is the
+    message's, else the pad's, by the board's canonical name; else None."""
     old = _starved("C210", "2", "zG", pos=(5, 5))
     new = _starved("C221", "1", "zG", pos=(9, 9))
     clr = _vat("drc", "clearance", "A", (2, 2), (2, 3))
     assert pr.starved_pads({"violations": [old]},
                            {"violations": [old, new, clr]}) \
         == [("C221", "1", "B.Cu", "zG")]
-    smd = _starved("C9", "2", "zM", layer="B.Cu",
-                   zlayer="F.Cu and 3 more")
-    pth = _starved("J1", "1", "zG", pth=True)
-    many = _starved("J2", "3", "zM", pth=True, zlayer="F.Cu and 1 more")
+    smd = _starved("C9", "2", "zM", zlayers="F.Cu and B.Cu")
+    pth = _starved("J1", "1", "zG", pth=True,
+                   zlayers="F.Cu, In1.Cu and B.Cu")
+    inner = _starved("J2", "3", "zM", pth=True, layer="SIG1",
+                     zlayers="F.Cu, SIG1 and B.Cu")
+    mute = _starved("J3", "1", "zG", pth=True, said=False,
+                    zlayers="F.Cu and B.Cu")
+    bare = _starved("C8", "1", "zG", said=False)
     named = _starved("C5", "1", "zN")
     named["items"][0]["msg"] = "Zone 'PATCH_GND' [GND] on B.Cu, priority 2"
-    assert pr.starved_pads({"violations": []},
-                           {"violations": [smd, pth, many, named]}) == [
+    assert pr.starved_pads(
+        {"violations": []},
+        {"violations": [smd, pth, inner, mute, bare, named]},
+        {"SIG1": "In1.Cu"}) == [
         ("C9", "2", "B.Cu", "zM"), ("J1", "1", "B.Cu", "zG"),
-        ("J2", "3", None, "zM"), ("C5", "1", "B.Cu", "zN")]
+        ("J2", "3", "In1.Cu", "zM"), ("J3", "1", None, "zG"),
+        ("C8", "1", "B.Cu", "zG"), ("C5", "1", "B.Cu", "zN")]
+
+
+def test_layer_names_map_a_renamed_layer_to_its_own(tmp_path):
+    """#1140: DRC names a layer by the board's name for it; layer_names
+    maps that back to the canonical one."""
+    pcb = tmp_path / "named.kicad_pcb"
+    pcb.write_text(
+        '(kicad_pcb (version 20260206) (generator "test")\n'
+        '  (general (thickness 1.6))\n'
+        '  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal "SIG1")\n'
+        '    (2 "B.Cu" signal) (25 "Edge.Cuts" user))\n'
+        '  (setup)\n  (net 0 "")\n)\n')
+    names = pr.layer_names(geom.BoardGeom.from_file(pcb))
+    assert names["SIG1"] == "In1.Cu" and "F.Cu" not in names
 
 
 def test_load_ops_takes_footprint_ops_only(tmp_path, monkeypatch):
