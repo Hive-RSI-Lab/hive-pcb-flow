@@ -485,6 +485,21 @@ Consumers per key (script -> phase):
   // step charge is judged against its converter's current limit and output
   // capacitance (reference/source_limits.yaml converters).
   "switched_loads": [{"nets": ["/PANEL_A", "/PANEL_B"], "capacitance_f": 1.4e-7}],
+  // check_rail_budget (P8, #1118): a load's supply pin against its minimum
+  // after the source's low limit, each net's copper drop and each series
+  // part's DCR x current. All by refdes, each merged over its row of
+  // reference/rail_budget.yaml. sources: pins (output pin function or pad
+  // number regex), vout_v (the nominal, else read from the net name),
+  // vout_min_v (the low limit itself). series: dcr_max_ohm, the datasheet's
+  // max DC resistance (a bead's value string is never read as DCR); beads
+  // FB* and inductors L* are followed without an entry, and are a warning
+  // until they have one. loads: pins, vmin_v, current_a (else
+  // source_limits.yaml's i_supply).
+  "rail_budget": {"sources": {"U2": {"pins": "VOUT", "vout_v": 1.8,
+                                     "vout_min_v": 1.782}},
+                  "series": {"FB2": {"dcr_max_ohm": 0.25}},
+                  "loads": {"U5": {"pins": "VDDA", "vmin_v": 1.71,
+                                   "current_a": 0.13}}},
 
   // check_thermal (P8), place_anneal spreading term (P6)
   "thermal": [{"ref": "U2", "power_w": 0.8, "net": "GND", "dt_c": 40,
