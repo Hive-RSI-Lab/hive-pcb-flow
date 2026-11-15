@@ -1,10 +1,11 @@
 """A sealed holdout round stays under holdout/ and nowhere else.
 
-A round under `reference/holdout/round-N.yaml` is the blind test for the
-rules written after it was swept. Its defects may be read only by the
-round's scorers, from `reference/holdout/` and `docs/holdout/`. If a defect
-or board id turns up in any other tracked file (the taxonomy, the corpus
-doc, a rule, a reference row, a test), a rule builder has read it or can,
+A round under `holdout/round-N.yaml` (the repo's top `holdout/` folder,
+outside `reference/` and `docs/`) is the blind test for the rules written
+after it was swept. Its defects may be read only by the round's scorers,
+from `holdout/`. If a defect or board id turns up in any other tracked file
+(the taxonomy, the corpus doc, a rule, a reference row, a test), a rule
+builder has read it or can,
 and the round no longer tests that rule. See "A new holdout round" in
 docs/errata-corpus.md.
 """
@@ -22,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import errata_corpus as ec  # noqa: E402
 
-SEALED_DIRS = ("reference/holdout/", "docs/holdout/")
+SEALED_DIRS = ("holdout/",)
 SELF = "tests/test_holdout_sealed.py"
 
 
@@ -80,8 +81,8 @@ def test_sealed_rounds_exist_and_load():
 def test_no_sealed_id_outside_holdout():
     found = leaks(sealed_ids(), _tracked())
     assert not found, (
-        "sealed holdout ids outside holdout/ (move them under docs/holdout/ "
-        "or reference/holdout/, and don't write rules from them):\n  "
+        "sealed holdout ids outside holdout/ (move them under holdout/, "
+        "and don't write rules from them):\n  "
         + "\n  ".join(found[:40]))
 
 
@@ -89,10 +90,14 @@ def test_the_seal_check_sees_a_leak(tmp_path):
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "miss-taxonomy.md").write_text("- foo-board-2: a leak\n")
     (tmp_path / "docs" / "ok.md").write_text("foo-board-20 and xfoo-board-2 are not it\n")
+    (tmp_path / "reference").mkdir()
+    (tmp_path / "reference" / "parts.yaml").write_text("follow_up: see foo-board-2\n")
     ids = {"foo-board-2": 3}
-    assert leaks(ids, ["docs/miss-taxonomy.md", "docs/ok.md"], tmp_path) == \
-        ["docs/miss-taxonomy.md:1: foo-board-2 (round 3)"]
-    assert leaks(ids, ["docs/holdout/round-3-members.md"], tmp_path) == []
+    assert leaks(ids, ["docs/miss-taxonomy.md", "docs/ok.md",
+                       "reference/parts.yaml"], tmp_path) == \
+        ["docs/miss-taxonomy.md:1: foo-board-2 (round 3)",
+         "reference/parts.yaml:1: foo-board-2 (round 3)"]
+    assert leaks(ids, ["holdout/round-3-members.md"], tmp_path) == []
 
 
 def _board(bid: str, rnd: int) -> dict:
@@ -105,7 +110,8 @@ def _board(bid: str, rnd: int) -> dict:
 
 
 def test_sealed_round_merges_and_its_table_stays_apart(tmp_path):
-    m = tmp_path / "errata_corpus.yaml"
+    (tmp_path / "reference").mkdir()
+    m = tmp_path / "reference" / "errata_corpus.yaml"
     m.write_text(yaml.safe_dump({"boards": [], "holdout": [_board("open", 1)]}))
     (tmp_path / "holdout").mkdir()
     (tmp_path / "holdout" / "round-2.yaml").write_text(
@@ -116,13 +122,14 @@ def test_sealed_round_merges_and_its_table_stays_apart(tmp_path):
     t = ec.table(tmp_path, [], holdout, {2})
     assert "open-1" in t and "shut-1" not in t
     assert "Holdout round 2, blind: 0 of 1 caught" in t
-    assert "docs/holdout/round-2-errata.md" in t
+    assert "holdout/round-2-errata.md" in t
     s = ec.sealed_table(tmp_path, holdout, 2)
     assert "shut-1" in s and "open-1" not in s
 
 
 def test_a_board_in_the_wrong_sealed_file_is_refused(tmp_path):
-    m = tmp_path / "errata_corpus.yaml"
+    (tmp_path / "reference").mkdir()
+    m = tmp_path / "reference" / "errata_corpus.yaml"
     m.write_text(yaml.safe_dump({"boards": [], "holdout": []}))
     (tmp_path / "holdout").mkdir()
     (tmp_path / "holdout" / "round-2.yaml").write_text(

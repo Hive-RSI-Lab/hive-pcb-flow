@@ -77,13 +77,16 @@ def cache_root(arg: str | None) -> Path:
 
 
 def sealed_files(path: Path = MANIFEST) -> dict[int, Path]:
-    """Sealed holdout rounds: `holdout/round-N.yaml` beside the manifest.
+    """Sealed holdout rounds: `holdout/round-N.yaml` at the repo's top.
+
+    The folder sits outside `reference/` and `docs/`, so a grep there for a
+    part or a check doesn't reach a sealed defect.
 
     A round stays in its own file while its defects are unread by rule
     builders; builders open nothing under `holdout/` (see "A new holdout
     round"). Unsealing a round moves its boards into the manifest."""
     out = {}
-    for f in sorted((path.parent / "holdout").glob("round-*.yaml")):
+    for f in sorted((path.parent.parent / "holdout").glob("round-*.yaml")):
         m = re.fullmatch(r"round-(\d+)\.yaml", f.name)
         if m:
             out[int(m.group(1))] = f
@@ -471,7 +474,7 @@ round, pinned and swept before those rules are:
    revision fixes a defect the designer's own errata quote, both revisions
    pinned to a commit, and no repository an earlier round or the training
    set holds.
-2. Each goes in the round's own sealed file, `reference/holdout/round-N.yaml`
+2. Each goes in the round's own sealed file, `holdout/round-N.yaml`
    (a `holdout:` list), with `swept: {flow: SHA, date, round: N}`, SHA
    being main as it stands, and its defects with the designer's quote,
    before anyone reads the findings. `errata_corpus.py sweep ID...` runs
@@ -487,13 +490,14 @@ round, pinned and swept before those rules are:
    N+1.
 5. Add the round's misses to `docs/miss-taxonomy.md`, one class per check,
    and re-rank it: the next rules go to the top classes. While the round is
-   sealed, its member lines go in `docs/holdout/round-N-members.md`, and the
+   sealed, its member lines go in `holdout/round-N-members.md`, and the
    taxonomy says only how many members each class has from it.
 
 **Keeping a sealed round blind.** Until a round is unsealed, its defects
-live only under `holdout/`: `reference/holdout/round-N.yaml`,
-`docs/holdout/round-N-members.md` and `docs/holdout/round-N-errata.md`
-(written by `table`). Rule builders open none of these, nor the round's
+live only in the repo's top `holdout/` folder: `holdout/round-N.yaml`,
+`holdout/round-N-members.md` and `holdout/round-N-errata.md` (written by
+`table`). It is outside `reference/` and `docs/`, so a grep there for a part
+or a check doesn't reach them. Rule builders open none of these, nor the round's
 boards or errata upstream, and their briefs quote only the taxonomy's
 Ranked table. Only the round's scorers read them. `tests/test_holdout_sealed.py`
 fails if a sealed defect id appears in any other tracked file. Unsealing a
@@ -503,7 +507,7 @@ into `reference/errata_corpus.yaml` and its members into the taxonomy.
 
 
 SEALED_NOTE = (
-    "Sealed: its boards and defects are in `docs/holdout/round-{r}-errata.md`,"
+    "Sealed: its boards and defects are in `holdout/round-{r}-errata.md`,"
     " for the round's scorers only. Rule builders don't open it, or the"
     " round's boards and errata; see \"A new holdout round\".")
 
@@ -514,7 +518,7 @@ def sealed_table(cache: Path, holdout: list[dict], r: int) -> str:
              "Rule builders: stop here. This file names the round's defects, and",
              "a rule written after reading it is no longer tested by the round.",
              "Written by `bin/pcb-flow errata_corpus table` from",
-             f"`reference/holdout/round-{r}.yaml`.", ""]
+             f"`holdout/round-{r}.yaml`.", ""]
     for b in holdout:
         if b["swept"]["round"] == r:
             lines += _board_rows(cache, b, True)
@@ -576,7 +580,7 @@ def main(argv: list[str] | None = None) -> int:
         out = Path(a.out)
         out.write_text(table(cache, load(man), holdout, sealed), encoding="utf-8")
         for r in sorted(sealed):
-            f = out.parent / "holdout" / f"round-{r}-errata.md"
+            f = out.parent.parent / "holdout" / f"round-{r}-errata.md"
             f.parent.mkdir(exist_ok=True)
             f.write_text(sealed_table(cache, holdout, r), encoding="utf-8")
         return 0

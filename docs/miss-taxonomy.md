@@ -31,7 +31,7 @@ holdout round 2: 17.
 
 **Since then (holdout round 3, swept blind with main at ba7c056,
 2026-11-15).** 12 new boards, 29 defects, 1 caught blind (netlist_audit
-dangling_net). The other 28 are in the classes below (members in the holdout file): 55 misses,
+dangling_net). The other 28 are in the classes below (members in `holdout/round-3-members.md`, scorers only): 55 misses,
 training 8, holdout round 1: 2, round 2: 17, round 3: 28. Round 3 adds four
 classes (12-15) and re-ranks the table. No rule has been written from round
 3 yet, so all of its 28 are still independent tests. With #1158, which

@@ -3,7 +3,7 @@
 Rule builders: stop here. This file names the round's defects, and
 a rule written after reading it is no longer tested by the round.
 Written by `bin/pcb-flow errata_corpus table` from
-`reference/holdout/round-3.yaml`.
+`holdout/round-3.yaml`.
 
 ### scanlight-driver: bsl_driver v1_a -> bsl_driver v1_b
 
