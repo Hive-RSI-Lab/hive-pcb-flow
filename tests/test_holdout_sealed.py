@@ -136,3 +136,73 @@ def test_a_board_in_the_wrong_sealed_file_is_refused(tmp_path):
         yaml.safe_dump({"holdout": [_board("shut", 3)]}))
     with pytest.raises(SystemExit, match="round-2.yaml but swept round 3"):
         ec.load(m, "holdout")
+
+
+def _two_rounds(tmp_path):
+    (tmp_path / "reference").mkdir()
+    m = tmp_path / "reference" / "errata_corpus.yaml"
+    m.write_text(yaml.safe_dump({"boards": [], "holdout": [_board("open", 1)]}))
+    (tmp_path / "holdout").mkdir()
+    (tmp_path / "holdout" / "round-2.yaml").write_text(
+        yaml.safe_dump({"holdout": [_board("shut", 2)]}))
+    return m
+
+
+def _record(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ec, "fetch", lambda c, b: seen.append(("fetch", b["id"], c)))
+    monkeypatch.setattr(ec, "sweep", lambda c, b: seen.append(("sweep", b["id"], c)) or {})
+    monkeypatch.setattr(ec, "run", lambda c, b: seen.append(("run", b["id"], c)) or {})
+    return seen
+
+
+def test_a_plain_sweep_leaves_sealed_rounds_out(tmp_path, monkeypatch, capsys):
+    m = _two_rounds(tmp_path)
+    cache, sealed = tmp_path / "train", tmp_path / "sealed"
+    seen = _record(monkeypatch)
+    base = ["--manifest", str(m), "--cache", str(cache), "--sealed-cache", str(sealed)]
+    for cmd in ("sweep", "fetch", "run"):
+        seen.clear()
+        ec.main([cmd, *base])
+        assert {i for _, i, _ in seen} == {"open"}, cmd
+        assert {c for _, _, c in seen} == {cache.resolve()}, cmd
+        err = capsys.readouterr().err
+        assert "left out 1 sealed-round board" in err and "shut" not in err
+    # naming a sealed board is not enough: it takes --sealed
+    seen.clear()
+    ec.main(["sweep", "shut", *base])
+    assert seen == []
+
+
+def test_scorers_get_a_sealed_round_from_the_sealed_cache(tmp_path, monkeypatch):
+    m = _two_rounds(tmp_path)
+    cache, sealed = tmp_path / "train", tmp_path / "sealed"
+    seen = _record(monkeypatch)
+    ec.main(["sweep", "--sealed", "2", "--manifest", str(m), "--cache", str(cache),
+             "--sealed-cache", str(sealed)])
+    assert ("sweep", "shut", sealed.resolve()) in seen
+    assert ("sweep", "open", cache.resolve()) in seen
+    assert not [s for s in seen if s[1] == "shut" and s[2] != sealed.resolve()]
+
+
+def test_the_sealed_cache_cannot_sit_in_the_training_cache(tmp_path):
+    cache = (tmp_path / "train").resolve()
+    for bad in (cache, cache / "holdout", tmp_path):
+        with pytest.raises(SystemExit, match="overlaps the training cache"):
+            ec.sealed_cache_root(str(bad), cache)
+    assert ec.sealed_cache_root(str(tmp_path / "sealed"), cache) == \
+        (tmp_path / "sealed").resolve()
+
+
+def test_no_sealed_board_in_the_training_cache():
+    """On a machine with the corpus fetched: the training cache holds no
+    sealed-round checkout or report (a count only, never the ids)."""
+    cache = ec.cache_root(None)
+    ids = set(ec.sealed_rounds())
+    if not cache.is_dir() or not ids:
+        pytest.skip("no training cache here")
+    names = {p.name.split("@")[0] for d in ("repos", "runs")
+             if (cache / d).is_dir() for p in (cache / d).iterdir()}
+    n = len(names & ids)
+    assert not n, (f"{n} sealed-round board(s) in the training cache {cache}; "
+                   "move them to the sealed cache (see \"A new holdout round\")")
