@@ -758,6 +758,8 @@ def dru_net_floors(dru_path: Path | None, constraint: str) -> dict[str, float]:
             continue
         if _DRU_COURTYARD_RE.search(rule["condition"] or ""):
             continue
+        if rule["layer"] and constraint == "track_width":
+            continue
         for net in rule["nets"]:
             floors[net] = max(floors.get(net, 0.0), rule["min_mm"])
     return floors
@@ -774,7 +776,9 @@ def dru_neck_rules(dru_path: Path | None,
     out = []
     for rule in parse_dru_rules(text):
         refs = _DRU_COURTYARD_RE.findall(rule["condition"] or "")
-        if rule["constraint"] != constraint or not refs:
+        if rule["constraint"] != constraint or not refs or rule["layer"] \
+                or not dru_condition_scoped(
+                    parse_dru_condition(rule["condition"])):
             continue
         out += [{"net": net, "ref": ref, "min_mm": rule["min_mm"]}
                 for net in rule["nets"] for ref in refs]

@@ -2,7 +2,7 @@
 opt / max ...) value of a rule through its expression evaluator, and one value
 it rejects (0.5MM, 20mils, a bare 0.2 on a length) drops the WHOLE file while
 kicad-cli says nothing: DRC then holds none of its rules. The fixture is what
-KiCad 10.0.6's DRC did with each of 170 rule files; dru_unit_errors is held to
+KiCad 10.0.6's DRC did with each of 190 rule files; dru_unit_errors is held to
 it. Pure text tests; no KiCad needed."""
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def test_probe_fixture_is_consistent():
     """A file KiCad read must not be flagged, and a flagged one must be one
     KiCad dropped; the fixture covers every verdict."""
     cases = PROBE["cases"]
-    assert len(cases) == 170
+    assert len(cases) == 190
     for name, case in cases.items():
         assert case["kicad"] in ("ok", "void"), name
         if case["kicad"] == "ok":
@@ -113,6 +113,11 @@ def test_dru_value_reads_but_does_not_evaluate(value, ctype):
     ("100ps/mm", "length", "after '/'"),
     ("0.005mm\t+ 0.005mm", "clearance", "tab or line break"),
     ("", "clearance", "has no value"),
+    ("mm", "clearance", "no number before it"),
+    ("(1)mm", "clearance", "after ')'"),
+    ("0.01mm-", "clearance", "ends in '-'"),
+    ("2*mm", "clearance", "after '*'"),
+    ("0.01mm\f", "clearance", "form feed"),
 ])
 def test_dru_value_names_why_kicad_rejects(value, ctype, why):
     mm, got = routelib.dru_value(value, ctype)
@@ -129,7 +134,8 @@ def test_dru_unit_errors_names_rule_clause_and_reason():
         """rule "b": (track_width (min 0.5MM)) has unit 'MM', which KiCad """
         "does not read (mm, mil, in)",
         'rule "c": (length (max 100ps)) is a delay after a length, and KiCad '
-        "takes one kind of unit per constraint",
+        "takes one kind per constraint (a value reads as its last unit; deg "
+        "or none is unitless)",
         'rule "d": (clearance (min 0.005mm\\t+ 0.005mm)) has a tab or line '
         "break inside, which KiCad's evaluator rejects"]
     # comment lines are not read, and an empty file is clean

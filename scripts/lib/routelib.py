@@ -488,14 +488,22 @@ DRU_UNITLESS_TYPES = frozenset(("bridged_mask", "track_angle", "via_count",
                                 "via_dangling"))
 # the only types a delay (fs, ps) may be given for
 DRU_TIME_TYPES = frozenset(("length", "skew"))
-_DRU_KIND_NAMES = {"length": "a length", "angle": "an angle", "time": "a delay"}
+# the kind of a value is the kind of its last unit, an angle or no unit at
+# all reading as unitless; each value of a clause must be of the kind of the
+# one before it (#1309)
+_DRU_KIND_NAMES = {"length": "a length", "time": "a delay",
+                   "unitless": "a unitless value"}
 # a value's own tokens: a number (a comma reads as a point), a word, an
-# operator or paren, a run of blanks, or any other character
+# operator or paren, a run of blanks, or any other character; ASCII only, as
+# KiCad's evaluator reads no other digit or letter
 _DRU_EXPR_RE = re.compile(
     r"(?P<num>\d+(?:[.,]\d*)?)|(?P<word>[^\W\d]\w*)|(?P<op>[-+*/()])"
-    r"|(?P<blank> +)|(?P<other>.)", re.S)
-# the first token of a list: its keyword, bare or quoted
-_DRU_HEAD_RE = re.compile(r'[ \t\r\n]*(?:"(?:[^"\\\n]|\\.)*"?|[^ \t\r\n()"]+)')
+    r"|(?P<blank> +)|(?P<other>.)", re.S | re.ASCII)
+# the first token of a list: its keyword, bare or quoted. A bare one stops at
+# a form feed or vertical tab too, leaving it in the value to be flagged:
+# KiCad's lexer reads neither as a blank, so (min\f0.1mm) voids the file
+_DRU_HEAD_RE = re.compile(
+    r'[ \t\r\n]*(?:"(?:[^"\\\n]|\\.)*"?|[^ \t\r\n\f\v()"]+)')
 
 
 class DruList(list):
@@ -576,50 +584,95 @@ def _dru_wrapped(toks: list) -> bool:
     return False
 
 
+def _dru_expr_error(toks: list) -> str | None:
+    """Why KiCad 10's evaluator cannot parse a value made of numbers and
+    + - * / ( ), each number's unit taken off: a sign may stand before any
+    number or '(', and every other operator goes between two values. None
+    for one it parses (#1309)."""
+    depth, want_value = 0, True
+    for kind, tok in toks:
+        if want_value:
+            if kind == "num":
+                want_value = False
+            elif tok == "(":
+                depth += 1
+            elif tok not in ("+", "-"):
+                return f"has {tok!r} where a number goes"
+        elif kind == "num" or tok == "(":
+            return "has two values with no operator between them"
+        elif tok == ")":
+            if not depth:
+                return "has a ')' with no '(' before it"
+            depth -= 1
+        else:
+            want_value = True
+    if not toks:
+        return "has no value"
+    if want_value:
+        return f"ends in {toks[-1][1]!r}"
+    if depth:
+        return "has a '(' that is not closed"
+    return None
+
+
 def _dru_scan(value: str | None, ctype: str) -> tuple:
     """One value of a `ctype` constraint as KiCad 10's rule parser reads it
-    -> (mm, kinds, why): mm for a plain length (20mil, -0.1mm, (0.2 mm)),
-    the set of unit kinds it names, and why KiCad rejects it. kinds is None
-    where this reader cannot follow the value (a string, a name, a character
-    it does not know), and it then gives no verdict (#1273)."""
+    -> (mm, kind, why): mm for a plain length (20mil, -0.1mm, (0.2 mm)); its
+    kind, the kind of its last unit (length or time), an angle or no unit at
+    all reading as unitless, as 1mm + 1deg does; and why KiCad rejects it.
+    kind is None for a value it rejects and where this reader cannot follow
+    the value (a string, a name, a character it does not know), and it then
+    gives no verdict (#1273, #1309)."""
     text = (value or "").strip(" \t\r\n")
     if not text:
-        return None, frozenset(), "has no value"
+        return None, None, "has no value"
     if '"' in text or "'" in text:
         return None, None, None
-    if re.search(r"[\t\n\r\f\v]", text):
-        return None, frozenset(), ("has a tab or line break inside, which "
-                                   "KiCad's evaluator rejects")
+    if re.search(r"[\f\v]", text):
+        return None, None, ("has a form feed or vertical tab, which KiCad "
+                            "does not read as a blank")
+    if re.search(r"[\t\n\r]", text):
+        return None, None, ("has a tab or line break inside, which KiCad's "
+                            "evaluator rejects")
     if re.search(r"(?<!\w)\.\d", text):
-        return None, frozenset(), ("has a number with no digit before its "
-                                   "point (write 0.5, not .5)")
+        return None, None, ("has a number with no digit before its point "
+                            "(write 0.5, not .5)")
     toks = [(m.lastgroup, m.group()) for m in _DRU_EXPR_RE.finditer(text)
             if m.lastgroup != "blank"]
-    kinds, follow = set(), True
-    for i, (kind, tok) in enumerate(toks):
+    unitless = ctype in DRU_UNITLESS_TYPES
+    kind, unit, follow = "unitless", None, True
+    for i, (cls, tok) in enumerate(toks):
         before = toks[i - 1] if i else ("", "")
-        if kind == "other":
+        if cls == "other":
             follow = False
-        elif kind != "word":
+        elif cls != "word":
             continue
         elif before[0] == "num":
             if re.match(r"[eE](\d|$)", tok):
-                return None, frozenset(), ("has an exponent, which KiCad "
-                                           "does not read")
-            if ctype in DRU_UNITLESS_TYPES:
-                return None, frozenset(), (f"has unit {tok!r}, but {ctype} "
-                                           "takes a plain number")
+                return None, None, "has an exponent, which KiCad does not read"
+            if unitless:
+                return None, None, (f"has unit {tok!r}, but {ctype} takes a "
+                                    "plain number")
             if tok not in DRU_UNIT_KINDS:
-                return None, frozenset(), (f"has unit {tok!r}, which KiCad "
-                                           "does not read (mm, mil, in)")
-            kinds.add(DRU_UNIT_KINDS[tok])
-        elif before == ("op", "/") and tok in DRU_UNIT_KINDS:
-            return None, frozenset(), (f"has unit {tok!r} after '/', which "
-                                       "KiCad does not read")
+                return None, None, (f"has unit {tok!r}, which KiCad does not "
+                                    "read (mm, mil, in)")
+            kind, unit = DRU_UNIT_KINDS[tok], tok
+            if kind == "angle":
+                kind = "unitless"
+        elif tok in DRU_UNIT_KINDS and not unitless:
+            # KiCad reads a unit only as part of the number before it
+            if not i:
+                return None, None, (f"has unit {tok!r} with no number before "
+                                    "it, which KiCad does not read")
+            return None, None, (f"has unit {tok!r} after {before[1]!r}, which "
+                                "KiCad reads only right after a number")
         else:
             follow = False
     if not follow:
         return None, None, None
+    why = _dru_expr_error([t for t in toks if t[0] != "word"])
+    if why:
+        return None, None, why
     core = toks
     while core:
         if core[0] == ("op", "+"):
@@ -630,19 +683,18 @@ def _dru_scan(value: str | None, ctype: str) -> tuple:
             break
     if not core:
         return None, None, None
-    if (len(core) == 1 and core[0][0] == "num"
-            and ctype not in DRU_UNITLESS_TYPES):
-        return None, frozenset(), "has no unit"
-    if kinds == {"time"} and ctype not in DRU_TIME_TYPES:
-        return None, frozenset(kinds), ("is a delay, which KiCad takes only "
-                                        "for length and skew")
+    if len(core) == 1 and core[0][0] == "num" and not unitless:
+        return None, None, "has no unit"
+    if kind == "time" and ctype not in DRU_TIME_TYPES:
+        return None, None, (f"is a delay (its last unit is {unit!r}), which "
+                            "KiCad takes only for length and skew")
     mm = None
     body = core[1:] if core[0] == ("op", "-") else core
     if (len(body) == 2 and body[0][0] == "num"
             and body[1][1] in DRU_LENGTH_UNITS):
         mm = float(body[0][1].replace(",", ".")) * DRU_LENGTH_UNITS[body[1][1]]
         mm = -mm if body is not core else mm
-    return mm, frozenset(kinds), None
+    return mm, kind, None
 
 
 def dru_value(value: str | None, constraint: str) -> tuple:
@@ -661,14 +713,17 @@ def dru_value(value: str | None, constraint: str) -> tuple:
 
 def dru_unit_errors(dru_text: str) -> list[str]:
     """Each value in a .kicad_dru that KiCad 10's rule parser rejects, as
-    'rule "NAME": (TYPE (KEY VALUE)) why': a unit it does not read, a bare
-    number where a unit is due, a unit on a count, a delay where only a
-    length goes, two kinds of unit in one clause. One is enough for KiCad to
-    drop the whole file: DRC then holds none of its rules, kicad-cli says
-    nothing, and the board falls back to its netclass, zone and board-setup
-    values (#1273). [] for a file whose values KiCad reads. Other parse
-    errors (a misspelled keyword, a bad condition, a type given twice) are
-    not looked for here."""
+    'rule "NAME": (TYPE (KEY VALUE)) why': a unit it does not read, or one
+    not right after a number; a bare number where a unit is due; a unit on
+    a count; a sum it cannot parse; a delay where only a length goes; a
+    value of another kind than the one before it in its clause (a value is
+    of the kind of its last unit, deg or none reading as unitless, so -1
+    after 0.1mm is one). One is enough for KiCad to drop the whole file: DRC
+    then holds none of its rules, kicad-cli says nothing, and the board
+    falls back to its netclass, zone and board-setup values (#1273, #1309).
+    [] for a file whose values KiCad reads. Other parse errors (a misspelled
+    keyword, a bad condition, a type given twice) are not looked for
+    here."""
     out = []
     for form in dru_forms(dru_text):
         rule = dru_rule_constraints(form)
@@ -677,14 +732,14 @@ def dru_unit_errors(dru_text: str) -> list[str]:
                 continue
             last = None
             for key, value in vals:
-                _, kinds, why = _dru_scan(value, ctype)
-                one = (next(iter(kinds)) if not why and kinds
-                       and len(kinds) == 1 else None)
-                if one and last and one != last:
-                    why = (f"is {_DRU_KIND_NAMES[one]} after "
+                _, kind, why = _dru_scan(value, ctype)
+                if not why and kind and last and kind != last:
+                    why = (f"is {_DRU_KIND_NAMES[kind]} after "
                            f"{_DRU_KIND_NAMES[last]}, and KiCad takes one "
-                           "kind of unit per constraint")
-                last = one
+                           "kind per constraint (a value reads as its last "
+                           "unit; deg or none is unitless)")
+                if not why:
+                    last = kind
                 if why:
                     shown = value.translate({9: "\\t", 10: "\\n", 11: "\\v",
                                              12: "\\f", 13: "\\r"})

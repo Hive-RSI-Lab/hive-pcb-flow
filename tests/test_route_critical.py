@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -30,6 +31,7 @@ import check_diffpair  # noqa: E402
 import env  # noqa: E402
 import geom  # noqa: E402
 import route_critical as rc  # noqa: E402
+import rules_gen  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 
@@ -558,6 +560,52 @@ def test_dru_net_floors_empty_when_kicad_drops_the_file(
                    encoding="utf-8")
     assert rc.dru_net_floors(dru, "track_width") == {}
     assert "KiCad ignores every rule" in capsys.readouterr().err
+
+
+# rules_gen's stripline windows (#323): a pair's or a 50-ohm net's width held
+# on its inner layer only, and with a BGA field cut out of the window (#325's
+# neck-down) only outside the courtyards. Neither is a courtyard neck or a
+# net-wide floor for the outer layers the router also draws on (#1309).
+_STRIP_CONS = {
+    "planes": [{"layer": "In1.Cu", "net": "GND"},
+               {"layer": "In3.Cu", "net": "+3V3"},
+               {"layer": "In4.Cu", "net": "GND"}],
+    "diff_pairs": [{"p": "/CK_P", "n": "/CK_N", "base": "CK",
+                    "impedance_ohm": 100},
+                   {"p": "/USB_DP", "n": "/USB_DM", "base": "USB",
+                    "impedance_ohm": 90}],
+    "high_speed": [{"net": "/D0", "reference": "GND", "impedance_ohm": 50},
+                   {"net": "/D1", "reference": "GND", "impedance_ohm": 50},
+                   {"net": "/CK_P", "reference": "GND", "impedance_ohm": 50}]}
+
+
+def _stripline_dru(tmp_path, bga):
+    stk = yaml.safe_load((REPO / "reference" / "stackups.yaml").read_text(
+        "utf-8"))["stackups"]["JLC06161H-3313"]
+    pairs = rules_gen.detect_diff_pairs(_STRIP_CONS)
+    dr, _ = rules_gen.diff_pair_rules(pairs, stk, _STRIP_CONS, 0.0889, bga)
+    zr, _ = rules_gen.impedance_rules(_STRIP_CONS, stk, pairs, 0.0889, bga)
+    dru = tmp_path / "b.kicad_dru"
+    dru.write_text(rules_gen.render_dru(dr + zr), encoding="utf-8")
+    return dru
+
+
+def test_window_outside_a_bga_field_is_not_a_courtyard_neck(tmp_path):
+    """(A) && !(A.intersectsCourtyard('U100') || ...) on an inner layer holds
+    the stripline width OUTSIDE the field: no neck at U100 or U200."""
+    dru = _stripline_dru(tmp_path, ["U100", "U200"])
+    text = dru.read_text(encoding="utf-8")
+    assert "intersectsCourtyard('U100')" in text and "(layer " in text
+    assert rc.dru_neck_rules(dru, "track_width") == []
+
+
+@pytest.mark.parametrize("bga", [[], ["U100"]])
+def test_inner_layer_window_is_not_a_net_wide_floor(tmp_path, bga):
+    """A track_width min KiCad holds on one inner layer only is no floor for
+    the outer layers the router also draws on."""
+    dru = _stripline_dru(tmp_path, bga)
+    assert "track_width" in dru.read_text(encoding="utf-8")
+    assert rc.dru_net_floors(dru, "track_width") == {}
 
 
 def test_build_net_clearances_class_plus_dru(tmp_path):
