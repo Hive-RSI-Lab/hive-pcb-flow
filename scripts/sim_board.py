@@ -133,6 +133,7 @@ SCRIPT = "sim_board"
 SOURCE = "sim_board"
 VREF_YAML = SCRIPTS.parent / "reference" / "regulator_vref.yaml"
 IO_SUPPLY_YAML = SCRIPTS.parent / "reference" / "io_supply.yaml"
+GPIO_DRIVE_YAML = SCRIPTS.parent / "reference" / "gpio_drive.yaml"
 
 GPIO_FN = re.compile(
     r"^(GPIO\d*|IO\d+|P[A-K]?\d+|PIO\d+|D\d+|A\d+|RXD?\d?|TXD?\d?|U\d?[RT]XD?"
@@ -276,6 +277,8 @@ def resolve_rails(board: dict, parts: dict, constraints: dict | None,
 
 
 PASSIVE_KINDS = {"R", "C", "L", "FB", "TP"}
+# reference prefixes that take a net off the board (an I2C bus's peer)
+OFFBOARD_KINDS = {"J", "P", "CN", "CON", "TP"}
 
 
 def _passive_only_nets(board: dict) -> set[str]:
@@ -791,6 +794,55 @@ def io_nets(board: dict, rails: dict, model: dict,
     io -= off
     return ({first[g]: supply[g] for g in sorted(io)},
             {first[g] for g in od if g in io})
+
+
+def io_drivers(board: dict, rails: dict, model: dict,
+               modes: dict | None = None) -> dict[str, list[tuple]]:
+    """{io net (as io_nets names it): [(comp, pin, pin dict)]}: the IC pins
+    io_nets reads as driven (io or od) on each net or its 0-ohm group."""
+    grp = _groups_by_zero_ohm(model)
+    first: dict[str, str] = {}
+    for n in sorted(grp):
+        first.setdefault(grp[n], n)
+    out: dict[str, list[tuple]] = {}
+    for c in board["comps"].values():
+        if c["kind"] not in ("U", "IC") or ic_supply(c, rails) is None:
+            continue
+        for pin, p in c["pins"].items():
+            n = p["net"]
+            if n in rails or n in model["grounds"] or n not in grp:
+                continue
+            if pin_role(c, pin, p, modes)[0] in ("io", "od"):
+                out.setdefault(first[grp[n]], []).append((c, pin, p))
+    return out
+
+
+def load_gpio_drive(path: Path = GPIO_DRIVE_YAML) -> list[dict]:
+    if not path.is_file():
+        return []
+    rows = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) \
+        .get("parts") or []
+    return [{**r, "_m": re.compile(r["match"], re.I),
+             "_p": re.compile(r["pins"]) if r.get("pins") else None}
+            for r in rows]
+
+
+def gpio_limit(c: dict, p: dict, part: dict | None, table: list[dict],
+               sinks: bool) -> tuple[float, str | None]:
+    """(amps, source) a driven IC pin may sink (or source): its
+    gpio_drive.yaml row's iol_a (ioh_a), else GPIO_MAX_A with source None."""
+    names = [x for x in ((part or {}).get("mpn"), c["value"]) if x]
+    fns = _pin_fns(p)
+    for r in table:
+        if any(r["_m"].search(x) for x in names) and \
+                (r["_p"] is None or any(r["_p"].match(f) for f in fns)):
+            v = r.get("iol_a" if sinks else "ioh_a")
+            if v is not None:
+                return float(v), ("reference/gpio_drive.yaml: "
+                                  + " ".join(str(r.get("source", "")).split())
+                                  + ("" if r.get("verified") else
+                                     ", not re-read"))
+    return GPIO_MAX_A, None
 
 
 RAIL_RANK = {"--rail": 0, "constraints": 1, "power_tree": 2}
@@ -1348,7 +1400,7 @@ def _other(e: dict, net: str) -> str:
 
 
 def device_findings(board, parts, rails, model, ops, scen, vios, unknowns,
-                    facts):
+                    facts, modes=None):
     # LEDs
     leds = []
     for e in (x for x in model["elems"] if x["kind"] == "D"
@@ -1381,8 +1433,13 @@ def device_findings(board, parts, rails, model, ops, scen, vios, unknowns,
                                     f"{e['vf_source']}"})
     facts["leds"] = leds
 
-    # GPIO drive currents in the io scenarios
+    # GPIO drive currents in the io scenarios, each judged against the
+    # driving pin's own IOH (sourcing) or IOL (sinking) where
+    # reference/gpio_drive.yaml has it, else a flat GPIO_MAX_A
     rev = {nd: n for n, nd in model["node"].items()}
+    drivers = io_drivers(board, rails, model, modes)
+    drive_tab = load_gpio_drive()
+    assumed: dict[str, set] = {}
     gp = []
     for sc in ("io_low", "io_high", "io_run"):
         for name, i in ops[sc]["src"].items():
@@ -1393,14 +1450,34 @@ def device_findings(board, parts, rails, model, ops, scen, vios, unknowns,
                 continue
             gp.append({"net": net, "scenario": sc,
                        "current_a": checklib.rnd(-i, 6)})
-            if abs(i) > GPIO_MAX_A:
-                vios.append(_vio("gpio_overcurrent", "warning", [], net,
-                                 f"{net} {'sinks' if i > 0 else 'sources'} "
-                                 f"{_f(abs(i), 'A')} when driven "
-                                 f"({sc}): "
-                                 "past the ~20 mA most MCU pins allow - "
-                                 "check the pin's datasheet limit",
-                                 current_a=i, scenario=sc))
+            sinks = i > 0
+            # the weakest of the pins the sim drives the net from
+            lim, src, ref = GPIO_MAX_A, None, None
+            for c, _pin, p in drivers.get(net, []):
+                lv, ls = gpio_limit(c, p, parts.get(c["ref"]), drive_tab,
+                                    sinks)
+                if ls is None:
+                    assumed.setdefault(c["ref"], set()).add(net)
+                if ref is None or lv < lim:
+                    lim, src, ref = lv, ls, c["ref"]
+            if abs(i) <= lim:
+                continue
+            io_dir = "IOL" if sinks else "IOH"
+            why = (f"past the {_f(lim, 'A')} {io_dir} {ref}'s pin is "
+                   f"specified at ({src})" if src else
+                   "past the ~20 mA most MCU pins allow - check the pin's "
+                   "datasheet limit")
+            vios.append(_vio("gpio_overcurrent", "warning",
+                             [ref] if ref else [], net,
+                             f"{net} {'sinks' if sinks else 'sources'} "
+                             f"{_f(abs(i), 'A')} when driven ({sc}): {why}",
+                             current_a=i, scenario=sc, limit_a=lim,
+                             limit_source=src or "assumed"))
+    for ref in sorted(assumed):
+        unknowns.append({"ref": ref, "what": "GPIO drive limit",
+                         "why": f"assumed {_f(GPIO_MAX_A, 'A')}: no "
+                                "reference/gpio_drive.yaml row for its "
+                                f"driven pins ({', '.join(sorted(assumed[ref]))})"})
     facts["io_currents"] = sorted(gp, key=lambda r: -abs(r["current_a"]))[:25]
 
     # IC pins above their own supply (default scenario), or above their
@@ -1674,10 +1751,18 @@ def i2c_findings(board, rails, model, opts, vios, unknowns, facts):
             by_fn = bool({"SDA", "SCL"} & set(p["fn"])) and \
                 pin_role(c, pin, p, modes) != ("off", "pin_modes")
             if I2C_RE.search(name) or by_fn:
-                buses.setdefault(r, {"ics": set()})
-            if r in buses and c["kind"] in ("U", "IC"):
-                buses[r]["ics"].add(c["ref"])
-    out = []
+                buses.setdefault(r, {"ics": set(), "off": set()})
+    # a second pass, so an IC met before the pin that names the bus counts
+    for c in board["comps"].values():
+        for p in c["pins"].values():
+            b = buses.get(grp.get(p["net"]))
+            if b is None or p["net"] in rails:
+                continue
+            if c["kind"] in ("U", "IC"):
+                b["ics"].add(c["ref"])
+            elif c["kind"] in OFFBOARD_KINDS:
+                b["off"].add(c["ref"])
+    out, lone = [], []
     for r, b in sorted(buses.items()):
         nets = members[r]
         pulls = [(e, _other(e, n)) for e in model["elems"] if e["kind"] == "R"
@@ -1685,6 +1770,14 @@ def i2c_findings(board, rails, model, opts, vios, unknowns, facts):
                  and _other(e, n) in rails and rails[_other(e, n)][0] > 0]
         label = "/".join(sorted(nets))
         if len(b["ics"]) < 1:
+            continue
+        # a bus needs a peer: a second IC, or a connector or test point
+        # taking it off the board; one IC alone is a port left unused (or
+        # strapped) and is not judged
+        if len(b["ics"]) < 2 and not b["off"]:
+            (ic,) = b["ics"]
+            lone.append({"nets": sorted(nets), "ic": ic,
+                         "pullups": [e["ref"] for e, _ in pulls]})
             continue
         if not pulls:
             vios.append(_vio("i2c_pullup_missing", "warning", sorted(b["ics"]),
@@ -1703,6 +1796,14 @@ def i2c_findings(board, rails, model, opts, vios, unknowns, facts):
                "cb_assumed": not opts["i2c_cb_pf"], "khz": opts["i2c_khz"],
                **{k: checklib.rnd(v, 2) if isinstance(v, float) else v
                   for k, v in calc.items()}}
+        if b["off"]:
+            row["off_board"] = sorted(b["off"])
+            unknowns.append({"ref": ",".join(sorted(b["off"])),
+                             "what": "I2C bus capacitance off the board",
+                             "why": f"{label} leaves the board through "
+                                    f"{', '.join(sorted(b['off']))}: the "
+                                    "cable and far-end devices are not in "
+                                    f"the {cb:g} pF counted"})
         out.append(row)
         refs = [e["ref"] for e, _ in pulls]
         if rp < calc["rmin"]:
@@ -1723,6 +1824,13 @@ def i2c_findings(board, rails, model, opts, vios, unknowns, facts):
                                 f"pin + {engcalc.I2C_TRACE_PF:g} pF trace; "
                                 "pass --i2c-cb-pf once the layout is known"})
     facts["i2c"] = out
+    facts["i2c_no_peer"] = lone
+    for ic in sorted({x["ic"] for x in lone}):
+        nets = [n for x in lone if x["ic"] == ic for n in x["nets"]]
+        unknowns.append({"ref": ic, "what": "I2C port with no peer",
+                         "why": "no I2C peer on the board (no second IC, "
+                                "connector or test point): unused or "
+                                f"off-board, not judged ({', '.join(nets)})"})
 
 
 def r_tolerance(board, parts, ref) -> float:
@@ -1882,7 +1990,7 @@ def run(a) -> dict:
      version) = analyze(board, parts, rails, opts)
     regulator_findings(board, parts, rails, model, opts, vios, unknowns, facts)
     device_findings(board, parts, rails, model, ops, scen, vios, unknowns,
-                    facts)
+                    facts, opts.get("pin_modes"))
     timing_findings(board, rails, model, ops, tran, ens, opts, vios, facts)
     i2c_findings(board, rails, model, opts, vios, unknowns, facts)
     passive_facts(board, rails, model, facts, parts)

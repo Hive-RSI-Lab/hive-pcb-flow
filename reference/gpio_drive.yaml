@@ -1,0 +1,27 @@
+# IC I/O pin drive limits for sim_board's gpio_overcurrent check. The io
+# scenarios drive each IC I/O net from its pin (the I/O supply for io_high,
+# 0 V for io_low); a pin that sources more than ioh_a or sinks more than
+# iol_a is flagged. Without a row, a pin is judged against a flat 20 mA
+# (GPIO_MAX_A) and the report lists a known unknown that says so.
+#
+# match: a regex tried against the part's MPN (parts.json) and its value
+# (case-insensitive). pins (optional): a regex tried against each pin's
+# function names (upper case); without it the row covers every driven pin.
+# ioh_a / iol_a: the source / sink current the datasheet specifies the
+# output high / low level at (or its per-pin limit, whichever is lower).
+# voh_drop_v / vol_v (optional): the drop below the I/O supply at ioh_a and
+# the low level at iol_a, for the record. source: where it came from.
+# `verified: false` means typed from the datasheet's numbers as quoted, not
+# re-read: the review that relies on it reads the datasheet once and flips
+# it (with the date).
+parts:
+  - match: '^CYPD3177'
+    ioh_a: 0.004
+    iol_a: 0.010
+    voh_drop_v: 0.6
+    vol_v: 0.6
+    source: >-
+      Infineon EZ-PD BCR datasheet 002-25383, GPIO DC specifications:
+      VOH = VDDD - 0.6 V at IOH = 4 mA (SID.GIO#33), VOL = 0.6 V at
+      IOL = 10 mA (SID.GIO#36)
+    verified: false
