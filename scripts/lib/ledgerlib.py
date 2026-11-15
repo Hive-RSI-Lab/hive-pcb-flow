@@ -19,7 +19,8 @@ Facts and who writes them:
               when the rating was read from a datasheet, listed when it was
               not; rated_from says which: datasheet, distributor (parts.json
               attributes), part_code (a capacitor's maker voltage code in
-              its MPN, or a voltage in its Value field) or package (a
+              its MPN, a voltage in its Value field, or a diode's
+              part-number family in reference/diode_vr.yaml) or package (a
               generic table)
               (check_ratings.py, run by the verify gate)
   pinout      per refdes with more than two pins: the board's pad numbers

@@ -2,7 +2,8 @@
 
 These parts' voltage ratings were compared with the board's rails and held, but the number came from
 the distributor's listing in parts.json, a capacitor's part-number voltage code or Value field
-("220u/16V"), or a generic package table. No datasheet was read, so their
+("220u/16V"), a diode's part-number family (reference/diode_vr.yaml: SS14 = 40 V, a TVS's
+standoff), or a generic package table. No datasheet was read, so their
 ledger facts are `listed`, not `verified`, and `rated_from` says which source it was. A warning: a
 listed fact doesn't block release (`lib/ledgerlib.py` says why), and attest names them in its result.
 

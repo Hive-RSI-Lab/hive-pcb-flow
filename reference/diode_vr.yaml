@@ -1,0 +1,247 @@
+# diode_vr.yaml - a diode's reverse-voltage rating read from its part number,
+# for check_ratings.py (read through scripts/lib/diode_vr.py mpn_reverse). A
+# 2-terminal diode with no datasheet read and no distributor reverse-voltage
+# attribute is still rated when its part number belongs to a family below:
+# SS14 = 40 V, 1N4007 = 1000 V, SMBJ24A = 24 V standoff (#1323).
+#
+#   match   regex matched in full on the upper-cased part number, spaces
+#           removed; its named group `k` (and `ka` when present) is looked up
+#           in `codes`; a `bi` group that matched marks the part
+#           bidirectional; anything after the part (packaging, grade: -E3/61T,
+#           -7-F, T1G, DPYR) is matched by the regex's tail
+#   codes   {k: rated volts}: a part with no row stays unrated, never guessed
+#   rating  which row of the datasheet the volts are: VDC or VR (the DC
+#           blocking voltage) for a rectifier or Schottky, VRWM (the
+#           reverse standoff, working peak) for a TVS or ESD diode. Never
+#           the breakdown or clamp voltage: a TVS conducts above its
+#           standoff by design, so the standoff is what a rail may sit at
+#   kind    rectifier, schottky, signal, tvs or esd
+#   cite    the maker's datasheet the numbers were read from (URL, document
+#           number and revision, the table)
+#
+# A family's number is the same across makers where the part number is a
+# shared industry number (1N4007, SS14, SMBJ24A); the cite is one maker's
+# sheet. Zeners (BZT52, MMSZ, BZX84) and LEDs are left out: a Zener's Value
+# is its clamp voltage and it runs in reverse by design, and an LED's
+# reverse rating is not a part-number family. A row is added only with the
+# sheet in hand.
+families:
+- name: Vishay 1N4148 small-signal diode
+  match: ^(?P<k>1N4148)(?:-.*|TR|TAP)?$
+  codes: {"1N4148": 75}
+  rating: VR
+  kind: signal
+  cite: "https://www.vishay.com/docs/81857/1n4148.pdf, Vishay 1N4148, Absolute
+    Maximum Ratings: reverse voltage VR 75 V (repetitive peak VRRM 100 V)"
+- name: Vishay 1N4001-1N4007 general-purpose rectifier
+  match: ^(?P<k>1N400[1-7])(?:[-/].*|G|GP)?$
+  codes: {"1N4001": 50, "1N4002": 100, "1N4003": 200, "1N4004": 400,
+          "1N4005": 600, "1N4006": 800, "1N4007": 1000}
+  rating: VDC
+  kind: rectifier
+  cite: "https://www.vishay.com/docs/88503/1n4001.pdf, Vishay 1N4001 thru
+    1N4007 (Revision 29-Apr-2020), Maximum Ratings: maximum DC blocking
+    voltage VDC 50/100/200/400/600/800/1000 V"
+- name: Vishay 1N5817-1N5819 Schottky rectifier
+  match: ^(?P<k>1N581[7-9])(?:[-/].*)?$
+  codes: {"1N5817": 20, "1N5818": 30, "1N5819": 40}
+  rating: VDC
+  kind: schottky
+  cite: "https://www.vishay.com/docs/88525/1n5817.pdf, Vishay 1N5817, 1N5818,
+    1N5819 (Revision 01-Jul-2020), Maximum Ratings: maximum DC blocking
+    voltage VDC 20/30/40 V"
+- name: Diodes Inc. 1N5819HW Schottky rectifier (SOD-123)
+  match: ^(?P<k>1N5819HW)(?:-.*)?$
+  codes: {"1N5819HW": 40}
+  rating: VR
+  kind: schottky
+  cite: "https://www.diodes.com/assets/Datasheets/ds30217.pdf, Diodes 1N5819HW
+    (DS30217 Rev. 23-2), Maximum Ratings: VRRM, VRWM, DC blocking voltage
+    VR 40 V"
+- name: Vishay SS12-SS16 Schottky rectifier (SMA)
+  match: ^(?P<k>SS1[2-6])(?:[-/].*)?$
+  codes: {"SS12": 20, "SS13": 30, "SS14": 40, "SS15": 50, "SS16": 60}
+  rating: VDC
+  kind: schottky
+  cite: "https://www.vishay.com/docs/88746/ss12.pdf, Vishay SS12, SS13, SS14,
+    SS15, SS16 (Revision 23-Apr-2020), Maximum Ratings: maximum DC blocking
+    voltage VDC 20/30/40/50/60 V"
+- name: Vishay SS32-SS36 Schottky rectifier (SMC)
+  match: ^(?P<k>SS3[2-6])(?:[-/].*)?$
+  codes: {"SS32": 20, "SS33": 30, "SS34": 40, "SS35": 50, "SS36": 60}
+  rating: VDC
+  kind: schottky
+  cite: "https://www.vishay.com/docs/88751/ss32.pdf, Vishay SS32, SS33, SS34,
+    SS35, SS36 (Revision 23-Apr-2020), Maximum Ratings: maximum DC blocking
+    voltage VDC 20/30/40/50/60 V"
+- name: Diodes Inc. B220-B260 Schottky rectifier (SMA/SMB)
+  match: ^(?P<k>B2[2-6]0)(?:A|B)?(?:-.*)?$
+  codes: {"B220": 20, "B230": 30, "B240": 40, "B250": 50, "B260": 60}
+  rating: VR
+  kind: schottky
+  cite: "https://www.diodes.com/assets/Datasheets/ds13004.pdf, Diodes B220/A -
+    B260/A (DS13004 Rev. 23-2), Maximum Ratings: VRRM, VRWM, DC blocking
+    voltage VR 20/30/40/50/60 V"
+- name: Diodes Inc. B270-B2100 Schottky rectifier (SMB)
+  match: ^(?P<k>B2(?:[789]0|100))(?:Q|B)?(?:-.*)?$
+  codes: {"B270": 70, "B280": 80, "B290": 90, "B2100": 100}
+  rating: VR
+  kind: schottky
+  cite: "https://www.diodes.com/assets/Datasheets/ds30021.pdf, Diodes B270 -
+    B2100 (DS30021 Rev. 13-2, October 2023), Maximum Ratings: VRRM, VRWM, DC
+    blocking voltage VR 70/80/90/100 V"
+- name: YFW B5817W-B5819W Schottky rectifier (SOD-123)
+  match: ^(?P<k>B581[7-9]W)(?:-.*)?$
+  codes: {"B5817W": 20, "B5818W": 30, "B5819W": 40}
+  rating: VDC
+  kind: schottky
+  cite: "https://atta.szlcsc.com/upload/public/pdf/source/20231218/A118C1BF4C5F3DCA4F9AC74151E11330.pdf,
+    YFW B5817W thru B5819W SOD-123, Maximum Ratings: maximum DC blocking
+    voltage VDC 20/30/40 V"
+- name: onsemi BAT54L Schottky diode (SOT-23, one diode)
+  match: ^(?P<k>BAT54L)(?:T[13]G?)?$
+  codes: {"BAT54L": 30}
+  rating: VR
+  kind: schottky
+  cite: "https://www.onsemi.com/download/data-sheet/pdf/bat54lt1-d.pdf, onsemi
+    BAT54L (BAT54LT1/D Rev. 18, November 2024), Maximum Ratings: reverse
+    voltage VR 30 V"
+- name: onsemi MBRS140 Schottky rectifier (SMB)
+  match: ^(?P<k>MBRS140)(?:T3G?|-.*)?$
+  codes: {"MBRS140": 40}
+  rating: VR
+  kind: schottky
+  cite: "https://www.onsemi.com/download/data-sheet/pdf/mbrs140t3-d.pdf, onsemi
+    MBRS140, Maximum Ratings: VRRM, VRWM, DC blocking voltage VR 40 V"
+- name: onsemi MBR0520L Schottky rectifier (SOD-123)
+  match: ^(?P<k>MBR0520)L?(?:T[13]G?)?$
+  codes: {"MBR0520": 20}
+  rating: VR
+  kind: schottky
+  cite: "https://www.onsemi.com/download/data-sheet/pdf/mbr0520lt1-d.pdf, onsemi
+    MBR0520L (Rev. 7), Maximum Ratings: VRRM, VRWM, DC blocking voltage
+    VR 20 V"
+- name: Bourns SMAJ 400 W TVS (SMA)
+  match: ^SMAJ(?P<k>\d+(?:\.\d)?)(?P<bi>C)?(?P<ka>A)(?:-.*)?$
+  codes: {"5.0A": 5.0, "6.0A": 6.0, "6.5A": 6.5, "7.0A": 7.0, "7.5A": 7.5,
+          "8.0A": 8.0, "8.5A": 8.5, "9.0A": 9.0, "10A": 10, "11A": 11,
+          "12A": 12, "13A": 13, "14A": 14, "15A": 15, "16A": 16, "17A": 17,
+          "18A": 18, "20A": 20, "22A": 22, "24A": 24, "26A": 26, "28A": 28,
+          "30A": 30, "33A": 33, "36A": 36, "40A": 40, "43A": 43, "45A": 45,
+          "48A": 48, "51A": 51, "54A": 54, "58A": 58, "60A": 60, "64A": 64,
+          "70A": 70, "75A": 75, "78A": 78, "85A": 85, "90A": 90, "100A": 100,
+          "110A": 110, "120A": 120, "130A": 130, "150A": 150, "160A": 160,
+          "170A": 170, "180A": 180, "200A": 200, "220A": 220, "250A": 250,
+          "300A": 300, "350A": 350, "400A": 400, "434A": 434, "440A": 440,
+          "495A": 495}
+  rating: VRWM
+  kind: tvs
+  cite: "https://www.bourns.com/docs/Product-Datasheets/SMAJ.pdf, Bourns SMAJ
+    Transient Voltage Suppressor Diode Series, Electrical Characteristics
+    table: working peak reverse voltage VRWM, SMAJ5.0A-SMAJ495A and the CA
+    bidirectional parts (part numbering: 5.0 = 5.0 VRWM)"
+- name: Vishay SMBJ 600 W TVS (SMB)
+  match: ^SMBJ(?P<k>\d+(?:\.\d)?)(?P<bi>C)?(?P<ka>A?)(?:[-/].*)?$
+  codes: {"5.0": 5.0, "5.0A": 5.0, "6.0": 6.0, "6.0A": 6.0, "6.5": 6.5,
+          "6.5A": 6.5, "7.0": 7.0, "7.0A": 7.0, "7.5": 7.5, "7.5A": 7.5,
+          "8.0": 8.0, "8.0A": 8.0, "8.5": 8.5, "8.5A": 8.5, "9.0": 9.0,
+          "9.0A": 9.0, "10": 10, "10A": 10, "11": 11, "11A": 11, "12": 12,
+          "12A": 12, "13": 13, "13A": 13, "14": 14, "14A": 14, "15": 15,
+          "15A": 15, "16": 16, "16A": 16, "17": 17, "17A": 17, "18": 18,
+          "18A": 18, "20": 20, "20A": 20, "22": 22, "22A": 22, "24": 24,
+          "24A": 24, "26": 26, "26A": 26, "28": 28, "28A": 28, "30": 30,
+          "30A": 30, "33": 33, "33A": 33, "36": 36, "36A": 36, "40": 40,
+          "40A": 40, "43": 43, "43A": 43, "45": 45, "45A": 45, "48": 48,
+          "48A": 48, "51": 51, "51A": 51, "54": 54, "54A": 54, "58": 58,
+          "58A": 58, "60": 60, "60A": 60, "64": 64, "64A": 64, "70": 70,
+          "70A": 70, "75": 75, "75A": 75, "78": 78, "78A": 78, "85": 85,
+          "85A": 85, "90": 90, "90A": 90, "100": 100, "100A": 100,
+          "110": 110, "110A": 110, "120": 120, "120A": 120, "130": 130,
+          "130A": 130, "150": 150, "150A": 150, "160": 160, "160A": 160,
+          "170": 170, "170A": 170, "188": 188, "188A": 188}
+  rating: VRWM
+  kind: tvs
+  cite: "https://www.vishay.com/docs/88392/smbj50.pdf, Vishay SMBJ5.0 thru
+    SMBJ188CA (Document Number 88392), Electrical Characteristics: stand-off
+    voltage VWM; for bidirectional devices use C or CA suffix"
+- name: Vishay SMCJ 1500 W TVS (SMC)
+  match: ^SMCJ(?P<k>\d+(?:\.\d)?)(?P<bi>C)?(?P<ka>A?)(?:[-/].*)?$
+  codes: {"5.0": 5.0, "5.0A": 5.0, "6.0": 6.0, "6.0A": 6.0, "6.5": 6.5,
+          "6.5A": 6.5, "7.0": 7.0, "7.0A": 7.0, "7.5": 7.5, "7.5A": 7.5,
+          "8.0": 8.0, "8.0A": 8.0, "8.5": 8.5, "8.5A": 8.5, "9.0": 9.0,
+          "9.0A": 9.0, "10": 10, "10A": 10, "11": 11, "11A": 11, "12": 12,
+          "12A": 12, "13": 13, "13A": 13, "14": 14, "14A": 14, "15": 15,
+          "15A": 15, "16": 16, "16A": 16, "17": 17, "17A": 17, "18": 18,
+          "18A": 18, "20": 20, "20A": 20, "22": 22, "22A": 22, "24": 24,
+          "24A": 24, "26": 26, "26A": 26, "28": 28, "28A": 28, "30": 30,
+          "30A": 30, "33": 33, "33A": 33, "36": 36, "36A": 36, "40": 40,
+          "40A": 40, "43": 43, "43A": 43, "45": 45, "45A": 45, "48": 48,
+          "48A": 48, "51": 51, "51A": 51, "54": 54, "54A": 54, "58": 58,
+          "58A": 58, "60": 60, "60A": 60, "64": 64, "64A": 64, "70": 70,
+          "70A": 70, "75": 75, "75A": 75, "78": 78, "78A": 78, "85": 85,
+          "85A": 85, "90": 90, "90A": 90, "100": 100, "100A": 100,
+          "110": 110, "110A": 110, "120": 120, "120A": 120, "130": 130,
+          "130A": 130, "150": 150, "150A": 150, "160": 160, "160A": 160,
+          "170": 170, "170A": 170, "188": 188, "188A": 188}
+  rating: VRWM
+  kind: tvs
+  cite: "https://www.vishay.com/docs/88394/smcj50.pdf, Vishay SMCJ5.0 thru
+    SMCJ188CA (Document Number 88394, Revision 07-May-07), Electrical
+    Characteristics: stand-off voltage VWM; for bidirectional devices use C
+    or CA suffix"
+- name: onsemi SMF5.0A 200 W TVS (SOD-123FL, unidirectional)
+  match: ^SMF(?P<k>\d+(?:\.\d)?)(?P<ka>A)(?:T[13]G?|-.*)?$
+  codes: {"5.0A": 5.0, "6.0A": 6.0, "6.5A": 6.5, "7.0A": 7.0, "7.5A": 7.5,
+          "8.0A": 8.0, "8.5A": 8.5, "9.0A": 9.0, "10A": 10, "11A": 11,
+          "12A": 12, "13A": 13, "14A": 14, "15A": 15, "16A": 16, "17A": 17,
+          "18A": 18, "20A": 20, "22A": 22, "24A": 24, "26A": 26, "28A": 28,
+          "30A": 30, "33A": 33, "36A": 36, "40A": 40, "43A": 43, "45A": 45,
+          "48A": 48, "51A": 51, "54A": 54, "58A": 58, "60A": 60, "64A": 64,
+          "70A": 70, "75A": 75, "78A": 78, "85A": 85, "90A": 90, "100A": 100,
+          "110A": 110, "120A": 120, "130A": 130, "150A": 150, "160A": 160,
+          "170A": 170}
+  rating: VRWM
+  kind: tvs
+  cite: "https://www.onsemi.com/download/data-sheet/pdf/smf5.0at1-d.pdf, onsemi
+    SMF5.0AT1 Series (Rev. 2, May 2007), Electrical Characteristics:
+    VRWM; unidirectional only, so SMF..CA has no row"
+- name: onsemi ESD5Z ESD diode (SOD-523, unidirectional)
+  match: ^(?:SZ)?ESD5Z(?P<k>2\.5|3\.3|5\.0|6\.0|7\.0|12)(?:T[15]G?)?$
+  codes: {"2.5": 2.5, "3.3": 3.3, "5.0": 5.0, "6.0": 6.0, "7.0": 7.0,
+          "12": 12}
+  rating: VRWM
+  kind: esd
+  cite: "https://www.onsemi.com/download/data-sheet/pdf/esd5z2.5t1-d.pdf, onsemi
+    ESD5Z2.5T1G Series (Rev. 16), Electrical Characteristics: VRWM
+    2.5/3.3/5.0/6.0/7.0/12 V"
+- name: Nexperia PESD5V0S1B ESD diode (bidirectional)
+  match: ^(?P<k>PESD5V0S1B)[ABL](?:,\d+)?$
+  codes: {"PESD5V0S1B": 5}
+  bidirectional: true
+  rating: VRWM
+  kind: esd
+  cite: "https://assets.nexperia.com/documents/data-sheet/PESD5V0S1BA_BB_BL.pdf,
+    NXP/Nexperia PESD5V0S1BA; PESD5V0S1BB; PESD5V0S1BL (Rev. 04, 20 August
+    2009), Table 2: reverse stand-off voltage VRWM 5 V; bidirectional"
+- name: TI ESD441 ESD diode (unidirectional)
+  match: ^(?P<k>ESD441)(?:DPY|DPL)R?$
+  codes: {"ESD441": 5.5}
+  rating: VRWM
+  kind: esd
+  cite: "https://www.ti.com/lit/ds/symlink/esd441.pdf, TI ESD441 (SLVSH26C),
+    Electrical Characteristics: VRWM 5.5 V"
+- name: TI ESD321 ESD diode (unidirectional)
+  match: ^(?P<k>ESD321)(?:DPY|DPL)R?$
+  codes: {"ESD321": 3.6}
+  rating: VRWM
+  kind: esd
+  cite: "https://www.ti.com/lit/ds/symlink/esd321.pdf, TI ESD321 (SLVSEN8C),
+    Electrical Characteristics: reverse stand-off voltage VRWM 3.6 V"
+- name: TI TPD1E04U04 ESD diode (unidirectional)
+  match: ^(?P<k>TPD1E04U04)(?:DPY|DPL)R?$
+  codes: {"TPD1E04U04": 3.6}
+  rating: VRWM
+  kind: esd
+  cite: "https://www.ti.com/lit/ds/symlink/tpd1e04u04.pdf, TI TPD1E04U04
+    (SLVSDG4B), Electrical Characteristics: reverse stand-off voltage VRWM
+    3.6 V"
