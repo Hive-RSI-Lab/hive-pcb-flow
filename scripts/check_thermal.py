@@ -108,6 +108,11 @@ there against 29.9 with vias on JESD51-5), so the own-side figure errs high
 and the credited one low. VIA_CREDIT_MIN is a judgement: four 0.3 mm vias
 to a plane 0.1-0.2 mm down are ~4-7 C/W in series, inside the screen's
 +/-30 % of its 51 C/W floor, while a single one is ~15-30 C/W.
+Past that credit the reading doesn't count vias (four read as sixteen), so a
+copper-model part over budget on saturated copper (or under the copper floor)
+isn't told to add vias, which a re-run wouldn't confirm: its error says the
+screen has no via lever there and names what would move the reading (cut the
+loss, the part's datasheet theta_JA, a heatsink or forced air) (#1181).
 
 Thermal vias. An entry's min_vias is the datasheet's floor for the part's
 via array (a PMIC datasheet's 9-via minimum under its exposed pad). It holds on
@@ -1055,6 +1060,16 @@ def check_part(bg: geom.BoardGeom, entry: dict, air_c: float | None = None):
         remedy = ("add thermal vias to an inner/back plane" + grow_hint(
             spread["theta"](spread["sat_mm2"]), f"the {net} pour")
             if saturated or need_vias else f"grow the {net} pour")
+        if bounded and (saturated or need_vias):
+            # 4+ layers: the reading already credits the net's inner planes
+            # and doesn't count vias past that (module doc), so "add vias"
+            # is a remedy a re-run can't confirm (#1181).
+            remedy = (f"more vias won't change this reading (the screen "
+                      f"already credits the {net} inner planes and has no "
+                      f"via lever past that): cut the loss, give {ref} its "
+                      "datasheet theta_JA (theta_ja_c_w with theta_source), "
+                      "or add a heatsink or forced air") + grow_hint(
+                spread["theta"](spread["sat_mm2"]), f"the {net} pour")
         where = f"into {a_eff:.0f} mm2 of {net} copper"
         if rated:
             r = entry["rating"]

@@ -221,3 +221,29 @@ def test_the_report_lists_what_it_could_not_judge(tmp_path):
     (line,) = payload["not_judged"]
     assert line.startswith("U1:")
     assert all("not_judged" not in c for c in payload["checked"])
+
+
+# #1181: past the plane credit the reading doesn't count vias, so the error
+# on 4 layers names what would move it, not more vias.
+@pytest.mark.parametrize("vias", [GRID[:4], GRID, ()], ids=["4", "9", "0"])
+def test_four_layer_saturated_error_does_not_ask_for_vias(tmp_path, vias):
+    vs, f = _part(tmp_path, {"power_w": 1.0}, vias=vias)
+    (e,) = _kind(vs, "thermal_area", "error")
+    assert "add thermal vias" not in e["msg"]
+    assert "more vias won't change this reading" in e["msg"]
+    assert "theta_ja_c_w with theta_source" in e["msg"]
+    assert e["theta_ja"] == pytest.approx(THETA_PLANES, abs=0.01)
+
+
+def test_four_and_nine_vias_read_the_same(tmp_path):
+    """The premise: the remedy can't be vias because vias don't move it."""
+    _, f4 = _part(tmp_path, {"power_w": 1.0}, vias=GRID[:4])
+    _, f9 = _part(tmp_path, {"power_w": 1.0}, vias=GRID)
+    assert f4["theta_ja"] == f9["theta_ja"]
+
+
+def test_two_layer_saturated_error_still_names_its_levers(tmp_path):
+    """The 2-layer path is untouched: it still errs, with its own remedy."""
+    vs, _ = _part(tmp_path, {"power_w": 1.0}, vias=GRID, layers=2)
+    (e,) = _kind(vs, "thermal_area", "error")
+    assert "more vias won't change this reading" not in e["msg"]
