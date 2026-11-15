@@ -278,16 +278,30 @@ class Router:
 
     # --------------------------------------------------------- islands
 
-    def islands(self, net: str, scraps: bool = True) -> list[dict]:
+    def islands(self, net: str, scraps: bool = True,
+                ends: bool = False) -> list[dict]:
         """The net's copper as it stands in this router: the board's, less
         what is ripped (obs.hidden), plus what is routed (obs.added), as
         [{layer: [polygons]}]. Each island also lists its pads' count under
         the key None. scraps=False leaves out the islands of zone fill alone
         with no pad: fill a move cut off from its pads, which the refill
         redoes or KiCad's island removal drops, so no route need join it
-        (#1140)."""
+        (#1140).
+        ends=True gives what a route may end on: a via the rest of the net
+        meets on one of its layers alone is left out of that layer's list
+        (its other layers keep it). A route ending on it there would leave
+        it met on one layer, which KiCad 10 calls dangling (via_dangling),
+        and the prune can't take it while the route hangs on it; ending on
+        the copper that meets it instead, the via goes (#1140: the R2A flip
+        on pd_trigger, whose join ended on the disk of a via a rip had left
+        on B.Cu alone). Meeting as part_repair._via_free counts it: copper
+        that touches it, teardrops not; a pad or via meeting it on two or
+        more layers keeps it whole. Islands and pad counts are as
+        without."""
         cu = list(self.bg.copper_layers)
         pieces: list[tuple[frozenset, object, bool, bool]] = []
+        vias: list[int] = []         # the pieces that are vias
+        tear: set = set()            # teardrop fill: meets no via
         for it in self.obs.items + self.obs.added:
             if it.net != net or (it.uuid and it.uuid in self.obs.hidden):
                 continue
@@ -299,9 +313,14 @@ class Router:
             if ly and not shape.is_empty:
                 is_pad = it.uuid is None and it.conn < 0 \
                     and it.shape.geom_type == "Polygon" and not it.tied
+                if it.hole is not None and it.half > 0:
+                    vias.append(len(pieces))
                 pieces.append((ly, shape, is_pad, False))
-        for znet, layer, poly in self.obs.fills:
+        tds = getattr(self.obs, "fill_teardrop", ())
+        for k, (znet, layer, poly) in enumerate(self.obs.fills):
             if znet == net:
+                if k < len(tds) and tds[k]:
+                    tear.add(len(pieces))
                 pieces.append((frozenset({layer}), poly, False, True))
         parent = list(range(len(pieces)))
 
@@ -317,6 +336,19 @@ class Router:
                 j = int(j)
                 if j > i and ly & pieces[j][0]:
                     parent[find(j)] = find(i)
+        alone: dict[int, str] = {}   # via -> the one layer it is met on
+        for i in vias if ends else ():
+            met: set = set()
+            for j in tree.query(pieces[i][1], predicate="intersects"):
+                both = pieces[i][0] & pieces[int(j)][0]
+                if int(j) == i or int(j) in tear or not both:
+                    continue
+                if len(both) > 1:
+                    break
+                met |= both
+            else:
+                if len(met) == 1:
+                    alone[i] = next(iter(met))
         groups: dict[int, dict] = {}
         live: set = set()
         for i, (ly, shape, is_pad, is_fill) in enumerate(pieces):
@@ -326,7 +358,8 @@ class Router:
             if not is_fill:
                 live.add(r)
             for layer in ly:
-                g.setdefault(layer, []).append(shape)
+                if alone.get(i) != layer:
+                    g.setdefault(layer, []).append(shape)
         return [g for r, g in groups.items() if scraps or r in live]
 
     def join_islands(self, net: str, want: int, near=None,
@@ -341,7 +374,7 @@ class Router:
         a grid of the whole board for every try cost minutes (#1140)."""
         ops: list = []
         for _ in range(64):
-            isl = self.islands(net, scraps=False)
+            isl = self.islands(net, scraps=False, ends=True)
             if len(isl) <= want:
                 return ops
             sides = [{k: v for k, v in i.items() if k is not None}

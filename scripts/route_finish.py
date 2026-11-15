@@ -366,6 +366,9 @@ class Obstacles:
         #                          net's board tracks/vias cost, not block
         self.fills = [(z.net, layer, p) for z in bg.zones_of()
                       for layer, ps in z.fills.items() for p in ps]
+        # beside fills: a teardrop's, which meets no via for KiCad (#1140)
+        self.fill_teardrop = [bool(z.teardrop) for z in bg.zones_of()
+                              for ps in z.fills.values() for _ in ps]
         self.fill_tree = STRtree([p for _, _, p in self.fills]) \
             if self.fills else None
 

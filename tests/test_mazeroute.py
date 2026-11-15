@@ -386,6 +386,46 @@ def test_a_stub_on_a_scrap_still_joins(tmp_path, mf_path):
     assert _tracks(ops, "GND") and len(r.islands("GND")) == 1
 
 
+def _via_on_b(tmp_path):
+    """20 x 10, two layers: A's via V at (10, 5), 1 mm across, met on B.Cu
+    alone, by a 0.25 mm track from its centre to (16, 5), as a rip of the
+    track that met it on F.Cu leaves it; and a stub of A on B.Cu from
+    (2, 5) to (4, 5)."""
+    import make_fixture as mf
+    body = (mf.via(10, 5, "A", "00000000-0000-0000-0000-0000000007c1",
+                   size=1.0, drill=0.4)
+            + mf.seg(10, 5, 16, 5, 0.25, "B.Cu", "A",
+                     "00000000-0000-0000-0000-0000000007c2")
+            + mf.seg(2, 5, 4, 5, 0.25, "B.Cu", "A",
+                     "00000000-0000-0000-0000-0000000007c3"))
+    return geom.BoardGeom.from_file(mf.write(tmp_path / "via1.kicad_pcb",
+                                             body, 20, 10))
+
+
+def test_a_join_ends_past_a_via_met_on_one_layer(tmp_path, mf_path):
+    """#1140, the R2A flip on pd_trigger: a rip left a via met on B.Cu
+    alone, and the join from the flipped pad ended on the via's disk there,
+    short of the track that met it. The via stayed met on one layer, which
+    KiCad 10 calls dangling, and the prune could not take it with the route
+    hanging on it. Its disk is no end on B.Cu now (still one on F.Cu, where
+    a route would meet it on a second layer): the join reaches the track,
+    and the via is the prune's to take."""
+    r = mazeroute.Router(_via_on_b(tmp_path))
+    disk = Point(9.6, 5)        # in V's disk, short of the track's copper
+    whole = [i for i in r.islands("A") if "F.Cu" in i]
+    ends = [i for i in r.islands("A", ends=True) if "F.Cu" in i]
+    assert len(whole) == len(ends) == 1
+    assert any(p.covers(disk) for p in whole[0]["B.Cu"])
+    assert not any(p.covers(disk) for p in ends[0]["B.Cu"])
+    assert any(p.covers(disk) for p in ends[0]["F.Cu"])
+    ops = r.join_islands("A", 1)
+    assert len(r.islands("A")) == 1
+    track = LineString([(10, 5), (16, 5)]).buffer(0.125)
+    assert any(LineString([o["start"], o["end"]]).buffer(o["width"] / 2)
+               .intersects(track) for o in _tracks(ops, "A")
+               if o["layer"] == "B.Cu")
+
+
 # ------------------------------------------------------------ DRU bans (#1140)
 
 _FOUR = """(kicad_pcb (version 20260206) (generator "test")
