@@ -28,10 +28,13 @@ graphic counts for its own exposed pad; a board graphic for any it covers.
   paste_on_via       error: a via's hole lies under an exposed pad's paste
                      (its own aperture or a window over it), unless the via
                      is filled or capped (KiCad's via `filling`/`capping`).
-                     A paste-only window has no number of its own, so it
-                     is named by the exposed pad it lies on ("U1 pad 9's
-                     paste window", pads "U1:9"); one over no exposed pad
-                     is "U1 paste window", pads "U1:".
+                     A footprint's own plated thru_hole pads inside one of
+                     its exposed pads are vias too, with their own drill
+                     (KiCad's stock *_ThermalVias footprints; hive-pcb-flow
+                     #1198). A paste-only window has no number of its
+                     own, so it is named by the exposed pad it lies on
+                     ("U1 pad 9's paste window", pads "U1:9"); one over no
+                     exposed pad is "U1 paste window", pads "U1:".
                      A via under any other pad's paste (via-in-pad on a
                      decoupler or an RF ground, which the golden boards
                      carry on purpose) is listed in the facts
@@ -82,6 +85,12 @@ COVER_MAX = 0.90
 EP_AREA_RATIO = 4.0
 # a hole reaching less than this (mm2) into an aperture is the arc sampling
 HIT_MM2 = 1e-3
+# paste reaching no more than this (mm) past a via hole's rim only grazes it,
+# under stencil-to-board registration: a window-pane laid around the vias
+# with the drill as its gap, whose outline stroke (KiCad prints a filled
+# graphic's stroke too) widens each pane by half a stroke (minuet U5's
+# 0.1 mm strokes; hive-pcb-flow #1198)
+RIM_MM = 0.05
 
 
 def _on(poly, cu) -> bool:
@@ -188,13 +197,15 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
                             "pad_to_paste_clearance_ratio")) \
         if setup is not None else (None, None)
     pads: list[Ap] = []
+    fp_vias: list[dict] = []
     for fp in _kids(root, "footprint"):
         ref = "?"
         for prop in _kids(fp, "property"):
             s = _strs(prop)
             if len(s) >= 2 and s[0] == "Reference":
                 ref = s[1]
-        at = _nums(_kid(fp, "at"))
+        # KiCad reads a footprint with no (at) at the origin (#1198)
+        at = _nums(_kid(fp, "at")) if _kid(fp, "at") is not None else [0, 0]
         fx, fy = at[0], at[1]
         fa = at[2] if len(at) > 2 else 0.0
         fpm = _margin(fp, ("solder_paste_margin", "solder_paste_ratio",
@@ -227,6 +238,16 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
                 prims = [pts for g in _kids(pr, "gr_poly")
                          if len(pts := _pts(_kid(g, "pts"))) >= 3]
             rr = _kid(pad, "roundrect_rratio")
+            dr = _kid(pad, "drill")
+            if str(_tok(pad[2])) == "thru_hole" and dr is not None \
+                    and _nums(dr) and sides("Cu"):
+                # a footprint's own plated hole: a stock *_ThermalVias
+                # belly's via pads, kept if they lie in its exposed pad
+                fp_vias.append({
+                    "at": (fx + dx, fy + dy), "drill": min(_nums(dr)),
+                    "net": (_strs(_kid(pad, "net")) or [None])[-1]
+                    if _kid(pad, "net") is not None else None,
+                    "plugged": False, "ref": ref})
             pads.append(Ap(ref, str(pad[1]), str(_tok(pad[2])),
                            str(_tok(pad[3])), (sz[0], sz[-1]),
                            (fx + dx, fy + dy), rest[0] if rest else 0.0,
@@ -245,7 +266,7 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
                 str(_tok(g[0])) in tuple("gr_" + k for k in _GFX) and \
                 (sd := _gfx_sides(g)) and (poly := _gfx_poly(g)) is not None:
             pads.append(Gfx(None, sd, poly))
-    vias = []
+    vias = fp_vias
     for v in _kids(root, "via"):
         at, dr = _kid(v, "at"), _kid(v, "drill")
         if at is None or dr is None or not _nums(dr):
@@ -332,6 +353,10 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
             apertures[side].append((p, poly))
     eps = []
     ep_list = exposed_pads(pads)
+    # a footprint's own via pads count where they lie in its exposed pad
+    vias = [v for v in vias if "ref" not in v or any(
+        ep.ref == v["ref"] and ep.copper_poly().contains(Point(v["at"]))
+        for ep in ep_list)]
     # a list, not a dict by (ref, number): two parts can share a ref, and a
     # split exposed pad's pieces share a number (hive-pcb-flow #1175)
     ep_cu = [(ep.ref, ep.number, ep.copper_poly()) for ep in ep_list]
@@ -380,7 +405,8 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
                 coverage=checklib.rnd(cover, 3)))
     hits, small = 0, []
     for v in vias:
-        hole = Point(v["at"]).buffer(v["drill"] / 2.0, quad_segs=16)
+        hole = Point(v["at"]).buffer(
+            max(v["drill"] / 2.0 - RIM_MM, 0.01), quad_segs=16)
         for side in ("F", "B"):
             under = [(p, poly) for p, poly in apertures[side]
                      if poly.intersection(hole).area > HIT_MM2]

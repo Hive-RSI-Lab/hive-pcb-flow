@@ -313,21 +313,106 @@ def test_copper_on_the_far_side_is_not_an_exposed_pad(tmp_path, bottom):
             [("9", side)]
 
 
-def test_stock_thermal_vias_qfn_passes_on_either_side(tmp_path):
-    lib = stock_footprints()
-    mod = lib and lib / "Package_DFN_QFN.pretty" / \
-        "QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
+def _stock(lib, name):
+    root = stock_footprints()
+    mod = root and root / f"{lib}.pretty" / f"{name}.kicad_mod"
     if not (mod and mod.is_file()):
         pytest.skip("needs KiCad's footprint library")
     first, rest = mod.read_text(encoding="utf-8").split("\n", 1)
-    body = first + "\n  (at 15 10)\n" + rest.replace('"REF**"', '"U1"', 1)
+    return first + "\n  (at 15 10)\n" + rest.replace('"REF**"', '"U1"', 1) \
+        + "\n"
+
+
+def test_stock_thermal_vias_qfn_paste_over_its_own_vias_fails(tmp_path):
+    # hive-pcb-flow #1198: the four 0.69 mm paste windows at +-0.425 mm
+    # cover the 0.2 mm drills of pad 17's own thru_hole vias at +-0.6 mm;
+    # no board via, so the footprint's via pads are the only vias
+    body = _stock("Package_DFN_QFN",
+                  "QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias")
     for text, side in ((body, "F"), (_flip(body), "B")):
-        vs, facts = cep.check(_board(tmp_path, text + "\n"))
-        # only the far-side copy is #1174's: the footprint's own thru_hole
-        # via pads under its paste windows are not modelled (no board vias)
+        vs, facts = cep.check(_board(tmp_path, text))
         assert "ep_paste_missing" not in _kinds(vs), side
+        assert _kinds(vs, "error") == ["paste_on_via"] * 4, side
+        assert facts["vias_under_paste"] == 4, side
         assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
             [("17", side)]
+
+
+def test_stock_thermal_vias_qfn_with_paste_clear_of_its_vias_passes(
+        tmp_path):
+    # the quiet twin: the stock QFN-44's paste windows sit between its vias
+    body = _stock("Package_DFN_QFN",
+                  "QFN-44-1EP_9x9mm_P0.65mm_EP7.5x7.5mm_ThermalVias")
+    for text, side in ((body, "F"), (_flip(body), "B")):
+        vs, facts = cep.check(_board(tmp_path, text))
+        assert "paste_on_via" not in _kinds(vs), side
+        assert facts["vias_under_paste"] == 0, side
+
+
+def _fp_via(x, y, num="9"):
+    return (f'    (pad "{num}" thru_hole circle (at {x} {y}) (size 0.5 0.5)'
+            ' (drill 0.2) (layers "*.Cu"))\n')
+
+
+def _with_fp_vias(body, *vias):
+    return body.replace("    (attr smd)\n",
+                        "    (attr smd)\n" + "".join(vias))
+
+
+def test_a_footprints_own_via_under_its_paste_window_fails(tmp_path):
+    # #1198 planted fault: a via pad of the footprint under a window
+    vs, facts = cep.check(_board(tmp_path, _with_fp_vias(
+        qfn('"F.Cu" "F.Mask"', True), _fp_via(0.8, 0.8))))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert vs[0]["pads"] == ["U1:9"]
+    assert facts["vias_under_paste"] == 1
+
+
+def test_a_footprints_own_via_clear_of_the_paste_passes(tmp_path):
+    # the quiet twin: between the windows, and a thru_hole pad off the EP
+    # (a mounting peg, not a thermal via)
+    vs, facts = cep.check(_board(tmp_path, _with_fp_vias(
+        qfn('"F.Cu" "F.Mask"', True), _fp_via(0, 0),
+        _fp_via(3.5, 0, num="10"))))
+    assert vs == []
+    assert facts["vias_under_paste"] == 0
+    assert facts["exposed_pads"][0]["vias_in_pad"] == 1
+
+
+def _panes(half_gap):
+    # two filled F.Paste rects either side of the EP's centre line, each
+    # with a 0.1 mm outline stroke that KiCad prints too
+    return "".join(
+        f'    (fp_rect (start {x0} -1.2) (end {x1} 1.2) (stroke (width 0.1)'
+        ' (type solid)) (fill solid) (layer "F.Paste"))\n'
+        for x0, x1 in ((-1.2, -half_gap), (half_gap, 1.2)))
+
+
+def test_window_pane_whose_stroke_grazes_a_via_rim_passes(tmp_path):
+    # #1198 quiet twin (minuet U5): the panes' gap is the 0.3 mm drill, so
+    # the stroke's half width reaches only 0.05 mm past the hole's rim
+    vs, facts = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"').replace(
+        "    (attr smd)\n", "    (attr smd)\n" + _panes(0.15)) + via()))
+    assert "paste_on_via" not in _kinds(vs)
+    assert facts["vias_under_paste"] == 0
+
+
+def test_window_pane_reaching_into_a_via_hole_fails(tmp_path):
+    # its planted fault: a 0.2 mm gap puts the printed paste 0.1 mm past
+    # each side of the rim
+    vs, facts = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"').replace(
+        "    (attr smd)\n", "    (attr smd)\n" + _panes(0.1)) + via()))
+    assert _kinds(vs, "error") == ["paste_on_via"]
+    assert facts["vias_under_paste"] == 1
+
+
+def test_a_footprint_with_no_at_reads_as_the_origin(tmp_path):
+    # #1198: KiCad reads a missing (at) as (0, 0, 0); hand-made fixtures
+    # leave it out and the check crashed
+    body = qfn().replace("    (at 15 10)\n", "")
+    vs, facts = cep.check(_board(tmp_path, body + via(0, 0)))
+    assert _kinds(vs, "error") == ["paste_on_via"]
+    assert facts["exposed_pads"][0]["vias_in_pad"] == 1
 
 
 @pytest.mark.parametrize("ep_layers,windows,cover", [
