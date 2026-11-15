@@ -46,6 +46,14 @@ without trusting anything nobody read:
                                    value; rows a figure shows (a divider,
                                    a second filter capacitor) the reader
                                    adds by hand
+                      source_limits  a regulator row from the
+                                   recommended-conditions and thermal
+                                   tables: iout_max from an "IOUT Output
+                                   current 0 200 mA" line, tj_max from
+                                   the top of a "TJ ... junction
+                                   temperature" range, theta_ja the
+                                   least of an "RθJA Junction-to-ambient"
+                                   line's package columns
                     A draft is a lead list for a reader, not a table: the
                     reader fixes the fields, the match regex and the
                     source, then runs --verify, and only then sets
@@ -427,6 +435,47 @@ def _abs_rows(pages, part, doc, digest) -> list[dict]:
     return rows
 
 
+_IOUT_RE = re.compile(r"^\s*I\s?OUT\b.*?output current\b.*?"
+                      r"(\d+(?:\.\d+)?)\s*(mA|A)\b", re.I)
+_TJ_RE = re.compile(r"^\s*T\s?J\b.*?junction temperature\b.*?"
+                    r"([-–−]?\d+)\s+\+?(\d+)\s*°C", re.I)
+_RJA_RE = re.compile(r"R\s?[θϴ]\s?JA\b.*?junction-to-ambient", re.I)
+
+
+def _reg_rows(pages, part, doc, digest) -> list[dict]:
+    """A source_limits.yaml regulator draft: iout_max, tj_max, theta_ja,
+    each from the first line of its kind; [] without an IOUT line."""
+    row: dict = {"mpn": part, "match": "TODO", "kind": "ldo",
+                 "out": "^V?OUT$", "in": "^V?IN$", "source": "TODO"}
+    cites = []
+    for pno, text in enumerate(pages, 1):
+        for line in text.splitlines():
+            q = line.strip()
+            m = _IOUT_RE.search(q)
+            if m and "iout_max" not in row:
+                nums = re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)(?=\s+(?:\d|mA|A\b))",
+                                  q[:m.end()])
+                v = float(nums[-1] if nums else m.group(1))
+                row["iout_max"] = v / 1000 if m.group(2) == "mA" else v
+                cites.append(_cite(doc, digest, pno, "", q, ["iout_max"]))
+            m = _TJ_RE.search(q)
+            if m and "tj_max" not in row:
+                row["tj_max"] = float(m.group(2))
+                cites.append(_cite(doc, digest, pno, "", q, ["tj_max"]))
+            if _RJA_RE.search(q) and "theta_ja" not in row:
+                tail = q[_RJA_RE.search(q).end():]
+                nums = [float(x) for x in re.findall(r"\d+(?:\.\d+)?",
+                                                     tail)]
+                if nums:
+                    row["theta_ja"] = min(nums)
+                    cites.append(_cite(doc, digest, pno, "", q,
+                                       ["theta_ja"]))
+    if "iout_max" not in row:
+        return []
+    row["cite"] = cites
+    return [row]
+
+
 def draft(part: str, pdf: Path) -> dict:
     pages = pdf_pages(pdf)
     doc, digest = pdf.name, sha256(pdf)
@@ -434,7 +483,7 @@ def draft(part: str, pdf: Path) -> dict:
                  "pages": len(pages), "pin_states": [], "pin_leakage": [],
                  "io_levels": [], "mcu_pins": [], "i2c_addresses": [],
                  "pin_abs_max": [], "pin_requirements": [],
-                 "part_pinouts": []}
+                 "part_pinouts": [], "source_limits": []}
     pins_seen = set()
     for pno, text in enumerate(pages, 1):
         for m in _FLOAT.finditer(text.replace("\n", " ")):
@@ -480,9 +529,10 @@ def draft(part: str, pdf: Path) -> dict:
     out["pin_abs_max"] = _abs_rows(pages, part, doc, digest)
     out["pin_requirements"] = _pin_parts(pages, doc, digest)
     out["part_pinouts"] = _pin_tables(pages, doc, digest, part)
+    out["source_limits"] = _reg_rows(pages, part, doc, digest)
     for key in ("pin_states", "pin_leakage", "io_levels", "mcu_pins",
                 "i2c_addresses", "pin_abs_max", "pin_requirements",
-                "part_pinouts"):
+                "part_pinouts", "source_limits"):
         for r in out[key]:
             r["verified"] = False
     return out
@@ -672,7 +722,7 @@ def main(argv: list[str] | None = None) -> int:
             code = 0 if any(res[k] for k in (
                 "pin_states", "pin_leakage", "io_levels", "mcu_pins",
                 "i2c_addresses", "pin_abs_max", "pin_requirements",
-                "part_pinouts")) else 1
+                "part_pinouts", "source_limits")) else 1
         else:
             ap.error("give PART --pdf FILE, or --verify YAML... --pdf FILE...")
     except (OSError, ValueError) as e:
