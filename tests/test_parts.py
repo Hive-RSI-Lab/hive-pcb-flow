@@ -1689,3 +1689,146 @@ def test_fp_verify_pairs_coverage_counts(tmp_path, capsys):
     code, payload = run_main(fp_verify, ["--pairs", str(pairs)], tmp_path, capsys)
     assert [e["kind"] for e in payload["errors"]] == ["pad_numbering"]
     assert code == 1 and payload["errors"][0]["message"]
+
+
+# #1331: pad size axis by axis, and a two-terminal land's gap. The sorted
+# pad_size_mm check passed a pad turned a quarter, and row spacing (centre
+# to centre) never saw the gap that turn moves under the body.
+def _chip_ds(tmp_path, **land):
+    return write_ds(tmp_path, {"mpn": "CHIP", "pinout": [], "land_pattern": {
+        "pad_count": 2, "pin1": "1", **land}})
+
+
+def _chip_fp(tmp_path, along, across, half, name="CHIP"):
+    """Two pads on the x axis at +-half, `along` x `across` mm."""
+    return _numbered_fp(tmp_path, name, [("1", -half, 0, along, across),
+                                         ("2", half, 0, along, across)])
+
+
+def _kinds(payload):
+    return sorted(v["kind"] for v in payload["violations"])
+
+
+def test_fp_verify_turned_chip_pad_fails_on_gap_and_axes(tmp_path, capsys):
+    ds = _chip_ds(tmp_path, pad_length_mm=0.3, pad_width_mm=0.5, gap_mm=0.3,
+                  pad_size_mm=[0.3, 0.5])
+    code, payload = _fpv(tmp_path, capsys, _chip_fp(tmp_path, 0.3, 0.5, 0.3), ds)
+    assert code == 0 and _kinds(payload) == ["no_courtyard"], payload["violations"]
+    assert payload["two_terminal_land"]["gap_mm"] == pytest.approx(0.3)
+    assert payload["coverage"]["pad_size"] == payload["coverage"]["land_gap"] == "judged"
+    # the same pads turned a quarter: the sorted size still matches, the
+    # centres don't move, and the gap shrinks to 0.1 mm
+    code, payload = _fpv(tmp_path, capsys, _chip_fp(tmp_path, 0.5, 0.3, 0.3), ds)
+    assert code == 1 and _kinds(payload) == ["land_gap", "no_courtyard", "pad_turned"]
+    gap, = [v for v in payload["violations"] if v["kind"] == "land_gap"]
+    assert gap["measured_mm"] == pytest.approx(0.1)
+    assert gap["expected_mm"] == pytest.approx([0.2, 0.4])
+    assert "bridge" in gap["msg"]
+    turned, = [v for v in payload["violations"] if v["kind"] == "pad_turned"]
+    assert turned["severity"] == "error" and turned["pads"] == ["1", "2"]
+
+
+def test_fp_verify_stock_0201_misses_murata_land_ranges(tmp_path, capsys):
+    """KiCad's C_0201_0603Metric (0.46 x 0.40 pads at +-0.32, a 0.18 mm gap)
+    against Murata GRM033's land, given as ranges."""
+    ds = _chip_ds(tmp_path, gap_mm=[0.2, 0.25], pad_length_mm=[0.2, 0.3],
+                  pad_width_mm=[0.25, 0.35])
+    code, payload = _fpv(tmp_path, capsys, _chip_fp(tmp_path, 0.46, 0.40, 0.32), ds)
+    assert code == 1 and _kinds(payload) == ["land_gap", "no_courtyard", "pad_size"]
+    gap, = [v for v in payload["violations"] if v["kind"] == "land_gap"]
+    assert gap["measured_mm"] == pytest.approx(0.18)
+    assert gap["expected_mm"] == [0.2, 0.25] and "0.2..0.25" in gap["msg"]
+    size, = [v for v in payload["violations"] if v["kind"] == "pad_size"]
+    assert size["severity"] == "warning" and size["pads"] == ["1", "2"]
+    assert size["expected_mm"] == {"length": [0.2, 0.3], "width": [0.25, 0.35]}
+    # the middle of each range passes, and so does the land turned upright
+    code, payload = _fpv(tmp_path, capsys, _chip_fp(tmp_path, 0.25, 0.3, 0.2375), ds)
+    assert code == 0 and _kinds(payload) == ["no_courtyard"], payload["violations"]
+    upright = _numbered_fp(tmp_path, "UP", [("1", 0, -0.2375, 0.3, 0.25),
+                                            ("2", 0, 0.2375, 0.3, 0.25)])
+    code, payload = _fpv(tmp_path, capsys, upright, ds)
+    assert code == 0 and _kinds(payload) == ["no_courtyard"], payload["violations"]
+    t = payload["two_terminal_land"]
+    assert t["gap_mm"] == pytest.approx(0.225)
+    assert [(p["along_mm"], p["across_mm"]) for p in t["pads"]] == [(0.25, 0.3)] * 2
+
+
+def _so8_sized_ds(tmp_path):
+    return write_ds(tmp_path, {"mpn": "SO8", "pinout": [], "land_pattern": {
+        "pad_count": 8, "pin1": "1", "pad_size_mm": [1.5, 0.6],
+        "pads_source": "p.33 example board layout",
+        "pads": [{"number": n, "at_mm": [x, y], "size_mm": [[1.4, 1.6], 0.6]}
+                 for n, (x, y) in SO8_PINS.items()]}})
+
+
+def test_fp_verify_per_pad_size_in_the_drawings_frame(tmp_path, capsys):
+    ds = _so8_sized_ds(tmp_path)
+    # the footprint turned a quarter against the drawing, pads and all
+    turned_fp = _numbered_fp(tmp_path, "SO8", [(n, -y, x, 0.6, 1.5)
+                                               for n, (x, y) in SO8_PINS.items()])
+    code, payload = _fpv(tmp_path, capsys, turned_fp, ds)
+    assert code == 0 and _kinds(payload) == ["no_courtyard"], payload["violations"]
+    f = payload["pad_size_by_axis"]
+    assert f["turn_deg"] in (90, 270) and len(f["pads"]) == 8
+    assert payload["coverage"]["pad_size"] == "judged"
+    # pad 3 alone turned within the footprint: sorted, its size still
+    # matches pad_size_mm, so only the per-pad check sees it
+    pads = [(n, x, y, 0.6 if n == "3" else 1.5, 1.5 if n == "3" else 0.6)
+            for n, (x, y) in SO8_PINS.items()]
+    code, payload = _fpv(tmp_path, capsys, _numbered_fp(tmp_path, "SO8", pads), ds)
+    assert code == 1 and _kinds(payload) == ["no_courtyard", "pad_turned"]
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_turned"]
+    assert v["pads"] == ["3"] and v["drawing"] == "p.33 example board layout"
+    assert "1.4..1.6 x 0.6+-0.1" in v["msg"]
+    # pad 5 too long: a warning, not a turn
+    pads = [(n, x, y, 2.0 if n == "5" else 1.5, 0.6) for n, (x, y) in SO8_PINS.items()]
+    code, payload = _fpv(tmp_path, capsys, _numbered_fp(tmp_path, "SO8", pads), ds)
+    assert code == 0 and _kinds(payload) == ["no_courtyard", "pad_size"]
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_size"]
+    assert v["pads"] == ["5"] and v["expected_mm"] == [[[1.4, 1.6], [0.5, 0.7]]]
+
+
+def test_fp_verify_land_size_and_gap_not_judged(tmp_path, capsys):
+    ds = _chip_ds(tmp_path, gap_mm=0.3, pad_length_mm=0.3, pad_width_mm=0.5)
+    # three pads: no two-terminal land to measure
+    fp = _numbered_fp(tmp_path, "Q", [("1", -0.95, 1, 0.6, 0.7), ("2", 0.95, 1, 0.6, 0.7),
+                                      ("3", 0, -1, 0.6, 0.7)])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert payload["coverage"]["land_gap"] == payload["coverage"]["pad_size"] == "not_judged"
+    assert "3 copper pads" in [n for n in payload["not_judged"]
+                               if n["check"] == "land_gap"][0]["why"]
+    assert "land_gap" not in _kinds(payload)
+    # a custom pad has no one length
+    fp = _mk_fp(tmp_path, [
+        '  (pad 1 smd custom (at -0.3 0 0) (size 0.3 0.3) (layers F.Cu F.Mask)\n'
+        '    (primitives (gr_poly (pts (xy -0.15 -0.25) (xy 0.15 -0.25) (xy 0.15 0.25)'
+        ' (xy -0.15 0.25)) (width 0) (fill yes))))',
+        '  (pad 2 smd rect (at 0.3 0) (size 0.3 0.5) (layers F.Cu F.Mask))'])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert payload["coverage"]["land_gap"] == "not_judged"
+    assert payload["two_terminal_land"] is None
+    # a pad at 45 degrees to the line through both
+    fp = _mk_fp(tmp_path, [
+        '  (pad 1 smd rect (at -0.3 0 45) (size 0.3 0.5) (layers F.Cu F.Mask))',
+        '  (pad 2 smd rect (at 0.3 0) (size 0.3 0.5) (layers F.Cu F.Mask))'])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert "odd angle" in [n for n in payload["not_judged"]
+                           if n["check"] == "pad_size"][0]["why"]
+    # nothing stated: not_stated, not judged and not a pass
+    code, payload = _fpv(tmp_path, capsys, _chip_fp(tmp_path, 0.3, 0.5, 0.3),
+                         _chip_ds(tmp_path))
+    assert payload["coverage"]["land_gap"] == payload["coverage"]["pad_size"] == "not_stated"
+    assert payload["two_terminal_land"] is None and payload["pad_size_by_axis"] is None
+
+
+def test_datasheet_schema_land_ranges(tmp_path, capsys):
+    rec = {**CAP_DS, "land_pattern": {**CAP_DS["land_pattern"], "gap_mm": [0.2, 0.25],
+                                      "pad_length_mm": 0.25, "pad_width_mm": [0.25, 0.35]}}
+    code, payload = run_main(datasheet_extract, ["--validate", str(write_ds(tmp_path, rec))],
+                             tmp_path, capsys)
+    assert code == 0, payload
+    rec["land_pattern"]["gap_mm"] = [0.2, 0.25, 0.3]
+    code, payload = run_main(datasheet_extract, ["--validate", str(write_ds(tmp_path, rec))],
+                             tmp_path, capsys)
+    assert code == 1 and "gap_mm" in " ".join(e["msg"] + str(e.get("path", ""))
+                                              for e in payload["errors"])

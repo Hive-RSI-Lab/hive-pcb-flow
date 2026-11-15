@@ -27,7 +27,22 @@ Checks (land_pattern fields drive which run):
                 row_spacing_mm, either axis of a quad              (error)
   - pad_size  : MIN and MAX pad size vs pad_size_mm (the mode hid a (warning)
                 tied asymmetric column 0.25 mm over max - LEARNINGS
-                2026-07-28 SSOP-20)
+                2026-07-28 SSOP-20). Sorted, so it can't see a pad turned
+                a quarter; pads judged axis by axis (below) are left out
+  - pad_turned / pad_size by axis (#1331): each land_pattern.pads   (error /
+                entry with size_mm [x, y] in the drawing's frame, laid   warning)
+                on its pad under the quarter turn that fits the drawing's
+                places; on a two-terminal land, pad_length_mm along the
+                line through both pads and pad_width_mm across it. A pad
+                that fits only with its width and height swapped is
+                pad_turned (error), any other misfit pad_size (warning).
+                A split, custom or odd-angled pad goes to not_judged
+  - land_gap  : a two-terminal land's gap, inner edge to inner edge,   (error)
+                vs gap_mm. A pad turned a quarter moves the gap under the
+                body while the centres (row_spacing, check_fp_geometry)
+                stay put: KiCad's stock 0201 is 0.18 mm where Murata's
+                GRM033 land is 0.2 to 0.25. Every size here is one number
+                (+- size_tol) or the maker's [min, max]
   - annulus   : THT min over axes of (size-drill)/2 vs the 0.15 mm JLC floor,  (error)
                 and vs land_pattern drill_mm/annulus_mm when given
   - courtyard : a courtyard layer is present                       (warning)
@@ -62,8 +77,8 @@ Checks (land_pattern fields drive which run):
                 puts VDD on OE and the clock never starts
 
 Coverage: the payload's `coverage` says, per check (pin1, pad_numbering,
-pitch), judged / not_judged / not_stated, so a check that judged nothing
-shows as such, not as a pass. `--pairs FILE` (FOOTPRINT<TAB>RECORD lines)
+pitch, pad_size, land_gap), judged / not_judged / not_stated, so a check
+that judged nothing shows as such, not as a pass. `--pairs FILE` (FOOTPRINT<TAB>RECORD lines)
 runs the set and reports those counts plus every error.
 
 Exit (SPEC section 6): 0 = no error-severity findings (warnings allowed),
@@ -418,7 +433,49 @@ def _ccw_turn(got: dict) -> float | None:
     return tot
 
 
-COVERED = ("pin1", "pad_numbering", "pitch")
+def _drawing_turn(ref: dict, got: dict, tol: float) -> int | None:
+    """The quarter turn that lays the footprint's numbered pads on the land
+    drawing's places, or on their mirror image (a bottom-view numbering is
+    pad_numbering's finding, and the mirror leaves each axis where it is);
+    None if neither fits."""
+    common = sorted(set(ref) & set(got))
+    if len(common) < 2:
+        return None
+    r = {k: ref[k] for k in common}
+    g = {k: got[k] for k in common}
+    t = _fits(r, g, tol)
+    return t if t is not None else _fits(
+        {k: (-x, y) for k, (x, y) in r.items()}, g, tol)
+
+
+def _span(val, tol: float) -> tuple[float, float, str]:
+    """A land dimension as (lo, hi, text): the maker's [min, max] range as
+    given, or one number +- tol (#1331)."""
+    if isinstance(val, (list, tuple)):
+        lo, hi = sorted(float(x) for x in val)
+        return lo, hi, f"{lo:g}..{hi:g}"
+    x = float(val)
+    return x - tol, x + tol, f"{x:g}+-{tol:g}"
+
+
+def _within(x: float, span: tuple) -> bool:
+    return span[0] - 1e-6 <= x <= span[1] + 1e-6
+
+
+def _along(p: fplib.Pad, angle: float) -> tuple[float, float] | None:
+    """The pad's extent along the direction `angle` degrees and across it;
+    None for a pad at an odd angle to it, which has no one length along it."""
+    if p.shape == "circle":
+        return (p.size[0], p.size[0])
+    rel = (p.at[2] - angle) % 180
+    if min(rel, 180 - rel) < 1:
+        return (p.size[0], p.size[1])
+    if abs(rel - 90) < 1:
+        return (p.size[1], p.size[0])
+    return None
+
+
+COVERED = ("pin1", "pad_numbering", "pitch", "pad_size", "land_gap")
 
 
 def coverage(land: dict, not_judged: list[dict], numbering: dict | None,
@@ -428,14 +485,20 @@ def coverage(land: dict, not_judged: list[dict], numbering: dict | None,
     judges nothing: --pairs counts these over a set of parts so it shows
     as a number, not a silent pass (#1102)."""
     left = {n["check"] for n in not_judged}
+    stated = {
+        "pitch": land.get("pitch_mm") is not None or bool(land.get("pitches_mm")),
+        "pad_size": bool(land.get("pad_size_mm")) or any(
+            land.get(k) is not None for k in ("pad_length_mm", "pad_width_mm"))
+        or any(q.get("size_mm") for q in land.get("pads") or []),
+        "land_gap": land.get("gap_mm") is not None,
+    }
     out = {}
     for c in COVERED:
         if c in left:
             out[c] = "not_judged"
         elif c == "pad_numbering":
             out[c] = "judged" if numbering else "not_stated"
-        elif c == "pitch" and land.get("pitch_mm") is None and not land.get(
-                "pitches_mm"):
+        elif not stated.get(c, True):
             out[c] = "not_stated"
         else:
             out[c] = "judged"
@@ -608,6 +671,150 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
             "numbering direction, so which pad carries which pin is "
             "unchecked")})
 
+    # --- pad size and gap, axis by axis (#1331). The sorted pad_size_mm
+    # check below passes a pad turned a quarter, and on a two-terminal chip
+    # that moves the gap under the body, which row spacing (centre to
+    # centre) never sees. land_pattern.pads[].size_mm is judged in the land
+    # drawing's frame, turned as the pads fit it; gap_mm, pad_length_mm and
+    # pad_width_mm along and across the line through a two-terminal land's
+    # pads. Each is one number (+- size_tol) or the maker's [min, max]
+    size_judged: set[int] = set()   # id() of each pad judged on both axes
+    by_axis_fact: dict | None = None
+    sized = [q for q in stated_pads if q.get("size_mm")]
+    if sized:
+        fit = _drawing_turn(
+            {str(q["number"]): (float(q["at_mm"][0]), float(q["at_mm"][1]))
+             for q in stated_pads}, got, size_tol)
+        if fit is None:
+            not_judged.append({"check": "pad_size", "why": (
+                "the footprint's pads don't lie on land_pattern.pads' places "
+                "under any quarter turn, so the drawing's per-pad size_mm "
+                "can't be laid on them")})
+        else:
+            turned, off, odd, judged = [], [], [], []
+            for q in sized:
+                n = str(q["number"])
+                same = [p for p in copper if p.number == n]
+                if not same:
+                    continue      # a missing pad is pad_count's or pin1's finding
+                p = same[0]
+                dims = (_along(p, -fit) if len(same) == 1
+                        and p.shape != "custom" else None)
+                if dims is None:
+                    odd.append(n)
+                    continue
+                want = [_span(d, size_tol) for d in q["size_mm"]]
+                size_judged.add(id(p))
+                judged.append(n)
+                if all(_within(m, w) for m, w in zip(dims, want)):
+                    continue
+                swapped = _within(dims[1], want[0]) and _within(dims[0], want[1])
+                (turned if swapped else off).append((p, dims, want))
+
+            def said(rows):
+                return "; ".join(
+                    f"pad {p.number} is {d[0]:g} x {d[1]:g} mm where the "
+                    f"drawing has {w[0][2]} x {w[1][2]}" for p, d, w in rows[:6])
+
+            if turned:
+                v("error", turned[0][0].center,
+                  "pad size turned a quarter against the land drawing (x by y "
+                  f"in the drawing's frame): {said(turned)}. Swap each one's "
+                  "width and height",
+                  "pad_turned", drawing=land.get("pads_source"),
+                  pads=[p.number for p, _, _ in turned],
+                  measured_mm=[list(d) for _, d, _ in turned])
+            if off:
+                v("warning", off[0][0].center,
+                  "pad size differs from the land drawing (x by y in the "
+                  f"drawing's frame): {said(off)}",
+                  "pad_size", drawing=land.get("pads_source"),
+                  pads=[p.number for p, _, _ in off],
+                  measured_mm=[list(d) for _, d, _ in off],
+                  expected_mm=[[[round(w[0], 4), round(w[1], 4)] for w in ws]
+                               for _, _, ws in off])
+            if odd:
+                not_judged.append({"check": "pad_size", "why": (
+                    f"pads {', '.join(odd)}: split in parts, custom-shaped or "
+                    "at an odd angle, so they have no one size along the "
+                    "drawing's axes")})
+            by_axis_fact = {"turn_deg": fit, "pads": judged}
+
+    # a two-terminal land as the maker draws it: the gap between the pads'
+    # inner edges, each pad's length along the line through both centres
+    # and its width across it
+    two_fact: dict | None = None
+    lw = {k: _span(land[k], size_tol) for k in ("pad_length_mm", "pad_width_mm")
+          if land.get(k) is not None}
+    if land.get("gap_mm") is not None or lw:
+        asked = (["land_gap"] if land.get("gap_mm") is not None else []) + (
+            ["pad_size"] if lw else [])
+        why = None
+        custom = any(p.shape == "custom" for p in copper)
+        if len(copper) != 2 or custom:
+            why = (f"{len(copper)} copper pads{', one custom' if custom else ''}"
+                   ": gap_mm, pad_length_mm and pad_width_mm describe a "
+                   "two-terminal land of two plain pads")
+        else:
+            a, b = sorted(copper, key=lambda p: (p.number, p.at))
+            dx, dy = b.at[0] - a.at[0], b.at[1] - a.at[1]
+            ang = math.degrees(math.atan2(-dy, dx))
+            ea, eb = _along(a, ang), _along(b, ang)
+            if math.hypot(dx, dy) < 1e-6 or ea is None or eb is None:
+                why = ("the pads sit at an odd angle to the line through "
+                       "their centres, so they have no one length along it")
+        if why:
+            not_judged += [{"check": c, "why": why} for c in asked]
+        else:
+            gap = math.hypot(dx, dy) - (ea[0] + eb[0]) / 2
+            two_fact = {"gap_mm": round(gap, 4), "pads": [
+                {"pad": p.number, "along_mm": e[0], "across_mm": e[1]}
+                for p, e in ((a, ea), (b, eb))]}
+            if land.get("gap_mm") is not None:
+                g = _span(land["gap_mm"], size_tol)
+                if not _within(gap, g):
+                    risk = ("solder can bridge under the body" if gap < g[0]
+                            else "the terminals may not reach the pads, and "
+                            "the part can tombstone")
+                    v("error", a.center,
+                      f"pads {a.number} and {b.number} are {gap:.3f} mm apart, "
+                      f"inner edge to inner edge; the record's land has a "
+                      f"{g[2]} mm gap, so {risk}",
+                      "land_gap", expected_mm=[round(g[0], 4), round(g[1], 4)],
+                      measured_mm=round(gap, 4))
+            ln, wd = lw.get("pad_length_mm"), lw.get("pad_width_mm")
+            want = " and ".join(t for t in (ln and f"{ln[2]} mm long",
+                                            wd and f"{wd[2]} mm wide") if t)
+            turned2: dict = {}
+            off2: dict = {}
+            for p, (al, ac) in ((a, ea), (b, eb)):
+                if not lw or id(p) in size_judged:
+                    continue    # no size stated, or judged on its size_mm above
+                if ln and wd:
+                    size_judged.add(id(p))
+                if (ln is None or _within(al, ln)) and (wd is None or _within(ac, wd)):
+                    continue
+                swapped = ln and wd and _within(ac, ln) and _within(al, wd)
+                (turned2 if swapped else off2).setdefault((al, ac), []).append(p)
+            for (al, ac), ps in turned2.items():
+                nums = [p.number for p in ps]
+                v("error", ps[0].center,
+                  f"pad{'s' if len(ps) > 1 else ''} {' and '.join(nums)}: "
+                  f"{al:g} mm along the line through both pads and {ac:g} mm "
+                  f"across it; the record's land is {want}, so "
+                  f"{'each pad is' if len(ps) > 1 else 'the pad is'} turned a "
+                  "quarter: swap width and height",
+                  "pad_turned", pads=nums, measured_mm=[al, ac])
+            for (al, ac), ps in off2.items():
+                nums = [p.number for p in ps]
+                v("warning", ps[0].center,
+                  f"pad{'s' if len(ps) > 1 else ''} {' and '.join(nums)}: "
+                  f"{al:g} mm along the line through both pads and {ac:g} mm "
+                  f"across it; the record's land is {want}",
+                  "pad_size", pads=nums, measured_mm=[al, ac],
+                  expected_mm={"length": ln and [round(ln[0], 4), round(ln[1], 4)],
+                               "width": wd and [round(wd[0], 4), round(wd[1], 4)]})
+
     # --- pitch, judged row by row (#1066): the nearest pair of pads in the
     # whole footprint is no pitch when a switch contact, shield tab or
     # thermal pad sits close to a pin row. Each row of like pads is judged
@@ -696,11 +903,13 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
 
     # --- pad size (warning): bound MIN and MAX, never the mode - a 10/10 tie
     # on an asymmetric SSOP-20 hid a column 0.25 mm over the datasheet max
-    # (LEARNINGS 2026-07-28 [librarian][easyeda2kicad])
-    if land.get("pad_size_mm") and copper:
+    # (LEARNINGS 2026-07-28 [librarian][easyeda2kicad]). Sorted, so blind to
+    # a pad turned a quarter: pads judged axis by axis above are left out
+    rest = [p for p in copper if id(p) not in size_judged]
+    if land.get("pad_size_mm") and rest:
         exp = tuple(sorted(float(x) for x in land["pad_size_mm"]))
         distinct = sorted({tuple(round(v_, 3) for v_ in sorted(p.size))
-                           for p in copper})
+                           for p in rest})
         extremes = [distinct[0]] if len(distinct) == 1 else [distinct[0], distinct[-1]]
         offending = [list(s) for s in extremes
                      if any(abs(m - e) > size_tol for m, e in zip(s, exp))]
@@ -779,6 +988,8 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "measured_pitch_mm": round(measured_pitch, 4) if measured_pitch else None,
         "pitch_rows": pitch_facts or None,
         "measured_pad_size_mm": list(measured_size) if measured_size else None,
+        "pad_size_by_axis": by_axis_fact,
+        "two_terminal_land": two_fact,
         "measured_row_spacing_mm": [round(m, 4) for m in measured_rows] or None,
         "has_courtyard": fp.has_courtyard,
         "has_silk": fp.has_layer_kind("SilkS"),
@@ -907,7 +1118,8 @@ def main(argv: list[str] | None = None) -> int:
         if svg_path is not None:
             # A pitch/size finding implicates the whole pad field; count/pin1
             # don't point at a specific pad, so nothing is reddened for those.
-            flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing")
+            flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing",
+                                     "pad_turned", "land_gap")
                        for v in viol)
             bad_pads = {p.number for p in fp.copper_pads} if flag else set()
             write_svg(svg_path, fp, bad_pads, facts["land_pattern"])

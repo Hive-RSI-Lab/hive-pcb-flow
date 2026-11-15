@@ -58,6 +58,14 @@ venv python; JSON out, exit 0/1/2. Keep output ASCII.
   the body), `land_pattern.courtyard_mm` [w, h], and for a connector
   `land_pattern.wire_entry_local` (+X/-X/+Y/-Y, KiCad y down). A missing one
   is a gap the P3 screen reports, never a number you guess.
+  pad_size_mm is compared sorted, so it can't tell a pad turned a quarter
+  (#1331). For a two-terminal land (a chip passive, a SOD diode) give the
+  maker's `gap_mm` (between the pads' inner edges), `pad_length_mm` (along
+  the line through both pads) and `pad_width_mm` (across it); with
+  `land_pattern.pads`, give each pad's `size_mm` as x by y in the drawing's
+  own frame, never sorted. Each is one number, or `[min, max]` when the
+  drawing gives a range (Murata GRM03: gap 0.2-0.25, length 0.2-0.3, width
+  0.25-0.35), and a range replaces fp_verify's tolerance.
 - Mechanical (every through-hole part and every connector): the
   `mechanical` block from the dimensioned drawing and its PCB layout -
   `pins` (the leads' MAX cross-section, dia_mm or w_mm x t_mm, with the
