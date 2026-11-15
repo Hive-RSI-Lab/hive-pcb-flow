@@ -28,6 +28,9 @@ graphic counts for its own exposed pad; a board graphic for any it covers.
   paste_on_via       error: a via's hole lies under an exposed pad's paste
                      (its own aperture or a window over it), unless the via
                      is filled or capped (KiCad's via `filling`/`capping`).
+                     A paste-only window has no number of its own, so it
+                     is named by the exposed pad it lies on ("U1 pad 9's
+                     paste window", pads "U1:9").
                      A via under any other pad's paste (via-in-pad on a
                      decoupler or an RF ground, which the golden boards
                      carry on purpose) is listed in the facts
@@ -257,6 +260,21 @@ def exposed_pads(pads: list[Ap]) -> list[Ap]:
     return out
 
 
+def _aperture_name(p, poly, ep_cu: dict) -> tuple[str, str, str]:
+    """(ref, pad, label) for an aperture over a via. A paste-only pad (a
+    QFN's window-pane aperture, `(pad "" smd ...)` on F.Paste alone) has no
+    number, so it takes the number of the exposed pad it lies on."""
+    ref = p.ref or "board"
+    if p.number == "graphic":
+        return ref, "graphic", f"{ref} paste graphic"
+    if p.copper or p.number:
+        return ref, p.number, f"{ref} pad {p.number}"
+    for (r, n), cu in ep_cu.items():
+        if r == p.ref and cu.intersects(poly):
+            return ref, n, f"{ref} pad {n}'s paste window"
+    return ref, "", f"{ref} paste window"
+
+
 def check(pcb: Path) -> tuple[list[dict], dict]:
     pads, vias = load(pcb)
     viols: list[dict] = []
@@ -330,20 +348,19 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
             hits += 1
             if v["plugged"]:
                 continue
-            on = sorted({(p.ref or "board", p.number) for p, _ in under})
+            on = sorted({_aperture_name(p, poly, ep_cu) for p, poly in under})
+            pads = list(dict.fromkeys(f"{r}:{n}" for r, n, _ in on))
             in_ep = any((p.ref, p.number) in ep_cu or (
                 not p.copper and any(p.ref in (r, None)
                                      and cu.intersects(poly)
                                      for (r, _), cu in ep_cu.items()))
                 for p, poly in under)
-            refs = sorted({r for r, _ in on})
+            refs = sorted({r for r, _, _ in on})
             if not in_ep:
                 small.append({"at": [checklib.rnd(c, 3) for c in v["at"]],
-                              "side": side,
-                              "pads": [f"{r}:{n}" for r, n in on]})
+                              "side": side, "pads": pads})
                 continue
-            names = ", ".join(f"{r} paste graphic" if n == "graphic"
-                              else f"{r} pad {n}" for r, n in on)
+            names = ", ".join(label for _, _, label in on)
             viols.append(checklib.violation(
                 SCRIPT, "error", v["at"],
                 f"{side}.Paste", v["net"], refs,
@@ -351,8 +368,7 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
                 f"{names}: the solder runs down the barrel and the joint "
                 "voids. Move the paste windows off the via (window-pane "
                 "apertures between the vias), or fill and cap it",
-                SOURCE, kind="paste_on_via", side=side,
-                pads=[f"{r}:{n}" for r, n in on]))
+                SOURCE, kind="paste_on_via", side=side, pads=pads))
     return viols, {"exposed_pads": eps, "vias_under_paste": hits,
                    "vias_in_paste": small}
 

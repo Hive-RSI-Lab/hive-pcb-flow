@@ -193,6 +193,16 @@ def test_window_pane_paste_clear_of_the_via_passes(tmp_path):
     assert ep["apertures"] == 4 and facts["vias_under_paste"] == 0
 
 
+def test_a_via_under_a_paste_window_names_the_exposed_pad(tmp_path):
+    # hive-pcb-flow #1150: a window is a paste-only pad with no number, so
+    # the error named "U1 pad " and its pads "U1:"
+    vs, _ = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"', True)
+                             + via(14.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert "the paste of U1 pad 9's paste window:" in vs[0]["msg"]
+    assert vs[0]["pads"] == ["U1:9"]
+
+
 def test_no_paste_on_the_ep_and_a_plugged_via(tmp_path):
     vs, _ = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"')))
     assert _kinds(vs) == ["ep_paste_missing"]
