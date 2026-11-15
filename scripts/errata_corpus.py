@@ -93,6 +93,27 @@ def sealed_cache_root(arg: str | None, cache: Path) -> Path:
     return c
 
 
+def sealed_in(cache: Path, ids) -> int:
+    """How many sealed-round boards have a checkout or a report in `cache`
+    (a count, never the ids)."""
+    names = {p.name.split("@")[0] for d in ("repos", "runs")
+             if (cache / d).is_dir() for p in (cache / d).iterdir()}
+    return len(names & set(ids))
+
+
+def guard_training_cache(cache: Path, ids) -> None:
+    """Refuse to work from a training cache that holds a sealed board.
+
+    A checkout made before a round was sealed (or from a branch older than
+    the seal) still sits where a builder's glob reaches it; every command
+    stops on it until it is moved to the sealed cache."""
+    n = sealed_in(cache, ids)
+    if n:
+        raise SystemExit(f"{n} sealed-round board(s) in the training cache {cache}; "
+                         "a scorer moves them to the sealed cache (see \"A new "
+                         "holdout round\"); builders don't open them")
+
+
 def sealed_rounds(path: Path = MANIFEST) -> dict[str, int]:
     """Board id -> round, for every board of a sealed round."""
     out = {}
@@ -965,7 +986,10 @@ sweep globs the training cache's `repos/` for training boards only, and
 never passes `--sealed` or opens the sealed cache. `tests/test_holdout_sealed.py`
 fails if a sealed defect id appears in any other tracked file, or if a
 sealed board is reachable from the default sweep or sits in the training
-cache. Unsealing a
+cache. Every command also stops, with a count and no ids, when its
+training cache (`--cache`, HWDE_ERRATA_CACHE or the default) holds a sealed
+board's checkout or report: a copy of the cache taken before a round was
+sealed still carries the round's boards. Unsealing a
 round (when a newer round replaces it as the blind test) moves its boards
 into `reference/errata_corpus.yaml` and its members into the taxonomy.
 """
@@ -1045,6 +1069,7 @@ def main(argv: list[str] | None = None) -> int:
     scache = sealed_cache_root(a.sealed_cache, cache)
     man = Path(a.manifest)
     rounds = sealed_rounds(man)
+    guard_training_cache(cache, rounds)
 
     def where(b: dict) -> Path:
         return scache if b["id"] in rounds else cache
