@@ -88,6 +88,12 @@ import sys
 from pathlib import Path
 
 _POS = {"type": "number", "exclusiveMinimum": 0}
+# a land dimension: one number (judged within --size-tol-mm) or the
+# maker's [min, max] range, judged as given (#1331)
+_DIM = {"oneOf": [{"type": "number", "minimum": 0},
+                  {"type": "array", "items": {"type": "number",
+                                              "minimum": 0},
+                   "minItems": 2, "maxItems": 2}]}
 _SRC = {"type": "string", "description": "page and figure it was read from"}
 # A pin or post cross-section: round (dia_mm) or rectangular (w_mm x t_mm),
 # its MAX size (with tolerance) as the drawing gives it.
@@ -267,9 +273,9 @@ DATASHEET_SCHEMA: dict = {
                             "at_mm": {"type": "array",
                                       "items": {"type": "number"},
                                       "minItems": 2, "maxItems": 2},
-                            "size_mm": {"type": "array",
-                                        "items": {"type": "number",
-                                                  "minimum": 0},
+                            # [along x, along y] in at_mm's frame;
+                            # fp_verify turns it with the fit (#1331)
+                            "size_mm": {"type": "array", "items": _DIM,
                                         "minItems": 2, "maxItems": 2},
                             "source": {"type": "string"},
                         },
@@ -287,6 +293,14 @@ DATASHEET_SCHEMA: dict = {
                     "minItems": 2, "maxItems": 2,
                 },
                 "row_spacing_mm": {"type": "number", "minimum": 0},
+                # a two-terminal land as the maker draws it (#1331):
+                # gap between the two pads, inner edge to inner edge;
+                # pad length along the line through both centres (IPC
+                # Y, Murata b); pad width across it (IPC X, Murata c).
+                # Each a number or a [min, max] range
+                "gap_mm": _DIM,
+                "pad_length_mm": _DIM,
+                "pad_width_mm": _DIM,
                 "drill_mm": {"type": "number", "exclusiveMinimum": 0},
                 "annulus_mm": {"type": "number", "exclusiveMinimum": 0},
                 "courtyard_excess_mm": {"type": "number", "minimum": 0},

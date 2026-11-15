@@ -30,18 +30,24 @@ scripts with the repo venv python; JSON out, exit 0/1/2. Keep output ASCII.
    power_out, an open-drain output).
 3. `scripts/fp_verify.py --footprint <lib.pretty/name.kicad_mod>
    --datasheet-json parts/<lcsc>.json --out reports/fp_verify_<ref>_<lcsc>.json`
-   - pad count/pitch/pin-1/size/drill diff vs the land pattern; the SVG
+   - pad count/pitch/pin-1/size/drill diff vs the land pattern, each pad's
+   size along the drawing's axes and a two-terminal land's gap; the SVG
    overlay lands beside the report, never in the library. A footprint with
    two pitches (a card socket's contacts and its switch pads) gets
    `land_pattern.pitches_mm` entries for each run. Give `land_pattern.pads`
    (each pad's number and top-view centre from the land drawing; mirror x
    when the drawing is a bottom view) so pad numbering is checked; without
-   it fp_verify reports pad_numbering as not_judged. Errors FAIL; warnings (pad_size,
-   no_courtyard, stroked_pad_primitive) pass but must be listed in your summary.
+   it fp_verify reports pad_numbering as not_judged. Errors FAIL (among them
+   pad_turned, a pad turned a quarter against the drawing, and land_gap);
+   warnings (pad_size, no_courtyard, stroked_pad_primitive) pass but must be
+   listed in your summary.
 
 ## Method
 1. fp_verify every IC and connector against its datasheet JSON; passives
-   with standard packages need only the pull + load check.
+   with standard packages need only the pull + load check, except 0201 and
+   smaller: KiCad's stock C_0201_0603Metric has a 0.18 mm gap where Murata
+   draws 0.2-0.25, so fp_verify those against the maker's gap_mm,
+   pad_length_mm and pad_width_mm.
 2. A missing courtyard degrades placement legality checks - list every
    courtyard-less footprint (warning `no_courtyard`).
 3. Polarity/pin-1 marks on polarized parts (diodes, LEDs, electrolytics,
