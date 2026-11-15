@@ -1718,8 +1718,9 @@ def block_sides(bg: geom.BoardGeom, net: str, track, sources,
     if len(feeds) > 1:
         return None
     if not feeds:
-        if len(facts) < 2:
-            return None
+        if len(facts) < 2 or any(f[1] is None for f in facts):
+            return None               # a port with an unknown load may be
+            #                           the feed: no side can be named
         feeds = [min(facts, key=lambda f: f[1])]
     if feeds[0][3]:
         return None                   # fed by a pour inside the block: the

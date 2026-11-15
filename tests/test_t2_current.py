@@ -2677,3 +2677,15 @@ def test_block_sides_refuses_a_piece_holding_a_source(tmp_path_factory):
         is None
     assert check_current.block_sides(
         bg, "PWR", t, ({"U2"}, {"U2"}, set())) == [{"R1"}]
+
+
+def test_block_sides_with_unmatched_sources_and_an_unbounded_port(
+        tmp_path_factory):
+    """Sources are known but sit in none of the ports, and one port's
+    load is unbounded (U2): no feed can be named, so no bound. This used
+    to crash in min() comparing None with a float (lumina work copies)."""
+    bg = _board(tmp_path_factory, "bcnone", _CASE_B)
+    [t] = [t for t in bg.tracks_of("PWR")
+           if tuple(t.shape.coords[0]) == (10, 5)]
+    assert check_current.block_sides(
+        bg, "PWR", t, ({"X9"}, set(), set())) is None
