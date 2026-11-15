@@ -142,6 +142,12 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
         "required": {"net": "str", "voltage": "num"},
         "optional": {"min": "num"},
     },
+    # check_ratings (#1006): a connector pin's signal level where the
+    # net carries no voltage (an off-board interface)
+    "interface_levels": {
+        "required": {"ref": "str", "max": "num"},
+        "optional": {"min": "num", "pins": "str_list", "why": "str"},
+    },
     "voltage_pairs": {
         "required": {"a": "str", "b": "str", "voltage": "num"},
         "optional": {"why": "str"},
