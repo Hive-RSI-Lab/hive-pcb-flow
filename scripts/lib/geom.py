@@ -999,7 +999,9 @@ class BoardGeom:
     def _fp_graphics(self, fp, fx, fy, fangle, layers=None):
         """(layer, board-frame shape) of each fp_poly, fp_rect, fp_circle,
         fp_line and fp_arc the footprint draws, on `layers` (a set) or on
-        any layer."""
+        any layer. check_wicking calls it unbound, with self None: then a
+        fill-less shape reads as the modern format has it."""
+        legacy = self.legacy_fill if self is not None else False
         c, s = _rot(1.0, 0.0, -fangle)
         for kind in ("fp_poly", "fp_rect", "fp_circle", "fp_line", "fp_arc"):
             for n in _kids(fp, kind):
@@ -1007,7 +1009,7 @@ class BoardGeom:
                 ln = _strs(layer)[0] if layer is not None and _strs(layer) else None
                 if ln is None or (layers is not None and ln not in layers):
                     continue
-                g = _copper_prim(n, self.legacy_fill)
+                g = _copper_prim(n, legacy)
                 if g is not None and not g.is_empty:
                     yield ln, affinity.affine_transform(g, [c, -s, s, c, fx, fy])
 

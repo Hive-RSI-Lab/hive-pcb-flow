@@ -689,3 +689,14 @@ def test_legacy_fill_less_circle_stays_ring(tmp_path):
     n = geom.sexpdata.loads('(gr_circle (center 0 0) (end 1 0) (width 0.1))')
     assert geom._copper_prim(n, legacy=True).area == pytest.approx(
         math.pi * (1.05 ** 2 - 0.95 ** 2), rel=0.02)
+
+
+def test_fp_graphics_still_runs_unbound():
+    """check_wicking reads a footprint's Fab body through the unbound
+    _fp_graphics, with self None; the per-file fill must not need a board."""
+    fp = geom.sexpdata.loads(
+        '(footprint "X" (fp_rect (start -1 -1) (end 1 1) (stroke (width 0.1))'
+        ' (layer "F.Fab")))')
+    got = list(geom.BoardGeom._fp_graphics(None, fp, 5, 5, 0, {"F.Fab"}))
+    assert [ln for ln, _ in got] == ["F.Fab"]
+    assert got[0][1].area < 1.0          # an outline: the modern reading
