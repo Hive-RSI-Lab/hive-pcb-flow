@@ -1,0 +1,16 @@
+# Seeded power-path orientation fault for netlist_audit's
+# power_switch_reversed (#1085). The mutant ships a changed usbbuck4.net
+# beside the board and no schematic, so the audit reads the planted
+# netlist; the copper is untouched. Quiet twins: tests/test_power_path.py.
+mutants:
+  load-switch-pfet-reversed:
+    board: usbbuck4
+    script: mutations/load_switch_pfet_reversed.py
+    check: netlist_audit
+    defect: >-
+      NETLIST fault: a high-side P-FET load switch from VBUS is placed with
+      its drain on VBUS, so its body diode feeds the load whatever the gate
+      does and the switch cannot turn the load off
+    expect:
+      kind: power_switch_reversed
+      ref: Q98

@@ -239,7 +239,7 @@ into `reference/errata_corpus.yaml` and its members into the taxonomy.
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
 | netscore-1: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT | SCH (part orientation) | caught on rev A, gone on rev B, since #1085 (`netlist_audit` power_path_body_diode) | Not an independent catch: the rule was written after this defect was read, though seeded from datasheets (TI SLVA139, Microchip AN1149), not from this board. The warning is on v3.0 and gone on v3.1. |
-| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` protector_cell_side) | protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors |
+| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` protector_cell_side) | Caught by protector_cell_side (class 6), which reads FS312-style GND/BAT- pin names; #1085's protector_orientation reads only VDD/VSS/VM/DO/CO protectors, and the two rules together cover both pin styles. Not an independent catch: written after this defect was read. |
 
 ### flexgrid-v4: V4 as ordered -> V4-2
 

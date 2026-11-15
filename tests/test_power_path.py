@@ -145,3 +145,158 @@ def test_parse_netlist_reads_the_symbol_description(tmp_path):
         ' (nets))', encoding="utf-8")
     comp = netlist_audit.parse_netlist(p)["components"]["Q1"]
     assert netlist_audit._fet_channel(comp) == "P"
+
+
+# --- power_switch_reversed: load switches and reverse-polarity FETs off
+# the battery nets (TI SLVA139; general high-/low-side switch practice:
+# a P-FET's source on the supply, an N-FET's source on ground)
+
+_PFET = {"value": "AO3401A", "libsource": ("Transistor_FET", "AO3401A"),
+         "libdesc": "P-Channel MOSFET"}
+_NFET = {"value": "2N7002", "libsource": ("Transistor_FET", "2N7002"),
+         "libdesc": "N-Channel MOSFET"}
+
+
+def _high_side(swapped=False):
+    """+12V (a regulator's output) -> Q1 P-FET -> /LOAD; Q1's gate pulled
+    up by R1 and pulled down by Q2, an N-FET on an MCU GPIO."""
+    sup, load = ("/LOAD", "+12V") if swapped else ("+12V", "/LOAD")
+    nets = {
+        "+12V": [_m("U1", "2", "VOUT", "power_out"), _m("R1", "1")],
+        "/LOAD": [_m("U2", "1", "VIN", "power_in")],
+        "/G": [_m("Q1", "1", "G"), _m("R1", "2"), _m("Q2", "3", "D")],
+        "/EN": [_m("Q2", "1", "G"), _m("U3", "5", "PA1", "bidirectional")],
+        "GND": [_m("Q2", "2", "S"), _m("U1", "1", "GND", "power_in"),
+                _m("U2", "2", "GND", "power_in"),
+                _m("U3", "8", "VSS", "power_in")],
+    }
+    nets[sup].append(_m("Q1", "2", "S"))
+    nets[load].append(_m("Q1", "3", "D"))
+    comps = {"U1": "LM7812", "U2": "load", "U3": "STM32", "R1": "10k",
+             "Q1": dict(_PFET), "Q2": dict(_NFET)}
+    return comps, nets
+
+
+def test_high_side_pfet_source_on_the_supply_is_quiet():
+    hits, facts = _audit(*_high_side(), "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 2
+
+
+def test_high_side_pfet_drain_on_the_supply_warns():
+    hits, _ = _audit(*_high_side(swapped=True), "power_switch_reversed")
+    assert [(h["refs"], h["net"], h["from_net"], h["case"]) for h in hits] \
+        == [(["Q1"], "+12V", "/LOAD", "high")]
+
+
+def _low_side(swapped=False):
+    """+5V (a connector) -> motor M1 -> /M- -> Q1 N-FET -> GND; Q1's gate
+    through R1 from an MCU GPIO."""
+    d, s = ("GND", "/M-") if swapped else ("/M-", "GND")
+    nets = {
+        "+5V": [_m("J1", "1"), _m("M1", "1"),
+                _m("U3", "1", "VDD", "power_in")],
+        "/M-": [_m("M1", "2")],
+        "/G": [_m("Q1", "1", "G"), _m("R1", "2")],
+        "/PWM": [_m("R1", "1"), _m("U3", "5", "PB3", "bidirectional")],
+        "GND": [_m("J1", "2"), _m("U3", "8", "VSS", "power_in")],
+    }
+    nets[d].append(_m("Q1", "3", "D"))
+    nets[s].append(_m("Q1", "2", "S"))
+    comps = {"J1": "Conn_01x02", "M1": "Motor", "U3": "STM32",
+             "R1": "100", "Q1": dict(_NFET)}
+    return comps, nets
+
+
+def test_low_side_nfet_source_on_ground_is_quiet():
+    hits, facts = _audit(*_low_side(), "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 1
+
+
+def test_low_side_nfet_drain_on_ground_warns():
+    hits, _ = _audit(*_low_side(swapped=True), "power_switch_reversed")
+    assert [(h["refs"], h["case"], h["from_net"]) for h in hits] \
+        == [(["Q1"], "low", "/M-")]
+
+
+def _reverse(swapped=False, gate_net="GND"):
+    """SLVA139 Fig 3: J1's /VIN_RAW -> Q1 P-FET -> +12V_PROT; the gate
+    through R1 to ground."""
+    d, s = ("+12V_PROT", "/VIN_RAW") if swapped else ("/VIN_RAW", "+12V_PROT")
+    nets = {
+        "/VIN_RAW": [_m("J1", "1")],
+        "+12V_PROT": [_m("U2", "1", "VIN", "power_in")],
+        "/G": [_m("Q1", "1", "G"), _m("R1", "1")],
+        "GND": [_m("J1", "2"), _m("U2", "2", "GND", "power_in")],
+    }
+    nets.setdefault(gate_net, []).append(_m("R1", "2"))
+    nets[d].append(_m("Q1", "3", "D"))
+    nets[s].append(_m("Q1", "2", "S"))
+    comps = {"J1": "Barrel_Jack", "U2": "LM2596", "R1": "100k",
+             "Q1": dict(_PFET)}
+    return comps, nets
+
+
+def test_reverse_protection_drain_on_the_input_is_quiet():
+    hits, facts = _audit(*_reverse(), "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 1
+
+
+def test_reverse_protection_source_on_the_input_warns():
+    hits, _ = _audit(*_reverse(swapped=True), "power_switch_reversed")
+    assert [(h["refs"], h["net"], h["case"]) for h in hits] \
+        == [(["Q1"], "/VIN_RAW", "reverse")]
+
+
+def test_gate_from_a_controller_is_not_judged():
+    # an ideal-diode controller's GATE pin: LTC4359 drives an N-FET with
+    # its source on the input, so either way round may be right
+    comps, nets = _reverse(swapped=True)
+    nets["/G"].append(_m("U5", "6", "GATE", "output"))
+    comps["U5"] = "LTC4359"
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 0
+    assert facts["power_switches_not_judged"] == {"gate from a controller": 1}
+
+
+def test_gate_held_by_a_rail_or_both_sides_sourced_is_not_judged():
+    comps, nets = _reverse(swapped=True, gate_net="+3V3")
+    nets["+3V3"].append(_m("U2", "3", "VOUT", "power_out"))
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 0
+    comps, nets = _high_side(swapped=True)
+    nets["/LOAD"].append(_m("J2", "1"))
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert hits == [] and facts["power_switches_not_judged"].get(
+        "both sides sourced or neither") == 1
+
+
+def test_fet_whose_channel_is_not_stated_is_not_judged():
+    # a vendor-library symbol with an empty description and a part
+    # number that names no channel: the body diode's direction is
+    # unknown, so the switch is counted, not guessed at
+    comps, nets = _reverse(swapped=True)
+    comps["Q1"] = {"value": "XM4407", "libsource": ("aiee", "XM4407_C1")}
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 0
+    assert facts["power_switches_not_judged"] == {"channel not stated": 1}
+
+
+def test_channel_from_a_part_number_or_a_value_note():
+    ch = netlist_audit._fet_channel
+    assert ch({"value": "AO4407A", "libsource": ("aiee", "AO4407A_C2841482")}) == "P"
+    assert ch({"value": "2N7002", "libsource": ("", "2N7002")}) == "N"
+    assert ch({"value": "x", "libsource": ("", "DMP3099L-7")}) == "P"
+    assert ch({"value": "SSM3K2615R 60V 2A N-FET"}) == "N"
+    assert ch({"value": "NCE01P13K -100V P-MOSFET TO-252"}) == "P"
+    # GaN has no body diode; a BJT is no FET
+    assert ch({"value": "EPC2019 200V eGaN"}) is None
+    assert ch({"value": "MMBT3904"}) is None
+    # the vendor-library swap of the reverse-protection case is now judged
+    comps, nets = _reverse(swapped=True)
+    comps["Q1"] = {"value": "AO4407A", "libsource": ("aiee", "AO4407A_C1")}
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert [h["case"] for h in hits] == ["reverse"]
+    comps, nets = _reverse()
+    comps["Q1"] = {"value": "AO4407A", "libsource": ("aiee", "AO4407A_C1")}
+    hits, facts = _audit(comps, nets, "power_switch_reversed")
+    assert hits == [] and facts["power_switches_checked"] == 1
