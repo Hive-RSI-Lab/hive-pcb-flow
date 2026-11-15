@@ -126,6 +126,87 @@ def test_each_holdout_round_is_counted_apart(tmp_path):
     assert t.index("## Holdout round 1") < t.index("## Holdout round 2")
 
 
+def _no_case_manifest(tmp_path, **over):
+    import yaml
+    c = {"script": "fp_verify", "kinds": ["pad_numbering"], "issue": 1102,
+         "catches": "a pad | numbered wrong", "corpus": "flagged\nnone", **over}
+    m = tmp_path / "nc.yaml"
+    m.write_text(yaml.safe_dump({"boards": [], "no_case": [c]}))
+    return m
+
+
+def test_a_no_case_check_names_its_issue_kinds_and_corpus_run(tmp_path):
+    # fp_verify's pin-position check (#1102): no corpus board shipped a
+    # misnumbered footprint, so it is listed apart, with what it did there
+    import pytest
+    import yaml
+    assert ec.load_no_case(_no_case_manifest(tmp_path))[0]["issue"] == 1102
+    for bad in ({"issue": None}, {"issue": True}, {"issue": 0}, {"issue": "1102"},
+                {"kinds": []}, {"kinds": "pad_numbering"}, {"kinds": [" "]},
+                {"script": ""}, {"catches": " "}, {"corpus": None}):
+        with pytest.raises(SystemExit):
+            ec.load_no_case(_no_case_manifest(tmp_path, **bad))
+    m = tmp_path / "none.yaml"
+    m.write_text(yaml.safe_dump({"boards": []}))
+    assert ec.load_no_case(m) == []
+    # a root, a section or a row that isn't the right shape is a clear
+    # SystemExit naming it, not an AttributeError
+    for doc, says in (([], "must be a mapping"),
+                      ({"no_case": {"script": "fp_verify"}}, "must be a list"),
+                      ({"no_case": "fp_verify"}, "must be a list"),
+                      ({"no_case": ["fp_verify"]}, "no_case[0]"),
+                      ({"no_case": [None]}, "no_case[0]")):
+        m.write_text(yaml.safe_dump(doc))
+        with pytest.raises(SystemExit, match=re.escape(says)):
+            ec.load_no_case(m)
+
+
+def test_no_case_checks_get_their_own_section_outside_the_counts(tmp_path):
+    holdout = ec.load(_holdout_manifest(tmp_path), "holdout")
+    no_case = ec.load_no_case(_no_case_manifest(tmp_path))
+    t = ec.table(tmp_path, [], holdout, no_case=no_case)
+    bare = ec.table(tmp_path, [], holdout)
+    assert t.startswith(bare) and "## Checks no defect here tests" not in bare
+    assert t.index("## Holdout round 1") < t.index("## Checks no defect here tests")
+    assert ("| `fp_verify` pad_numbering (#1102) | a pad \\| numbered wrong "
+            "| flagged none |") in t
+    # a sealed round keeps only its note, and the section still follows it
+    sealed = ec.table(tmp_path, [], holdout, {1}, no_case=no_case)
+    assert sealed.startswith(ec.table(tmp_path, [], holdout, {1}))
+    assert sealed.index(ec.SEALED_NOTE.format(r=1)) < \
+        sealed.index("## Checks no defect here tests")
+
+
+def _code_strings(src: str) -> set[str]:
+    """Every string literal in a script's code, docstrings left out."""
+    import ast
+    tree = ast.parse(src)
+    docs = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                          ast.ClassDef)) and n.body and \
+                isinstance(n.body[0], ast.Expr) and \
+                isinstance(n.body[0].value, ast.Constant):
+            docs.add(id(n.body[0].value))
+    return {n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)
+            and isinstance(n.value, str) and id(n) not in docs}
+
+
+def test_the_doc_lists_every_no_case_check():
+    # the doc is edited by hand to match the manifest, so its section must be
+    # the one `table` writes, every cell of every row
+    doc = ec.DOC.read_text(encoding="utf-8")
+    rows = ec.load_no_case()
+    assert rows
+    assert "\n".join(ec._no_case_rows(rows)) in doc
+    for c in rows:
+        src = (ec.ROOT / "scripts" / f"{c['script']}.py").read_text(encoding="utf-8")
+        # each kind a whole string in the script's code, not in its prose
+        missing = set(c["kinds"]) - _code_strings(src)
+        assert not missing, (c["script"], sorted(missing))
+    assert "pad_numbering" not in _code_strings('"""pad_numbering"""\nx = 1')
+
+
 def test_sweep_keeps_what_the_fix_removed(tmp_path, monkeypatch):
     found = {"rev_a": [{"kind": "k", "net": "/A", "refs": ["R1"]},
                        {"kind": "k", "net": "/B", "refs": ["R2"]}],

@@ -24,6 +24,11 @@ holdout defect (its `verdict` moves, the rule named in `caught_by`), but only
 `blind` says how the flow does on a board it has never seen; and a rule
 seeded from a holdout defect moves that board to `boards:`.
 
+`no_case:` lists checks no defect in the corpus tests (no board here shipped
+the fault they catch): each with what it catches and what it did when run
+over the corpus boards, where a flag on a correct part is a bug in the check.
+The table lists them apart, and no count includes them.
+
 --cache DIR (default ~/.cache/hwde-errata-corpus, or HWDE_ERRATA_CACHE). Nothing
 is fetched into this repo. Checks run here (RUNNERS), each with an empty
 constraints file, what hwde reads before anyone has written one:
@@ -166,6 +171,35 @@ def load(path: Path = MANIFEST, section: str = "boards") -> list[dict]:
 
 def load_all(path: Path = MANIFEST) -> list[dict]:
     return load(path) + load(path, "holdout")
+
+
+def load_no_case(path: Path = MANIFEST) -> list[dict]:
+    """The manifest's `no_case:` checks: script, finding kinds, the issue it
+    was built for, what it catches, and what it did on the corpus boards."""
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(doc, dict):
+        raise SystemExit(f"{path.name}: the manifest must be a mapping "
+                         "(boards:, no_case: ...)")
+    rows = doc.get("no_case") or []
+    if not isinstance(rows, list):
+        raise SystemExit("no_case must be a list of checks")
+    for i, c in enumerate(rows):
+        if not isinstance(c, dict):
+            raise SystemExit(f"no_case[{i}]: each check must be a mapping "
+                             "(script, kinds, issue, catches, corpus), "
+                             f"not {type(c).__name__}")
+        name = f"no_case {c.get('script') or '?'}"
+        if not isinstance(c.get("issue"), int) or isinstance(c["issue"], bool) \
+                or c["issue"] < 1:
+            raise SystemExit(f"{name}: issue must be the number of the issue it was built for")
+        kinds = c.get("kinds")
+        if not isinstance(kinds, list) or not kinds or \
+                not all(isinstance(k, str) and k.strip() for k in kinds):
+            raise SystemExit(f"{name}: kinds must list the check's finding kinds")
+        for k in ("script", "catches", "corpus"):
+            if not isinstance(c.get(k), str) or not c[k].strip():
+                raise SystemExit(f"{name}: {k} is empty")
+    return rows
 
 
 def repo_dir(cache: Path, b: dict, rev: str | None = None) -> Path:
@@ -654,8 +688,23 @@ def sealed_table(cache: Path, holdout: list[dict], r: int) -> str:
     return "\n".join(lines)
 
 
+def _no_case_rows(no_case: list[dict]) -> list[str]:
+    lines = ["## Checks no defect here tests", "",
+             "No board here shipped the fault these catch, so no count above includes",
+             "them. Each was run over the corpus boards to see what it flags there: a",
+             "flag on a correct part is a bug in the check.", "",
+             "| check | catches | on the corpus |", "|---|---|---|"]
+    for c in no_case:
+        cells = [f"`{c['script']}` {', '.join(c['kinds'])} (#{c['issue']})",
+                 c["catches"], c["corpus"]]
+        lines.append("| " + " | ".join(x.replace("\n", " ").replace("|", "\\|").strip()
+                                       for x in cells) + " |")
+    return lines + [""]
+
+
 def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None,
-          sealed: set[int] | frozenset[int] = frozenset()) -> str:
+          sealed: set[int] | frozenset[int] = frozenset(),
+          no_case: list[dict] | None = None) -> str:
     holdout = holdout or []
     lines = ["# The real-errata corpus", "",
              "Public boards whose next revision fixed a defect the first one shipped with,",
@@ -690,6 +739,8 @@ def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None,
         for b in holdout:
             if b["swept"]["round"] == r:
                 lines += _board_rows(cache, b, True)
+    if no_case:
+        lines += _no_case_rows(no_case)
     return "\n".join(lines)
 
 
@@ -732,7 +783,8 @@ def main(argv: list[str] | None = None) -> int:
         holdout = load(man, "holdout")
         sealed = set(sealed_files(man))
         out = Path(a.out)
-        out.write_text(table(cache, load(man), holdout, sealed), encoding="utf-8")
+        out.write_text(table(cache, load(man), holdout, sealed,
+                             load_no_case(man)), encoding="utf-8")
         for r in sorted(sealed):
             f = out.parent.parent / "holdout" / f"round-{r}-errata.md"
             f.parent.mkdir(exist_ok=True)
