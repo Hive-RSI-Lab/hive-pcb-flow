@@ -86,11 +86,23 @@ def _num_key(s: str):
 
 def package_family(footprint: str | None) -> str | None:
     """A footprint's package token, dashes dropped: SOT-223-3_TabPin2 is
-    SOT2233, TO-252-2 is TO2522, SOIC-8_3.9x4.9mm is SOIC8. None when the
-    name starts with no letters-then-digits token (a custom 'MyPart')."""
+    SOT2233, TO-252-2 is TO2522, SOIC-8_3.9x4.9mm is SOIC8. A name that
+    doesn't start with one but carries a package word and its pin count
+    (Z80_PLCC_44, MyLib:CPU-DIP40) gives that (PLCC44, DIP40). None when
+    there is neither (a custom 'MyPart')."""
     name = (footprint or "").split(":")[-1].upper().replace("-", "")
     m = re.match(r"^([A-Z]{2,}\d+)", name)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    m = _PKG_WORD_RE.search((footprint or "").split(":")[-1].upper())
+    return f"{m.group(1)}{m.group(2)}" if m else None
+
+
+# package words a custom footprint name may carry with its pin count
+_PKG_WORD_RE = re.compile(
+    r"(?<![A-Z])(PLCC|LCC|PDIP|DIP|CDIP|SDIP|SOIC|SSOP|TSSOP|MSOP|SOP|SO|"
+    r"LQFP|TQFP|PQFP|QFP|VQFN|QFN|DFN|SON|BGA|PGA|SIP|ZIP)[-_ ]?(\d{1,3})"
+    r"(?!\d)")
 
 
 def same_package(fp_a: str | None, fp_b: str | None) -> bool:
@@ -101,6 +113,45 @@ def same_package(fp_a: str | None, fp_b: str | None) -> bool:
         return True
     # SOT-223 vs SOT-223-3: one token a prefix of the other is one package
     return a.startswith(b) or b.startswith(a)
+
+
+def _filter_word(pat: str) -> str:
+    """The package word a ki_fp_filters glob starts with (DIP*W15.24* is
+    DIP, PLCC?44* is PLCC); '' for one starting with a wildcard."""
+    m = re.match(r"[A-Z]+", pat.upper())
+    w = m.group(0) if m else ""
+    return "DIP" if w in ("PDIP", "DIP") else w
+
+
+def stock_package_match(footprint: str | None, st: dict) -> bool | None:
+    """Is the board's FOOTPRINT the package stock symbol ST is drawn for?
+    The stock symbol's package is its default Footprint, else its
+    ki_fp_filters globs (KiCad's list of the footprints it fits). True,
+    False, or None when the stock symbol is drawn for several packages
+    and the board's footprint names none KiCad can tell (not judged)."""
+    sfp = st.get("footprint") or ""
+    filters = [f for f in st.get("filters") or [] if f]
+    mine = package_family(footprint)
+    if sfp and package_family(sfp) and mine:
+        return same_package(footprint, sfp)
+    name = (footprint or "").split(":")[-1].upper()
+    if filters:
+        import fnmatch  # noqa: PLC0415
+        if name and any(fnmatch.fnmatchcase(name, f.upper())
+                        for f in filters):
+            return True
+        if mine:
+            words = {_filter_word(f) for f in filters} - {""}
+            got = "DIP" if re.match(r"P?DIP", mine) else \
+                re.match(r"[A-Z]+", mine).group(0)
+            # a filter whose package word is the board's but whose size
+            # glob doesn't take it is still that package's numbering
+            return got in words if words else True
+        words = {_filter_word(f) for f in filters} - {""}
+        if sfp and package_family(sfp):
+            words.add(_filter_word(package_family(sfp)))
+        return None if len(words) > 1 else True
+    return True
 
 
 # ------------------------------------------------------------ stock symbols
@@ -270,9 +321,10 @@ def _walk_pins(node, out: dict[str, str]):
 
 @functools.lru_cache(maxsize=512)
 def stock_symbol(path: str) -> dict | None:
-    """{"pins": {number: name}, "footprint": str} of the one-symbol file
-    PATH, following (extends "Parent") to the parent's file beside it.
-    None when it can't be read."""
+    """{"pins": {number: name}, "footprint": str, "filters": [glob]} of
+    the one-symbol file PATH (filters: its ki_fp_filters), following
+    (extends "Parent") to the parent's file beside it. None when it can't
+    be read."""
     try:
         syms = _sexp_symbols(path)
     except Exception:  # noqa: BLE001 - a stock file we can't read is no hit
@@ -281,11 +333,15 @@ def stock_symbol(path: str) -> dict | None:
         return None
     sym = syms[0]
     fp = ""
+    filters: list[str] = []
     parent = None
     for x in sym:
         if isinstance(x, list) and len(x) > 2 and str(x[0]) == "property" \
                 and str(x[1]) == "Footprint":
             fp = str(x[2])
+        elif isinstance(x, list) and len(x) > 2 and str(x[0]) == "property" \
+                and str(x[1]) == "ki_fp_filters":
+            filters = str(x[2]).split()
         elif isinstance(x, list) and len(x) > 1 and str(x[0]) == "extends":
             parent = str(x[1])
     pins: dict[str, str] = {}
@@ -296,7 +352,8 @@ def stock_symbol(path: str) -> dict | None:
             return None
         pins = dict(base["pins"])
         fp = fp or base["footprint"]
-    return {"pins": pins, "footprint": fp}
+        filters = filters or list(base["filters"])
+    return {"pins": pins, "footprint": fp, "filters": filters}
 
 
 # ------------------------------------------------------------ size tokens

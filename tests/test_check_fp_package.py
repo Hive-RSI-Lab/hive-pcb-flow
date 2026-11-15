@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "scripts" / "lib"))
 
+import case_limits  # noqa: E402
 import check_fp_package as cfp  # noqa: E402
 import pkgname  # noqa: E402
 import verify_all  # noqa: E402
@@ -244,3 +245,186 @@ def test_value_name_in_another_mount_not_judged(tmp_path):
     fetch = jlc([row("C82531", "BAT85", "LL-34")])
     viols, facts = run(pcb, live=True, fetch=fetch)
     assert viols == [] and facts["judged"] == 0
+
+
+# ------------------------------------------------- MPN ordering codes (#1202)
+
+import mpn_decode  # noqa: E402
+
+SOIC16 = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"
+
+
+@pytest.mark.parametrize("mpn,fpid,pads,hit", [
+    # TI package designator: PW is TSSOP 0.65 mm, D the 3.9 mm SOIC
+    ("SN74HC595PWR", SOIC16, 16, "pitch"),
+    ("SN74HC595DR", SOIC16, 16, None),
+    # Microchip -SU is the 8S2 208 mil SOIC, not the 150 mil one
+    ("ATTINY85-20SU", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", 8, "208 mil"),
+    ("ATTINY85-20SU", "Package_SO:SOIC-8_5.23x5.23mm_P1.27mm", 8, None),
+    ("ATTINY85-20PU", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", 8, "through"),
+    ("ATTINY85-20PU", "Package_DIP:DIP-8_W7.62mm", 8, None),
+    # ST pin-count letter: C is 48 pins (LQFP 7x7), R 64
+    ("STM32F103C8T6", "Package_QFP:LQFP-64_10x10mm_P0.5mm", 64, "48 pins"),
+    ("STM32F103C8T6", "Package_QFP:LQFP-48_7x7mm_P0.5mm", 48, None),
+    ("STM32F103C8U6", "Package_QFP:LQFP-48_7x7mm_P0.5mm", 48, "QFP"),
+    # Nexperia: PW TSSOP, D SO
+    ("74HC595PW,118", SOIC16, 16, "pitch"),
+    ("74HC595D,653", SOIC16, 16, None),
+    # PowerPAK 1212-8 is 3.3x3.3, not the 5x6 PowerPAK SO-8
+    ("SIS412DN-T1-GE3", "Package_SO:Vishay_PowerPAK_SO-8_Single", 8,
+     "POWER-SO8"),
+    ("SIS412DN-T1-GE3", "Package_DFN_QFN:Vishay_PowerPAK_1212-8_Single", 8,
+     None),
+    # Microchip MCP1700 MB is SOT-89, TT SOT-23
+    ("MCP1700T-3302E/MB", "Package_TO_SOT_SMD:SOT-23", 3, "SOT-89"),
+    ("MCP1700T-3302E/TT", "Package_TO_SOT_SMD:SOT-23", 3, None),
+])
+def test_mpn_ordering_code_offline(tmp_path, mpn, fpid, pads, hit):
+    tht = "DIP" in fpid
+    pcb = board(tmp_path, footprint("U1", fpid, "x", {"MPN": mpn},
+                                    pads=pads, kind=THT if tht else SMD,
+                                    attr="through_hole" if tht else "smd"))
+    viols, facts = run(pcb)
+    assert facts["judged"] == 1, facts
+    if hit is None:
+        assert viols == []
+    else:
+        assert [v["kind"] for v in viols] == ["footprint_package_mismatch"]
+        assert viols[0]["severity"] == "error"
+        assert hit in viols[0]["msg"], viols[0]["msg"]
+        assert "mpn_packages.yaml" in viols[0]["msg"]
+
+
+def test_mpn_that_does_not_decode_is_not_judged(tmp_path):
+    # no entry, or an entry's prefix with a code letter it has no row for
+    pcb = board(tmp_path,
+                footprint("U1", SOIC16, "x", {"MPN": "XYZ1234ABC"}, pads=16),
+                footprint("U2", SOIC16, "x", {"MPN": "SN74HC595QQ"}, pads=16),
+                # a little-logic part with a standard-logic letter (TI's DBV
+                # cut short): not Nexperia's DB, so not decoded
+                footprint("U3", "Package_TO_SOT_SMD:SOT-23-5", "x",
+                          {"MPN": "74AHCT1G125DB"}, pads=5))
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 0
+    assert facts["not_judged"] == {"an MPN is looked up only with --live": 3}
+
+
+def test_another_makers_mpn_is_not_decoded(tmp_path):
+    fp = footprint("U1", SOIC16, "x", {"MPN": "74HC595PW,118",
+                                       "Manufacturer": "Toshiba"}, pads=16)
+    viols, facts = run(board(tmp_path, fp))
+    assert viols == [] and facts["judged"] == 0
+    fp = footprint("U1", SOIC16, "x", {"MPN": "74HC595PW,118",
+                                       "Manufacturer": "Nexperia"}, pads=16)
+    viols, _ = run(board(tmp_path, fp))
+    assert [v["kind"] for v in viols] == ["footprint_package_mismatch"]
+
+
+def test_value_named_part_decoded_is_a_warning(tmp_path):
+    pcb = board(tmp_path, footprint(
+        "U1", "Package_QFP:LQFP-64_10x10mm_P0.5mm", "STM32F103C8T6", pads=64))
+    viols, _ = run(pcb)
+    assert [(v["kind"], v["severity"]) for v in viols] == [
+        ("footprint_package_mismatch", "warning")]
+    pcb = board(tmp_path, footprint(
+        "U1", "Package_QFP:LQFP-48_7x7mm_P0.5mm", "STM32F103C8T6", pads=48))
+    assert run(pcb)[0] == []
+
+
+def test_code_without_a_readable_package_falls_back_to_the_mpn(tmp_path):
+    # the LCSC code has no record offline; the MPN field still decodes
+    fp = footprint("U1", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "x",
+                   {"LCSC": "C89852", "MPN": "ATTINY85-20SU"}, pads=8)
+    viols, facts = run(board(tmp_path, fp))
+    assert [v["kind"] for v in viols] == ["footprint_package_mismatch"]
+    assert "MPN field" in facts["parts"][0]["from"]
+    # the record's own model decodes when its package name is not read
+    pcb = board(tmp_path, footprint(
+        "U1", "Package_SO:SOIC-8_5.23x5.23mm_P1.27mm", "x",
+        {"LCSC": "C89852"}, pads=8),
+        parts=[{"lcsc": "C89852", "mpn": "ATTINY85-20SU", "package": "?"}])
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 1
+
+
+def test_mpn_table_rows_are_cited_and_regexes_compile():
+    entries = mpn_decode.load()
+    assert entries
+    for e in entries:
+        assert e["verified"] is True, e["name"]
+        rows = [e.get("row")] + [r for g in (e.get("groups") or {}).values()
+                                 for r in g.values()] + (e.get("combos") or [])
+        for r in filter(None, rows):
+            for c in r.get("cite") or []:
+                assert c["doc"] and c["page"] and c["quote"] and c["sha256"]
+            fam = r.get("family")
+            assert fam is None or fam in {
+                f for f, *_ in pkgname._FAMILIES} | {"NOLEAD"}, fam
+
+
+@pytest.mark.parametrize("part,fp,hit", [
+    ("SOT-563", "Package_TO_SOT_SMD:SOT-23-6", "SOT-563"),
+    ("SOT-563", "Package_TO_SOT_SMD:SOT-563", None),
+    ("PowerPAK 1212-8", "Package_SO:Vishay_PowerPAK_SO-8_Single", "NOLEAD"),
+    ("PowerPAK 1212-8", "Package_DFN_QFN:Vishay_PowerPAK_1212-8_Single",
+     None),
+])
+def test_pkgname_sot563_and_powerpak1212(part, fp, hit):
+    why = pkgname.compare(pkgname.describe(part), pkgname.describe(fp), None)
+    assert (why == []) if hit is None else (hit in " ".join(why)), why
+
+
+# ------------------------------------------------- value against the case
+
+CAP = "Capacitor_SMD:C_{}_{}Metric"
+RES = "Resistor_SMD:R_{}_{}Metric"
+
+
+@pytest.mark.parametrize("ref,fpid,value,props,hit", [
+    # a capacitor over its case's largest part, and its quiet twin
+    ("C1", CAP.format("0402", "1005"), "100uF", {}, True),
+    ("C1", CAP.format("0402", "1005"), "22uF", {}, False),
+    # the voltage column: 10 uF is sold in 0402 at 10 V, not at 25 V
+    ("C2", CAP.format("0402", "1005"), "10uF 25V", {}, True),
+    ("C2", CAP.format("0402", "1005"), "10uF 10V", {}, False),
+    # the dielectric: X7R 0402 tops out well below X5R
+    ("C3", CAP.format("0402", "1005"), "10uF",
+     {"Dielectric": "X7R", "Voltage": "16V"}, True),
+    ("C3", CAP.format("0402", "1005"), "10uF",
+     {"Dielectric": "X5R", "Voltage": "6.3V"}, False),
+    # a resistor's stated power over its case's rating, and its twin
+    ("R1", RES.format("0603", "1608"), "10k 1W", {}, True),
+    ("R1", RES.format("0603", "1608"), "10k", {"Power": "1/4W"}, False),
+])
+def test_passive_case_limit(tmp_path, ref, fpid, value, props, hit):
+    viols, facts = run(board(tmp_path, footprint(ref, fpid, value, props)))
+    assert facts["case_limits_judged"] == 1
+    got = [v for v in viols if v["kind"] == "passive_case_limit"]
+    assert len(got) == (1 if hit else 0), viols
+    if hit:
+        assert got[0]["severity"] == "warning"
+        assert "reference/case_limits.yaml" in got[0]["msg"]
+        assert ("Yageo" in got[0]["msg"]) and (" p" in got[0]["msg"])
+
+
+@pytest.mark.parametrize("ref,fpid,value,props", [
+    ("C1", "Capacitor_SMD:CP_Elec_6.3x5.4", "100uF", {}),     # electrolytic
+    ("C1", "Capacitor_Tantalum_SMD:CP_EIA-3216-18_Kemet-A", "100uF", {}),
+    ("C1", CAP.format("0402", "1005"), "100uF Y5V", {}),      # no chart rows
+    ("C1", "Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm", "100uF", {}),
+    ("R1", RES.format("0603", "1608"), "10k", {}),            # no power stated
+])
+def test_passive_case_limit_not_judged(tmp_path, ref, fpid, value, props):
+    viols, facts = run(board(tmp_path, footprint(ref, fpid, value, props)))
+    assert facts["case_limits_judged"] == 0
+    assert not [v for v in viols if v["kind"] == "passive_case_limit"]
+
+
+def test_case_limit_table_is_cited():
+    data = case_limits.load()
+    assert data["caps"] and data["res"]
+    for *_, cite in data["caps"]:
+        assert cite["doc"] and cite["page"] and cite["quote"] \
+            and cite["sha256"]
+    for case, rows in data["res"].items():
+        assert all(w > 0 and c["page"] for w, c in rows), case
