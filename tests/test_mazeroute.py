@@ -682,17 +682,20 @@ _ZONE = """  (zone (net "GND") (layer "F.Cu") (uuid "00000000-0000-0000-0000-000
 """
 
 
-def _thermal(tmp_path, body=""):
+def _thermal(tmp_path, body="", cut=None):
     """20 x 20, F.Cu and B.Cu: G1, a 1 mm GND pad at (10, 10), in a GND
     pour across the board (y 9.2 to 10.8) with a 0.5 mm thermal gap and two
     0.5 mm spokes, left and right, each into its own half of the pour; A's
     pads at (11.4, 15) and (11.4, 5) either side. A's straight way down
-    crosses the right spoke's end. `body` adds copper."""
+    crosses the right spoke's end. `body` adds copper; `cut` (a shape)
+    comes out of the fill, as other copper's clearance would."""
     import make_fixture as mf
     band = box(0.5, 9.2, 19.5, 10.8).difference(
         box(9.5, 9.5, 10.5, 10.5).buffer(0.5))
     fill = band.union(box(10.4, 9.75, 11.2, 10.25)).union(
         box(8.8, 9.75, 9.6, 10.25))
+    if cut is not None:
+        fill = fill.difference(cut)
     polys = list(getattr(fill, "geoms", [fill]))
     assert len(polys) == 2
     fills = "".join(
@@ -836,6 +839,36 @@ def test_a_starved_pad_gets_a_track_on_its_live_spoke(tmp_path, mf_path):
     ops, notes = pr.spoke_tracks(_thermal(tmp_path, via + left),
                                  [("G1", "1", "F.Cu", zid)], rules)
     assert ops == [] and "the spoke model counts 2" in notes[0]
+
+
+def test_a_spoke_track_narrows_past_a_notch(tmp_path, mf_path):
+    """#1140 (C210.2 on the voice board): where other copper's clearance
+    notches the fill along the live spoke, the track narrows, 0.02 mm a
+    try, to the widest that lies in the fill and the pad, down to the
+    net's width floor; with none there, no track and a note."""
+    import make_fixture as mf
+    import part_repair as pr
+    via = mf.via(15, 10, "GND", "00000000-0000-0000-0000-0000000005b1")
+    # the notch comes down to y 10.193 over the right spoke: a track on
+    # its axis fits at 0.38 mm and not at 0.40
+    notch = Point(10.9, 10.443).buffer(0.25)
+    bg = _thermal(tmp_path, via, cut=notch)
+    assert _obs(bg).spoke_count(0) == 1
+    zid = "00000000-0000-0000-0000-0000000005a1"
+    rules = SimpleNamespace(net_layers=lambda net, lys: list(lys),
+                            width_floor=lambda net: 0.101)
+    [op], notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid)], rules)
+    assert op["width"] == pytest.approx(0.38)
+    assert 11.0 < op["end"][0] < 11.4 and "a 0.380 mm GND track" in notes[0]
+    track = mf.seg(*op["start"], *op["end"], op["width"], "F.Cu", "GND",
+                   "00000000-0000-0000-0000-0000000005c1")
+    assert _obs(_thermal(tmp_path, via + track, cut=notch)).spoke_count(0) \
+        == 2
+    # a floor above every width that fits: no track, and the note says so
+    thick = SimpleNamespace(net_layers=rules.net_layers,
+                            width_floor=lambda net: 0.4)
+    ops, notes = pr.spoke_tracks(bg, [("G1", "1", "F.Cu", zid)], thick)
+    assert ops == [] and "none fits in the spoke and the fill" in notes[0]
 
 
 def test_zone_join():

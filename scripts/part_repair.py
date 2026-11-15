@@ -1013,6 +1013,7 @@ def starved_pads(drc0: dict, drc1: dict) -> list:
 
 SPOKE_REACH = 10     # steps of SPOKE_STEP mm past the spoke's end, at most
 SPOKE_STEP = 0.05
+SPOKE_NARROW = 0.02  # mm a spoke track narrows by a try, to the width floor
 
 
 def spoke_tracks(bg, starved: list, rules) -> tuple[list, list]:
@@ -1077,7 +1078,11 @@ def spoke_tracks(bg, starved: list, rules) -> tuple[list, list]:
 def _spoke_track(p, z, layer, gap, sw, mt, mid, rules):
     """The add_track op from pad p's copper centre along its spoke through
     mid (thermal_spokes) to the first point past the spoke's end that is
-    in z's fill, if the track lies in the fill and the pad; else None."""
+    in z's fill, if the track lies in the fill and the pad; else None. It
+    is as wide as the spoke less 0.02 mm where that fits; where other
+    copper notches the fill along the spoke (C210.2 on the voice board: a
+    via's clearance), the widest that fits, SPOKE_NARROW mm a try, down to
+    the net's width floor. DRC counts the track as a spoke at any width."""
     end = rf.spoke_end(p, mid, gap, mt)
     if end is None:
         return None
@@ -1085,16 +1090,23 @@ def _spoke_track(p, z, layer, gap, sw, mt, mid, rules):
     fill = z.fill_on(layer)
     inner = fill.buffer(-TOUCH)
     room = shapely.union(fill, p.poly).buffer(1e-4)
-    w = max(rules.width_floor(p.net), min(sw, min(p.size)) - 0.02)
+    floor = rules.width_floor(p.net)
+    w0 = max(floor, min(sw, min(p.size)) - 0.02)
+    widths = [max(floor, round(w0 - k * SPOKE_NARROW, 4))
+              for k in range(int((w0 - floor) / SPOKE_NARROW + 1e-9) + 1)]
+    if widths[-1] > floor:
+        widths.append(floor)
     a = tuple(p.copper_center)
-    for k in range(SPOKE_REACH + 1):
-        b = (ox + ux * k * SPOKE_STEP, oy + uy * k * SPOKE_STEP)
-        if inner.contains(Point(b)) and room.contains(
-                LineString([a, b]).buffer(w / 2)):
-            return {"op": "add_track", "net": p.net, "layer": layer,
-                    "start": [round(a[0], 4), round(a[1], 4)],
-                    "end": [round(b[0], 4), round(b[1], 4)],
-                    "width": round(w, 4)}
+    ends = [b for b in ((ox + ux * k * SPOKE_STEP, oy + uy * k * SPOKE_STEP)
+                        for k in range(SPOKE_REACH + 1))
+            if inner.contains(Point(b))]
+    for w in widths:
+        for b in ends:
+            if room.contains(LineString([a, b]).buffer(w / 2)):
+                return {"op": "add_track", "net": p.net, "layer": layer,
+                        "start": [round(a[0], 4), round(a[1], 4)],
+                        "end": [round(b[0], 4), round(b[1], 4)],
+                        "width": w}
     return None
 
 
