@@ -12,6 +12,8 @@ ops are ABSOLUTE (idempotent by construction - re-applying is a no-op):
   {"op": "move",   "ref": R, "x": mm, "y": mm}
   {"op": "rotate", "ref": R, "deg": d}
   {"op": "flip",   "ref": R, "side": "front"|"back"}   # absolute side, not toggle
+     - mirrors top to bottom about the part's position: pad local y and the
+       angle are negated, local x kept (see set_side); rotate after it.
   {"op": "lock",   "ref": R, "locked": true|false}
 Text ops (S14, closes V17 - silk labels/refdes moves were previously
 unscriptable):

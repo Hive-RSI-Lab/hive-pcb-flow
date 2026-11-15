@@ -17,6 +17,10 @@ label / text.
 
 `swap_fp` re-pads a placed part with a fixed library footprint (the nets follow
 the pad numbers); `renumber` gives the pads at board positions new numbers.
+`flip`, when it changes the side, mirrors the part top to bottom about its
+position, not left to right:
+each pad's local y and the part's angle are negated (-90 becomes 90), local x
+is kept. Follow it with `rotate` to set the angle you want.
 
 It validates, edits a scratch copy, re-parses to verify every op landed
 (1e-3 mm / 0.05 deg), and only then swaps the file in. Any failure leaves the
