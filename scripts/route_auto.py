@@ -1037,11 +1037,11 @@ def run(argv: list[str] | None = None):
         import route_finish
 
         def _maze(rip_board):
+            sbg = geom.BoardGeom.from_file(staged)
             return route_finish.finish_staged(
                 cli, staged, drc, parity=sch.is_file(), refill=has_zones,
                 rip_errors=True, rip_board=rip_board,
-                protect_uuids=_protect_uuids(
-                    pre, geom.BoardGeom.from_file(staged)),
+                protect_uuids=_protect_uuids(pre, sbg),
                 layers=(",".join(ly for ly in bg.copper_layers
                                  if ly not in power_layers)
                         if power_layers else "auto"))
