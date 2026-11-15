@@ -15,11 +15,11 @@ only for the round's first reading: each round is swept once.
 
 ## Count
 
-- Training: 42 of 51 caught (42 caught, 5 missed, 4 not_static).
-- Holdout round 1, blind: 1 of 6 caught (1 caught, 5 missed).
-- Holdout round 1, with the rules written since: 3 of 6 caught (3 caught, 3 missed).
-- Holdout round 2, blind: 1 of 23 caught (1 caught, 22 missed).
-- Holdout round 2, with the rules written since: 5 of 23 caught (5 caught, 18 missed).
+- Training: 47 of 55 caught (47 caught, 4 missed, 4 not_static).
+- Holdout round 1, blind: 1 of 4 caught (1 caught, 3 missed).
+- Holdout round 1, with the rules written since: 2 of 4 caught (2 caught, 2 missed).
+- Holdout round 2, blind: 1 of 21 caught (1 caught, 20 missed).
+- Holdout round 2, with the rules written since: 4 of 21 caught (4 caught, 17 missed).
 
 ## A new holdout round
 
@@ -202,7 +202,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| fc980c-1: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13 | SCH (pin function vs datasheet) | missed | SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070) |
+| fc980c-1: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13 | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` debug_pin_wrong) | SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070) |
 | fc980c-2: KEY_STATE open-collector line has no 5V pull-up | SCH (missing pull-up) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_floating) | an off-board control input left floating needs a stiff pull (#1079) |
 
 ### zxdiag-v11: v1.1 -> v1.2
@@ -215,16 +215,25 @@ round, pinned and swept before those rules are:
 | zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_clamp) | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
 | zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_rail_absent) | a measurement divider whose reference comes from an off-board rail |
 
-## Holdout round 1
-
 ### netscore-main: main-board v3.0 -> main-board v3.1
 
-[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`.
 
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| netscore-1: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT | SCH (part orientation) | missed | caught on rev A, gone on rev B, since #1085 (`netlist_audit` power_path_body_diode) | Not an independent catch: the rule was written after this defect was read, though seeded from datasheets (TI SLVA139, Microchip AN1149), not from this board. The warning is on v3.0 and gone on v3.1. |
-| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | missed | missed | protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors |
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| netscore-1: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT | SCH (part orientation) | caught on rev A, gone on rev B, since #1085 (`netlist_audit` power_path_body_diode) | Not an independent catch: the rule was written after this defect was read, though seeded from datasheets (TI SLVA139, Microchip AN1149), not from this board. The warning is on v3.0 and gone on v3.1. |
+| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` protector_cell_side) | protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors |
+
+### flexgrid-v4: V4 as ordered -> V4-2
+
+[https://github.com/Open-Muscle/OpenMuscle-FlexGrid](https://github.com/Open-Muscle/OpenMuscle-FlexGrid) at `d3529287a899`, CERN-OHL-S-2.0; errata `KiCad/OM-FlexGrid V4/README.md`.
+
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` pin_role_net) | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
+| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | caught (not run here), since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
+
+## Holdout round 1
 
 ### netscore-big: display-board-big v2.0 -> display-board-big v3.0
 
@@ -325,15 +334,6 @@ round, pinned and swept before those rules are:
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | mdbt-micro-50q-1: Pro Micro 2.54 mm header holes 0.7 mm, too small; 1 mm in v1.2 | DFM (hole size) | missed | missed | check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why |
-
-### flexgrid-v4: V4 as ordered -> V4-2
-
-[https://github.com/Open-Muscle/OpenMuscle-FlexGrid](https://github.com/Open-Muscle/OpenMuscle-FlexGrid) at `d3529287a899`, CERN-OHL-S-2.0; errata `KiCad/OM-FlexGrid V4/README.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
-
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | missed | missed | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
-| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | missed | caught (not run here), since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
 
 ### flexgrid-v3: V3 -> V4
 

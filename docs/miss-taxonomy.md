@@ -18,6 +18,17 @@ caught. That leaves 31 misses: training 9 (5 missed, 4 not_static;
 smart-lcc-1, fc980c-1 and zxdiag-v11-1 came with their boards), holdout
 round 1: 3, holdout round 2: 19.
 
+**Since then (#1142, class 4).** flexgrid-v4-2 (holdout round 2) is
+caught by check_wicking's via-in-pad rule, now in the corpus runners
+(#1088): 30 misses, training 9, holdout round 1: 3, holdout round 2: 18.
+
+**Since then (#1155, rules 29-31, class 6).** netscore-main (holdout round
+1) and flexgrid-v4 (round 2) moved to training, since rules 29 and 30 were
+seeded from their defects; fc980c-1, netscore-2 and flexgrid-v4-1 are
+caught. That leaves 27 misses: training 8 (4 missed, 4 not_static;
+flexgrid-v4-2 came with its board, already caught), holdout round 1: 2,
+holdout round 2: 17.
+
 ## How classes are cut and ranked
 
 A class is **one check**: misses that a single rule with one data source
@@ -47,13 +58,13 @@ parts on an ordinary board.
 | 1 | Footprint vs the part's package | 4 | 3 | 12 | footprint + BOM (LCSC/MPN, value) | each part's package, pad count and pitch from its LCSC record (EasyEDA footprint) or MPN ordering code; case-size limits for passives (largest C or R a case holds) |
 | 2 | Connector mechanics vs the mate | 6 | 2 | 12 | footprint, 3D | lead sizes per connector footprint, the mate's gender and row pitch (a stated mating side), mounting heights of raised THT parts |
 | 4 | Board-level DFM | 3 | 3 | 9 | footprint, pcb | none beyond the board: vias inside SMD pads, vias under a part's body, mounting holes |
-| 6 | Pin function on the wrong net | 3 | 3 | 9 | netlist | pin roles (a pin named GND on a supply net), a protector's cell-side pins, MCU debug pins (mcu_pins.yaml) |
 | 7 | Datasheet application circuit | 3 | 2 | 6 | netlist | per-part required externals and reference networks from the typical-application figure; pins that must be connected |
 | 8 | Wiring against design intent | 5 | 1 | 5 | netlist + a stated fact | which signal a pin should carry: UART crossover, a level shifter's DIR net, a jumper map, a named bus checked complete |
 | 9 | Shared-bus drivers | 3 | 1 | 3 | netlist | driver type per part (push-pull vs open drain), I2C masters per bus, bus strobes |
 | 10 | Silk pin labels (two-column legends) | 1 | 2 | 2 | footprint + silk | none; extends #1028 |
 | 11 | Load against a source's limit | 1 | 1 | 1 | netlist + a stated load | the off-board load's capacitance |
 | 5 | Symbol pin map vs the part (landed, #1134) | 0 | 3 | 0 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts |
+| 6 | Pin function on the wrong net (landed, #1155) | 0 | 3 | 0 | netlist | pin names of the stock symbols, protector cell/load pin names, reference/mcu_pins.yaml debug pins |
 | 3 | Off-board inputs (landed, #1139) | 0 | 2 | 0 | netlist | reference/pin_abs_max.yaml (abs-max, negative too, cited; part_rows drafts it): netlist_audit rules 23 and 28; identidem-1 by check_pinouts pulsed_load_no_bulk (#1090) |
 | - | Not static | 4 | - | - | not static | firmware, radio power, MCU timer and interrupt pin choice |
 
@@ -119,10 +130,21 @@ parts on an ordinary board.
    on 26 boards with no hit, so it has no real catch yet. The datasheet pin
    tables in part_rows and module pinouts are not read yet.
 
-6. **Pin function on the wrong net.**
-   - flexgrid-v4-1: KiCad's own USBLC6-2SC6 symbol with its GND pin on VBUS.
-   - netscore-2: FS312MH GND and BAT- swapped.
-   - fc980c-1: SWDIO on PA15, not PA13.
+6. **Pin function on the wrong net.** All three are caught since #1155,
+   by rules written knowing them, so none is independent:
+   - flexgrid-v4-1: KiCad's own USBLC6-2SC6 symbol with its GND pin on
+     VBUS. Rule 29 `pin_role_net` reads each pin's role from its name (GND,
+     VCC/VBUS, VBAT) and flags a ground pin on a supply net or the reverse.
+   - netscore-2: FS312MH GND and BAT- swapped. Rule 30
+     `protector_cell_side` finds the cell's own terminal and checks the
+     protector's cell-side pin is on it, not the load-side one.
+   - fc980c-1: SWDIO on PA15, not PA13. Rule 31 `debug_pin_wrong` checks a
+     net named SWDIO/SWCLK lands on the MCU's own debug pin from
+     reference/mcu_pins.yaml (ST open pin data); `debug_pins_reused` warns
+     when those pins, or a BOOT0 they share, carry other signals.
+
+   Over 83 board revisions they judged 761 parts, 17 protectors and 8 MCUs,
+   with 3 hits, all three of these; every fixed revision is quiet.
 
 7. **Datasheet application circuit.**
    - healthmonitor-1: AD8232's IOUT to SW capacitor missing.

@@ -14,6 +14,11 @@
 #               function brings out; a pin named GP4 or GPIO26_ADC0 is
 #               looked up by its GPIOn
 #   source      where the table comes from: the document, its revision, the table
+#   debug       the serial-wire debug signals and the one pin each is on
+#               (SWDIO: PA13); an SWD-named net or header pin on any other
+#               pin is debug_pin_wrong, an SWD pin wired to other parts with
+#               no header or pad is debug_pins_reused (netlist_audit rule 31)
+#   shared      a pin's other role at reset (PA14: BOOT0 on STM32G0/C0)
 #
 # loads: parts whose inputs need an MCU function.
 #   pwm_group   the inputs that take PWM; every such input of every load of
@@ -42,6 +47,8 @@ mcus:
       STMicroelectronics STM32_open_pin_data (the STM32CubeMX pin database
       behind the DS13836 alternate-function tables), commit 7d1f1514ed55,
       mcu/STM32C031K(4-6)Tx.xml
+    debug: {SWDIO: PA13, SWCLK: PA14}   # DEBUG_SWDIO, DEBUG_SWCLK
+    shared: {PA14: BOOT0}               # pin PA14-BOOT0
     timers:
       PA0: [TIM16_CH1, TIM1_CH1]
       PA1: [TIM17_CH1, TIM1_CH2]
@@ -77,6 +84,8 @@ mcus:
     source: >-
       STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
       mcu/STM32C051C8Tx.xml
+    debug: {SWDIO: PA13, SWCLK: PA14}   # DEBUG_SWDIO, DEBUG_SWCLK
+    shared: {PA14: BOOT0}               # pin PA14-BOOT0
     timers:
       PA0: [TIM16_CH1, TIM1_CH1, TIM2_CH1]
       PA1: [TIM17_CH1, TIM1_CH2, TIM2_CH2]
@@ -116,6 +125,36 @@ mcus:
       PD3: [TIM1_CH2N]
       PF0: [TIM14_CH1]
       PF2: [TIM1_CH4]
+
+  # Debug-only rows: the STM32 lines whose SWD pins the corpus's boards use.
+  # Every package file read puts SWDIO on PA13 and SWCLK on PA14.
+  - mpn: STM32F401
+    match: '^STM32F401'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32F401C(B-C)Ux.xml (PA13 SYS_JTMS-SWDIO, PA14
+      SYS_JTCK-SWCLK; BOOT0 its own pin)
+    debug: {SWDIO: PA13, SWCLK: PA14}
+
+  - mpn: STM32F030
+    match: '^STM32F030'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32F030F4Px.xml (PA13 SYS_SWDIO, PA14 SYS_SWCLK; BOOT0 its
+      own pin)
+    debug: {SWDIO: PA13, SWCLK: PA14}
+
+  - mpn: STM32G030 / STM32G031
+    match: '^STM32G03[01]'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32G030F6Px.xml, STM32G030K(6-8)Tx.xml, STM32G031F(4-6-8)Px.xml,
+      STM32G031K(4-6-8)Tx.xml (PA13 SYS_SWDIO, pin PA14-BOOT0 SYS_SWCLK)
+    debug: {SWDIO: PA13, SWCLK: PA14}
+    shared: {PA14: BOOT0}
 
   - mpn: CY7C68013A / CY7C68014A (FX2LP)
     match: '^CY7C6801[3-6]A'
