@@ -82,16 +82,19 @@ lists the pad as a waived thermal, not a fixed one. Only a pad the run did
 not move, with no fewer spokes from that zone than it had before, gets
 one, and the tracks stay only if DRC then finds nothing new; any other
 starved pad fails the gate, and the notes say why.
-Teardrops (#1138): when a via the run removes (ripped, pushed or pruned)
-had teardrops on, every new via on its net gets them, set as on the
-nearest such via (route_edit's add_via "teardrops"; the replay carries
-them), and the refill builds the drops. After it, the check reads the
-drops round the repair area (lib/teardroplib.py) and fails the run when a
-new via that took teardrops has them off or wants a drop it lacks, or a
-via on both boards that had teardrops on wants one it did not want
-before. A new via short of a drop where the via it took them from was
-short too is a note, not a failure. DRC has no check for a missing drop:
-this is the only one. Pads are not checked.
+Teardrops (#1138): when a via the run removes (ripped, pushed, or pruned
+before the route or by a peel after a refill) had teardrops on, every new
+via on its net gets them, set as on the nearest such via (route_edit's
+add_via "teardrops"; the replay carries them), and the refill builds the
+drops. After the last refill, the check reads the drops round the repair
+area (lib/teardroplib.py) and fails the run when a new via that took
+teardrops has them off or lacks a drop on a layer where the via it took
+them from lacked none, or a via on both boards in the area that had
+teardrops on lacks a drop on a layer where it lacked none before (a layer
+in its own net's pour counts). A new via short of a drop where the via it
+took them from was short too is a note, not a failure. Not checked: the
+vias the run removes, and pads. DRC has no check for a missing drop: this
+is the only one.
 
 Contract: --pcb is read only, except with --apply on a pass. Exit 0 pass,
 1 violations (a net would not join, or the board got worse: --pcb untouched,
@@ -883,8 +886,10 @@ def _made(ops: list, results: list, first: int) -> tuple[dict, set]:
 
 def _td_params(p: dict | None) -> dict | None:
     """A via's teardroplib.params_of as add_via's teardrops (#1138); None
-    when its teardrops are off. A value route_edit would refuse is left
-    out, so the default stands for it."""
+    when its teardrops are off. A value route_edit would refuse (negative,
+    not a number) is left out, so the default stands for it; a zero is
+    copied as it is (KiCad: max_length 0 sets no cap, max_width 0 makes no
+    drop)."""
     if not p or not p.get("enabled"):
         return None
     out = {}
@@ -894,7 +899,7 @@ def _td_params(p: dict | None) -> dict | None:
             if isinstance(v, bool):
                 out[k] = v
         elif isinstance(v, (int, float)) and not isinstance(v, bool) \
-                and math.isfinite(v) and v > 0:
+                and math.isfinite(v) and v >= 0:
             out[k] = float(v)
     return out
 
@@ -936,6 +941,42 @@ def restore_teardrops(adds: list, lost: list, params: dict, vias) -> list:
     return src
 
 
+def late_teardrops(kept: list, made: dict, td_src: list, gone: list,
+                   params: dict, skip) -> list:
+    """restore_teardrops for a re-prune after the route (#1138), which takes
+    vias (gone) off the board after the new vias are made: each add_via in
+    made (the uuid it made -> its index in kept) that took no teardrops yet
+    (td_src None) and is not in skip (indices going now or gone) takes
+    them from gone, op "teardrops" and td_src set in place. Returns those
+    add_vias, to send again: route_edit sets the teardrops on the via the
+    op made ("exists"), and the replay's op has them from the start. Every
+    setting is spelled out: on a via already there route_edit keeps the
+    via's own value for a key left out, on a new via the default."""
+    idx = sorted(i for i in made.values() if i not in skip
+                 and td_src[i] is None and kept[i]["op"] == "add_via")
+    again = []
+    for i, s in zip(idx, restore_teardrops([kept[i] for i in idx], gone,
+                                           params, [])):
+        if s is not None:
+            td_src[i] = s
+            kept[i]["teardrops"] = dict(tdl.ITEM_PARAMS,
+                                        **kept[i]["teardrops"])
+            again.append(dict(kept[i]))
+    return again
+
+
+def td_read(params) -> float:
+    """mm past the repair area the teardrop check reads (#1138): TD_READ, or
+    2.5 x the longest max_length_mm of the items with teardrops on (params:
+    their params_of), so the item a drop that touches a via in the area
+    belongs to is read too; else the drop is credited to that via."""
+    longest = [p.get("max_length_mm") for p in params
+               if p and p.get("enabled")]
+    longest = [v for v in longest if isinstance(v, (int, float))
+               and not isinstance(v, bool) and math.isfinite(v)]
+    return max([TD_READ] + [2.5 * v for v in longest])
+
+
 def _td_entry(it, layers, why: str) -> dict:
     return {"via": it.uuid, "net": it.net,
             "at": [_r(it.at[0]), _r(it.at[1])], "layers": layers, "why": why}
@@ -949,12 +990,16 @@ def _td_line(e: dict) -> str:
 def teardrop_loss(b0, b1, new_src: dict, area) -> tuple[list, list]:
     """The drops the run lost (#1138), from teardroplib.read of the base
     (b0) and work (b1) boards round the repair area: (lost, short), entries
-    of via, net, at, layers, why. A new via that took a lost via's
-    teardrops (new_src: its uuid -> that via's) must have them on and a
-    drop on every layer that wants one, unless the via it took them from
-    lacked a drop too (then it is short, not lost). A via on both boards,
-    in the area, with teardrops on, must want no drop on work that it did
-    not want on base."""
+    of via, net, at, layers, why. Counted per layer as the joins no drop
+    answers (teardroplib Item.deficit; a layer in the via's own net's pour
+    counts, as KiCad makes the drop there too). A new via that took a lost
+    via's teardrops (new_src: its uuid -> that via's) must have them on,
+    and, judged at that via's size (or its own, if larger) and limits,
+    leave no more joins unanswered than that via did: one more is lost
+    (a smaller via can lose the drop of a track it is too small for), one
+    that via left unanswered too is short. A via on both boards, in the
+    area, with teardrops on, must leave no more unanswered on work than on
+    base."""
     v0 = {it.uuid: it for it in b0.items if it.kind == "via" and it.uuid}
     v1 = {it.uuid: it for it in b1.items if it.kind == "via" and it.uuid}
     lost, short = [], []
@@ -965,17 +1010,30 @@ def teardrop_loss(b0, b1, new_src: dict, area) -> tuple[list, list]:
         if not it.enabled:
             lost.append(_td_entry(it, [], "has its teardrops off"))
             continue
-        miss = it.missing()
-        if not miss:
-            continue
-        why = "has no drop on " + ", ".join(miss)
         src = v0.get(s)
-        if src is not None and src.missing():
+        size = max(it.min_size_mm, src.min_size_mm) if src else None
+        lim = src.lim if src else None
+        gone, both, small = [], [], False
+        for layer in sorted(set(it.cands) | set(it.joins)):
+            d1 = it.deficit(layer, size=size, lim=lim)
+            d0 = src.deficit(layer) if src is not None else 0
+            if d1 > d0:
+                gone.append(layer)
+                small = small or it.deficit(layer) < d1
+            elif d1 > 0:
+                both.append(layer)
+        if gone:
+            why = "lacks a drop on " + ", ".join(gone)
+            if small and it.min_size_mm < src.min_size_mm - 1e-9:
+                why += (f" (at {it.min_size_mm:g} mm, against the"
+                        f" {src.min_size_mm:g} mm via it replaced, it is"
+                        " too small for a drop on a track that wide)")
+            lost.append(_td_entry(it, gone, why))
+        if both:
+            j = ", ".join(both)
             short.append(_td_entry(
-                it, miss, why + ", and the via it took its teardrops from"
-                " had none on " + ", ".join(src.missing())))
-        else:
-            lost.append(_td_entry(it, miss, why))
+                it, both, f"lacks a drop on {j}, and the via it took its"
+                " teardrops from lacked one there too"))
     for u, it0 in sorted(v0.items()):
         it1 = v1.get(u)
         if it1 is None or not it0.enabled or u in new_src \
@@ -985,10 +1043,11 @@ def teardrop_loss(b0, b1, new_src: dict, area) -> tuple[list, list]:
             lost.append(_td_entry(it1, [], "had teardrops on and has them"
                                   " off"))
             continue
-        miss = sorted(set(it1.missing()) - set(it0.missing()))
-        if miss:
-            lost.append(_td_entry(it1, miss, "lost its drop on "
-                                  + ", ".join(miss)))
+        gone = sorted(layer for layer in set(it1.cands) | set(it1.joins)
+                      if it1.deficit(layer) > it0.deficit(layer))
+        if gone:
+            lost.append(_td_entry(it1, gone, "lost a drop on "
+                                  + ", ".join(gone)))
     return lost, short
 
 
@@ -1697,10 +1756,13 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     for u in pushed + pruned:
         if isinstance(by_uuid.get(u), geom.Via):
             lost.setdefault(u, by_uuid[u])
-    td_src = restore_teardrops(
-        kept, list(lost.values()),
-        tdl.via_params(sexpdata.loads(base.read_text(encoding="utf-8"))),
-        bgw.vias_of())
+    root0 = sexpdata.loads(base.read_text(encoding="utf-8"))
+    td_params = tdl.via_params(root0)
+    td_reach = td_read(list(td_params.values())
+                       + list(tdl.pad_params(root0).values()))
+    del root0
+    td_src = restore_teardrops(kept, list(lost.values()), td_params,
+                               bgw.vias_of())
     route_ops = ops_now()
 
     # 7. check
@@ -1712,7 +1774,6 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         # from the replay too: else a later peel of that copper would
         # leave the replay with it and work without
         made, dup = _made(route_ops, res, len(route_ops) - len(kept))
-    new_src = {u: td_src[i] for u, i in made.items() if td_src[i]}
     drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
     bg1 = geom.BoardGeom.from_file(work)
 
@@ -1775,6 +1836,14 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                 shorter[i] = (shorter.get(i, (ends,))[0], (new.a, new.b))
             else:
                 moved[u] = (moved.get(u, (was,))[0], new)
+        # a via this peel takes off passes its teardrops on to the new vias
+        # of its net, as those removed before the route did; the refill
+        # below builds the drops (#1138)
+        step += late_teardrops(
+            kept, made, td_src,
+            [by_uuid[u] for u in dead if u not in made
+             and isinstance(by_uuid.get(u), geom.Via)],
+            td_params, {made[u] for u in dead if u in made} | drop)
         route_edit.apply_ops(work, step)
         for u in dead:
             if u in made:
@@ -1841,6 +1910,7 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                         " not fix the join: the track adds no new path")
             aside.unlink()
     area = gate_area()
+    new_src = {u: td_src[i] for u, i in made.items() if td_src[i]}
     payload["trimmed"] += [kept[i] for i in sorted(drop)]
     payload["shortened"] = [
         _cut_note(u, was.net, was.layer, (was.a, was.b), (new.a, new.b))
@@ -1860,7 +1930,7 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     payload["drc"] = {"before": drc0["counts"], "after": drc1["counts"]}
     worse = gates(drc0, drc1, isl, area)
     # the drops after the refill: DRC has no check for a missing one
-    reach_td = area.buffer(TD_READ)
+    reach_td = area.buffer(td_reach)
     td_lost, td_short = teardrop_loss(tdl.read(base, None, area=reach_td),
                                       tdl.read(work, None, area=reach_td),
                                       new_src, area)

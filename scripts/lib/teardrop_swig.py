@@ -19,6 +19,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# teardroplib.ITEM_PARAMS's values (that module needs the venv, this one runs
+# in KiCad's python; test_teardrops keeps the two equal): what a new via that
+# add_via asks teardrops for takes when a key is left out (#1138)
+ITEM_DEFAULTS = {"length_ratio": 0.5, "max_length_mm": 1.0,
+                 "width_ratio": 1.0, "max_width_mm": 2.0,
+                 "filter_ratio": 0.9, "curved": False,
+                 "two_tracks": True, "prefer_zones": True}
+
 
 def set_params(item, p: dict, mm) -> None:
     """Set a via's or pad's teardrop parameters (teardroplib.ITEM_PARAMS

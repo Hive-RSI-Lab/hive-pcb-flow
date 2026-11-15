@@ -40,9 +40,10 @@ job JSON: {"verb": ..., "result": out.json, ...} with verbs:
         {"op": "add_via", "at": [x,y], "size": mm, "drill": mm, "net": "NAME"}
             # optional, a span (#477): "kind": micro|blind|buried, "top", "bot"
             # optional (#1138): "teardrops": {teardroplib.ITEM_PARAMS names}
-            #   enables the via's teardrops with those settings (route_edit
-            #   fills every key); a via already there takes them too, and
-            #   its "exists" result says "teardrops": "set" when they changed
+            #   enables the via's teardrops with those settings; a key left
+            #   out takes the default on a new via and keeps its value on a
+            #   via already there, whose "exists" result says
+            #   "teardrops": "set" when anything changed
         {"op": "remove", "uuid": "..."}        # track, via or zone; absent = no-op
         {"op": "set_net", "uuid": "...", "net": "NAME"}   # renet one item
         {"op": "set_width", "uuid": "...", "width": mm}   # a track or arc
@@ -275,8 +276,11 @@ def verb_apply_ops(job):
             if hit is not None:
                 res = {"op": kind, "status": "exists"}
                 if td is not None:
+                    # merged onto the via's own settings: a key left out
+                    # keeps its value, not the default (#1138)
                     was = teardrop_swig.get_params(hit, mm)
-                    teardrop_swig.set_params(hit, td, iu)
+                    keep = {k: x for k, x in was.items() if k != "enabled"}
+                    teardrop_swig.set_params(hit, dict(keep, **td), iu)
                     if teardrop_swig.get_params(hit, mm) != was:
                         res["teardrops"] = "set"
                 results.append(res)
@@ -289,7 +293,8 @@ def verb_apply_ops(job):
             v.SetLayerPair(top, bot)
             v.SetNet(net)
             if td is not None:
-                teardrop_swig.set_params(v, td, iu)
+                teardrop_swig.set_params(
+                    v, dict(teardrop_swig.ITEM_DEFAULTS, **td), iu)
             board.Add(v)
             via_index[(at.x, at.y, op["net"], top, bot)] = v
             results.append({"op": kind, "status": "added",

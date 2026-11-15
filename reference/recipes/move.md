@@ -36,10 +36,13 @@ positions, never file hashes.
    round each part, makes the move, routes every net back to as few islands as
    it had, and keeps the result only if DRC got no worse and no violation is
    new near the move (exit 1 and nothing written otherwise). A new via on a
-   net whose removed vias had teardrops takes the nearest one's settings
-   (route_edit's add_via `teardrops`, carried in its route file), and the run
-   fails when a via round the repair has fewer drops than before: DRC has no
-   check for a missing drop. Pads are not checked.
+   net whose removed vias had teardrops (ripped, pushed, or pruned before or
+   after the refill) takes the nearest one's settings (route_edit's add_via
+   `teardrops`, carried in its route file). The run then fails when such a
+   new via lacks a drop on a layer where the via it took them from lacked
+   none, or a via it kept in the repair area with teardrops on lacks one on
+   a layer where it lacked none before; a via the run removes is not
+   checked, nor are pads. DRC has no check for a missing drop.
    With bare place_edit, re-route the affected nets (`reroute-net`) before
    believing `drc_routed`. Unconnected items in DRC are the honest signal.
 2. **Neighbour silk does not move.** The footprint's own silk travels with it;

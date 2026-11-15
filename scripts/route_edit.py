@@ -15,7 +15,8 @@ Contract:
               [teardrops: {length_ratio, max_length_mm, width_ratio,
                            max_width_mm, filter_ratio, curved, two_tracks,
                            prefer_zones}]   # enabled with these (#1138); a
-                                            # key left out takes the default
+                     # key left out takes the default on a new via and keeps
+                     # its value on a via already there ({} only enables)
     remove    {uuid}                         # track, via or zone; absent=noop
     set_net   {uuid, net}                            # worker-level (renet)
     set_via_fill {uuid, filled}                      # filling + capping
@@ -266,7 +267,8 @@ def validate_ops(doc: dict) -> list[dict]:
 
 def _validate_teardrops(i: int, td) -> None:
     """add_via's teardrops (#1138): teardroplib.ITEM_PARAMS names, a flag
-    true or false, a ratio or size a positive number."""
+    true or false, a ratio or size a number of 0 or more (KiCad keeps a
+    zero: max_length 0 sets no cap, max_width 0 makes no drop)."""
     if not isinstance(td, dict):
         raise CheckError(f"ops[{i}]: teardrops must be an object of "
                          f"{sorted(tdl.ITEM_PARAMS)}")
@@ -279,9 +281,9 @@ def _validate_teardrops(i: int, td) -> None:
             if not isinstance(v, bool):
                 raise CheckError(f"ops[{i}]: teardrops.{k} must be true or "
                                  "false")
-        elif isinstance(v, bool) or not (_num(v) and v > 0):
-            raise CheckError(f"ops[{i}]: teardrops.{k} must be a positive "
-                             "number")
+        elif isinstance(v, bool) or not (_num(v) and v >= 0):
+            raise CheckError(f"ops[{i}]: teardrops.{k} must be a "
+                             "non-negative number")
 
 
 def _validate_route(i: int, op: dict) -> None:
@@ -471,10 +473,10 @@ def resolve_ops(bg, ops: list[dict], guards: dict | None = None
         else:
             flat.append(dict(op))
             if kind == "add_via" and "teardrops" in op:
-                # every setting spelled out: the worker sets them all, and
-                # verify checks them all (#1138)
-                flat[-1]["teardrops"] = dict(tdl.ITEM_PARAMS,
-                                             **op["teardrops"])
+                # only the caller's keys (#1138): the worker merges them onto
+                # a via already there and fills the defaults for a new one,
+                # and verify checks the keys given
+                flat[-1]["teardrops"] = dict(op["teardrops"])
         spans.append(list(range(start, len(flat))))
     return flat, spans
 
