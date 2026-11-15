@@ -54,13 +54,13 @@ NOT_JUDGED = {"cpl_fetch_failed": "fetch failed"}
 # bin/pin.py writes this block; don't edit it by hand.
 # pins:begin
 PINS = {
-    "core": "064d1244a8ed65de337885b57ee2f418490e570eb3505322b1ae046f831f55a7",
+    "core": "3a8a0b06114fdbbc0374be4487ced8b6712dd9c4805e82f9be42cc3e9c8c19e8",
     "digits-v1": "9e0da1682142b785a75e4273ec6e0e465f2ddb22326fdfb0689ef94cf9aa0241",
     "hwde-led-test": "703f061b4277e434bddaa0acb388153ce3232eb6bd5e2908b44f78cdf7ae2b4f",
-    "lite-main": "f0eaa97080a954c4ee601dae622a5676f2fbeb6302d1d88f86b4524fcd76d085",
-    "minuet-v3": "e1c4903bd360390f8786155a5f9c137cc8eef7afd1ceae341b482720ec77c89d",
-    "oasis-v0-2": "138769bf3fc27498927ed64acaf9afd812ae4177a3d6b3b1bf017df6caaf0f8b",
-    "ultra-front": "bddfc3abdc82eec9cfdd6da10a1773b658e7b9fae2f54729f2f45aa20990159a",
+    "lite-main": "f60ee88b85caa0872f5e99a12a9a6c425e1ece7eeffeff31a64b3a6ee63d6c21",
+    "minuet-v3": "e8556ab352a3581b27a8a4c3a4db98c2635baf2bcf6947d6469fb17d8ab5119f",
+    "oasis-v0-2": "af22f7bd587915f241ab4aa1e019f2aa952634a47d545b4a95b609d208e18529",
+    "ultra-front": "2e9522c6817e638bc6b88d1b616d4ee15f0d80c551f3167c5566b3c7df085f51",
 }
 # pins:end
 

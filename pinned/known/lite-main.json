@@ -1192,6 +1192,19 @@
    "kind": "mating_zone_blocked",
    "verdict": "real",
    "reason": "follows from J4's inward wire entries: the wires' path runs across the board's parts"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    77.035,
+    62.923
+   ],
+   "kind": "dfm_slot_size_preferred",
+   "verdict": "real",
+   "reason": "plated slots shorter than twice their width (JLC asks for length >= 2x width); the slots in the footprint are drawn that way"
   }
  ]
 }
