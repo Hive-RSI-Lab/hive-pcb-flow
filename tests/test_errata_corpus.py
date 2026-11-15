@@ -647,8 +647,8 @@ def test_sweep_prints_a_coverage_line_per_check(tmp_path, monkeypatch, capsys):
         {"id": "p", "rev_a": {}, "rev_b": {}}, {"id": "q", "rev_a": {}, "rev_b": {}}])
     ec.main(["sweep", "p", "q", "--cache", str(cache)])
     out = capsys.readouterr().out
-    assert ("coverage planted: judged 0, nothing_to_judge 2, "
-            "with not_judged items 0, crashed 0") in out
+    assert ("coverage planted: judged 0, nothing_to_judge 2, judged nothing "
+            "(unsaid) 0, with not_judged items 0, crashed 0") in out
     r = ec.sweep(cache, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
     assert r["coverage"]["status"] == "nothing_to_judge"
 
@@ -657,4 +657,43 @@ def test_coverage_line_counts_a_crash():
     rows = [("a", "c", {"error": "boom"}),
             ("b", "c", {"coverage": {"status": "judged", "not_judged": 1}})]
     assert ec.coverage_line(rows) == [
-        "coverage c: judged 1, nothing_to_judge 0, with not_judged items 1, crashed 1"]
+        "coverage c: judged 1, nothing_to_judge 0, judged nothing (unsaid) 0, "
+        "with not_judged items 1, crashed 1"]
+
+
+def test_coverage_counts_judged_only_on_evidence():
+    """A check that says nothing_to_judge only when it finds no part of its
+    kind is judged only when its report shows it judged something."""
+    assert ec.coverage({"checked": []}, "check_current")["status"] == "judged_nothing"
+    assert ec.coverage({"checked": [{"net": "/5V"}]}, "check_current")["status"] == "judged"
+    # a finding is a judgement; a can't-judge note is not
+    assert ec.coverage({"violations": [{"kind": "rating_unrated"}],
+                        "pins_checked": 0}, "check_ratings")["status"] == "judged_nothing"
+    assert ec.coverage({"violations": [{"kind": "rating_over"}],
+                        "pins_checked": 0}, "check_ratings")["status"] == "judged"
+    assert ec.coverage({"violations": [{"kind": "mcu_unknown"}],
+                        "checked": [{"mcus": []}]}, "check_straps")["status"] == "judged_nothing"
+    assert ec.coverage({"checked": [{"mcus": ["U1"]}]}, "check_straps")["status"] == "judged"
+    assert ec.coverage({"coverage": {"ran": []}}, "dfm")["status"] == "judged_nothing"
+    assert ec.coverage({"pins_connected": 0, "i2c_buses_checked": 1},
+                       "netlist_audit")["status"] == "judged"
+    # nothing_to_judge still wins, and a check with no evidence rule keeps the default
+    assert ec.coverage({"nothing_to_judge": "x", "checked": []},
+                       "check_current")["status"] == "nothing_to_judge"
+    assert ec.coverage({}, "planted")["status"] == "judged"
+
+
+def test_coverage_counts_footprint_parts():
+    geo = ec.coverage({"judged": {"stock": 5, "model": 2},
+                       "not_judged": {"why": ["R1", "R2"]}}, "check_fp_geometry")
+    assert (geo["status"], geo["parts_judged"], geo["parts_not_judged"]) == ("judged", 7, 2)
+    pkg = ec.coverage({"judged": 0, "not_judged": {"a": 3, "b": 1}}, "check_fp_package")
+    assert (pkg["status"], pkg["parts_judged"], pkg["parts_not_judged"]) == (
+        "judged_nothing", 0, 4)
+    rows = [("a", "check_fp_package", {"coverage": pkg}),
+            ("b", "check_fp_package", {"coverage": {**pkg, "status": "judged",
+                                                    "parts_judged": 6}})]
+    assert ec.coverage_line(rows) == [
+        "coverage check_fp_package: judged 1, nothing_to_judge 0, judged nothing "
+        "(unsaid) 1, with not_judged items 2, crashed 0; parts judged 6, "
+        "parts not_judged 8"]
