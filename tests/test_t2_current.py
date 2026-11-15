@@ -2838,3 +2838,120 @@ def test_block_sides_with_unmatched_sources_and_an_unbounded_port(
            if tuple(t.shape.coords[0]) == (10, 5)]
     assert check_current.block_sides(
         bg, "PWR", t, ({"X9"}, set(), set())) is None
+
+
+# ---- #1169: a non-bridge track in a loop through a plane -----------------
+# B.Cu plane 0..8 x 0..4; U1 (the source) on it at (1, 2); U2 on F.Cu at
+# (6, 2), fed by a thin F.Cu track from a via at (2.5, 2). _LOOP_WIDE adds a
+# 1.5 mm F.Cu leg from U2 down to a second plane via at (6, 3.5): the thin
+# track is then no bridge, and the plane carries most of U2's current.
+
+_LOOP_PLANE = """  (zone (net "PWR") (layer "B.Cu")
+    (polygon (pts (xy 0 0) (xy 8 0) (xy 8 4) (xy 0 4)))
+    (filled_polygon (layer "B.Cu")
+      (pts (xy 0 0) (xy 8 0) (xy 8 4) (xy 0 4))))
+"""
+
+
+def _loop_part(ref: str, x: float, y: float, layer: str) -> str:
+    return f"""  (footprint "t:U" (at {x} {y})
+    (layer "{layer}")
+    (property "Reference" "{ref}" (at 0 0 0))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "{layer}") (net "PWR")))
+"""
+
+
+_LOOP_THIN = """  (via (at 2.5 2) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (segment (start 2.5 2) (end 6 2) (width 0.4) (layer "F.Cu") (net "PWR"))
+"""
+_LOOP_WIDE = """  (via (at 6 3.5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "PWR"))
+  (segment (start 6 2) (end 6 3.5) (width 1.5) (layer "F.Cu") (net "PWR"))
+"""
+_LOOP_ENTRY = {"net": "PWR", "current_a": 2.0, "source": "U1"}
+
+
+def _loop_board(tmp_path_factory, name, wide=True):
+    return _board(tmp_path_factory, name,
+                  _LOOP_PLANE + _loop_part("U1", 1, 2, "B.Cu")
+                  + _loop_part("U2", 6, 2, "F.Cu") + _LOOP_THIN
+                  + (_LOOP_WIDE if wide else ""))
+
+
+def _thin(bg):
+    return [t for t in bg.tracks_of("PWR") if t.width < 1][0]
+
+
+def test_loop_track_beside_a_plane_is_bounded_by_the_grid(tmp_path_factory):
+    """#1169: the thin track carries only its share of U2's 2 A (the plane
+    and the wide leg carry the rest), so it passes at that share."""
+    bg = _loop_board(tmp_path_factory, "gb1")
+    vs, facts = check_current.check_net(bg, dict(_LOOP_ENTRY))
+    assert not _kinds(vs, "undersized_track")
+    [gb] = facts["grid_bounded"]
+    assert 0.05 < gb["solved_a"] < 1.0
+    assert gb["current_a"] == pytest.approx(
+        check_current.GRID_MARGIN * gb["solved_a"], rel=1e-3)
+    assert gb["richardson_delta"] <= check_current.GRID_RICHARDSON_MAX
+    assert gb["layer"] == "F.Cu" and "grid_fallback" not in facts
+
+
+def test_cut_transfer_conserves_current(tmp_path_factory):
+    """The two paths into U2 carry all of its draw: the thin track's
+    section and the wide leg's add to 1 A per ampere."""
+    import check_irdrop
+    bg = _loop_board(tmp_path_factory, "gb2")
+    h = 0.05
+    cuts = [("F.Cu", (4.25, 2.0), (1.0, 0.0), 0.2 + 1.5 * h),
+            ("F.Cu", (6.0, 2.9), (0.0, 1.0), 0.75 + 1.5 * h)]
+    res, facts = check_irdrop.cut_transfer(bg, "PWR", ["F.Cu", "B.Cu"], h,
+                                           cuts, ["U1"])
+    t, refs = res["U1"]
+    assert refs == ["U2"] and facts["solves"] == 1
+    assert 0.0 < t[0, 0] < 0.5
+    assert t[0, 0] - t[1, 0] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_loop_track_failing_its_share_says_so(tmp_path_factory):
+    """At 10 A even the thin track's share needs more copper: it stays an
+    error, judged at the solved share (with the margin), not at 10 A. (The
+    wide leg fails its larger share too.)"""
+    bg = _loop_board(tmp_path_factory, "gb3")
+    vs, facts = check_current.check_net(bg, dict(_LOOP_ENTRY,
+                                                 current_a=10.0))
+    [v] = [x for x in _kinds(vs, "undersized_track") if x["width_mm"] < 1]
+    assert v["bridge"] is False and v["severity"] == "error"
+    assert v["current_a"] < 10.0
+    assert v["current_a"] == pytest.approx(
+        check_current.GRID_MARGIN * v["solved_a"], rel=1e-3)
+    assert "net's grid puts at most" in v["msg"]
+    assert v["solver"] in ("direct", "multigrid_cg")
+    assert "richardson_delta" in v
+
+
+def test_sole_path_track_is_judged_at_the_budget(tmp_path_factory):
+    """Without the wide leg the thin track is U2's only feed: a bridge,
+    judged at the full budget as before, and the grid is not consulted."""
+    bg = _loop_board(tmp_path_factory, "gb4", wide=False)
+    vs, facts = check_current.check_net(bg, dict(_LOOP_ENTRY))
+    [v] = _kinds(vs, "undersized_track")
+    assert v["bridge"] is True and v["current_a"] == 2.0
+    assert "grid_bounded" not in facts and "grid_fallback" not in facts
+
+
+@pytest.mark.parametrize("patch,why", [
+    ({"GRID_RICHARDSON_MAX": -1.0}, "grid unconverged"),
+    ({"GRID_RHS_CAP": (0, 0)}, "exceed the cap"),
+])
+def test_unsolved_grid_keeps_the_budget_with_a_fact(tmp_path_factory,
+                                                    monkeypatch, patch, why):
+    """An unconverged grid pair or a solve over the cap keeps the full
+    budget, and facts.grid_fallback says why."""
+    for k, val in patch.items():
+        monkeypatch.setattr(check_current, k, val)
+    bg = _loop_board(tmp_path_factory, "gb5")
+    vs, facts = check_current.check_net(bg, dict(_LOOP_ENTRY))
+    [v] = _kinds(vs, "undersized_track")
+    assert v["current_a"] == 2.0 and "solved_a" not in v
+    [fb] = facts["grid_fallback"]
+    assert why in fb["why"] and fb["layer"] == "F.Cu"
+    assert "grid_bounded" not in facts
