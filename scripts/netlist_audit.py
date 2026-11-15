@@ -240,6 +240,21 @@ schematic-level structural problems BEFORE board work starts:
    covers, an LED with no Vf in its value, or volts the net names don't
    give is not judged, never guessed. Class 11 of docs/miss-taxonomy.md;
    fact source_limits_checked.
+ - polarity_mismatch (error; a warning for interrupts and for a reset or
+   power-good into an enable), polarity_net_name (warning),
+   idle_pull_asserted (error): a
+   control signal's active level across a connection (a reset output
+   asserting low into a reset input asserting high, directly, through a
+   0 ohm rename or a translator channel; a net named active-low on pins
+   that assert high; a reset held asserted by its only pull). Class 14
+   of the gaps list; lib/signal_domains.py; fact polarity_pins_checked.
+ - io_domain_overdrive (error), io_domain_underdrive (warning),
+   io_domain_pull_rail (error over, warning under): an output on one
+   rail into an input whose datasheet row (reference/io_tolerance.yaml,
+   pin_abs_max.yaml) takes less, a high below the receiver's VIH, an
+   open-drain pull above or below a receiver's limits; a receiver with
+   no row is not_judged. Class 15 of the gaps list; fact
+   io_domain_pairs_checked.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -285,6 +300,7 @@ SOURCE = "audit.netlist"
 PIN_REQUIREMENTS = HERE.parent / "reference" / "pin_requirements.yaml"
 PIN_STATES = HERE.parent / "reference" / "pin_states.yaml"
 MCU_PINS = HERE.parent / "reference" / "mcu_pins.yaml"
+IO_SUPPLY = HERE.parent / "reference" / "io_supply.yaml"
 I2C_ADDRESSES = HERE.parent / "reference" / "i2c_addresses.yaml"
 BUS_LOAD = HERE.parent / "reference" / "bus_load.yaml"
 PIN_LEAKAGE = HERE.parent / "reference" / "pin_leakage.yaml"
@@ -3499,6 +3515,162 @@ def _source_limits(nets: dict, comps: dict,
     yield ("checked", checked)
 
 
+def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
+                  io_table, abs_table, pl_specs, io_tolerance):
+    """Report lib/signal_domains.py's findings; (polarity pins, I/O pairs)
+    checked."""
+    import signal_domains as sd  # noqa: PLC0415
+    tol = sd.load_io_tolerance() if io_tolerance is None else io_tolerance
+    try:
+        import yaml  # noqa: PLC0415
+        io_sup = (yaml.safe_load(IO_SUPPLY.read_text(encoding="utf-8"))
+                  or {}).get("parts") or []
+    except (OSError, ImportError):
+        io_sup = []
+    h = {"norm_pin": _norm_pin, "part_kind": _part_kind,
+         "parse_value": engcalc.parse_value, "is_ground": _is_ground_name,
+         "base_type": _base_type, "spec_matches": _spec_matches,
+         "abs_row": _abs_row, "leak_row": _leak_row}
+
+    def desc(p):
+        return f"{p['ref']} {p['func']} (pin {p['pin']}, asserts {p['level']})"
+
+    pol = 0
+    for hit in sd.polarity(nets, comps, comp_pins, rails, h):
+        if "checked" in hit:
+            pol = hit["checked"]
+            continue
+        if hit["rule"] == "polarity_mismatch":
+            ps = hit["lows"] + hit["highs"]
+            refs = sorted({p["ref"] for p in ps})
+            via = (f", joined through {', '.join(hit['joins'])}"
+                   if hit["joins"] else "")
+            net = hit["nets"][0]
+            if hit["cross"]:
+                o = hit["lows"][0]
+                v("warning", "polarity_mismatch", net, refs,
+                  f"{desc(o)} drives {'; '.join(desc(p) for p in hit['highs'])}"
+                  f" on '{'/'.join(hit['nets'])}'{via}: the output's 'run' "
+                  f"level is the input's 'stop' level, so the part is held "
+                  f"off while the source says all is well, and runs while "
+                  f"it is held in reset or fault. Check both datasheets' "
+                  f"pin tables; an inverter or the other-polarity part "
+                  f"fixes it", nets=hit["nets"], kind_of=hit["kind"])
+                continue
+            sev = "warning" if hit["kind"] == "irq" else "error"
+            extra = (" Some interrupt outputs are programmable; check the "
+                     "firmware sets the level the input expects."
+                     if hit["kind"] == "irq" else "")
+            v(sev, "polarity_mismatch", net, refs,
+              f"{hit['kind']} pins of opposite active level meet on "
+              f"'{'/'.join(hit['nets'])}'{via}: "
+              f"{'; '.join(desc(p) for p in hit['lows'])} against "
+              f"{'; '.join(desc(p) for p in hit['highs'])}. When one side "
+              f"asserts the other is released, so the line holds a part in "
+              f"its asserted state at idle.{extra} Their names say the "
+              f"levels; check the datasheets' pin tables",
+              nets=hit["nets"], kind_of=hit["kind"])
+        elif hit["rule"] == "polarity_net_name":
+            ps = hit["pins"]
+            v("warning", "polarity_net_name", hit["net"],
+              sorted({p["ref"] for p in ps}),
+              f"'{hit['net']}' is named as a {hit['kind']} asserting "
+              f"{hit['level']}, but every {hit['kind']} pin on it asserts "
+              f"the other way: {'; '.join(desc(p) for p in ps)}. Either "
+              f"the name or the part is wrong; firmware or the next "
+              f"designer reading the name will get the level backwards",
+              kind_of=hit["kind"])
+        elif hit["rule"] == "idle_pull_asserted":
+            m = hit["pin"]
+            pulls = ", ".join(f"{r} to {n}" for r, n in hit["pulls"])
+            od = (f" (the open-drain {', '.join(x['ref'] for x in hit['ods'])}"
+                  f" can only pull it low too)" if hit["ods"] else "")
+            v("error", "idle_pull_asserted", hit["net"], [m["ref"]],
+              f"{m['ref']} {m.get('pinfunction')} (pin {m['pin']}) is a "
+              f"{hit['kind']} input asserting {hit['level']}, and nothing "
+              f"on '{hit['net']}' drives it: its only pull ({pulls}) holds "
+              f"it {hit['level']}{od}, so it stays asserted for good. Pull "
+              f"it to the other side", kind_of=hit["kind"])
+    tables = {"io_levels": io_table, "pin_abs_max": abs_table,
+              "pin_leakage": pl_specs, "io_tolerance": tol,
+              "io_supply": io_sup}
+    vt_tables = {"io_levels": io_table,
+                 "pin_abs_max": _verified_only(abs_table),
+                 "pin_leakage": _verified_only(pl_specs),
+                 "io_tolerance": _verified_only(tol), "io_supply": io_sup}
+    ok = {(x["rule"], x.get("driver"), x["receiver"], x.get("net"))
+          for x in sd.domains(nets, comps, comp_pins, rails, h, vt_tables)
+          if "checked" not in x}
+    dom = 0
+    for hit in sd.domains(nets, comps, comp_pins, rails, h, tables):
+        if "checked" in hit:
+            dom = hit["checked"]
+            continue
+        src = ""
+        if hit.get("row"):
+            src = " [" + " ".join(str(hit["row"].get(
+                "source") or hit["row"].get("mpn") or "").split()) + "]"
+        if hit["rule"] == "io_domain_pull_rail":
+            r = hit["receiver"]
+            rv = f" on its {hit['vr']:g} V rail" if hit["vr"] else ""
+            if hit["how"] == "unrated":
+                not_judged.append(
+                    f"io_domain_pull_rail on {hit['net']}: {hit['pull']} "
+                    f"pulls it to {hit['rail']} ({hit['vp']:g} V), above "
+                    f"{r} ({comps[r].get('value')}){rv}; no datasheet row "
+                    f"says whether {hit['rfunc']} is {hit['vp']:g} V "
+                    f"tolerant")
+                continue
+            over = hit["how"] == "over"
+            key = (hit["rule"], None, r, hit["net"])
+            vt(key in ok, "error" if over else "warning",
+               "io_domain_pull_rail", hit["net"], [hit["pull"], r],
+               f"open-drain line '{hit['net']}' is pulled by {hit['pull']} "
+               f"to {hit['rail']} ({hit['vp']:g} V), "
+               + (f"above the {hit['limit']:.2f} V {r} "
+                  f"({comps[r].get('value')}) {hit['rfunc']}{rv} takes"
+                  if over else
+                  f"below the {hit['limit']:.2f} V VIH of {r} "
+                  f"({comps[r].get('value')}) {hit['rfunc']}{rv}, so it "
+                  f"may never read high")
+               + f". Pull it to the receiver's rail, or use a translator"
+               f"{src}", pull_rail=hit["rail"], receiver=r)
+            continue
+        d, r = hit["driver"], hit["receiver"]
+        nets_s = ", ".join(f"'{n}'" for n in hit["nets"][:6]) + (
+            f" and {len(hit['nets']) - 6} more" if len(hit["nets"]) > 6
+            else "")
+        pins_s = ", ".join(f"{a}->{b}" for a, b in hit["pins"][:6])
+        ser = (f" (through {', '.join(hit['series'])})" if hit["series"]
+               else "")
+        rv = f" on a {hit['vr']:g} V rail" if hit["vr"] else ""
+        head = (f"{d} ({comps[d].get('value')}) drives {r} "
+                f"({comps[r].get('value')}){rv} at {hit['vd']:g} V "
+                f"({hit['dwhy']}) on {nets_s}{ser} [{pins_s}]")
+        if hit["rule"] == "unrated":
+            not_judged.append(
+                f"io_domain_overdrive: {head}; no datasheet row says "
+                f"whether {r}'s inputs are {hit['vd']:g} V tolerant")
+            continue
+        key = (hit["rule"], d, r, None)
+        if hit["rule"] == "io_domain_overdrive":
+            vt(key in ok, "error", "io_domain_overdrive", hit["nets"][0],
+               [d, r],
+               f"{head}: above the {hit['limit']:.2f} V its inputs take. "
+               f"The input's clamp diodes carry the difference into its "
+               f"rail. A level translator, a part tolerant of "
+               f"{hit['vd']:g} V, or both parts on one rail fixes it{src}",
+               nets=hit["nets"], driver_v=hit["vd"], limit_v=hit["limit"])
+        else:
+            vt(key in ok, "warning", "io_domain_underdrive", hit["nets"][0],
+               [d, r],
+               f"{head}: its high is below the {hit['limit']:.2f} V VIH "
+               f"{r} needs, so a high may read low or as noise. An input "
+               f"of the HCT/AHCT kind, or a translator, fixes it{src}",
+               nets=hit["nets"], driver_v=hit["vd"], vih_v=hit["limit"])
+    return pol, dom
+
+
 def audit(parsed: dict, constraints: dict,
           decoupling: dict | None,
           pin_requirements: list[dict] | None = None,
@@ -3512,7 +3684,8 @@ def audit(parsed: dict, constraints: dict,
           stock_symbols: Path | str | None = None,
           pin_abs_max: dict | None = None,
           part_pinouts: list[dict] | None = None,
-          source_limits: dict | None = None
+          source_limits: dict | None = None,
+          io_tolerance: list[dict] | None = None
           ) -> tuple[list[dict], dict]:
     """stock_symbols: KiCad's stock symbol dir for the pin-map rule;
     None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off.
@@ -4639,6 +4812,14 @@ def audit(parsed: dict, constraints: dict,
             kind, sev, net, refs, msg, rows, extra = hit
             vt(_sl_judged(rows), sev, kind, net, refs, msg, **extra)
 
+    # 33. a control signal's active level across a connection, and an I/O
+    # pin's supply domain against its net's level (lib/signal_domains.py,
+    # classes 14 and 15 of the gaps list; built from datasheets and
+    # planted faults)
+    pol_pins, dom_pairs = _signal_rules(
+        v, vt, not_judged, nets, comps, comp_pins, pl_rails, io_table,
+        abs_table, pl_specs, io_tolerance)
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -4679,6 +4860,8 @@ def audit(parsed: dict, constraints: dict,
         "protector_cell_sides_checked": cell_checked,
         "debug_mcus_checked": dbg_checked,
         "source_limits_checked": sl_checked,
+        "polarity_pins_checked": pol_pins,
+        "io_domain_pairs_checked": dom_pairs,
     }
     if not_judged:
         facts["not_judged"] = not_judged

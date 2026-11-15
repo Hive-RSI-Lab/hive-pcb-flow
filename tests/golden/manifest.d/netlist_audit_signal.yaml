@@ -1,0 +1,36 @@
+# Seeded signal-level faults for netlist_audit's class 14 and 15 rules
+# (lib/signal_domains.py). Each mutant ships a changed usbbuck4.net beside
+# the board and no schematic, so the audit reads the planted netlist; the
+# copper is untouched. Quiet twins: tests/test_signal_domains.py.
+mutants:
+  reset-polarity-max810:
+    board: usbbuck4
+    script: mutations/reset_polarity_max810.py
+    check: netlist_audit
+    defect: >-
+      NETLIST fault: a MAX810 supervisor, whose RESET output asserts high,
+      drives the STM32F103's NRST, which asserts low (the MAX809 was
+      meant), so the MCU sits in reset while the rail is good
+    expect:
+      kind: polarity_mismatch
+      ref: U98
+  io-5v-hc-into-3v3:
+    board: usbbuck4
+    script: mutations/io_5v_hc_into_3v3.py
+    check: netlist_audit
+    defect: >-
+      NETLIST fault: a 74HC595 on VBUS drives an RP2040 GPIO whose IOVDD
+      is 3.3 V, 3.8 V past the pin's IOVDD + 0.5 V absolute maximum
+    expect:
+      kind: io_domain_overdrive
+      ref: U96
+  io-3v3-into-5v-hc:
+    board: usbbuck4
+    script: mutations/io_3v3_into_5v_hc.py
+    check: netlist_audit
+    defect: >-
+      NETLIST fault: the STM32F103's 3.3 V PA9 drives a 74HC245 on VBUS,
+      whose input needs 3.5 V for a high at 5 V (a 74HCT part was meant)
+    expect:
+      kind: io_domain_underdrive
+      ref: U95

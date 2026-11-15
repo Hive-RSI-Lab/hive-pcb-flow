@@ -1,0 +1,76 @@
+# The input levels a part's logic pins take from its recommended operating
+# conditions, for netlist_audit.py's I/O domain rules (lib/signal_domains.py,
+# class 15 of the gaps list): an output on one rail into an input powered
+# from another.
+#
+# receivers:
+#   mpn         the part or family the row is read from
+#   match       regex tried against the part's Value, then its symbol name
+#               (case-insensitive)
+#   pins        regex on the pin function (upper-cased, ~{...} dropped) of
+#               the pins the row covers; without it every pin not of a
+#               power type
+#   pintypes    regex on the KiCad pin type, when only some pins carry it
+#   vin_max     V: the most an input is rated to take in operation (a 5 V
+#               tolerant input on a 3.3 V part), or
+#   vin_max_vdd V: the most above the part's own I/O rail (0: VI 0 to VCC)
+#   vih         V: the least an input reads as high at vih_vdd (when set,
+#               scaled with the rail), or
+#   vih_frac    the least, as a fraction of the part's I/O rail
+#   basis       which table: recommended operating conditions, not the
+#               absolute maximum (pin_abs_max.yaml holds those)
+# cite / verified as in io_levels.yaml: `bin/hwde part_rows --verify`
+# checks each quote is on its page and each cited number is in the quote.
+# A finding only an unverified row makes is reported as not judged. A
+# family row cites the one datasheet it was read from; other vendors'
+# parts of the family share the JEDEC levels.
+receivers:
+  # each cite checked with part_rows --verify against the PDF named.
+  - mpn: SN74HC245
+    match: '^(SN|CD|MC|M|NL)?74HC\d'
+    verified: true   # TI SCLS131F (Aug 2022) read 2026-11-15 (part_rows --verify)
+    vin_max_vdd: 0.0
+    vih: 3.15
+    vih_vdd: 4.5
+    basis: recommended operating conditions
+    source: TI SN74HC245 datasheet SCLS131F, 6.3 Recommended Operating Conditions
+    cite:
+      - {doc: sn74hc245.pdf, sha256: 31514d936e53661d1c380603e5034b2958085359313986775b838d1f30fb8d3f, page: 4, table: Recommended Operating Conditions, quote: 'VCC = 4.5 V 3.15 3.15', fields: [vih, vih_vdd]}
+      - {doc: sn74hc245.pdf, sha256: 31514d936e53661d1c380603e5034b2958085359313986775b838d1f30fb8d3f, page: 4, table: Recommended Operating Conditions, quote: 'VI Input voltage 0 VCC 0 VCC V', fields: [vin_max_vdd]}
+
+  - mpn: SN74HCT245
+    match: '^(SN|CD|MC|M|NL)?74HCT\d'
+    verified: true   # TI SCLS020H (Dec 2022) read 2026-11-15 (part_rows --verify)
+    vin_max_vdd: 0.0
+    vih: 2.0
+    basis: recommended operating conditions
+    source: TI SN74HCT245 datasheet SCLS020H, 6.3 Recommended Operating Conditions
+    cite:
+      - {doc: sn74hct245.pdf, sha256: 7b48b14b34db864ed921932c20bd7dd69b53f7c7eeaf9147a5860a75948e1a41, page: 4, table: Recommended Operating Conditions, quote: 'VIH High-level input voltage VCC = 4.5 V to 5.5 V 2 V', fields: [vih]}
+      - {doc: sn74hct245.pdf, sha256: 7b48b14b34db864ed921932c20bd7dd69b53f7c7eeaf9147a5860a75948e1a41, page: 4, table: Recommended Operating Conditions, quote: 'VI Input voltage 0 VCC V', fields: [vin_max_vdd]}
+
+  # AHC/AHCT inputs take 5.5 V at any VCC (VI 0 to 5.5 V): 5 V tolerant
+  - mpn: SN74AHC125
+    match: '^(SN)?74AHC\d'
+    verified: true   # TI SCLS256O (Feb 2024) read 2026-11-15 (part_rows --verify)
+    pintypes: '^input$'
+    vin_max: 5.5
+    vih: 3.85
+    vih_vdd: 5.5
+    basis: recommended operating conditions
+    source: TI SN74AHC125 datasheet SCLS256O, 5.3 Recommended Operating Conditions
+    cite:
+      - {doc: sn74ahc125.pdf, sha256: c2ca226688e5704e94755fb20907c970ba7e2bac3a18fd6b2c28ce73295d0a3f, page: 5, table: Recommended Operating Conditions, quote: 'VCC = 5.5 V 3.85', fields: [vih, vih_vdd]}
+      - {doc: sn74ahc125.pdf, sha256: c2ca226688e5704e94755fb20907c970ba7e2bac3a18fd6b2c28ce73295d0a3f, page: 5, table: Recommended Operating Conditions, quote: 'VI Input voltage 0 5.5 V', fields: [vin_max]}
+
+  - mpn: SN74AHCT125
+    match: '^(SN)?74AHCT\d'
+    verified: true   # TI SCLS264R (Feb 2024) read 2026-11-15 (part_rows --verify)
+    pintypes: '^input$'
+    vin_max: 5.5
+    vih: 2.0
+    basis: recommended operating conditions
+    source: TI SN74AHCT125 datasheet SCLS264R, 5.2 Recommended Operating Conditions
+    cite:
+      - {doc: sn74ahct125.pdf, sha256: 70f4346e34d9215ebe850d31cd53efe0e8cfda986b90b8219a889a8965898dc6, page: 5, table: Recommended Operating Conditions, quote: 'VIH High-level input voltage 2 2 V', fields: [vih]}
+      - {doc: sn74ahct125.pdf, sha256: 70f4346e34d9215ebe850d31cd53efe0e8cfda986b90b8219a889a8965898dc6, page: 5, table: Recommended Operating Conditions, quote: 'VI Input voltage 0 5.5 0 5.5 V', fields: [vin_max]}
