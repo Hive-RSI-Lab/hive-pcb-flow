@@ -18,7 +18,9 @@ Facts and who writes them:
   rating      per refdes: every connected pin within its rating, verified
               when the rating was read from a datasheet, listed when it was
               not; rated_from says which: datasheet, distributor (parts.json
-              attributes) or package (a generic table)
+              attributes), part_code (a capacitor's maker voltage code in
+              its MPN, or a voltage in its Value field) or package (a
+              generic table)
               (check_ratings.py, run by the verify gate)
   pinout      per refdes with more than two pins: the board's pad numbers
               and names agree with the datasheet extraction's pinout

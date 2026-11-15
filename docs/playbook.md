@@ -262,8 +262,8 @@ recorded at `fab/attestation.json`) and `state.py resume` reports the derived
 (`scripts/lib/ledgerlib.py`): every fact the design relies on - per BOM code
 its stock, part match and lifecycle at JLC; per part its pin ratings, pinout
 and footprint - as verified (source and date), failed, or unknown, and a rating
-whose number came from the distributor or a package table, with no datasheet
-read, as listed (`rated_from` says which). The checks
+whose number came from the distributor, a capacitor's part-number voltage code
+or Value field, or a package table, with no datasheet read, as listed (`rated_from` says which). The checks
 write it as they run (`stock_check.py` and `bom_cpl.py`'s live run,
 `check_ratings.py` in verify, `cpl_verify.py` in dfm); a check that cannot
 tell records unknown, never a pass. `ledger.py report --workspace <ws>` lists

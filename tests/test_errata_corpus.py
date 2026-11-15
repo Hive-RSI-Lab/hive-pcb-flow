@@ -740,6 +740,10 @@ def test_coverage_counts_judged_only_on_evidence():
                         "pins_checked": 0}, "check_ratings")["status"] == "judged_nothing"
     assert ec.coverage({"violations": [{"kind": "rating_over"}],
                         "pins_checked": 0}, "check_ratings")["status"] == "judged"
+    # a part rated with no extraction (listing, part-number code) is judged
+    assert ec.coverage({"pins_checked": 0, "parts_rated_unextracted": ["C1"]},
+                       "check_ratings")["status"] == "judged"
+    assert ec.EVIDENCE["check_ratings"]({"parts_rated_unextracted": ["C1", "C2"]}) == 2
     assert ec.coverage({"violations": [{"kind": "mcu_unknown"}],
                         "checked": [{"mcus": []}]}, "check_straps")["status"] == "judged_nothing"
     assert ec.coverage({"checked": [{"mcus": ["U1"]}]}, "check_straps")["status"] == "judged"

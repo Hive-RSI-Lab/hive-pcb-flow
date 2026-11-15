@@ -1,7 +1,8 @@
 # rating_no_datasheet_read
 
 These parts' voltage ratings were compared with the board's rails and held, but the number came from
-the distributor's listing in parts.json or a generic package table. No datasheet was read, so their
+the distributor's listing in parts.json, a capacitor's part-number voltage code or Value field
+("220u/16V"), or a generic package table. No datasheet was read, so their
 ledger facts are `listed`, not `verified`, and `rated_from` says which source it was. A warning: a
 listed fact doesn't block release (`lib/ledgerlib.py` says why), and attest names them in its result.
 

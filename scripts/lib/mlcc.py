@@ -31,6 +31,7 @@ nominal value here (their own derating - ripple, ESR - is another check).
 """
 from __future__ import annotations
 
+import functools
 import math
 import re
 from pathlib import Path
@@ -185,3 +186,68 @@ def c_eff(c_f: float, vdc: float, *, footprint: str = "", value: str = "",
     out.update(c_eff=c_f * fb * ft, c_eff_low=c_f * fl * ft,
                fraction=fb * ft, curve="generic")
     return out
+
+
+# --- rated voltage from the part number or the Value field (#1307) ---------
+
+VCODE_YAML = (Path(__file__).resolve().parents[2] / "reference"
+              / "mlcc_voltage_codes.yaml")
+
+
+def load_vcodes(path: Path = VCODE_YAML) -> list[dict]:
+    """The makers' voltage-code entries, each with its regex compiled."""
+    if not path.is_file():
+        return []
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return [{**e, "_rx": re.compile(e["match"])}
+            for e in data.get("series") or []]
+
+
+@functools.lru_cache(maxsize=1)
+def _vcodes() -> tuple[dict, ...]:
+    return tuple(load_vcodes())
+
+
+def mpn_voltage(mpn: str, table: list[dict] | None = None) -> dict | None:
+    """{v, code, series, cite} when the MPN matches a maker's ordering code
+    in full and its voltage code has a row in the table; else None (a code
+    with no row is never guessed)."""
+    key = re.sub(r"\s+", "", str(mpn or "")).upper()
+    if not key:
+        return None
+    for e in _vcodes() if table is None else table:
+        m = e["_rx"].fullmatch(key)
+        if not m:
+            continue
+        code = m.group("v")
+        v = {str(k): x for k, x in (e.get("codes") or {}).items()}.get(code)
+        if v is None:
+            return None
+        return {"v": float(v), "code": code, "series": e["name"],
+                "cite": e["cite"]}
+    return None
+
+
+# "16V", "6.3 V", "50VDC", "2kV", "6V3" - with a separator (or nothing) on
+# each side, so "_10V_" in "C_0.1u_0402_10V_10%" counts and "V" inside a
+# word (VCC, 10VA) does not
+_VALUE_V_RE = re.compile(
+    r"(?<![A-Za-z0-9.])(?:(\d+(?:\.\d+)?)\s*(k?)V(?:DC)?|(\d+)V(\d))"
+    r"(?![A-Za-z0-9])")
+
+
+def value_voltage(value: str) -> dict | None:
+    """{v, text} for the one voltage written in a capacitor's Value field
+    ("220u/16V", "C_0.1u_0402_10V_10%_JB", "4u7 6V3"); None when there is
+    none, or more than one different figure."""
+    found = {}
+    for m in _VALUE_V_RE.finditer(str(value or "")):
+        if m.group(1):
+            v = float(m.group(1)) * (1000.0 if m.group(2) else 1.0)
+        else:
+            v = float(f"{m.group(3)}.{m.group(4)}")
+        found.setdefault(v, m.group(0))
+    if len(found) != 1 or next(iter(found)) <= 0:
+        return None
+    (v, text), = found.items()
+    return {"v": v, "text": text}

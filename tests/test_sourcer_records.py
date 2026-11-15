@@ -103,8 +103,10 @@ def test_dropped_attributes_are_named(tmp_path):
     parts = sourcer_parts(tmp_path, drop=("refdes", "attributes"))
     out, _ = check_ratings.run_check(LED_PCB, parts.parent, None, None)
     msg = next(v["msg"] for v in out if v["kind"] == "rating_unrated")
-    # R1 is rated anyway, from its chip package's limiting element voltage
-    assert "carries no attributes" in msg and "C1" in msg and "R1" not in msg
+    # R1 is rated anyway, from its chip package's limiting element voltage,
+    # and C1 from its MPN's voltage code (CL10A475KO8NNNC, O = 16 V, #1307)
+    assert "carries no attributes" in msg and "D1" in msg
+    assert "R1" not in msg and "C1" not in msg
 
 
 def test_bulk_cap_counted_on_a_rail_with_no_ic():
