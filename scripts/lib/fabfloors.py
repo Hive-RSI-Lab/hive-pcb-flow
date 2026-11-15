@@ -297,8 +297,14 @@ def check_dru(dru_text: str, cap: dict) -> list[str]:
     previously invisible until the P9 DFM gate. -> [] when every baseline
     rule in DRU_FLOOR_KEYS is present with `(min ...)` >= the capability
     row's floor; otherwise one message per failure. Same >= semantics as
-    check_pro. Callable via `rules_gen.py --check-dru PATH`."""
-    bad: list[str] = []
+    check_pro. Callable via `rules_gen.py --check-dru PATH`.
+
+    First come the values KiCad's rule parser rejects (0.5MM, 20mils, a bare
+    0.2 on a length): one is enough for KiCad to drop the whole file, these
+    floors with it, while kicad-cli says nothing (#1273)."""
+    import routelib  # noqa: PLC0415 - lazy: lib/ is on sys.path, as for fabmaterial
+    bad: list[str] = [f"KiCad ignores every rule in this file, the fab floors "
+                      f"included: {e}" for e in routelib.dru_unit_errors(dru_text)]
     for name, cap_key in DRU_FLOOR_KEYS.items():
         want = float(cap[cap_key])
         block = _rule_block(dru_text, name)

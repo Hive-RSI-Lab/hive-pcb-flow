@@ -1803,6 +1803,19 @@ def test_check_dru_parses_hand_edited_style():
     assert fabfloors.check_dru(hand, cap) == []
 
 
+def test_check_dru_fails_a_file_kicad_drops():
+    """#1273: one value KiCad's rule parser rejects drops the whole file,
+    the aiee_* floors with it, while kicad-cli says nothing: check_dru names
+    it first, even when every floor is in place."""
+    cap = _cap("2layer_2oz")
+    dru = rules_gen.render_dru(rules_gen.baseline_rules(cap))
+    rule = '(rule "hv" (constraint clearance (min {})))\n'
+    msgs = fabfloors.check_dru(dru + rule.format("0.5MM"), cap)
+    assert msgs and msgs[0].startswith("KiCad ignores every rule in this file")
+    assert "'MM'" in msgs[0]
+    assert fabfloors.check_dru(dru + rule.format("20mil"), cap) == []
+
+
 def test_rules_gen_check_dru_cli(tmp_path, capsys):
     """--check-dru: exit 0 clean / 1 with named failures (SPEC 6), resolving
     the capability row with the same stackup-derived copper weight."""

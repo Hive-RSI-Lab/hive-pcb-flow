@@ -347,6 +347,33 @@ def run_erc(cli: Path, sch: Path) -> dict:
     }, sch)
 
 
+def dru_ignored_row(pcb: Path) -> dict | None:
+    """A DRC error row for a board whose .kicad_dru KiCad drops whole: one
+    value its rule parser rejects (0.5MM, 20mils, a bare 0.2 on a length)
+    is a parse error, and DRC then checks none of the file's rules while
+    kicad-cli reports nothing (#1273). None when the file is absent or
+    every value in it reads."""
+    dru = Path(pcb).with_suffix(".kicad_dru")
+    try:
+        text = dru.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+    lib = str(Path(__file__).resolve().parent / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import routelib  # noqa: PLC0415 - lazy: only a board with a DRU pays
+    errs = routelib.dru_unit_errors(text)
+    if not errs:
+        return None
+    more = f" (and {len(errs) - 1} more)" if len(errs) > 1 else ""
+    return {"check": "rules_file_ignored", "severity": "error", "pos": None,
+            "layer": None, "net": None, "refs": [],
+            "msg": (f"KiCad ignores every rule in {dru.name}, and DRC checks "
+                    f"none of them: {errs[0]}{more}"),
+            "source": "drc",
+            "items": [{"msg": e, "pos": None, "uuid": None} for e in errs]}
+
+
 def run_drc(cli: Path, pcb: Path, *, parity: bool = False,
             all_track_errors: bool = False, refill: bool = False,
             save_board: bool = False) -> dict:
@@ -361,6 +388,9 @@ def run_drc(cli: Path, pcb: Path, *, parity: bool = False,
             args.append("--save-board")
     data = _run_json_report(cli, args, pcb)
     violations = parse_drc_data(data)
+    ignored = dru_ignored_row(pcb)
+    if ignored:
+        violations.insert(0, ignored)
     return checklib.stamp({
         "script": "kc", "tool": "drc", "input": str(pcb),
         "units": data.get("coordinate_units", "mm"),
