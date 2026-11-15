@@ -310,6 +310,7 @@ import sys
 from functools import partial
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 from shapely import STRtree
@@ -1710,6 +1711,130 @@ def _reach(adj: list, start, blocked: set) -> set:
     return seen
 
 
+GRID_MARGIN = 1.2          # solved worst-case current x this (#1169)
+GRID_SOURCES_MAX = 3       # more candidate sources: keep the budget
+GRID_STATIONS = (0.25, 0.5, 0.75)   # cross-sections along each track
+GRID_BAND_CELLS = 1.5      # section reaches this many cells past the edge
+GRID_RICHARDSON_MAX = 0.10  # base vs refined grid disagree more: budget
+GRID_RHS_CAP = (64, 16)    # solves per grid: sparse LU, multigrid CG
+
+
+def _worst_draw(row, bounds, budget: float) -> float:
+    """Largest |sum T_k I_k| over draws 0 <= I_k <= bounds_k with
+    sum I_k <= budget: a fractional knapsack per sign, filling the refs
+    that put the most of each ampere through the section first."""
+    best = 0.0
+    for sgn in (1.0, -1.0):
+        frac = sgn * row
+        order = np.argsort(-frac, kind="stable")
+        left, flow = budget, 0.0
+        for k in order:
+            if left <= 0 or not frac[k] > 0:
+                break
+            take = min(bounds[k], left)
+            flow += frac[k] * take
+            left -= take
+        best = max(best, flow)
+    return best
+
+
+def grid_bound(bg: geom.BoardGeom, net: str, budget: float, tracks: list,
+               sources) -> tuple[dict, str | None]:
+    """The most current each of `tracks` (non-bridge, judged at the full
+    budget) can carry, from check_irdrop's resistor grid of the net (#1169).
+    A track in a loop through a plane shares the current with the plane;
+    the grid gives, per candidate source, the fraction of each other ref's
+    draw that crosses each track (cut_transfer). The worst draw puts the
+    budget on the refs with the largest fractions, each up to its
+    load_bound (a capacitor draws no DC; an unbounded part up to the whole
+    budget). That is solved at the base cell and at a second size; a track
+    whose two answers differ by more than GRID_RICHARDSON_MAX, or with no
+    clean section, keeps the budget.
+
+    Returns ({id(track): {"solved_a", "current_a", "richardson_delta",
+    "solver", "cell_mm"} when bounded, else why it keeps the budget}, None),
+    or ({}, why) when nothing could be solved."""
+    import check_irdrop                 # numpy/scipy only when needed
+    if sources is None:
+        return {}, "no_source"
+    cands = sorted(sources[0])
+    if len(cands) > GRID_SOURCES_MAX:
+        return {}, f"{len(cands)} candidate sources (cap {GRID_SOURCES_MAX})"
+    layers = [l for l in bg.copper_layers if bg.net_area(net, l) > 0]
+    if not layers or not tracks:
+        return {}, "no copper"
+    cell, _feat = check_irdrop.pick_cell_mm(bg, net, layers, {})
+    area = sum(bg.net_area(net, l) for l in layers)
+    other = (cell / 2.0 if 4.0 * area / (cell * cell)
+             <= check_irdrop.REFINE_CELL_CAP else cell * 2.0)
+    fine, coarse = min(cell, other), max(cell, other)
+    thinnest = min(t.width for t in tracks)
+    if fine > thinnest / 3.0 or coarse > thinnest / 1.5:
+        return {}, (f"cell {coarse:.4f} mm too coarse for a "
+                    f"{thinnest:.3f} mm track")
+    refs_all = sorted({p.ref for p in bg.pads_of(net=net)})
+    bound = {}
+    for r in refs_all:
+        b = 0.0 if re.fullmatch(r"C\d+", r) else load_bound(bg, r)
+        bound[r] = budget if b is None else min(b, budget)
+
+    per_grid = []
+    for h in (fine, coarse):
+        cuts, owner = [], []
+        for t in tracks:
+            (x0, y0), (x1, y1) = t.shape.coords[0], t.shape.coords[-1]
+            ln = math.hypot(x1 - x0, y1 - y0)
+            if ln <= 0:
+                continue
+            u = ((x1 - x0) / ln, (y1 - y0) / ln)
+            for f in GRID_STATIONS:
+                at = t.shape.interpolate(f, normalized=True).coords[0]
+                cuts.append((t.layer, at, u,
+                             t.width / 2.0 + GRID_BAND_CELLS * h))
+                owner.append(id(t))
+        try:
+            res, facts = check_irdrop.cut_transfer(
+                bg, net, layers, h, cuts, cands, *GRID_RHS_CAP)
+        except CheckError as e:
+            return {}, str(e)
+        amps: dict[int, float] = {}
+        for src in cands:
+            got = res.get(src)
+            if not isinstance(got, tuple):
+                return {}, f"{src}: {got}"
+            tm, refs = got
+            bvec = np.array([bound[r] for r in refs])
+            for ci, key in enumerate(owner):
+                row = tm[ci]
+                if np.isnan(row).all():
+                    continue
+                row = np.nan_to_num(row, nan=0.0)
+                amps[key] = max(amps.get(key, 0.0),
+                                _worst_draw(row, bvec, budget))
+        per_grid.append((amps, facts))
+
+    (a_f, f_f), (a_c, _f_c) = per_grid
+    out = {}
+    for t in tracks:
+        k = id(t)
+        if k not in a_f or k not in a_c:
+            out[k] = "no clean cross-section (net copper beside the track)"
+            continue
+        hi = max(a_f[k], a_c[k])
+        delta = abs(a_f[k] - a_c[k]) / max(hi, 1e-3 * budget)
+        if delta > GRID_RICHARDSON_MAX:
+            out[k] = (f"grid unconverged: {a_c[k]:.3f} A at {coarse:.4f} mm "
+                      f"vs {a_f[k]:.3f} A at {fine:.4f} mm "
+                      f"(delta {delta:.2f} > {GRID_RICHARDSON_MAX})")
+            continue
+        out[k] = {"solved_a": checklib.rnd(hi),
+                  "current_a": min(budget, GRID_MARGIN * hi),
+                  "richardson_delta": checklib.rnd(delta, 3),
+                  "solver": f_f.get("method"),
+                  "cell_mm": f_f.get("cell_mm")}
+    return out, None
+
+
 def block_sides(bg: geom.BoardGeom, net: str, track, sources,
                 cache: dict | None = None):
     """track_sides from the block-cut tree of the net's item overlap graph
@@ -2198,6 +2323,43 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
             v.update(required_mm=checklib.rnd(req), current_a=amps,
                      leaf_loads=refs)
 
+    # ---- #1169: a non-bridge track still at the budget shares it with the
+    # loop it is in; the net's resistor grid bounds its share
+    grid_bounded: list[dict] = []
+    grid_fallback: list[dict] = []
+    loops = [(v, t) for v, t in undersized
+             if not v["bridge"] and not v.get("advisory")
+             and v["current_a"] == budget and region_current(
+                 entry, t.shape.interpolate(0.5, normalized=True).coords[0])
+             is None]
+    if loops:
+        solved, why = grid_bound(bg, net, budget, [t for _, t in loops],
+                                 sources)
+        for v, t in loops:
+            got = solved.get(id(t), why)
+            if not isinstance(got, dict):
+                grid_fallback.append({"layer": t.layer, "pos": v["pos"],
+                                      "why": got or "not solved"})
+                continue
+            amps = got["current_a"]
+            req = required_width_mm(amps, dt_c, cu[t.layer])
+            item = dict(got, layer=t.layer, pos=v["pos"],
+                        current_a=checklib.rnd(amps))
+            if t.width + WIDTH_TOL_MM >= req:
+                violations = [x for x in violations if x is not v]
+                undersized.remove((v, t))
+                grid_bounded.append(item)
+                continue
+            msg = (f"{net} track {t.width:.3f} mm wide on {t.layer}; "
+                   f"IPC-2152 needs {req:.3f} mm for {amps:.3f} A at "
+                   f"dT={dt_c:.0f}C; in a loop, the net's grid puts at most "
+                   f"{got['solved_a']:.3f} A of the {budget:.2f} A budget "
+                   f"through it (x{GRID_MARGIN} margin)")
+            v["msg"] = v["items"][0]["msg"] = msg
+            v.update(required_mm=checklib.rnd(req), current_a=amps,
+                     solved_a=got["solved_a"], solver=got["solver"],
+                     richardson_delta=got["richardson_delta"])
+
     # ---- pour neckdowns (always at the full budget; plane_fed keeps error)
     zone_layers = bg.layers_with_zone(net)
 
@@ -2462,6 +2624,10 @@ def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
         facts["pour_taps"] = pour_taps
     if leaf_branches:
         facts["leaf_branches"] = leaf_branches
+    if grid_bounded:
+        facts["grid_bounded"] = grid_bounded
+    if grid_fallback:
+        facts["grid_fallback"] = grid_fallback
     if unjudged:
         facts["unjudged"] = unjudged
     if ripple_caps:
