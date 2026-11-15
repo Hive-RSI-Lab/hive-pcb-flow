@@ -867,7 +867,13 @@ def test_live_fine_via_escape_6_layer_quiet(tmp_path):
     assert f["drc_delta"]["new"] == {}
     assert not b.get("ripped_by_drc")
     assert b["kept_nets"] >= 30
-    assert "aiee_bga_fine_via_U1" in pcb.with_suffix(".kicad_dru").read_text()
+    dru = pcb.with_suffix(".kicad_dru").read_text()
+    assert "aiee_bga_fine_via_U1" in dru
+    # the courtyard copper rule keeps the field's own clearance: a wider one
+    # (hole clearance minus the thin ring) is one Freerouting can't see and
+    # its netclass-clearance wires broke it (#1252 6-layer bench)
+    assert b["fine_via"]["rule_clearance"] < b["clearance"]
+    assert bgalib.dru_rule("U1", b["fine_via"]["rule_clearance"]) in dru
     bg = geom.BoardGeom.from_file(pcb)
     (g,) = bgalib.find_bgas(bg)
     new = {v.uuid for v in bg.vias_of()}

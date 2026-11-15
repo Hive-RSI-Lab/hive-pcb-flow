@@ -900,7 +900,14 @@ def run(argv: list[str] | None = None):
                              free_filled_via_layers()) if fine_cap else None
         ep = bgalib.escape_params(b, {**floors, **fv} if fv else floors)
         if fv:      # #1252: the fab's smallest via, filled, in the pad
+            # the courtyard copper rule stays at the field's own clearance:
+            # the fine via's thin ring needs 0.15 track-to-via, but that is
+            # the fine rule's hole_clearance to check, not a track-to-track
+            # rule Freerouting (netclass clearance) never sees - a 0.15
+            # courtyard rule turned 18 of its 0.125 gaps into DRC errors
             ep.update(method="underpad", fine_via=fv,
+                      rule_clearance=bgalib.escape_params(
+                          b, floors)["clearance"],
                       why=(f"{b.pitch:g} mm field on {len(bg0.copper_layers)}"
                            f" layers: filled {fv['via_diameter']:g}/"
                            f"{fv['via_drill']:g} mm via in the pad "
@@ -919,7 +926,8 @@ def run(argv: list[str] | None = None):
             "why", "budget")}, "layers": p["layers"],
             **({"fine_via": {"rule": bgalib.fine_rule_name(p["bga"].ref),
                              "hole_to_hole": fv["hole_to_hole"],
-                             "hole_clearance": fv["hole_clearance"]}}
+                             "hole_clearance": fv["hole_clearance"],
+                             "rule_clearance": p["ep"]["rule_clearance"]}}
                if fv else {}),
             "plane_layers": p["planes"],
             **({"pairs": p["pairs"], "pair_gap_mm": p["pair_gap"]}
@@ -947,7 +955,8 @@ def run(argv: list[str] | None = None):
     dru = staged.with_suffix(".kicad_dru")
     dru_text = dru.read_text(encoding="utf-8") if dru.is_file() else ""
     dru_text, rules_changed = bgalib.ensure_rules(
-        dru_text, [(p["bga"].ref, p["ep"]["clearance"],
+        dru_text, [(p["bga"].ref,
+                    p["ep"].get("rule_clearance", p["ep"]["clearance"]),
                     p["ep"].get("fine_via")) for p in plans])
     if rules_changed:
         dru.write_text(dru_text, encoding="utf-8")
