@@ -106,3 +106,41 @@ def test_publish_needs_an_existing_dir(tmp_path):
     r = run(ROOT / "bin" / "hwde", tmp_path, "publish", str(tmp_path / "missing"))
     assert r.returncode == 2
     assert "usage: pcb-flow publish" in r.stderr
+
+
+def ruff_copy(tmp_path: Path) -> tuple[Path, Path]:
+    """A published copy with the code publish ships (scripts, bin, ruff.toml), no tests/."""
+    copy, py = fake_copy(tmp_path)
+    # A link to a venv's python loses the venv (pyvenv.cfg sits beside the
+    # link's target's parent, not the link): exec it, so ruff is importable.
+    py.unlink()
+    py.write_text(f"#!/bin/sh\nexec {sys.executable} \"$@\"\n")
+    py.chmod(0o755)
+    (copy / "scripts").mkdir()
+    (copy / "scripts" / "ok.py").write_text("x = 1\n")
+    shutil.copy2(ROOT / "ruff.toml", copy / "ruff.toml")
+    home = tmp_path / "home"
+    home.mkdir()
+    return copy, home
+
+
+def test_published_copy_lints_without_a_tests_folder(tmp_path):
+    copy, home = ruff_copy(tmp_path)
+    r = run(copy / "bin" / "hwde", home, "lint")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "E902" not in r.stdout
+
+
+def test_published_copy_lint_still_finds_a_fault(tmp_path):
+    copy, home = ruff_copy(tmp_path)
+    (copy / "scripts" / "bad.py").write_text("y = undefined_name\n")
+    r = run(copy / "bin" / "hwde", home, "lint")
+    assert r.returncode == 1
+    assert "F821" in r.stdout
+
+
+def test_published_copy_test_says_it_has_no_tests(tmp_path):
+    copy, home = ruff_copy(tmp_path)
+    r = run(copy / "bin" / "hwde", home, "test")
+    assert r.returncode == 2
+    assert "has no tests/" in r.stderr
