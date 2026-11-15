@@ -261,10 +261,10 @@ parts:
           - {doc: stm32g431cb.pdf, sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9, page: 111, table: Table 53, quote: 'FT_c 1.62 V<VDD<3.6 V 0.7xVDD --', fields: [vih_frac]}
           - {doc: stm32g431cb.pdf, sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9, page: 111, table: Table 53, quote: 'FT_d 0 ≤ VIN ≤ VDD - - ±4500', fields: [leak]}
 
-  - mpn: ESP32-C3 (chip, ESP32-C3-MINI-1)
-    match: '^ESP32-C3(?!-WROOM)'
+  - mpn: ESP32-C3 (chip, ESP32-C3-MINI-1, ESP32-C3-WROOM-02)
+    match: '^ESP32-C3'
     state: always (VDD1 3.3 V)
-    verified: true   # Espressif ESP32-C3 v2.5 and ESP32-C3-MINI-1 v2.2 read 2026-11-14
+    verified: true   # Espressif ESP32-C3 v2.5 and ESP32-C3-MINI-1 v2.2, ESP32-C3-WROOM-02 v1.7 read 2026-11-14
     pins:
       - pin: '^(EN|CHIP_EN)$'
         reset: true
@@ -281,18 +281,21 @@ parts:
         vil_frac: 0.25
         vih_frac: 0.75
         source: >-
-          ESP32-C3 v2.5 and ESP32-C3-MINI-1 v2.2 DC characteristics: VIH min
+          ESP32-C3 v2.5, ESP32-C3-MINI-1 v2.2 and ESP32-C3-WROOM-02 v1.7
+          DC characteristics: VIH min
           0.75 x VDD1, VIL max 0.25 x VDD1, IIH and IIL max 50 nA.
         cite:
           - {doc: esp32-c3.pdf, sha256: fede706c39ce663c861136724ffe32dff3f1407fa7f2dac18bbd0d21f0634205, page: 56, table: DC Characteristics, quote: 'VIH High-level input voltage 0.75 × VDD1', fields: [vih_frac]}
           - {doc: esp32-c3.pdf, sha256: fede706c39ce663c861136724ffe32dff3f1407fa7f2dac18bbd0d21f0634205, page: 56, table: DC Characteristics, quote: '0.25 × VDD1 V IIH High-level input current — — 50 nA', fields: [vil_frac, leak]}
           - {doc: esp32-c3-mini-1.pdf, sha256: b53790a43866afb431ecc121d1b73d514aea1bf4934906f2eab630310528b1e0, page: 21, table: DC Characteristics, quote: 'VIH High-level input voltage 0.75 × VDD1', fields: [vih_frac]}
           - {doc: esp32-c3-mini-1.pdf, sha256: b53790a43866afb431ecc121d1b73d514aea1bf4934906f2eab630310528b1e0, page: 21, table: DC Characteristics, quote: '0.25 × VDD1 V IIH High-level input current — — 50 nA', fields: [vil_frac, leak]}
+          - {doc: esp32-c3-wroom-02_datasheet_en.pdf, sha256: 622db737a711a75e89185aed850f3854c77d515c32ddf0ba9886653663cfdabe, page: 21, table: DC Characteristics, quote: 'VIH High-level input voltage 0.75 × VDD1', fields: [vih_frac]}
+          - {doc: esp32-c3-wroom-02_datasheet_en.pdf, sha256: 622db737a711a75e89185aed850f3854c77d515c32ddf0ba9886653663cfdabe, page: 21, table: DC Characteristics, quote: '0.25 × VDD1 V IIH High-level input current — — 50 nA', fields: [vil_frac, leak]}
 
-  - mpn: ESP32-S3 (chip, ESP32-S3-WROOM-1)
-    match: '^ESP32-S3(?!-MINI)'
+  - mpn: ESP32-S3 (chip, ESP32-S3-WROOM-1, ESP32-S3-MINI-1)
+    match: '^ESP32-S3'
     state: always (VDD1 3.3 V)
-    verified: true   # Espressif ESP32-S3 v2.2 and ESP32-S3-WROOM-1 v1.8 read 2026-11-14
+    verified: true   # Espressif ESP32-S3 v2.2 and ESP32-S3-WROOM-1 v1.8, ESP32-S3-MINI-1 v1.7 read 2026-11-14
     pins:
       - pin: '^(EN|CHIP_PU)$'
         reset: true
@@ -309,10 +312,32 @@ parts:
         vil_frac: 0.25
         vih_frac: 0.75
         source: >-
-          ESP32-S3 v2.2 and ESP32-S3-WROOM-1 v1.8 DC characteristics: VIH
-          min 0.75 x VDD1, VIL max 0.25 x VDD1, IIH and IIL max 50 nA.
+          ESP32-S3 v2.2, ESP32-S3-WROOM-1 v1.8 and ESP32-S3-MINI-1 v1.7 DC
+          characteristics: VIH min 0.75 x VDD1, VIL max 0.25 x VDD1, IIH and IIL max 50 nA.
         cite:
           - {doc: esp32-s3.pdf, sha256: 2d5a7cb7fd559d8d972bd88db32669c0196d23f22d7afaafb0f63d099b589a3f, page: 65, table: DC Characteristics, quote: 'VIH High-level input voltage 0.75 × VDD1', fields: [vih_frac]}
           - {doc: esp32-s3.pdf, sha256: 2d5a7cb7fd559d8d972bd88db32669c0196d23f22d7afaafb0f63d099b589a3f, page: 65, table: DC Characteristics, quote: '0.25 × VDD1 V IIH High-level input current — — 50 nA', fields: [vil_frac, leak]}
           - {doc: esp32-s3-wroom-1.pdf, sha256: 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435, page: 27, table: DC Characteristics, quote: 'VIH High-level input voltage 0.75 × VDD1', fields: [vih_frac]}
           - {doc: esp32-s3-wroom-1.pdf, sha256: 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435, page: 27, table: DC Characteristics, quote: '0.25 × VDD1 V IIH High-level input current — — 50 nA', fields: [vil_frac, leak]}
+          - {doc: esp32-s3-mini-1_mini-1u_datasheet_en.pdf, sha256: 4d4b7f1c17b484c627aaa0f806566c48a6124a8e466c6d21d99210e6eacdef04, page: 27, table: DC Characteristics, quote: 'VIH High-level input voltage 0.75 × VDD1', fields: [vih_frac]}
+          - {doc: esp32-s3-mini-1_mini-1u_datasheet_en.pdf, sha256: 4d4b7f1c17b484c627aaa0f806566c48a6124a8e466c6d21d99210e6eacdef04, page: 27, table: DC Characteristics, quote: '0.25 × VDD1 V IIH High-level input current — — 50 nA', fields: [vil_frac, leak]}
+
+  - mpn: TPA3116D2 / TPA3118D2 / TPA3130D2
+    match: '^TPA3(116|118|130)D2'
+    state: always (IIH given at VCC = 18 V)
+    verified: true   # TI SLOS708G (December 2017) read 2026-11-14
+    pins:
+      - pin: '^(SDZ|MUTE|AM[0-2]|MODSEL)$'
+        ipd: 50.0e-6
+        vil: 0.8
+        vih: 2.0
+        source: >-
+          SLOS708G 6.3 Recommended Operating Conditions: VIH min 2 V, VIL
+          max 0.8 V for AM0-AM2, MUTE, SDZ, SYNC, MODSEL; IIH max 50 uA for
+          AM0-AM2, MUTE, SDZ, MODSEL, given only at VI = 2 V, VCC = 18 V
+          (no IIL is given, so IIH stands in for the sink a pull-up must
+          beat).
+        cite:
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 5, table: '6.3 Recommended Operating Conditions', quote: 'current AM0, AM1, AM2, MUTE, SDZ, MODSEL (VI = 2 V, VCC = 18 V) 50 µA', fields: [ipd]}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 5, table: '6.3 Recommended Operating Conditions', quote: 'voltage AM0, AM1, AM2, MUTE, SDZ, SYNC, MODSEL 2 V', fields: [vih]}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 5, table: '6.3 Recommended Operating Conditions', quote: 'voltage AM0, AM1, AM2, MUTE, SDZ, SYNC, MODSEL 0.8 V', fields: [vil]}

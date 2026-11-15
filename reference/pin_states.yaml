@@ -139,9 +139,9 @@ parts:
 
   # Seeded with scripts/part_rows.py (#1100): drafted from the datasheet,
   # each cite checked with part_rows --verify against the PDF named.
-  - mpn: ESP32-C3 (chip, ESP32-C3-MINI-1)
-    match: '^ESP32-C3(?!-WROOM)'
-    verified: true   # Espressif ESP32-C3 v2.5 and ESP32-C3-MINI-1 v2.2 read 2026-11-14
+  - mpn: ESP32-C3 (chip, ESP32-C3-MINI-1, ESP32-C3-WROOM-02)
+    match: '^ESP32-C3'
+    verified: true   # Espressif ESP32-C3 v2.5 and ESP32-C3-MINI-1 v2.2, ESP32-C3-WROOM-02 v1.7 read 2026-11-14
     aliases: {CHIP_EN: EN}
     pins:
       - pin: EN
@@ -151,15 +151,17 @@ parts:
           chip may never start or may reset at random
         source: >-
           ESP32-C3 Series Datasheet v2.5 section 2.3 (pin overview): "Note:
-          Do not leave the CHIP_EN pin floating." ESP32-C3-MINI-1 v2.2 pin
-          table: "Note: Do not leave the EN pin floating."
+          Do not leave the CHIP_EN pin floating." ESP32-C3-MINI-1 v2.2 and
+          ESP32-C3-WROOM-02 v1.7 pin tables: "Note: Do not leave the EN pin
+          floating."
         cite:
           - {doc: esp32-c3.pdf, sha256: fede706c39ce663c861136724ffe32dff3f1407fa7f2dac18bbd0d21f0634205, page: 25, table: '', quote: 'Note: Do not leave the CHIP_EN pin floating.', fields: []}
           - {doc: esp32-c3-mini-1.pdf, sha256: b53790a43866afb431ecc121d1b73d514aea1bf4934906f2eab630310528b1e0, page: 11, table: '', quote: 'Note: Do not leave the EN pin floating.', fields: []}
+          - {doc: esp32-c3-wroom-02_datasheet_en.pdf, sha256: 622db737a711a75e89185aed850f3854c77d515c32ddf0ba9886653663cfdabe, page: 11, table: '', quote: 'Note: Do not leave the EN pin floating.', fields: []}
 
-  - mpn: ESP32-S3 (chip, ESP32-S3-WROOM-1)
-    match: '^ESP32-S3(?!-MINI)'
-    verified: true   # Espressif ESP32-S3 v2.2 and ESP32-S3-WROOM-1 v1.8 read 2026-11-14
+  - mpn: ESP32-S3 (chip, ESP32-S3-WROOM-1, ESP32-S3-MINI-1)
+    match: '^ESP32-S3'
+    verified: true   # Espressif ESP32-S3 v2.2 and ESP32-S3-WROOM-1 v1.8, ESP32-S3-MINI-1 v1.7 read 2026-11-14
     aliases: {CHIP_PU: EN}
     pins:
       - pin: EN
@@ -169,11 +171,13 @@ parts:
           chip may never start or may reset at random
         source: >-
           ESP32-S3 Series Datasheet v2.2 pin overview: "Note: Do not leave
-          the CHIP_PU pin floating." ESP32-S3-WROOM-1 v1.8 pin table: "Note:
-          Do not leave the EN pin floating."
+          the CHIP_PU pin floating." ESP32-S3-WROOM-1 v1.8 and
+          ESP32-S3-MINI-1 v1.7 pin tables: "Note: Do not leave the EN pin
+          floating."
         cite:
           - {doc: esp32-s3.pdf, sha256: 2d5a7cb7fd559d8d972bd88db32669c0196d23f22d7afaafb0f63d099b589a3f, page: 28, table: '', quote: 'Note: Do not leave the CHIP_PU pin floating.', fields: []}
           - {doc: esp32-s3-wroom-1.pdf, sha256: 27d71971da07c280c6068d08c74720d1a25b8f20cf8494dc1765bdd28d40d435, page: 11, table: '', quote: 'Note: Do not leave the EN pin floating.', fields: []}
+          - {doc: esp32-s3-mini-1_mini-1u_datasheet_en.pdf, sha256: 4d4b7f1c17b484c627aaa0f806566c48a6124a8e466c6d21d99210e6eacdef04, page: 12, table: '', quote: 'Note: Do not leave the EN pin floating.', fields: []}
 
   - mpn: USB2514B
     match: '^USB251[234]B'
@@ -221,3 +225,266 @@ parts:
         cite:
           - {doc: max98357a.pdf, sha256: abac92d3522a204f093c911257c0e0ffa958d8f8acc1da3103a291d0403e8cd9, page: 17, table: '', quote: 'Drive SD_MODE low to put the ICs into shutdown.', fields: []}
           - {doc: max98357a.pdf, sha256: abac92d3522a204f093c911257c0e0ffa958d8f8acc1da3103a291d0403e8cd9, page: 7, table: 'Electrical Characteristics', quote: 'SD_MODE Pulldown Resistor RPD 92 100 108', fields: []}
+
+  # Rows for the ICs of boards no datasheet rule judged before (#1104
+  # sweep: 10 of 23 boards checked), each cite checked with part_rows
+  # --verify against the PDF named.
+  - mpn: TPA3116D2 / TPA3118D2 / TPA3130D2
+    match: '^TPA3(116|118|130)D2'
+    verified: true   # TI SLOS708G (December 2017) read 2026-11-14
+    aliases: {GAIN: GAIN/SLV}
+    pins:
+      - pin: SDZ
+        forbid: [ground, open]
+        severity: warning
+        why: >-
+          SDZ low mutes the outputs and puts the amplifier in its
+          low-current state, so grounded it never plays; left unconnected
+          its operation is unpredictable
+        source: >-
+          SLOS708G 7.3.3 Startup and Shutdown Operation: "The SDZ input
+          terminal should be held high (see specification table for trip
+          point) during normal operation when the amplifier is in use.
+          Pulling SDZ low will put the outputs to mute and the amplifier to
+          enter a low-current state." and "It is not recommended to leave
+          SDZ unconnected, because amplifier operation would be
+          unpredictable."
+        cite:
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.3 Startup and Shutdown Operation', quote: 'The SDZ input terminal should be held high (see specification table for trip point) during normal operation when the amplifier is in use.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.3 Startup and Shutdown Operation', quote: 'Pulling SDZ low will put the outputs to mute and the amplifier to enter a low-current state.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.3 Startup and Shutdown Operation', quote: 'It is not recommended to leave SDZ unconnected, because amplifier operation would be unpredictable.', fields: []}
+      - pin: PLIMIT
+        forbid: [open, ground]
+        severity: warning
+        why: >-
+          PLIMIT takes a GVDD-to-GND divider (a power limit) or GVDD itself
+          (no limit); the output's virtual rail is about 4 x the PLIMIT
+          voltage, so grounded the amplifier has no output swing, and open
+          the pin is at neither connection the datasheet gives
+        source: >-
+          SLOS708G Pin Functions, PLIMIT: "Power limit level adjust.
+          Connect a resistor divider from GVDD to GND to set power limit.
+          Connect directly to GVDD for no power limit." 7.3.4 PLIMIT
+          Operation: the "virtual" rail "is approximately 4 times the
+          voltage at the PLIMIT pin".
+        cite:
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 4, table: 'Pin Functions', quote: 'Power limit level adjust. Connect a resistor divider from GVDD to GND to set power limit. Connect directly to GVDD for no power limit.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 15, table: '7.3.4 PLIMIT Operation', quote: 'rail is approximately 4 times the voltage at the PLIMIT pin', fields: []}
+      - pin: GAIN/SLV
+        allow: [pulled_down]
+        severity: warning
+        why: >-
+          the gain and master/slave mode are read from GAIN/SLV's divider,
+          and every setting Table 1 lists has R1 from the pin to GND
+          (5.6k to 100k); with no resistor to ground the pin is at none of
+          the listed settings
+        source: >-
+          SLOS708G 7.3.1 Gain Setting and Master and Slave: "The gain of
+          the TPA31xxD2 family is set by the voltage divider connected to
+          the GAIN/SLV control pin." Table 1 Gain and Master/Slave: R1 (to
+          GND) 5.6 kOhm to 100 kOhm in all eight rows, R2 (to GVDD) OPEN or
+          16 kOhm to 100 kOhm.
+        cite:
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 13, table: '7.3.1 Gain Setting and Master and Slave', quote: 'The gain of the TPA31xxD2 family is set by the voltage divider connected to the GAIN/SLV control pin.', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 14, table: 'Table 1. Gain and Master/Slave', quote: 'MODE GAIN R1 (to GND) (1) R2 (to GVDD) (1) INPUT IMPEDANCE', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 14, table: 'Table 1. Gain and Master/Slave', quote: 'Master 20 dB 5.6 kΩ OPEN 60 kΩ', fields: []}
+          - {doc: tpa3118d2.pdf, sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0, page: 4, table: 'Pin Functions', quote: 'Selects Gain and selects between Master and Slave mode depending on pin voltage divider.', fields: []}
+
+  - mpn: AP64350
+    match: '^AP64350'
+    verified: true   # Diodes DS41976 Rev. 5-2 read 2026-11-14
+    aliases: {RT: RT/CLK}
+    pins:
+      - pin: RT/CLK
+        forbid: [open]
+        allow: [pulled_down, driven, external]
+        why: >-
+          RT/CLK sets the switching frequency, by a resistor to GND or by an
+          external clock, the only two modes the datasheet gives; it cannot
+          be left floating
+        source: >-
+          DS41976 Rev. 5-2 Programming Switching Frequency: "The switching
+          frequency of the AP64350 can be programmed through either of two
+          modes, Resistor Timing or External Clock Synchronization." and
+          "The RT/CLK pin cannot be left floating." Pin Descriptions,
+          RT/CLK: "Connect a resistor from RT/CLK to GND to set the internal
+          oscillator frequency. An external clock can be input directly to
+          the RT/CLK pin".
+        cite:
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 13, table: 'Programming Switching Frequency', quote: 'The RT/CLK pin cannot be left floating.', fields: []}
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 13, table: 'Programming Switching Frequency', quote: 'The switching frequency of the AP64350 can be programmed through either of two modes, Resistor Timing or External Clock Synchronization.', fields: []}
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: 'Connect a resistor from RT/CLK to GND to set the internal oscillator frequency.', fields: []}
+          - {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: 'An external clock can be input directly to the RT/CLK pin', fields: []}
+
+  - mpn: CH224K
+    match: '^CH224K'
+    verified: true   # WCH CH224 datasheet V2.1 (CH224手册1) read 2026-11-14
+    pins:
+      - pin: VBUS
+        forbid: [open, ground, rail]
+        why: >-
+          the CH224K's VBUS pin is a voltage-sense input that takes a series
+          resistor to the USB VBUS (10 kOhm in the reference design) and is
+          rated 13.5 V; straight on a supply it takes the whole bus voltage
+          (up to 20 V on a PD request), and open or grounded it senses
+          nothing
+        source: >-
+          WCH CH224 datasheet V2.1 table 4-2 CH224K pins: "8 VBUS I
+          电压检测输入，需要串联电阻至外部输入 VBUS。" (voltage-sense input, needs a
+          series resistor to the external VBUS input); 7.1: "CH224A的 VBUS耐压
+          32V，CH224K的 VBUS耐压 13.5V" (the CH224K's VBUS is rated 13.5 V).
+        cite:
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 3, table: '表 4-2 CH224K引脚定义', quote: '8 VBUS I 电压检测输入，需要串联电阻至外部输入 VBUS。', fields: []}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.1 CH224A和 CH224K不同点', quote: 'CH224A的 VBUS耐压 32V，CH224K的 VBUS耐压 13.5V', fields: []}
+      - pin: VDD
+        max_v: 3.6
+        why: >-
+          the CH224K's VDD is rated 3.0 to 3.6 V and is fed from VBUS
+          through a series resistor with 1 uF to ground; on a supply above
+          3.6 V it is past its absolute maximum (pin 1 of the pin-compatible
+          CH224A is VHV, rated 32 V, which takes VBUS directly)
+        source: >-
+          WCH CH224 datasheet V2.1 8.1.3 CH224K absolute maximum: "VDD
+          工作电源电压（VDD引脚接电源，GND引脚接地） 3.0 3.6 V" (VDD supply voltage
+          3.0 to 3.6 V); 7.1: "CH224A的 1脚为 VHV，耐压 32V，CH224K的 1脚为 VDD，耐压
+          3.6V" (CH224A pin 1 is VHV rated 32 V, CH224K pin 1 is VDD rated 3.6
+          V); table 4-2: "1 VDD P 工作电源输入，外接 1uF对地电容，串联电阻至 VBUS。"
+          (supply input, 1 uF to ground, series resistor to VBUS).
+        cite:
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 13, table: '8.1.3 CH224K绝对最大值', quote: 'VDD 工作电源电压（VDD引脚接电源，GND引脚接地） 3.0 3.6 V', fields: [max_v]}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.1 CH224A和 CH224K不同点', quote: 'CH224A的 1脚为 VHV，耐压 32V，CH224K的 1脚为 VDD，耐压 3.6V', fields: [max_v]}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 3, table: '表 4-2 CH224K引脚定义', quote: '1 VDD P 工作电源输入，外接 1uF对地电容，串联电阻至 VBUS。', fields: []}
+      - pin: CFG1
+        max_v: 8
+        why: >-
+          the CH224K's CFG1 is rated -0.5 to 8 V (the CH224A's only 3.8 V);
+          on a supply above 8 V it is past its absolute maximum
+        source: >-
+          WCH CH224 datasheet V2.1 8.1.3 CH224K absolute maximum: "VIOCC CC1
+          、CC2、CFG1引脚上的电压 -0.5 8 V" (voltage on CC1, CC2, CFG1, -0.5 to 8
+          V); 7.1: "CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V" (the CH224A's
+          CFG1 is rated 3.8 V, the CH224K's 8 V).
+        cite:
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 13, table: '8.1.3 CH224K绝对最大值', quote: 'VIOCC CC1 、CC2、CFG1引脚上的电压 -0.5 8 V', fields: [max_v]}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.1 CH224A和 CH224K不同点', quote: 'CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V', fields: [max_v]}
+
+  - mpn: CH224A / CH224Q
+    match: '^CH224[AQ]'
+    verified: true   # WCH CH224 datasheet V2.1 (CH224手册1) read 2026-11-14
+    pins:
+      # Not rail_pin: VHV: the replacement guide's fix is a 0 ohm in place
+      # of the series resistor, which leaves VBUS on its own net; a 0 ohm
+      # hop reads as the short, so a VBUS pin on a different rail from VHV
+      # is not caught (a miss, never a false hit).
+      - pin: VBUS
+        allow: [rail, external]
+        forbid: [open, ground]
+        why: >-
+          the CH224A/Q's VBUS pin is a voltage-sense input that must be
+          shorted to VHV (pin 1, the supply); left open, grounded, or kept
+          behind the CH224K's series resistor it does not see the bus
+          voltage straight
+        source: >-
+          WCH CH224 datasheet V2.1 table 4-1 CH224Q/CH224A pins: "8 8 VBUS
+          I 电压检测输入，需要短接至 VHV。" (voltage-sense input, must be
+          shorted to VHV); 7.2.1, replacing a CH224K's single-resistor
+          design: "将 R1短接或更换为 0Ω" (short R1, the VBUS series resistor,
+          or change it to 0 ohm).
+        cite:
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 3, table: '表 4-1 CH224Q、CH224A引脚定义', quote: '8 8 VBUS I 电压检测输入，需要短接至 VHV。', fields: []}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.2.1 原CH224K为单电阻配置模式', quote: '将 R1短接或更换为 0Ω', fields: []}
+      - pin: CFG1
+        max_v: 3.8
+        why: >-
+          the CH224A/Q's CFG1 is rated -0.5 to 3.8 V (the CH224K's 8 V);
+          a CFG1 level carried over from a CH224K design on a 5 V or higher
+          supply is past its absolute maximum
+        source: >-
+          WCH CH224 datasheet V2.1 8.1.1 CH224Q/A absolute maximum: "VIOUX
+          DP 、DM、CFG1引脚上的电压 -0.5 3.8 V" (voltage on DP, DM, CFG1, -0.5
+          to 3.8 V); 7.1: "CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V" (the
+          CH224A's CFG1 is rated 3.8 V, the CH224K's 8 V).
+        cite:
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 13, table: '8.1.1 CH224Q/A绝对最大值', quote: 'VIOUX DP 、DM、CFG1引脚上的电压 -0.5 3.8 V', fields: [max_v]}
+          - {doc: ch224k.pdf, sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d, page: 11, table: '7.1 CH224A和 CH224K不同点', quote: 'CH224A的 CFG1耐压 3.8V，CH224K的 CFG1耐压 8V', fields: [max_v]}
+
+  - mpn: ADS8326
+    match: '^ADS8326'
+    verified: true   # TI SBAS343C (May 2007, revised September 2009) read 2026-11-14
+    aliases: {CS: CS/SHDN, 'IN-': '-IN'}
+    pins:
+      - pin: CS/SHDN
+        allow: [driven, external]
+        why: >-
+          CS/SHDN selects the converter when low and shuts it down when
+          high, and each conversion starts on a falling CS; held high it
+          stays shut down, held low it never sees the edge that starts a
+          conversion
+        source: >-
+          SBAS343C pin assignments: "CS/SHDN 5 Digital input Chip select when
+          low; Shutdown mode when high." Digital interface: "A falling CS
+          signal initiates the conversion and data transfer."
+        cite:
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 7, table: 'PIN ASSIGNMENTS', quote: 'CS/SHDN 5 Digital input Chip select when low; Shutdown mode when high.', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 23, table: 'DIGITAL INTERFACE', quote: 'A falling CS signal initiates the conversion and data transfer.', fields: []}
+      - pin: '-IN'
+        max_v: 0.5
+        why: >-
+          -IN, the inverting analog input, is specified at -0.3 to 0.5 V
+          from GND, and the input span is +IN - (-IN) from 0 to VREF; on a
+          supply it is outside its operating range
+        source: >-
+          SBAS343C recommended operating conditions: "–IN to GND –0.3 0 0.5 V"
+          and "+IN – (–IN) 0 VREF V".
+        cite:
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 3, table: 'RECOMMENDED OPERATING CONDITIONS', quote: '–IN to GND –0.3 0 0.5 V', fields: [max_v]}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 3, table: 'RECOMMENDED OPERATING CONDITIONS', quote: '+IN – (–IN) 0 VREF V', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 7, table: 'PIN ASSIGNMENTS', quote: '–IN 3 Analog input Inverting analog input', fields: []}
+      - pin: REF
+        forbid: [open, ground]
+        why: >-
+          REF takes the external reference that sets the input range, 0.1 V
+          to VDD; open or grounded the converter has no range to convert
+          against
+        source: >-
+          SBAS343C reference input: "The external reference sets the analog
+          input range. The ADS8326 operates with a reference in the range of
+          0.1V to VDD." Recommended operating conditions: "Reference input
+          voltage 0.1 VDD V".
+        cite:
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 22, table: 'REFERENCE INPUT', quote: 'The external reference sets the analog input range. The ADS8326 operates with a reference in the range of 0.1V to VDD.', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 3, table: 'RECOMMENDED OPERATING CONDITIONS', quote: 'Reference input voltage 0.1 VDD V', fields: []}
+          - {doc: ads8326.pdf, sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a, page: 7, table: 'PIN ASSIGNMENTS', quote: 'REF 1 Analog input Reference input', fields: []}
+
+  - mpn: AD8226
+    match: '^AD8226'
+    verified: true   # Analog Devices AD8226 data sheet Rev. C read 2026-11-14
+    # Known false warning: a buffer whose output pin is typed as an output,
+    # on a REF net that also carries a pull resistor, reads as driven plus
+    # pulled and still warns; the rule cannot tell the low-impedance driver
+    # from the pull. A buffer typed passive (PCB-0013's OPA2333) reads as
+    # neither and stays quiet.
+    pins:
+      - pin: REF
+        forbid: [open, pulled_up, pulled_down]
+        severity: warning
+        why: >-
+          REF must be driven from a low impedance, below 2 ohm for best
+          performance: it is one end of an internal 50 kOhm resistor, so a
+          resistor divider or pull on it adds to that resistor, amplifies
+          only the positive input path and degrades CMRR (Figure 59 crosses
+          out a bare divider on REF and buffers it instead); open, the
+          output has no reference to be developed against
+        source: >-
+          AD8226 Rev. C table 6: "REF Reference. This pin must be driven by
+          low impedance." Reference terminal: "The output voltage of the
+          AD8226 is developed with respect to the potential on the reference
+          terminal." "For the best performance, source impedance to the REF
+          terminal should be kept below 2 Ω." "This uneven amplification
+          degrades CMRR." Figure 59, Driving the Reference Pin.
+        cite:
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 9, table: 'Table 6. Pin Function Descriptions', quote: 'REF Reference. This pin must be driven by low impedance.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'The output voltage of the AD8226 is developed with respect to the potential on the reference terminal.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'For the best performance, source impedance to the REF terminal should be kept below 2 Ω.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'This uneven amplification degrades CMRR.', fields: []}
+          - {doc: ad8226.pdf, sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a, page: 21, table: 'REFERENCE TERMINAL', quote: 'Figure 59. Driving the Reference Pin', fields: []}

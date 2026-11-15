@@ -21,13 +21,23 @@ without trusting anything nobody read:
                                    from a leakage line
                       io_levels    a driver row: voh_drop from the largest
                                    "VDD-n" on a VOH line
-                    i2c_addresses and mcu_pins are not drafted from text
-                    (an address table's straps and an AF matrix need a
-                    reader or the vendor's pin XML); the report lists the
-                    pages that mention them as `leads`. A draft is a lead
-                    list for a reader, not a table: the reader fixes the
-                    fields and the pin regex, then runs --verify, and only
-                    then sets verified: true.
+                      mcu_pins     timers: each port pin's TIMn_CHx[N]
+                                   from an "alternate function mapping"
+                                   table (a row runs from a line starting
+                                   PB0 to the next pin), one cite per pin;
+                                   input_only: GPIO names on a line that
+                                   says "input only"
+                      i2c_addresses  one row per distinct address a page
+                                   states ("7-bit slave address is
+                                   0101100b", "address 0x48", "2Ch"), as
+                                   a fixed `address`; a datasheet may state
+                                   several (the part's own and an EEPROM
+                                   it masters), and address straps are
+                                   left to the reader
+                    A draft is a lead list for a reader, not a table: the
+                    reader fixes the fields, the match regex and the
+                    source, then runs --verify, and only then sets
+                    verified: true.
   --verify YAML ... --pdf FILE ...
                     check every row with a `cite` in the given tables
                     against the PDFs (matched by sha256, else by file name
@@ -35,7 +45,8 @@ without trusting anything nobody read:
                     table named on it or the two pages before, and each
                     number of the row's cited fields must be a number in the
                     quote at some SI scale (1.0e-6 A matches "1 uA", 30000
-                    ohm matches "30 kohm"). A quote found only on another
+                    ohm matches "30 kohm"); an `address` must be in the
+                    quote as 7-bit binary (0101100b), 0x2C or 2Ch. A quote found only on another
                     page is reported with the page it is on. Rows whose PDF
                     was not given are listed as unchecked.
 
@@ -104,8 +115,15 @@ _VDD = r"V\s*DD\w*"
 _FRAC = re.compile(r"(0\s*\.\s*\d+)\s*[x×*]?\s*" + _VDD)
 _VOH_DROP = re.compile(_VDD + r"\s*-\s*(\d\s*\.\s*\d+)")
 _LEAK_UNIT = re.compile(r"(\d+(?:\s*\.\s*\d+)?)\s*(n|µ|μ|u)A\b")
-_LEADS = {"i2c_addresses": re.compile(r"(slave|target|device) address", re.I),
-          "mcu_pins": re.compile(r"alternate function", re.I)}
+_AF_PAGE = re.compile(r"alternate\s+function\s+mapping", re.I)
+_AF_PIN = re.compile(r"^\s*(P[A-K]\d{1,2})\b")
+_TIM = re.compile(r"\bTIM\d+_CH\d+N?(?![0-9A-Za-z])")
+_INPUT_ONLY = re.compile(r"\binput[\s-]+only\b", re.I)
+_GPIO = re.compile(r"\b(P[A-K]\d{1,2}|GPIO\d{1,2})\b")
+_ADDR = re.compile(
+    r"(?:7-bit\s+)?(?:slave|target|device|I\s*2\s*C|SMBus)\s+address"
+    r"(?:\s+(?:is|of|=|:))?\s*:?\s*"
+    r"(?:([01]{7})\s*b\b|0x([0-9A-Fa-f]{2})\b|([0-9A-Fa-f]{2})h\b)", re.I)
 
 
 def _window(lines: list[str], i: int, n: int) -> str:
@@ -159,12 +177,79 @@ def _leak(win: str):
     return max(vals) if vals else None
 
 
+def _af_pins(pages, doc, digest) -> tuple[dict, list]:
+    """({pin: [TIMn_CHx...]}, cites) from every alternate-function mapping
+    page: a row starts at a line beginning with a port pin (PB0) and runs
+    to the next one, so a wrapped cell (SPI1_NSS/ newline I2S1_WS) stays
+    in its pin's row."""
+    timers: dict[str, list[str]] = {}
+    cites = []
+    for pno, text in enumerate(pages, 1):
+        if not _AF_PAGE.search(text):
+            continue
+        lines = text.splitlines()
+        table = _table_name(lines)
+        rows: list[list[str]] = []
+        for x in lines:
+            if _AF_PIN.match(x):
+                rows.append([x])
+            elif rows and x.strip():
+                rows[-1].append(x)
+        for row in rows:
+            pin = _AF_PIN.match(row[0]).group(1)
+            seg = " ".join(r.strip() for r in row)
+            tims = sorted(set(_TIM.findall(re.sub(r"\s*_\s*", "_", seg))))
+            if not tims or pin in timers:
+                continue
+            timers[pin] = tims
+            cites.append(_cite(doc, digest, pno, table, seg, []))
+    return timers, cites
+
+
+def _input_only(pages, doc, digest) -> tuple[list, list]:
+    """(pins, cites): GPIO names on a line that says input only."""
+    pins, cites = [], []
+    for pno, text in enumerate(pages, 1):
+        lines = text.splitlines()
+        for i, x in enumerate(lines):
+            if not _INPUT_ONLY.search(x):
+                continue
+            got = [g for g in _GPIO.findall(x) if g not in pins]
+            if got:
+                pins += got
+                cites.append(_cite(doc, digest, pno, _table_name(lines),
+                                   x.strip(), []))
+    return pins, cites
+
+
+def _addresses(pages, doc, digest, part) -> list[dict]:
+    """One draft i2c_addresses row per distinct address a page states
+    ("The 7-bit slave address is 0101100b", "address 0x48", "2Ch"). A
+    datasheet often states more than one (the part's own and the EEPROM
+    it masters): the reader keeps the part's."""
+    out, seen = [], set()
+    for pno, text in enumerate(pages, 1):
+        flat = re.sub(r"\s+", " ", text)
+        for m in _ADDR.finditer(flat):
+            b, x, h = m.groups()
+            adr = int(b, 2) if b else int(x or h, 16)
+            if adr in seen or adr > 0x7F:
+                continue
+            seen.add(adr)
+            out.append({"mpn": part, "match": "TODO", "address": adr,
+                        "source": "TODO",
+                        "cite": [_cite(doc, digest, pno,
+                                       _table_name(text.splitlines()),
+                                       m.group(0), ["address"])]})
+    return out
+
+
 def draft(part: str, pdf: Path) -> dict:
     pages = pdf_pages(pdf)
     doc, digest = pdf.name, sha256(pdf)
     out: dict = {"part": part, "doc": doc, "sha256": digest,
                  "pages": len(pages), "pin_states": [], "pin_leakage": [],
-                 "io_levels": [], "leads": {}}
+                 "io_levels": [], "mcu_pins": [], "i2c_addresses": []}
     pins_seen = set()
     for pno, text in enumerate(pages, 1):
         for m in _FLOAT.finditer(text.replace("\n", " ")):
@@ -196,11 +281,19 @@ def draft(part: str, pdf: Path) -> dict:
     if val is not None:
         out["io_levels"].append({"supply": "TODO", "pins": "TODO",
                                  "voh_drop": val, "cite": [cite]})
-    for table, pat in _LEADS.items():
-        hits = [p for p, t in enumerate(pages, 1) if pat.search(t)]
-        if hits:
-            out["leads"][table] = hits[:20]
-    for key in ("pin_states", "pin_leakage", "io_levels"):
+    timers, tcites = _af_pins(pages, doc, digest)
+    only, ocites = _input_only(pages, doc, digest)
+    if timers or only:
+        mcu: dict = {"mpn": part, "match": "TODO", "source": "TODO"}
+        if timers:
+            mcu["timers"] = timers
+        if only:
+            mcu["input_only"] = only
+        mcu["cite"] = tcites + ocites
+        out["mcu_pins"].append(mcu)
+    out["i2c_addresses"] = _addresses(pages, doc, digest, part)
+    for key in ("pin_states", "pin_leakage", "io_levels", "mcu_pins",
+                "i2c_addresses"):
         for r in out[key]:
             r["verified"] = False
     return out
@@ -245,6 +338,16 @@ def _in_quote(val: float, nums: list[float]) -> bool:
     return False
 
 
+def _addr_in_quote(adr, quote: str) -> bool:
+    """A 7-bit address as the quote writes it: 0101100b / 0101100, 0x2C,
+    2Ch."""
+    if not isinstance(adr, int) or isinstance(adr, bool):
+        return False
+    q = unicodedata.normalize("NFKC", quote).casefold()
+    return any(re.search(rf"\b{pat}\b", q)
+               for pat in (f"{adr:07b}b?", f"0x{adr:02x}", f"{adr:02x}h"))
+
+
 def check_cite(row: dict, cite: dict, pages: list[str]) -> list[str]:
     """Problems with one cite of one row; [] when it holds."""
     probs = []
@@ -270,6 +373,11 @@ def check_cite(row: dict, cite: dict, pages: list[str]) -> list[str]:
     for f in cite.get("fields") or ():
         if f not in row:
             probs.append(f"cited field {f} not in the row")
+            continue
+        if f == "address":
+            if not _addr_in_quote(row[f], cite.get("quote") or ""):
+                probs.append(f"address={row[f]!r} is not in the quote as "
+                             "7-bit binary, 0xNN or NNh")
             continue
         for v in _flat(row[f]):
             if not _in_quote(v, nums):
@@ -322,8 +430,9 @@ def main(argv: list[str] | None = None) -> int:
             code = 1 if res["counts"]["fail"] else 0
         elif a.part and len(a.pdf) == 1:
             res = draft(a.part, a.pdf[0])
-            code = 0 if (res["pin_states"] or res["pin_leakage"]
-                         or res["io_levels"]) else 1
+            code = 0 if any(res[k] for k in (
+                "pin_states", "pin_leakage", "io_levels", "mcu_pins",
+                "i2c_addresses")) else 1
         else:
             ap.error("give PART --pdf FILE, or --verify YAML... --pdf FILE...")
     except (OSError, ValueError) as e:

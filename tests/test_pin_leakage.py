@@ -282,3 +282,28 @@ def test_part_supply_v_follows_the_spec_supply_regex():
                                         rails) == 1.8
     assert netlist_audit._part_supply_v("U1", {"supply": "^VCCIO"}, nets, cp,
                                         rails) is None
+
+
+def _tpa_sdz(rail):
+    """PCB-0017's TPA3118D2 SDZ (FAULTZ on the same net) on R2 100k to
+    `rail`; SLOS708G gives IIH up to 50 uA at 2 V, VIH 2 V."""
+    comps = {"U1": "TPA3118D2DAPR", "R2": "100k 1%"}
+    nets = {"GND": [_m("U1", "9", "GND", "power_in")],
+            "+12V": [_m("U1", "17", "AVCC", "power_in")]}
+    nets.setdefault(rail, []).append(_m("R2", "2"))
+    nets["/SDZ"] = [_m("R2", "1"), _m("U1", "2", "SDZ", "passive"),
+                    _m("U1", "3", "FAULTZ", "passive")]
+    return comps, nets
+
+
+def test_tpa3118_sdz_100k_to_3v3_is_the_planted_fault():
+    hits, facts = _audit(*_tpa_sdz("+3V3"))
+    assert [(h["kind"], h["net"], h["severity"]) for h in hits] == [
+        ("pull_vs_leakage", "/SDZ", "error")]
+    assert "SLOS708G" in hits[0]["msg"]
+    assert facts["pulls_vs_leakage_checked"] == 1
+
+
+def test_tpa3118_sdz_100k_to_12v_of_pcb0017_is_quiet():
+    hits, facts = _audit(*_tpa_sdz("+12V"))
+    assert hits == [] and facts["pulls_vs_leakage_checked"] == 1
