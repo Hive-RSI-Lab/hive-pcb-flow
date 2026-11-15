@@ -4,12 +4,23 @@
 # with no constraints.json nothing told check_thermal it dissipated at all).
 #
 # match: a regex tried against the part's Value and MPN fields
-# (case-insensitive). theta_ja_c_w: the datasheet's JEDEC junction-to-ambient
-# figure, the board its ratings assume. The check finds the copper on the
-# part's exposed-pad net and flags the board when even the most favourable of
-# its copper models gives more than THETA_RATIO_MAX (2x) that figure: the part
-# can then shed under half the heat the datasheet's board sheds before its
-# thermal warning.
+# (case-insensitive). tj_max_c: the recommended-operating junction maximum.
+# packages: one entry per package, each {name, pkg, theta_ja_c_w,
+# exposed_pad, cite}: pkg a regex tried against Value, MPN and the
+# footprint library name (first match wins; a row with one package needs
+# none), theta_ja_c_w the datasheet's JEDEC junction-to-ambient figure,
+# exposed_pad whether the package sheds its heat through a pad or tab
+# soldered to copper. A row may instead give theta_ja_c_w (and exposed_pad)
+# at its top level, for its only package.
+#
+# An exposed-pad package is screened: the check finds the copper on the
+# part's exposed-pad net and flags the board when even the most favourable
+# of its copper models gives more than THETA_RATIO_MAX (2x) the package's
+# figure: the part can then shed under half the heat the datasheet's board
+# sheds before its thermal limits. A package with no exposed pad sheds
+# through its leads, so board copper says little; without a load it is
+# listed in the report's candidates as no_load, with the dissipation that
+# would take it to tj_max_c (a screen ceiling, not a judgement).
 #
 # Optional, to put a current in the finding: tj_warn_c (the die temperature
 # its thermal warning trips at, the datasheet minimum) and a loss model:
@@ -19,11 +30,17 @@
 #       at a time). Switching and supply losses are left out, so the current
 #       reported is an upper bound.
 #   peak_a: the part's rated peak current, quoted beside it.
-# source / verified as in regulator_vref.yaml: `false` means typed from memory
-# of the datasheet, not re-read.
+# source / verified / cite as in source_limits.yaml (part_rows.py --verify
+# checks each cite against its PDF; a package's cite is its theta_ja_c_w).
+#
+# families: power ICs with no row yet. check_thermal lists a part one
+# matches (or one a regulator row of switch_nodes, regulator_vref,
+# converter_fsw or source_limits matches) as a candidate with reason
+# no_row, so a not_judged result says which row is missing.
 parts:
   - match: '^MCF8316D'
     theta_ja_c_w: 25.7
+    exposed_pad: true
     tj_warn_c: 135
     loss: three_phase
     r_hs_ls_ohm: 0.140
@@ -33,3 +50,627 @@ parts:
       25.7 C/W); 6.5 RDS(ON) high-side + low-side 140 mOhm typ at TJ 150 C;
       TOTW 135 C min; features (8-A peak)
     verified: true
+  - match: ^TPS629203
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: DRL SOT-583
+      pkg: .
+      theta_ja_c_w: 120
+      exposed_pad: false
+      cite:
+      - doc: tps629203.pdf
+        sha256: 6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 120 60 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI TPS629203 datasheet: 7.3 Recommended Operating Conditions, 7.4 Thermal Information (JEDEC PCB column)'
+    verified: true
+    cite:
+    - doc: tps629203.pdf
+      sha256: 6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Junction temperature (5) –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^TLV62569
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: DDC SOT-23-THIN
+      pkg: DDC|TSOT|SOT-?23-?THIN
+      theta_ja_c_w: 106.2
+      exposed_pad: false
+      cite:
+      - doc: tlv62569.pdf
+        sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 188.2 106.2 146.3 °C/W
+        fields:
+        - theta_ja_c_w
+    - name: DBV SOT-23
+      pkg: DBV|SOT-?23
+      theta_ja_c_w: 188.2
+      exposed_pad: false
+      cite:
+      - doc: tlv62569.pdf
+        sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 188.2 106.2 146.3 °C/W
+        fields:
+        - theta_ja_c_w
+    - name: DRL SOT-563
+      pkg: DRL|SOT-?563
+      theta_ja_c_w: 146.3
+      exposed_pad: false
+      cite:
+      - doc: tlv62569.pdf
+        sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 188.2 106.2 146.3 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI TLV62569 datasheet: 6.3 Recommended Operating Conditions, 6.4 Thermal Information'
+    verified: true
+    cite:
+    - doc: tlv62569.pdf
+      sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^TPS62A01
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: DRL SOT-563
+      pkg: DRL|SOT-?563
+      theta_ja_c_w: 157.3
+      exposed_pad: false
+      cite:
+      - doc: tps62a01.pdf
+        sha256: cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 157.3 132.1 °C/W
+        fields:
+        - theta_ja_c_w
+    - name: DDC SOT-23-THIN
+      pkg: DDC|TSOT|SOT-?23
+      theta_ja_c_w: 132.1
+      exposed_pad: false
+      cite:
+      - doc: tps62a01.pdf
+        sha256: cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 157.3 132.1 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI TPS62A01 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: tps62a01.pdf
+      sha256: cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^TPS561201
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: DDC SOT-23-6
+      pkg: .
+      theta_ja_c_w: 90.8
+      exposed_pad: false
+      cite:
+      - doc: tps561201.pdf
+        sha256: 54e5a4f272c638b385ec0d66867891cdc2f94974269a2400e80ecb4279b94e2f
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 90.8 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI TPS561201 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: tps561201.pdf
+      sha256: 54e5a4f272c638b385ec0d66867891cdc2f94974269a2400e80ecb4279b94e2f
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^LMR54406
+    kind: switcher
+    tj_max_c: 150
+    packages:
+    - name: DBV SOT-23-6
+      pkg: .
+      theta_ja_c_w: 173
+      exposed_pad: false
+      cite:
+      - doc: lmr54406.pdf
+        sha256: f0dc0ace8430cad919ef1f590d65d217362ee3d3a975406ded57b98f228ffaf7
+        page: 5
+        table: Thermal Information
+        quote: RθJA (2) Junction-to-ambient thermal resistance 173 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI LMR54406 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: lmr54406.pdf
+      sha256: f0dc0ace8430cad919ef1f590d65d217362ee3d3a975406ded57b98f228ffaf7
+      page: 4
+      table: Recommended Operating Conditions
+      quote: Over the recommended operating junction temperature range of –40 °C to 150°C
+      fields:
+      - tj_max_c
+  - match: ^TLV61070
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: DBV SOT-23-6
+      pkg: .
+      theta_ja_c_w: 139.1
+      exposed_pad: false
+      cite:
+      - doc: tlv61070a.pdf
+        sha256: 1486d1a8c394245eafe18e3259cd24477949f8ef4f3c91d669f66322da5555b2
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 139.1 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI TLV61070A datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: tlv61070a.pdf
+      sha256: 1486d1a8c394245eafe18e3259cd24477949f8ef4f3c91d669f66322da5555b2
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^LM5158
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: RTE WQFN-16
+      pkg: .
+      theta_ja_c_w: 45.6
+      exposed_pad: true
+      cite:
+      - doc: lm5158.pdf
+        sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f
+        page: 7
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 45.6 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI LM5158 datasheet: Recommended Operating Conditions, Thermal Information (JEDEC column, not the EVM line)'
+    verified: true
+    cite:
+    - doc: lm5158.pdf
+      sha256: 7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f
+      page: 6
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^DRV8662
+    kind: driver
+    tj_max_c: 150
+    packages:
+    - name: RGP VQFN-20
+      pkg: .
+      theta_ja_c_w: 33.1
+      exposed_pad: true
+      cite:
+      - doc: drv8662.pdf
+        sha256: c47fbf590742f01ab0b5bf9c184f30a94f63b1788372743b24f3a3b2c2fee5e2
+        page: 5
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 33.1
+        fields:
+        - theta_ja_c_w
+    source: 'TI DRV8662 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: drv8662.pdf
+      sha256: c47fbf590742f01ab0b5bf9c184f30a94f63b1788372743b24f3a3b2c2fee5e2
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature range –40 150 °C
+      fields:
+      - tj_max_c
+  - match: ^DRV8874
+    kind: driver
+    tj_max_c: 150
+    packages:
+    - name: PWP HTSSOP-16
+      pkg: .
+      theta_ja_c_w: 36.0
+      exposed_pad: true
+      cite:
+      - doc: drv8874.pdf
+        sha256: fa2b0d0bdf49088299ee167675542b4c3b16b7c8e384ce03af93ffafafa6c80a
+        page: 5
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 36.0 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI DRV8874 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: drv8874.pdf
+      sha256: fa2b0d0bdf49088299ee167675542b4c3b16b7c8e384ce03af93ffafafa6c80a
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 150 °C
+      fields:
+      - tj_max_c
+  - match: ^DRV8434S
+    kind: driver
+    tj_max_c: 150
+    packages:
+    - name: RGE VQFN-24
+      pkg: RGE|QFN
+      theta_ja_c_w: 39.0
+      exposed_pad: true
+      cite:
+      - doc: drv8434s.pdf
+        sha256: 7d04f20afda8c51bd67e5614a15f844612166bc2ace7700453131cdb942fdc37
+        page: 6
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 29.7 39.0 °C/W
+        fields:
+        - theta_ja_c_w
+    - name: PWP HTSSOP-24
+      pkg: PWP|HTSSOP|TSSOP
+      theta_ja_c_w: 29.7
+      exposed_pad: true
+      cite:
+      - doc: drv8434s.pdf
+        sha256: 7d04f20afda8c51bd67e5614a15f844612166bc2ace7700453131cdb942fdc37
+        page: 6
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 29.7 39.0 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI DRV8434S datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: drv8434s.pdf
+      sha256: 7d04f20afda8c51bd67e5614a15f844612166bc2ace7700453131cdb942fdc37
+      page: 6
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 150 °C
+      fields:
+      - tj_max_c
+  - match: ^DRV8876
+    kind: driver
+    tj_max_c: 150
+    packages:
+    - name: RGT VQFN-16
+      pkg: RGT|QFN
+      theta_ja_c_w: 45.9
+      exposed_pad: true
+      cite:
+      - doc: drv8876.pdf
+        sha256: f96a70b19f582ba2999bc22e0c15adc69385374a9590bf77e2ab0bdf887f6f3e
+        page: 5
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 45.9 44.3 °C/W
+        fields:
+        - theta_ja_c_w
+    - name: PWP HTSSOP-16
+      pkg: PWP|HTSSOP|TSSOP
+      theta_ja_c_w: 44.3
+      exposed_pad: true
+      cite:
+      - doc: drv8876.pdf
+        sha256: f96a70b19f582ba2999bc22e0c15adc69385374a9590bf77e2ab0bdf887f6f3e
+        page: 5
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 45.9 44.3 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI DRV8876 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: drv8876.pdf
+      sha256: f96a70b19f582ba2999bc22e0c15adc69385374a9590bf77e2ab0bdf887f6f3e
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 150 °C
+      fields:
+      - tj_max_c
+  - match: ^DRV8871
+    kind: driver
+    tj_max_c: 150
+    packages:
+    - name: DDA HSOP-8
+      pkg: .
+      theta_ja_c_w: 41.1
+      exposed_pad: true
+      cite:
+      - doc: drv8871.pdf
+        sha256: 09de551aa0c6d090fd14b000634cfd894d782a050eed13110fe2eb10f1b548bf
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 41.1 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI DRV8871 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: drv8871.pdf
+      sha256: 09de551aa0c6d090fd14b000634cfd894d782a050eed13110fe2eb10f1b548bf
+      page: 3
+      table: Recommended Operating Conditions
+      quote: Operating junction temperature, TJ –40 150 °C
+      fields:
+      - tj_max_c
+  - match: ^LM5108
+    kind: driver
+    tj_max_c: 125
+    packages:
+    - name: DRC VSON-10
+      pkg: .
+      theta_ja_c_w: 47.3
+      exposed_pad: true
+      cite:
+      - doc: lm5108.pdf
+        sha256: a845b247db23a1addfe31f689de94969dd5613245538b2c54f37a06f6f97b280
+        page: 5
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 47.3 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI LM5108 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: lm5108.pdf
+      sha256: a845b247db23a1addfe31f689de94969dd5613245538b2c54f37a06f6f97b280
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^LMR38010
+    kind: switcher
+    tj_max_c: 150
+    packages:
+    - name: DDA HSOIC-8
+      pkg: .
+      theta_ja_c_w: 42.9
+      exposed_pad: true
+      cite:
+      - doc: lmr38010.pdf
+        sha256: b8b6dced113ffb83012e0d38187af8b807dab8cbfa8b842e3af54387f98d7418
+        page: 5
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 42.9 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI LMR38010 datasheet: Recommended Operating Conditions, Thermal Information (JEDEC line, not the EVM one)'
+    verified: true
+    cite:
+    - doc: lmr38010.pdf
+      sha256: b8b6dced113ffb83012e0d38187af8b807dab8cbfa8b842e3af54387f98d7418
+      page: 4
+      table: Recommended Operating Conditions
+      quote: Temperature Operating junction temperature TJ range (4) –40 150 °C
+      fields:
+      - tj_max_c
+  - match: ^TPS62086
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: RLT VSON-HR-7
+      pkg: .
+      theta_ja_c_w: 107.8
+      exposed_pad: false
+      cite:
+      - doc: tps62086.pdf
+        sha256: 31311da69fdc42211ecf876bab403b6ce48970724766ae9ff8a76bc9754b0853
+        page: 4
+        table: Thermal Information
+        quote: RθJA Junction-to-ambient thermal resistance 107.8 °C/W
+        fields:
+        - theta_ja_c_w
+    source: 'TI TPS62086 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: tps62086.pdf
+      sha256: 31311da69fdc42211ecf876bab403b6ce48970724766ae9ff8a76bc9754b0853
+      page: 4
+      table: Recommended Operating Conditions
+      quote: TJ Operating junction temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^LM2596
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: KTT TO-263
+      pkg: LM2596S|TO-?263|D2PAK
+      theta_ja_c_w: 50
+      exposed_pad: true
+      cite:
+      - doc: lm2596.pdf
+        sha256: 2eec90879908cf711b84d4f0c5d534c3cd12c576d25254b7019247435af4ab0f
+        page: 5
+        table: 7.4 Thermal Information
+        quote: See(5) 50 —
+        fields:
+        - theta_ja_c_w
+    - name: NDH TO-220
+      pkg: LM2596T|TO-?220
+      theta_ja_c_w: 50
+      exposed_pad: false
+      cite:
+      - doc: lm2596.pdf
+        sha256: 2eec90879908cf711b84d4f0c5d534c3cd12c576d25254b7019247435af4ab0f
+        page: 5
+        table: 7.4 Thermal Information
+        quote: See(4) — 50
+        fields:
+        - theta_ja_c_w
+    source: 'TI LM2596 SNVS124: 7.3 Operating Conditions, 7.4 Thermal Information notes 4 and 5'
+    verified: true
+    cite:
+    - doc: lm2596.pdf
+      sha256: 2eec90879908cf711b84d4f0c5d534c3cd12c576d25254b7019247435af4ab0f
+      page: 5
+      table: 7.3 Operating Conditions
+      quote: Temperature –40 125 °C
+      fields:
+      - tj_max_c
+  - match: ^SY7208
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: SOT23-6
+      pkg: .
+      theta_ja_c_w: 161
+      exposed_pad: false
+      cite:
+      - doc: sy7208.pdf
+        sha256: d05f52f8e1d2b83a0557a1f8eacad02e972d17f00c5783ee4cbb3e8f3cd40cbc
+        page: 2
+        table: Package Thermal Resistance (Note 2)
+        quote: θJA --------------------------------------------------------------------------------------------------------- 161°C/W
+        fields:
+        - theta_ja_c_w
+    source: 'Silergy SY7208 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: sy7208.pdf
+      sha256: d05f52f8e1d2b83a0557a1f8eacad02e972d17f00c5783ee4cbb3e8f3cd40cbc
+      page: 2
+      table: Recommended Operating Conditions
+      quote: Junction Temperature Range ----------------------------------------------------------------------------------------- 125°C
+      fields:
+      - tj_max_c
+  - match: ^SY8301
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: TSOT23-6
+      pkg: .
+      theta_ja_c_w: 100
+      exposed_pad: false
+      cite:
+      - doc: sy8301.pdf
+        sha256: d2a1acae6a41e7e6e62ad498280c74a0fe549e62d20f5176c8367640b77a1621
+        page: 3
+        table: Package Thermal Resistance (Note 2)
+        quote: θJA ----------------------------------------------------------- ------------------------------------------------------------ 100° C/W
+        fields:
+        - theta_ja_c_w
+    source: 'Silergy SY8301 datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: sy8301.pdf
+      sha256: d2a1acae6a41e7e6e62ad498280c74a0fe549e62d20f5176c8367640b77a1621
+      page: 3
+      table: Recommended Operating Conditions
+      quote: Junction Temperature Range ------------------------------------------------------------------------------------  -40° C to 125° C
+      fields:
+      - tj_max_c
+  - match: ^SY7200
+    kind: switcher
+    tj_max_c: 125
+    packages:
+    - name: SOT23-6
+      pkg: .
+      theta_ja_c_w: 170
+      exposed_pad: false
+      cite:
+      - doc: sy7200a.pdf
+        sha256: 86fa6eccd7ef812c8ce4b05ba372384f9ba9198b5fbeacfe406756cf9a097dfe
+        page: 2
+        table: Package Thermal Resistance (Note 2)
+        quote: SOT23-6, θJA --------------------------------------------------------------------------------------- 170° C/W
+        fields:
+        - theta_ja_c_w
+    source: 'Silergy SY7200A datasheet: Recommended Operating Conditions, Thermal Information'
+    verified: true
+    cite:
+    - doc: sy7200a.pdf
+      sha256: 86fa6eccd7ef812c8ce4b05ba372384f9ba9198b5fbeacfe406756cf9a097dfe
+      page: 2
+      table: Recommended Operating Conditions
+      quote: Junction Temperature Range ------------------------------------------------------------------------ -40° C to 125° C
+      fields:
+      - tj_max_c
+  - match: ^IX44(27|28|26)
+    kind: driver
+    tj_max_c: 150
+    packages:
+    - name: 8-pin DFN
+      pkg: IX442[678]M|DFN
+      theta_ja_c_w: 68
+      exposed_pad: true
+      cite:
+      - doc: ix4427.pdf
+        sha256: ad6813e5bbba6056bc79507e4afd53ad7a65d69f39dc07637333db5180247238
+        page: 6
+        table: 1.7 Thermal Characteristics
+        quote: "8-Pin DFN Thermal Resistance, Junction-to-Ambient \uF071JA 68 °C/W"
+        fields:
+        - theta_ja_c_w
+    - name: 8-pin SOIC
+      pkg: IX442[678]N|SOIC
+      theta_ja_c_w: 120
+      exposed_pad: false
+      cite:
+      - doc: ix4427.pdf
+        sha256: ad6813e5bbba6056bc79507e4afd53ad7a65d69f39dc07637333db5180247238
+        page: 6
+        table: 1.7 Thermal Characteristics
+        quote: "8-Pin SOIC Thermal Resistance, Junction-to-Ambient \uF071JA 120 °C/W"
+        fields:
+        - theta_ja_c_w
+    source: 'IXYS IX4426/27/28 datasheet: 1.4 Recommended Operating Conditions, Thermal Characteristics'
+    verified: true
+    cite:
+    - doc: ix4427.pdf
+      sha256: ad6813e5bbba6056bc79507e4afd53ad7a65d69f39dc07637333db5180247238
+      page: 3
+      table: Recommended Operating Conditions
+      quote: Junction T emperature TJ -55 +150 °C
+      fields:
+      - tj_max_c
+families:
+  - {match: '^DRV8', what: motor / solenoid driver}
+  - {match: '^DRV2', what: haptic / piezo driver}
+  - {match: '^(TP|LTC|STC|MCP)40?5[4-7]', what: linear Li-ion charger}
+  - {match: '^MCP738', what: linear Li-ion charger}
+  - {match: '^BQ2[45]', what: Li-ion charger}
+  - {match: '^IX44', what: gate driver}
+  - {match: '^UCC27', what: gate driver}
+  - {match: '^IR21', what: gate driver}
+  - {match: '^LM51[0-9][0-9]', what: gate driver / controller}
+  - {match: '^TPS5[0-9]{4}', what: buck converter}
+  - {match: '^TPS6[0-9]{4}', what: buck / boost converter}
+  - {match: '^TLV6[0-9]{4}', what: buck / boost converter}
+  - {match: '^LMR[0-9]', what: buck converter}
+  - {match: '^LM2[5-6][0-9]{2}', what: buck converter}
+  - {match: '^MP[0-9]{4}', what: buck converter}
+  - {match: '^SY[0-9]{4}', what: buck / boost converter}
+  - {match: '^XL[0-9]{4}', what: buck converter}
+  - {match: '^A4988|^TMC2[0-9]{3}', what: stepper driver}
+  - {match: '^L298|^L293', what: bridge driver}

@@ -392,3 +392,55 @@ def test_an_mcu_load_counts_as_continuous_heat():
     _, facts = _audit(*_loads3("HT7533-1", [("STM32F103C8T6", "VDD_1")]))
     assert _nj(facts, "rail_over") == []
     assert not any("passes 0 mA" in n for n in _nj(facts, "ldo_heat"))
+
+
+def _netlist(tmp_path, comps, nets, fields=None):
+    """A kicadsexpr netlist file for comps {ref: value} and nets as _ldo
+    builds them; fields {ref: {name: value}}."""
+    fields = fields or {}
+    out = ["(export (version \"E\")", " (components"]
+    for ref, val in comps.items():
+        fl = "".join(f' (field (name "{k}") "{v}")'
+                     for k, v in fields.get(ref, {}).items())
+        out.append(f'  (comp (ref "{ref}") (value "{val}") (footprint "x")'
+                   + (f" (fields{fl})" if fl else "") + ")")
+    out.append(" )")
+    out.append(" (nets")
+    for i, (name, nodes) in enumerate(nets.items(), 1):
+        ns = "".join(f' (node (ref "{n["ref"]}") (pin "{n["pin"]}") '
+                     f'(pinfunction "{n["pinfunction"]}") '
+                     f'(pintype "{n["pintype"]}"))' for n in nodes)
+        out.append(f'  (net (code "{i}") (name "{name}"){ns})')
+    out.append(" ))")
+    p = tmp_path / "n.net"
+    p.write_text("\n".join(out), encoding="utf-8")
+    return p
+
+
+@pytest.mark.parametrize("value,fields,dnp", [
+    ("ESP32-S3-WROOM-1-N16R8 (DNP)", None, True),
+    ("ESP32-S3-WROOM-1-N16R8", {"DNP": "yes"}, True),
+    ("ESP32-S3-WROOM-1-N16R8", {"Populate": "DNF"}, True),
+    ("ESP32-S3-WROOM-1-N16R8", {"Config": "DNP"}, True),
+    ("ESP32-S3-WROOM-1-N16R8", None, False),
+    ("ESP32-S3-WROOM-1-N16R8", {"DNP": "no"}, False),
+    ("ESP32-S3-WROOM-1-N16R8", {"Description": "DNP on rev B, fit on C"},
+     False),
+])
+def test_a_value_or_field_marking_dnp_is_not_a_load(tmp_path, value, fields,
+                                                    dnp):
+    """A part whose Value ("1x4 2.54mm THT (DNP)") or a field says do not
+    populate is not fitted, so it is no load: the 500 mA module on the
+    200 mA LDO is rail_over only when fitted (planted fault and quiet
+    twin, through the netlist parser)."""
+    comps, nets = _ldo(load=value)
+    parsed = netlist_audit.parse_netlist(
+        _netlist(tmp_path, comps, nets, {"U2": fields} if fields else None))
+    assert bool(parsed["components"]["U2"].get("dnp")) is dnp
+    viol, _ = netlist_audit.audit(parsed, {}, None)
+    assert _hits(viol) == ([] if dnp else [("rail_over", "error")])
+
+
+@pytest.mark.parametrize("value", ["10nF", "DNPX1", "SDNP", "100k"])
+def test_dnp_words_need_word_edges(value):
+    assert not netlist_audit._DNP_RE.search(value)

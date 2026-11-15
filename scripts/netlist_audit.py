@@ -372,6 +372,28 @@ def _pin_name(pin: str | None, func: str) -> str:
     return func[:-len(suffix)] if pin and func.endswith(suffix) else func
 
 
+# a Value or field that marks a part not fitted: DNP / DNF / NF / NoPop /
+# "do not populate|fit|place" / "not fitted" as a word of its own
+_DNP_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:DNP|DNF|DNI|NoPop|No[ _-]Pop(?:ulate)?|"
+    r"do[ _-]?not[ _-]?(?:populate|fit|place|mount)|not[ _-]fitted)"
+    r"(?![A-Za-z0-9])", re.I)
+_DNP_FIELDS = {"DNP", "DNF", "DONOTPOPULATE", "NOPOP"}
+_TRUE = {"1", "yes", "y", "true", "x", "dnp", "dnf"}
+
+
+def _field_dnp(fname: str, val: str) -> bool:
+    """A schematic field that marks its part not fitted: a DNP-named field
+    set true, a Populate/Fitted field set false, or any field (not a
+    description) whose whole value is a DNP marker."""
+    key, v = fname.replace("_", "").upper(), val.strip()
+    if key in _DNP_FIELDS:
+        return v.lower() in _TRUE
+    if key in {"POPULATE", "FITTED", "FIT", "MOUNT"}:
+        return v.lower() in {"0", "no", "n", "false", "dnp", "dnf"}
+    return bool(v) and _DNP_RE.fullmatch(v) is not None
+
+
 _MPN_FIELDS = {"MPN", "MANUFACTURERPARTNUMBER", "PARTNUMBER", "MFRPN",
                "MFR_PN", "MANF#"}
 
@@ -417,6 +439,10 @@ def parse_netlist(path: Path | str) -> dict:
             # `(property (name "dnp"))`, present only when set
             if any(_atom(pr, "name") == "dnp" for pr in _kids(c, "property")):
                 comps[ref]["dnp"] = True
+            # ...or older schematics write it into the Value ("1x4 THT
+            # (DNP)") or a field ("DNP" = yes, Populate = DNF)
+            if _DNP_RE.search(comps[ref]["value"] or ""):
+                comps[ref]["dnp"] = True
             # the part number, from the fields any of MPN / Manufacturer
             # Part Number / PartNumber (pin-map check looks the part up)
             for fb in _kids(c, "fields"):
@@ -426,6 +452,9 @@ def parse_netlist(path: Path | str) -> dict:
                     if fname.upper() in _MPN_FIELDS and \
                             not isinstance(val, list) and str(val).strip():
                         comps[ref].setdefault("mpn", str(val).strip())
+                    if not isinstance(val, list) and _field_dnp(
+                            fname, str(val) if val is not None else ""):
+                        comps[ref]["dnp"] = True
             sp = _kids(c, "sheetpath")
             if sp and _atom(sp[0], "names"):
                 comps[ref]["sheet"] = _atom(sp[0], "names")
