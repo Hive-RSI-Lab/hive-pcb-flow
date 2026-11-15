@@ -173,3 +173,214 @@ pulsed_loads:
         table: ""
         quote: "For the VBAT input, a bypass capacitor (low ESR) such as a 100µF is strongly recommended."
         fields: [vendor_uf]
+
+# bus_drivers (class 9): the output stage of each logic part, from its own
+#   datasheet, never from the pin name alone. `outputs` names the output
+#   pins by function (KiCad's overbar markup removed); `kind` is
+#     push_pull   - always drives (balanced CMOS / totem-pole outputs);
+#     three_state - drives while its active-low `oe` pin is low. With
+#                   `oe_group`, a digit before the pin name picks its
+#                   enable (1Y2 -> 1OE). `oe: bus` is a CPU's own bus
+#                   release (the Z80 floats its strobes on BUSACK);
+#     open_drain  - pulls low only; listed, never judged.
+#   bus_driver_contention fires on a net with an always-on output (a
+#   push-pull, or a three-state output whose OE is tied low) and any other
+#   output from another part; outputs whose enables are all driven by
+#   logic are listed, not judged. Outputs of one part tied together
+#   (paralleled gates) are listed. `strobes` names a bus strobe in the
+#   finding.
+#
+# i2c_single_master (class 9): parts that are an I2C master with no
+#   arbitration (their datasheet: a single-master bus to one EEPROM). On an
+#   I2C line, in master mode (`mode_pin` at `master_when`; unconnected
+#   reads as the pin's internal pull), another IC on the same line other
+#   than an EEPROM (`eeproms`) is a second device the part was never meant
+#   to share with. A bus mux or arbiter on the line (`isolators`) splits it
+#   and is listed. The mode pin driven by logic is listed, not judged.
+
+bus_drivers:
+  strobes: [RD, WR, IORQ, MREQ]
+  parts:
+    hc_gates:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT)(00|02|04|08|32|86)($|[^0-9])"
+      kind: push_pull
+      outputs: "^[0-9]*Y[0-9]*$"
+      source: "TI SN74HC08 SCLS081J section 7.3.1, SN74HC32 SCLS200F and SN74HC04 SCLS078H section 8.3.1, SN74AHC08 SCLS236L"
+      url: https://www.ti.com/lit/ds/symlink/sn74hc08.pdf
+      cite:
+      - doc: sn74hc08.pdf
+        sha256: 0d125beb415972726a34eb93fbb7ce093909319f4252593fab37a7e77541e363
+        page: 9
+        table: ""
+        quote: "Balanced CMOS Push-Pull Outputs"
+        fields: []
+      - doc: sn74hc32.pdf
+        sha256: 18adcf7e59d693f9857a32200c28faf72bc84ac64f619411001bececd4fa96f0
+        page: 9
+        table: ""
+        quote: "Balanced CMOS Push-Pull Outputs"
+        fields: []
+      - doc: sn74hc04.pdf
+        sha256: a48266c5ce3f22a87a30cd78b0fdb80e99820220534b215a11a9b67a35f41101
+        page: 9
+        table: ""
+        quote: "Balanced CMOS Push-Pull Outputs"
+        fields: []
+      - doc: sn74ahc08.pdf
+        sha256: 5b2bcbcf6b40a36fe9ddccda528bd5bb5ab7516356f540d879129a7d5c3f9036
+        page: 13
+        table: ""
+        quote: "This device uses CMOS technology and has balanced output drive."
+        fields: []
+    hc138:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT)138"
+      kind: push_pull
+      outputs: "^(Y|O)[0-7]$"
+      source: "TI SN74HC138 SCLS107G, Feature Description"
+      url: https://www.ti.com/lit/ds/symlink/sn74hc138.pdf
+      cite:
+      - doc: sn74hc138.pdf
+        sha256: 795ac76468c240b976a632b6107738765800f7f672ad5b58925fbfb5f5064938
+        page: 11
+        table: ""
+        quote: "These devices use CMOS technology and have balanced output drive."
+        fields: []
+    hc273:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT)273"
+      kind: push_pull
+      outputs: "^[0-9]*(Q|O)[0-9]*$"
+      source: "TI SN74HC273 SCLS136F and SN74AHC273 SCLS376J, Feature Description"
+      url: https://www.ti.com/lit/ds/symlink/sn74ahc273.pdf
+      cite:
+      - doc: sn74hc273.pdf
+        sha256: 952ec843ead41518cc4701716599bed99a23c1e8c5c9ec595a92eda174c6793f
+        page: 12
+        table: ""
+        quote: "has balanced output drive."
+        fields: []
+      - doc: sn74ahc273.pdf
+        sha256: 5431ccf466c17a392356ad26de68a912c6fc6538d55d4418d4ddb6be21314b0a
+        page: 10
+        table: ""
+        quote: "This device uses CMOS technology and has balanced output drive."
+        fields: []
+    hc244:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT)244"
+      kind: three_state
+      outputs: "^[12]?Y[0-9]$"
+      oe: "^[12]?(OE|G)$"
+      oe_group: true
+      source: "TI SN74HC244 SCLS130I and SN74AHC244 SCLS226N, title and Description"
+      url: https://www.ti.com/lit/ds/symlink/sn74ahc244.pdf
+      cite:
+      - doc: sn74hc244.pdf
+        sha256: 96fab8d66e73471202eddee965c22a78430f330c328a901cc6d78094915f49e9
+        page: 1
+        table: ""
+        quote: "3-state outputs drive bus lines or buffer memory"
+        fields: []
+      - doc: sn74ahc244.pdf
+        sha256: 0242fba6c663d7d4e4a06d7e69704b676bfef5192d5a1012dd93b0a8393db9a9
+        page: 1
+        table: ""
+        quote: "Octal Buffers/Drivers With 3-State Outputs"
+        fields: []
+    hc574:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT)(374|574)"
+      kind: three_state
+      outputs: "^(Q|O)[0-7]$"
+      oe: "^(OE|G)$"
+      source: "TI SN74HC574 SCLS148H and SN74AHC374 SCLS240K, Description"
+      url: https://www.ti.com/lit/ds/symlink/sn74ahc374.pdf
+      cite:
+      - doc: sn74hc574.pdf
+        sha256: 41dc3007ca8c8f8e801784e554cd496a4e8037b92563144db608ed257fe399a8
+        page: 1
+        table: ""
+        quote: "3-state outputs designed specifically for bus driving."
+        fields: []
+      - doc: sn74ahc374.pdf
+        sha256: 9ecbe6a9fadf3932c29f4b5bb24c31d7eaa97ff7c4ff31db57b86f44e050c43b
+        page: 1
+        table: ""
+        quote: "3-state outputs drive bus lines directly"
+        fields: []
+    hc595:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT)595"
+      kind: three_state
+      outputs: "^Q[A-H]$"
+      oe: "^(OE|G)$"
+      source: "TI SN74HC595 SCLS041J, Features"
+      url: https://www.ti.com/lit/ds/symlink/sn74hc595.pdf
+      cite:
+      - doc: sn74hc595.pdf
+        sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+        page: 1
+        table: ""
+        quote: "High-current 3-state outputs can drive up to 15"
+        fields: []
+    z80:
+      match: "^(Z80|Z84C00|Z0840|Z8400)"
+      kind: three_state
+      outputs: "^(RD|WR|IORQ|MREQ)$"
+      oe: bus
+      source: "Zilog Z80 CPU User Manual UM0080, Pin Descriptions"
+      # the cited copy came from www.z80.info/zip/z80cpu_um.pdf (http only)
+      url: https://www.zilog.com/docs/z80/um0080.pdf
+      cite:
+      - doc: z80cpu_um.pdf
+        sha256: e3c83da5a5d8e372364c20fa53665e6fbb165ec6ac38c8c1eebc359603447b5e
+        page: 20
+        table: ""
+        quote: "RD. Read (output, active Low, tristate)."
+        fields: []
+      - doc: z80cpu_um.pdf
+        sha256: e3c83da5a5d8e372364c20fa53665e6fbb165ec6ac38c8c1eebc359603447b5e
+        page: 21
+        table: ""
+        quote: "WR. Write (output, active Low, tristate)."
+        fields: []
+      - doc: z80cpu_um.pdf
+        sha256: e3c83da5a5d8e372364c20fa53665e6fbb165ec6ac38c8c1eebc359603447b5e
+        page: 19
+        table: ""
+        quote: "BUSACK. Bus Acknowledge (output, active Low)."
+        fields: []
+    ahc05:
+      match: "^(SN)?74(HC|HCT|AHC|AHCT|LV|LVC)0[56]($|[^0-9])"
+      kind: open_drain
+      outputs: "^[0-9]*Y[0-9]*$"
+      source: "TI SN74AHC05 SCLS357H, Description"
+      url: https://www.ti.com/lit/ds/symlink/sn74ahc05.pdf
+      cite:
+      - doc: sn74ahc05.pdf
+        sha256: 64df285810ba22ba4c9018fcb9b33a305e17a2a861cc80370e0b064ecb74040a
+        page: 1
+        table: ""
+        quote: "open-drain outputs to implement active-low wired-OR or active-high wired-AND functions."
+        fields: []
+
+i2c_single_master:
+  eeproms: "^(24(C|LC|AA|FC|CW)|AT24|M24C?|CAT24|BR24|FM24)"
+  isolators: "^(TCA|PCA)954[0-9]|^PCA9541|^LTC4316|^(TCA|PCA)951[0-9]"
+  parts:
+    tusb8041:
+      match: "^TUSB8041"
+      mode_pin: SMBUSZ
+      master_when: H
+      pull: H
+      source: "TI TUSB8041 SLLSEE4E, sections 8.4.1 and 8.4.2, and the SMBUSz pin description"
+      url: https://www.ti.com/lit/ds/symlink/tusb8041.pdf
+      cite:
+      - doc: tusb8041.pdf
+        sha256: b715bce72e988310d18dbc8eb041a05b5f15e4a0b690843a873abdc373a1ad87
+        page: 15
+        table: ""
+        quote: "The TUSB8041 supports a single-master, standard mode (100 kbit/s) connection to a dedicated I2C EEPROM"
+        fields: []
+      - doc: tusb8041.pdf
+        sha256: b715bce72e988310d18dbc8eb041a05b5f15e4a0b690843a873abdc373a1ad87
+        page: 7
+        table: ""
+        quote: "When SMBUSz = 1, this pin acts as the serial clock interface for an I2C EEPROM."
+        fields: []

@@ -131,3 +131,65 @@ def test_parse_silk_takes_a_kicad6_footprints_ref_from_fp_text():
     items = cs.parse_silk(root)
     assert {s.text for s in items} == {"J7", "GND"}
     assert all(s.ref == "J7" for s in items)
+
+
+# -- class 10: two-column legends -------------------------------------------
+
+def _qwiic2x2():
+    """A 2x2 header J2, columns at x 10 and 12.54: pin 1 SDA, 2 SCL (left
+    column down), 3 +3V3, 4 GND (right column down)."""
+    at = [("1", "/SDA", 10.0, 20.0), ("2", "/SCL", 10.0, 22.54),
+          ("3", "+3V3", 12.54, 20.0), ("4", "GND", 12.54, 22.54)]
+    return _Board([_Pad("J2", n, net, x, y) for n, net, x, y in at])
+
+
+def _btext(text, x, y):
+    t = _text(text, x, y)
+    t.side = "B"
+    return t
+
+
+def test_two_column_legend_with_columns_swapped_fires():
+    v = cs.check_label_nets(_qwiic2x2(), [_text("3V3 SDA\nGND SCL", 11.3, 17.5)])
+    assert len(v) == 1 and v[0]["form"] == "columns"
+    assert v[0]["refs"] == ["J2"] and "reader's left are SCL, SDA" in v[0]["msg"]
+
+
+def test_two_column_legend_in_pad_order_is_quiet():
+    assert cs.check_label_nets(_qwiic2x2(),
+                               [_text("SDA 3V3\nSCL GND", 11.3, 17.5)]) == []
+
+
+def test_bottom_legend_not_mirrored_fires():
+    v = cs.check_label_nets(_qwiic2x2(), [_btext("SDA 3V3\nSCL GND", 11.3, 17.5)])
+    assert len(v) == 1 and v[0]["form"] == "mirrored"
+    assert "reader's left are +3V3, GND" in v[0]["msg"]
+
+
+def test_bottom_legend_mirrored_is_quiet():
+    assert cs.check_label_nets(_qwiic2x2(),
+                               [_btext("3V3 SDA\nGND SCL", 11.3, 17.5)]) == []
+
+
+def test_two_words_a_line_by_a_single_row_is_not_judged():
+    t = _text("3V3 CLK\nDIO GND", 13.8, 17.0)
+    assert cs.check_label_nets(_header(), [t]) == []
+
+
+# ------------------------------- golden mutant and its quiet twin (class 10)
+
+@pytest.mark.parametrize("mirrored, fires", [(False, True), (True, False)])
+def test_silk_legend_unmirrored_mutant_and_twin(tmp_path, mirrored, fires):
+    sys.path.insert(0, str(REPO / "tests" / "golden" / "mutations"))
+    import mutlib
+    import silk_legend_unmirrored as m
+
+    text, _ = m.surgery(mutlib.load_golden("blinky2"), mirrored=mirrored)
+    pcb = tmp_path / "blinky2.kicad_pcb"
+    pcb.write_text(text, encoding="utf-8")
+    payload, _ = cs.run(["--pcb", str(pcb)])
+    hits = [v for v in payload["violations"]
+            if v.get("kind") == "pin_label_wrong" and "J9" in v["refs"]]
+    assert bool(hits) is fires
+    if fires:
+        assert hits[0]["form"] == "mirrored"

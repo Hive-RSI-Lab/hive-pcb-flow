@@ -941,6 +941,10 @@ holdout:
       check_mounting (#1088) flags rev_a, a 100x50 mm board with no
       mounting hole, and rev_b adds MH2-MH6. Real, but the errata does not
       name it, so it is not a defect here.
+      check_silk's two-column legend rule (#1172) stays quiet here,
+      rightly by the files: rev_a's ISP legend matches the copper as
+      placed, since J1 pin 2 is on an unnamed net, not 3V3, so the
+      mislabel the erratum fixes is not in the published board.
 - id: ice1usb-r01
   url: https://github.com/osmocom/osmo-e1-hardware
   commit: 85acea8b6d656add7c098d51f816f4ac34084fa2
@@ -996,6 +1000,14 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "I2C masters per bus: a module that drives I2C as a master (from its datasheet) sharing lines with an off-board port"
+    note: >-
+      check_pinouts i2c_single_master (#1170) judges a part its datasheet
+      calls a master that cannot arbitrate (TUSB8041 in master mode). It
+      stays quiet here, rightly: the GPS is a u-blox MAX-M8W, whose DDC
+      (I2C) port the maker documents as a slave. The erratum's "acts as a
+      master" is the clone module's own behaviour, which no datasheet
+      states and no design file holds. Not independent either way: the
+      rule was written after this defect was read.
 - id: zxdiag-v10
   url: https://github.com/derekfountain/zx-spectrum-diagnostics
   commit: a6d874e92e14834dd6f81a66c2ae44a377eacba6
@@ -1130,6 +1142,12 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "bus contention: two drivers enabled by one bus strobe (U12 and U40 on BWRITE1)"
+    note: >-
+      check_pinouts bus_driver_contention (#1171) stays quiet here, rightly:
+      in V5.0's netlist U12 and U40 both take BWRITE1 as an input (a latch
+      clock), so no net has two outputs on it. The conflict is in what
+      the firmware writes on that strobe, which no design file holds. Not
+      independent: the rule was written after this defect was read.
   - id: gcm-v50-2
     summary: A symbol's pins flipped and out of order, causing a clock problem
     source_quote: "Fix a symbol issue where pins was flipped and not ordered causing a clock problem"

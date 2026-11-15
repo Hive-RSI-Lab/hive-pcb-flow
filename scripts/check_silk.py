@@ -41,6 +41,12 @@ One concern: silkscreen that will not assemble or read.
    and nearest one it doesn't name, while it names another pin of the part
    LABEL_SLACK_MM or more farther off, is the per-pin form. Names compare by _norm (3V3 = +3.3V, G = GND,
    CLK on SWCLK); unnamed nets (Net-(...)) are never named.
+   A two-column legend (two words a line, class 10) by a header with two
+   rows of pins must put each word over its own column, the first word on
+   the reader's left; on the bottom side the reader is below, so the
+   columns read mirrored from the top. Words naming pins only in the other
+   column read swapped (form "columns"), or on the bottom side unmirrored
+   (form "mirrored").
 
 Silk geometry is parsed here (not in geom.py, which is copper-only): top-level
 gr_text / gr_line / gr_poly / gr_rect / gr_circle / gr_arc on *.SilkS, plus the
@@ -705,6 +711,12 @@ def check_label_nets(bg: geom.BoardGeom, silks: list[Silk]) -> list[dict]:
     for s in texts:
         g = _block(s)
         lines = [ln.strip() for ln in s.text.split("\n")]
+        pairs = [ln.split() for ln in lines if ln]
+        if len(pairs) >= 2 and all(len(t) == 2 for t in pairs):
+            v = _columns(s, g, conns, pairs)
+            if v:
+                out.append(v)
+            continue
         ref = (_stack_owner(g, conns, lines) if len(lines) >= 2
                else _label_owner(g, conns, all_pads))
         if ref is None:
@@ -753,6 +765,69 @@ def _stack(s, ref, pads, lines):
         "name below the ones before it. A cable made to the silk goes on "
         "wrong", SCRIPT, kind="pin_label_wrong", silk_text=s.text,
         form="stack", lines=len([ln for ln in lines if ln]), pins=len(row))
+
+
+def _columns(s, g, conns, pairs):
+    """Class 10: a two-column legend, "SDA SCL / 3V3 GND", read line by
+    line against a header's two rows of pins. Each word should name a pin
+    in its own column: the first word the column on the reader's left, the
+    second the right one. Seen from the top, bottom-side text is mirrored,
+    so its reader's left is the top view's right. A legend whose words name
+    pins only in the other column (two at least, none in their own) reads
+    swapped, or on the bottom side was laid out for the top and never
+    mirrored. Words naming a pin in both columns (GND twice) don't count."""
+    best, key = None, None
+    words = [w for t in pairs for w in t]
+    for ref, pads in conns.items():
+        d = min(g.distance(p.poly) for p in pads)
+        if d > LABEL_MM:
+            continue
+        n = sum(1 for w in words if any(_names(w, p.net) for p in pads))
+        if n >= 2 and 2 * n >= len(words) and (key is None or (n, -d) > key):
+            best, key = ref, (n, -d)
+    if best is None:
+        return None
+    pads = conns[best]
+    a = math.radians(s.angle or 0.0)
+    right = (math.cos(a), -math.sin(a))     # reading direction, top view
+    if s.side == "B":
+        right = (-right[0], -right[1])      # mirrored: read from below
+    pos = lambda p: p.center[0] * right[0] + p.center[1] * right[1]  # noqa: E731
+    across = sorted(pos(p) for p in pads)
+    gaps = [(across[i + 1] - across[i], i) for i in range(len(across) - 1)]
+    if not gaps:
+        return None
+    gap, i = max(gaps)
+    if (gap <= ROW_ACROSS_MM or across[i] - across[0] > ROW_ACROSS_MM
+            or across[-1] - across[i + 1] > ROW_ACROSS_MM):
+        return None                          # not two rows of pins
+    cut = (across[i] + across[i + 1]) / 2.0
+    col = ([p for p in pads if pos(p) < cut], [p for p in pads if pos(p) >= cut])
+    own = other = 0
+    for t in pairs:
+        for k, w in enumerate(t):
+            here = any(_names(w, p.net) for p in col[k])
+            there = any(_names(w, p.net) for p in col[1 - k])
+            own += here and not there
+            other += there and not here
+    if other < 2 or own:
+        return None
+    label = " / ".join(" ".join(t) for t in pairs)
+    left = ", ".join(sorted({(p.net or "").rsplit("/", 1)[-1] for p in col[0]
+                             if _named(p.net)}))
+    if s.side == "B":
+        form, why = "mirrored", (
+            "it is on the bottom side and reads in the top side's column "
+            "order: from below, the pins on the reader's left are " + left)
+    else:
+        form, why = "columns", (
+            "its two columns are swapped against the pads: the pins on the "
+            "reader's left are " + left)
+    return violation(
+        SCRIPT, "warning", s.pos, f"{s.side}.SilkS", None, [best],
+        f"silk legend \"{label}\" beside {best}: {why}. A cable made to the "
+        "silk goes on wrong", SCRIPT, kind="pin_label_wrong", silk_text=s.text,
+        form=form, lines=len(pairs), pins=len(pads))
 
 
 def _single(s, ref, pads, word):

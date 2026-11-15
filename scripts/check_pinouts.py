@@ -48,6 +48,13 @@ document that fixes the pinout):
    of bulk_uf_min or more on its named supply nets, or with --pcb none
    within bulk_mm of its pad (identidem v7.5: J7, a ToF LiDAR on /3.3V
    with none).
+ - bus_driver_contention (scripts/mate_needs.py): two outputs on one net,
+   one always on (a push-pull gate, or a 3-state part with OE tied on),
+   such as a Z80 bus strobe also driven by a 74HC gate. Output kinds come
+   from the datasheets, listed in reference/mate_needs.yaml bus_drivers.
+ - i2c_single_master (scripts/mate_needs.py): a master that cannot
+   arbitrate (TUSB8041 in master mode) sharing its I2C bus with an IC that
+   is not its EEPROM, with no mux or isolator between them.
 
     check_pinouts.py --pcb B.kicad_pcb [--netlist B.net] [--constraints C]
     check_pinouts.py --sch B.kicad_sch [--constraints C]
@@ -470,6 +477,12 @@ def check(parsed: dict, constraints: dict, table: dict | None = None,
     v, j = mate_needs.judge_wired_or(board, mates)
     viols += v
     judged += [dict(x, standard="wired_or") for x in j]
+    v, j = mate_needs.judge_bus_drivers(board, mates)
+    viols += v
+    judged += [dict(x, standard="bus_drivers") for x in j]
+    v, j = mate_needs.judge_i2c_master(board, mates)
+    viols += v
+    judged += [dict(x, standard="i2c_single_master") for x in j]
     v, j = mate_needs.judge_pulsed(board, mates, pcb)
     viols += v
     judged += [dict(x, standard="pulsed_load") for x in j]
