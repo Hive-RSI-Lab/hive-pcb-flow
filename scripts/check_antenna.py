@@ -186,7 +186,8 @@ def antenna_geometry(f, pads, row: dict | None = None) -> dict | None:
         ant, end = box(px1, cy0, cx1, cy1), box(cx1, cy0, cx1, cy1)
         bands = [box(px1, cy0 - s, cx1, cy0), box(px1, cy1, cx1, cy1 + s)]
     ant_b = _to_board(ant, f)
-    return {"antenna": ant_b, "keepout": ant_b, "end": _to_board(end, f),
+    return {"antenna": ant_b, "keepout": ant_b, "parts_keepout": ant_b,
+            "end": _to_board(end, f),
             "bands": [_to_board(b, f) for b in bands], "depth": depth,
             "body": _to_board(f.courtyard_local, f),
             "from": "footprint (outline mismatch)" if mismatch
@@ -255,10 +256,17 @@ def _datasheet_geometry(f, pads, row, ko) -> dict | None:
         u0, u1 = min(u0, u1), max(u0, u1)
         return box(u0, v0, u1, v1) if along_x else box(v0, u0, v1, u1)
     ant = rect(a0, a1, lo, hi)
-    keep = rect(k0, a1 if side in ("-x", "-y") else a0, lo - wide, hi + wide)
+    k1 = a1 if side in ("-x", "-y") else a0
+    keep = rect(k0, k1, lo - wide, hi + wide)
+    # another part's body is judged on the datasheet's own width: the
+    # courtyard's margin beside the antenna is copper clearance, and a part
+    # there (a mounting hole, a switch) sits outside the area the module
+    # datasheet keeps clear of components
+    parts = rect(k0, k1, mid - half - wide, mid + half + wide)
     end = rect(e, e, lo, hi)
     bands = [rect(a0, a1, lo - s, lo), rect(a0, a1, hi, hi + s)] if s else []
     return {"antenna": _to_board(ant, f), "keepout": _to_board(keep, f),
+            "parts_keepout": _to_board(parts, f),
             "end": _to_board(end, f), "bands": [_to_board(b, f) for b in bands],
             "depth": depth, "body": _to_board(f.courtyard_local, f),
             "from": "datasheet"}
@@ -372,7 +380,9 @@ def check(pcb: Path, constraints: dict | None = None,
                 SOURCE, kind="antenna_copper", nets=nets,
                 area_mm2=checklib.rnd(hit.area, 2),
                 antenna_bbox=fact["antenna_bbox"]))
-        viols += _parts_under(model, ref, value or f.fpid, over, g["body"])
+        viols += _parts_under(model, ref, value or f.fpid,
+                              g["parts_keepout"].intersection(board),
+                              g["body"])
         # the antenna end against the board edge
         edge_mm = (row or {}).get("edge_mm", EDGE_MM)
         mid = g["end"].centroid

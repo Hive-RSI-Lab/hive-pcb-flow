@@ -234,6 +234,22 @@ def test_a_courtyard_wider_than_the_outline_widens_the_area(tmp_path):
     assert mod["antenna_bbox"] == [20.25, -2.75, 39.75, 3.44]
 
 
+def test_a_part_beside_the_antenna_in_the_courtyard_margin_passes(tmp_path):
+    """#1188: the courtyard's margin beside the antenna widens the copper
+    area only. flexgrid's H1 and H4 mounting holes sit in that margin, outside
+    the datasheet's 18 mm, where the module datasheet asks no part clear: a
+    part at x 39.65..41.15 passes, and moved in to x 38.75 it is under the
+    datasheet area."""
+    body = _module("30 10", "ESP32-WROOM-32E").replace(
+        "(start -9 -13) (end 9 13)", "(start -9.75 -13) (end 9.75 13)")
+    payload, kinds = _antenna(_pcb(tmp_path, body + _part("C9", "40.4 2")))
+    # its pad beside the antenna is antenna_side_clearance's, not a body
+    assert kinds == {"antenna_side_clearance"}, \
+        json.dumps(payload["violations"])
+    payload, kinds = _antenna(_pcb(tmp_path, body + _part("C9", "39.5 2")))
+    assert "antenna_part" in kinds, json.dumps(payload["violations"])
+
+
 def test_a_wroom_1_value_on_a_1u_sized_footprint_keeps_the_guess(tmp_path):
     """#1188: netscore's U1 is a WROOM-1 value on a WROOM-1U footprint
     (courtyard 19.6 x 20.5). The datasheet's 25.5 mm outline doesn't fit a
