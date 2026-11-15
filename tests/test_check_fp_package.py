@@ -516,6 +516,24 @@ def test_generic_name_live_candidates(tmp_path):
     assert any("more than one" in k for k in facts["not_judged"])
 
 
+def test_smaf_body_is_read_so_a_1n4007_is_judged(tmp_path):
+    # flexgrid-v3 D4: JLC sells 1N4007 in DO-41, SMA, SMAF and SOD-123FL.
+    # SMAF was taken for an SMA coax jack, so the name was never judged.
+    assert pkgname.describe("SMAF")["family"] == "SMA"
+    assert pkgname.describe("SMA-F")["family"] is None  # the coax jack
+    rows = [row("C1", "1N4007", "DO-41"), row("C2", "1N4007", "SMA"),
+            row("C3", "1N4007", "SMAF"), row("C4", "1N4007", "SOD-123FL")]
+    # the fault: SOD-323 fits none of them
+    pcb = board(tmp_path, footprint("D4", "Diode_SMD:D_SOD-323", "1N4007"))
+    viols, facts = run(pcb, live=True, fetch=jlc(rows))
+    assert [v["kind"] for v in viols] == ["footprint_package_mismatch"]
+    assert "SOD-123FL" in viols[0]["msg"]
+    # its twin: SOD-123F is the SOD-123FL land, the one body that fits
+    pcb = board(tmp_path, footprint("D4", "Diode_SMD:D_SOD-123F", "1N4007"))
+    viols, facts = run(pcb, live=True, fetch=jlc(rows))
+    assert viols == [] and facts["judged"] == 1
+
+
 def test_value_cut_short_of_its_ordering_code_is_not_judged(tmp_path):
     # #1211: TPS2552D is TPS2552DBVR with its ending dropped, not TI's D
     # SOIC; the full code on the same footprint is judged and passes
