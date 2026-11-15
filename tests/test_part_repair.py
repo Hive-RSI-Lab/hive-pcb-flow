@@ -37,6 +37,7 @@ import env  # noqa: E402
 import geom  # noqa: E402
 import mazeroute  # noqa: E402
 import part_repair as pr  # noqa: E402
+import placelib  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 FIX = REPO / "tests" / "fixtures" / "stages" / "pd_trigger"
@@ -531,11 +532,21 @@ def _report(out) -> dict:
     return json.loads((out / "part_repair.json").read_text(encoding="utf-8"))
 
 
-def test_live_renumber_r6_applies_and_replays(kicad, tmp_path):
+def test_live_renumber_r6_applies_and_replays(kicad, tmp_path,
+                                              monkeypatch):
     pcb = _copy(tmp_path, "kicad")
     out = tmp_path / "out"
+    loads: list = []
+
+    def load(path):
+        loads.append(path)
+        return placelib.PlaceModel(path)
+
+    monkeypatch.setattr(pr, "placelib", SimpleNamespace(PlaceModel=load))
     assert pr.main(["--pcb", str(pcb), "--op", json.dumps(RENUMBER),
                     "--out", str(out), "--apply"]) == 0
+    # no clearance rule held to a footprint: no board model (#1163)
+    assert loads == []
     p = json.loads((out / "part_repair.json").read_text(encoding="utf-8"))
     assert p["status"] == "pass" and p["applied"]
     assert p["ripped"]["tracks"] > 0

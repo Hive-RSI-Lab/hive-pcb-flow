@@ -224,6 +224,19 @@
    "kind": "wick_via_in_pad",
    "verdict": "real",
    "reason": "open via in a pasted pad with no fill or cap: solder wicks down the barrel and starves the joint; spot-checked 13 against the board (vias untented, unfilled, inside the pad's paste)"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    82.805,
+    48.05
+   ],
+   "kind": "dfm_slot_size_preferred",
+   "verdict": "real",
+   "reason": "plated slots shorter than twice their width (JLC asks for length >= 2x width); the slots in the footprint are drawn that way"
   }
  ]
 }

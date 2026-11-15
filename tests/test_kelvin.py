@@ -53,7 +53,7 @@ def _board(tmp_path, body, name="k") -> Path:
     return p
 
 
-def _circuit(tap_x, neck_w=0.5, shunt="10m"):
+def _circuit(tap_x, neck_w=0.5, shunt="10m", minus="IN-"):
     """L1 -- neck on A -- R1 (shunt) -- 3 mm wide B to J1. U1 reads R1 through R2 (0R)
     on A, joined at x = tap_x (L1's pad at 30, R1's at 22), and directly on B."""
     return (_fp("R1", shunt, 20, 10, ("1", 2, "A", ""), ("2", -2, "B", ""))
@@ -63,7 +63,7 @@ def _circuit(tap_x, neck_w=0.5, shunt="10m"):
             + _seg("B", 6, 10, 18, 10, 3)
             + _fp("R2", "0R", 24, 20, ("1", 0, "A", ""), ("2", 2, "K", ""), size=1)
             + _seg("A", 24, 20, tap_x, 20, 0.2) + _seg("A", tap_x, 20, tap_x, 10, 0.2)
-            + _fp("U1", "INA240", 12, 20, ("1", 14, "K", "IN+"), ("2", 0, "B", "IN-"), size=1)
+            + _fp("U1", "INA240", 12, 20, ("1", 14, "K", "IN+"), ("2", 0, "B", minus), size=1)
             + _seg("K", 26, 20, 26, 20.5, 0.2)
             + _seg("B", 12, 20, 18, 20, 0.2) + _seg("B", 18, 20, 18, 10, 0.2))
 
@@ -117,6 +117,16 @@ def test_four_terminal_shunt_and_no_reader(tmp_path):
     alone = _fp("R1", "10m", 20, 10, ("1", 2, "A", ""), ("2", -2, "B", ""))
     vios, facts, left = _judge(_board(tmp_path, alone, "b"))
     assert not vios and not facts and "no amplifier" in left[0]
+
+
+def test_en_dash_minus_pin_is_a_sense_pin(tmp_path):
+    """INA228 symbols name the pin "IN–" (en dash): with pin names on the
+    pads it's still the - sense input, so a tap past the neck is caught."""
+    vios, facts, left = _judge(_board(tmp_path, _circuit(tap_x=30, minus="IN\u2013")))
+    assert [f["ic"] for f in facts] == ["U1"] and not left
+    assert vios and vios[0]["kind"] == "kelvin_error"
+    vios, facts, _ = _judge(_board(tmp_path, _circuit(tap_x=22, minus="IN\u2212"), "q"))
+    assert not vios and facts[0]["extra_mohm"] < 0.1
 
 
 def test_named_supply_pin_is_not_a_tap(tmp_path):

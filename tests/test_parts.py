@@ -237,6 +237,106 @@ def test_fp_verify_flags_missing_pin1(tmp_path, capsys):
     assert any(v["kind"] == "pin1_missing" for v in payload["violations"])
 
 
+
+# #1127: a depopulated A1 ball, and a pin1 that is prose, are not a missing
+# pin 1. Infineon S28HS512T's BGA-24: a 5 x 5 grid at 1.0 mm, A1 left off.
+def _bga24(tmp_path, mark: str = "", depop=("A1",)) -> Path:
+    pads = [f'  (pad "{r}{c}" smd circle (at {(c - 3) * 1.0:g} {(i - 2) * 1.0:g}) '
+            '(size 0.4 0.4) (layers "F.Cu" "F.Paste" "F.Mask"))'
+            for i, r in enumerate("ABCDE") for c in range(1, 6)
+            if f"{r}{c}" not in depop]
+    fp = tmp_path / "bga24.kicad_mod"
+    fp.write_text('(footprint "BGA-24_5x5" (layer "F.Cu")\n' + "\n".join(pads)
+                  + ("\n" + mark if mark else "") + "\n)\n", encoding="utf-8")
+    return fp
+
+
+def _dot(x, y):
+    return (f'  (fp_circle (center {x} {y}) (end {x + 0.1} {y}) '
+            '(stroke (width 0.1) (type solid)) (layer "F.SilkS"))')
+
+
+def _bga_ds(tmp_path, pin1="A1", pinout_a1=False):
+    pins = [{"pin": f"{r}{c}", "name": f"{r}{c}", "type": "passive"}
+            for r in "ABCDE" for c in range(1, 6) if pinout_a1 or (r, c) != ("A", 1)]
+    return write_ds(tmp_path, {"mpn": "S28HS512T", "pinout": pins,
+                               "land_pattern": {"pad_count": 24, "pin1": pin1}})
+
+
+def _fpv(tmp_path, capsys, fp, ds):
+    return run_main(fp_verify, ["--footprint", str(fp), "--datasheet-json",
+                                str(ds), "--svg", str(tmp_path / "o.svg")],
+                    tmp_path, capsys)
+
+
+def test_fp_verify_depopulated_a1_mark_at_corner(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys, _bga24(tmp_path, _dot(-2.8, -2.8)),
+                         _bga_ds(tmp_path))
+    assert code == 0, payload["violations"]
+    v, = [v for v in payload["violations"] if v["kind"].startswith("pin1")]
+    assert v["kind"] == "pin1_depopulated" and v["severity"] == "info"
+    assert v["site_mm"] == [-2.0, -2.0] and v["mark"] == "ok"
+
+
+def test_fp_verify_depopulated_a1_no_mark_is_info(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys, _bga24(tmp_path), _bga_ds(tmp_path))
+    assert code == 0
+    v, = [v for v in payload["violations"] if v["kind"].startswith("pin1")]
+    assert v["kind"] == "pin1_depopulated" and v["mark"] == "none"
+
+
+def test_fp_verify_depopulated_a1_mark_off_corner_warns(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys, _bga24(tmp_path, _dot(2.8, 2.8)),
+                         _bga_ds(tmp_path))
+    assert code == 0
+    v, = [v for v in payload["violations"] if v["kind"].startswith("pin1")]
+    assert v["kind"] == "pin1_mark_off_corner" and v["severity"] == "warning"
+    assert v["marks_off"] == [[2.8, 2.8]]
+
+
+def test_fp_verify_depopulated_corners_large_grid(tmp_path, capsys):
+    """OSD62x-PM class: all four corner balls left off; A1's site still found."""
+    fp = _bga24(tmp_path, _dot(-2.8, -2.8), depop=("A1", "A5", "E1", "E5"))
+    ds = write_ds(tmp_path, {"mpn": "OSD", "pinout": [{"pin": "B2", "type": "passive"}],
+                             "land_pattern": {"pad_count": 21, "pin1": "A1"}})
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0
+    v, = [v for v in payload["violations"] if v["kind"].startswith("pin1")]
+    assert v["kind"] == "pin1_depopulated" and v["site_mm"] == [-2.0, -2.0]
+
+
+def test_fp_verify_a1_in_pinout_but_no_pad_is_still_missing(tmp_path, capsys):
+    """The quiet twin: the record says ball A1 exists, so its absence is real."""
+    code, payload = _fpv(tmp_path, capsys, _bga24(tmp_path, _dot(-2.8, -2.8)),
+                         _bga_ds(tmp_path, pinout_a1=True))
+    assert code == 1
+    assert any(v["kind"] == "pin1_missing" for v in payload["violations"])
+
+
+def test_fp_verify_pin1_prose_not_judged(tmp_path, capsys):
+    """MGM240P class: the record's pin1 is a sentence, not a pad name."""
+    prose = "top-left in land pattern view (Fig 8.3); pins 1-14 left column"
+    ds = write_ds(tmp_path, {**CAP_DS, "land_pattern": {
+        **CAP_DS["land_pattern"], "pin1": prose}})
+    code, payload = _fpv(tmp_path, capsys, LEGACY_FP, ds)
+    assert code == 0
+    assert not any(v["kind"].startswith("pin1") for v in payload["violations"])
+    nj, = payload["not_judged"]
+    assert nj["check"] == "pin1" and "not a pad name" in nj["why"]
+
+
+def test_datasheet_validate_rejects_prose_pin1(tmp_path, capsys):
+    ds = {**CAP_DS, "land_pattern": {**CAP_DS["land_pattern"],
+                                     "pin1": "top-left in land pattern view"}}
+    code, payload = run_main(datasheet_extract, ["--validate", str(write_ds(tmp_path, ds))],
+                             tmp_path, capsys)
+    assert code == 1 and payload["errors"][0]["path"] == "land_pattern/pin1"
+    for name in ("1", "A1", "EP", "SH2"):
+        ds["land_pattern"]["pin1"] = name
+        code, _ = run_main(datasheet_extract, ["--validate", str(write_ds(tmp_path, ds))],
+                           tmp_path, capsys, name=name)
+        assert code == 0, name
+
 def _custom_pad(tmp_path, capsys, prims):
     """fp_verify one custom SMD pad with the given primitives."""
     fp = tmp_path / "m.kicad_mod"

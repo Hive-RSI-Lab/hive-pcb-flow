@@ -10,6 +10,12 @@ dimensions for human side-by-side review.
 Checks (land_pattern fields drive which run):
   - pad_count : # copper pads vs land_pattern.pad_count            (error)
   - pin1      : a copper pad numbered land_pattern.pin1 ('1')      (error)
+                when the record's pin1 ball (A1) is in neither the copper
+                nor its pinout on a ball grid, it is depopulated: the
+                grid's A1 site is placed from the ball names and the
+                pin-1 silk mark checked at that corner (info; a mark at
+                another corner is a warning). A pin1 that is prose, not a
+                pad name, goes to not_judged (#1127)
   - pad_pitch : nearest-neighbour pad spacing vs pitch_mm          (error)
   - row_spacing: centre-to-centre spacing of the two pad rows vs
                 row_spacing_mm, either axis of a quad              (error)
@@ -48,6 +54,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
+import statistics
 import sys
 from collections import Counter
 from pathlib import Path
@@ -62,6 +70,82 @@ SOURCE = "check.fp_verify"
 # JLC minimum annular ring (jlc_capabilities.yaml, the EDITS.md acceptance
 # bar); a THT pad below it cannot fab reliably whatever the datasheet says.
 ANNULUS_FLOOR_MM = 0.15
+
+
+# A pad or ball name: "1", "A1", "EP", "SH2". Anything with a space is prose
+# (an MGM240P record's "top-left in land pattern view (Fig 8.3); ...", #1127)
+PAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,7}$")
+BALL = re.compile(r"^([A-Z]{1,2})(\d{1,3})$")
+
+
+def _median_step(lines: dict) -> tuple[float, float] | None:
+    """Median per-index step along lines of (index, x, y); gaps divide out."""
+    steps = []
+    for line in lines.values():
+        line = sorted(line)
+        steps += [((x1 - x0) / (j - i), (y1 - y0) / (j - i))
+                  for (i, x0, y0), (j, x1, y1) in zip(line, line[1:]) if j != i]
+    if not steps:
+        return None
+    return (statistics.median(s[0] for s in steps),
+            statistics.median(s[1] for s in steps))
+
+
+def depopulated_pin1(path: Path, copper: list[fplib.Pad], pin1: str,
+                     ds: dict) -> dict | None:
+    """Pin 1 as a depopulated ball (#1127): the record names ball `pin1`
+    (A1), it is in neither the copper nor the record's pinout, and the pads
+    are a letter-row / number-column grid. Returns None when that doesn't
+    hold (a real pin1_missing), {"why"} when the grid gives no pin-1 site,
+    else {"at": the site from the grid's row and column steps, "marks":
+    "ok" | "wrong" | "none", "off": marks at another corner}. The marks are
+    cpl_verify's: a dot, small shape or corner chamfer on F.SilkS."""
+    want = BALL.match(pin1)
+    pinout = {str(p.get("pin")) for p in ds.get("pinout") or []}
+    if not want or pin1 in pinout:
+        return None
+    balls = [(m.group(1), int(m.group(2)), p) for p in copper
+             if (m := BALL.match(p.number or ""))]
+    rows = sorted({b[0] for b in balls}, key=lambda r: (len(r), r))
+    # a USB-C's A1..A12 / B1..B12 is two rows of pins, not a ball grid
+    if len(balls) < 6 or len(rows) < 3 or len(balls) < 0.8 * len(copper):
+        return None
+    if want.group(1) not in rows:
+        return {"why": f"ball {pin1} is in neither the copper nor the pinout, "
+                       f"and no ball is in its row {want.group(1)}, so the "
+                       "grid gives no site for it"}
+    rank = {r: i for i, r in enumerate(rows)}
+    by_row: dict = {}
+    by_col: dict = {}
+    for r, c, p in balls:
+        by_row.setdefault(r, []).append((c, p.center[0], p.center[1]))
+        by_col.setdefault(c, []).append((rank[r], p.center[0], p.center[1]))
+    across, down = _median_step(by_row), _median_step(by_col)
+    if not across or not down or min(math.hypot(*across), math.hypot(*down)) <= 0:
+        return {"why": f"ball {pin1} is depopulated, but the ball names give "
+                       "no row and column step to place its site"}
+    r1, c1 = rank[want.group(1)], int(want.group(2))
+    xs = [p.center[0] - (c - c1) * across[0] - (rank[r] - r1) * down[0]
+          for r, c, p in balls]
+    ys = [p.center[1] - (c - c1) * across[1] - (rank[r] - r1) * down[1]
+          for r, c, p in balls]
+    at = (round(statistics.median(xs), 3), round(statistics.median(ys), 3))
+    import cpl_verify as cv  # its pin-1 mark reader; only ball grids pay
+    import sexpdata
+    named = [p for p in copper if p.number]
+    box = (min(p.center[0] for p in named), min(p.center[1] for p in named),
+           max(p.center[0] for p in named), max(p.center[1] for p in named))
+    if len(cv._nearest_corners(*at, box)) > 2:
+        return {"why": f"ball {pin1} is depopulated, but its site {at} from "
+                       "the ball names is not at a corner of the pad field"}
+    root = sexpdata.loads(Path(path).read_text(encoding="utf-8", errors="replace"))
+    marks = [m for node in root[1:] if isinstance(node, list) and node
+             if (m := cv._silk_mark(node, "top", box))]
+    corner = cv._nearest_corners(*at, box)
+    off = [[round(x, 3), round(y, 3)] for x, y in marks
+           if not cv._nearest_corners(x, y, box) & corner]
+    return {"at": list(at), "marks": "none" if not marks else
+            "wrong" if off else "ok", "off": off}
 
 
 def _nearest_neighbour_pitch(centers: list[tuple[float, float]]) -> float | None:
@@ -136,12 +220,42 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               f"copper pad count {len(copper)} != datasheet {expected}",
               "pad_count", expected=expected, measured=len(copper))
 
-    # --- pin 1 present
+    # --- pin 1 present. A record's pin1 that is a sentence names no pad,
+    # and a depopulated A1 ball is absent by design (#1127): neither is a
+    # missing pin 1, so each is judged another way or listed in not_judged
     pin1 = str(land.get("pin1", "1"))
-    if not any(p.number == pin1 for p in copper):
-        nums = sorted({p.number for p in copper})
-        v("error", None, f"no copper pad numbered '{pin1}' (pads: {nums})",
-          "pin1_missing", expected_pin1=pin1)
+    not_judged: list[dict] = []
+    pin1_fact: dict | None = None
+    if not PAD_NAME.match(pin1):
+        not_judged.append({"check": "pin1", "why": (
+            f"the record's pin1 {pin1[:60]!r} is not a pad name, so there is "
+            "no pad to look for: re-extract it as the pad number and put the "
+            "description in notes")})
+    elif not any(p.number == pin1 for p in copper):
+        pin1_fact = depopulated_pin1(footprint, copper, pin1, ds)
+        if pin1_fact is None:
+            nums = sorted({p.number for p in copper})
+            v("error", None, f"no copper pad numbered '{pin1}' (pads: {nums})",
+              "pin1_missing", expected_pin1=pin1)
+        elif pin1_fact.get("why"):
+            not_judged.append({"check": "pin1", "why": pin1_fact["why"]})
+        elif pin1_fact["marks"] == "wrong":
+            v("warning", pin1_fact["at"],
+              f"ball {pin1} is depopulated, and a pin-1 mark sits at another "
+              f"corner than the grid's {pin1} site {pin1_fact['at']}: "
+              "move the mark to that corner",
+              "pin1_mark_off_corner", expected_pin1=pin1,
+              site_mm=pin1_fact["at"], marks_off=pin1_fact["off"])
+        else:
+            mark = ("its pin-1 mark is at that corner"
+                    if pin1_fact["marks"] == "ok" else
+                    "no pin-1 mark on F.SilkS to check against")
+            v("info", pin1_fact["at"],
+              f"ball {pin1} is depopulated (in neither the copper nor the "
+              f"record's pinout); the grid's {pin1} site is at "
+              f"{pin1_fact['at']}, and {mark}",
+              "pin1_depopulated", expected_pin1=pin1,
+              site_mm=pin1_fact["at"], mark=pin1_fact["marks"])
 
     # --- pitch
     if land.get("pitch_mm") is not None and measured_pitch is not None:
@@ -262,6 +376,8 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "has_silk": fp.has_layer_kind("SilkS"),
         "land_pattern": land,
         "mechanical": mech_fact or None,
+        "pin1": pin1_fact,
+        "not_judged": not_judged,
     }
     return viol, facts, fp
 

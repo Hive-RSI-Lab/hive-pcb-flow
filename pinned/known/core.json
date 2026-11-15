@@ -4408,6 +4408,344 @@
    "kind": "rating_no_datasheet_read",
    "verdict": "real",
    "reason": "true of the board: these parts' ratings are distributor attributes or package tables with no datasheet read (no PDF extraction in parts/); the fix is datasheet_extract --fetch on the board"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    176.58
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    177.43
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    178.28
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    179.13
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    179.98
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    180.83
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    176.58
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    177.42
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    178.28
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    179.12
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    179.98
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    180.82
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    176.58
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    177.43
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    178.28
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    179.13
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    179.98
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    180.83
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    176.58
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    177.42
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    178.28
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    179.12
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    179.98
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    40.687,
+    180.82
+   ],
+   "kind": "dfm_hole_to_track",
+   "verdict": "real",
+   "reason": "J1 (USB-C 16-pin through-hole) exports its 0.4 mm drills as zero-length plated slots; the F.Cu GND pour comes 0.252 mm from the drill wall (0.102 mm from the 0.7 mm pad), under JLC's 0.28 mm PTH hole-to-track"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    39.337,
+    181.68
+   ],
+   "kind": "dfm_hole_to_track_preferred",
+   "verdict": "real",
+   "reason": "hole-to-copper 0.300 mm at J1, under JLC's preferred 0.33 mm: a warning JLC's capability page states"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [],
+   "pos": [
+    84.337,
+    212.447
+   ],
+   "kind": "dfm_slot_size_preferred",
+   "verdict": "real",
+   "reason": "plated slots shorter than twice their width (JLC asks for length >= 2x width); the slots in the footprint are drawn that way"
   }
  ]
 }

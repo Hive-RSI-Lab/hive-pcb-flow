@@ -939,3 +939,92 @@ def test_i2c_off_board_bus_judged_with_capacitance_unknown(tmp_path):
     assert all(r["off_board"] == ["J5"] for r in facts["i2c"])
     assert any(u["what"] == "I2C bus capacitance off the board"
                and "J5" in u["why"] for u in unknowns)
+
+
+# --- #1232: cap_dc_bias warns on a rail's stated floor, not a flat 50 % ---
+
+def _cap_row(ref, c_nom, keeps_low, rail="+5V", vdc=6.0, rating=10.0,
+             diel="X5R"):
+    return {"ref": ref, "net": rail, "rail": rail, "vdc": vdc,
+            "rating_v": rating, "dielectric": diel,
+            "class2": diel.startswith("X"), "c_nom": c_nom,
+            "c_eff": c_nom * (keeps_low + 0.1),
+            "c_eff_low": c_nom * keeps_low, "fraction": keeps_low + 0.1,
+            "curve": "generic"}
+
+
+FLOOR_5V = {"+5V": {"min_c": 10e-6, "refs": [],
+                    "source": "constraints power[].min_cout"}}
+
+
+def test_cap_dc_bias_planted_floor_missed_warns():
+    # planted: two 10 uF parts keeping 40 % on the low curve give 8 uF,
+    # under the rail's stated 10 uF effective floor
+    vios, unknowns = [], []
+    sim_board.cap_dc_bias_findings(
+        [_cap_row("C1", 10e-6, 0.4), _cap_row("C2", 10e-6, 0.4)],
+        FLOOR_5V, vios, unknowns)
+    assert [(v["refs"], v["severity"]) for v in vios] == [
+        (["C1"], "warning"), (["C2"], "warning")]
+    assert "constraints power[].min_cout" in vios[0]["msg"]
+    assert vios[0]["floor_source"] == "constraints power[].min_cout"
+    assert unknowns == []
+
+
+def test_cap_dc_bias_quiet_twin_floor_held_is_info():
+    # quiet twin: the same parts and DC, three of them, hold the floor
+    # (12 uF low): the 50 % screen still notes them, never as a warning
+    vios, unknowns = [], []
+    sim_board.cap_dc_bias_findings(
+        [_cap_row(f"C{i}", 10e-6, 0.4) for i in (1, 2, 3)],
+        FLOOR_5V, vios, unknowns)
+    assert {v["severity"] for v in vios} == {"info"}
+    assert all("holds its" in v["msg"] for v in vios)
+    assert unknowns == []
+
+
+def test_cap_dc_bias_no_floor_is_info_and_not_judged():
+    # the old flat line warned here (50 % of rating, under half nominal);
+    # with no floor stated it is info and the rail is listed as not judged
+    vios, unknowns = [], []
+    sim_board.cap_dc_bias_findings(
+        [_cap_row("C1", 10e-6, 0.4), _cap_row("C2", 10e-6, 0.4),
+         _cap_row("C3", 1e-6, 0.9, vdc=1.0)], {}, vios, unknowns)
+    assert [(v["refs"], v["severity"]) for v in vios] == [
+        (["C1"], "info"), (["C2"], "info")]
+    (u,) = unknowns
+    assert u["what"] == "effective-capacitance floor" and "+5V" in u["why"]
+
+
+def test_cap_dc_bias_class1_and_unrated_parts_count_toward_the_floor():
+    # a C0G part adds to the rail's total but is never itself screened;
+    # with it the rail holds its floor, so no warning
+    vios, unknowns = [], []
+    rows = [_cap_row("C1", 10e-6, 0.4), _cap_row("C2", 10e-6, 0.4),
+            _cap_row("C3", 3e-6, 1.0, diel="C0G", rating=None)]
+    sim_board.cap_dc_bias_findings(rows, FLOOR_5V, vios, unknowns)
+    assert {v["severity"] for v in vios} == {"info"}
+    assert all(v["refs"] != ["C3"] for v in vios)
+
+
+def test_run_takes_the_floor_from_constraints(tmp_path, monkeypatch):
+    # run() hands analyze the rail floors mlcc_dcbias would use
+    net = write_net(tmp_path / "f.net", [
+        ("C1", "10u", "C_0805_2012Metric", {"1": ("+5V", ""),
+                                            "2": ("GND", "")})])
+    cons = tmp_path / "constraints.json"
+    cons.write_text(json.dumps({
+        "voltages": [{"net": "+5V", "voltage": 5.0}],
+        "power": [{"net": "+5V", "min_cout": 4.7e-6}]}), encoding="utf-8")
+    seen = {}
+
+    def stop(board, parts, rails, opts):
+        seen.update(opts)
+        raise sim_board.checklib.CheckError("stop")
+
+    monkeypatch.setattr(sim_board.env, "find_ngspice_dll",
+                        lambda: tmp_path / "libngspice.so")
+    monkeypatch.setattr(sim_board, "analyze", stop)
+    sim_board.main(["--net", str(net), "--constraints", str(cons),
+                    "--out", str(tmp_path / "r.json")])
+    assert seen["cap_floors"]["+5V"]["min_c"] == 4.7e-6

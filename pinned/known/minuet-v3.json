@@ -5747,8 +5747,8 @@
     93.715
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5760,8 +5760,8 @@
     81.426
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5872,8 +5872,8 @@
     84.287
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5885,8 +5885,8 @@
     83.93
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5898,8 +5898,8 @@
     71.555
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5911,8 +5911,8 @@
     71.516
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5924,8 +5924,8 @@
     62.025
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5937,8 +5937,8 @@
     63.664
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5950,8 +5950,8 @@
     62.569
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5963,8 +5963,8 @@
     65.831
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5976,8 +5976,8 @@
     64.736
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",
@@ -5989,8 +5989,8 @@
     49.211
    ],
    "kind": "dfm_silk_over_pad",
-   "verdict": "real",
-   "reason": "silk runs onto a pad's mask opening; the fab clips it, so that silk doesn't print as drawn"
+   "verdict": "false",
+   "reason": "main's gerber reader drew a rotated rectangle pad's mask opening as its axis-aligned bounding box; the true rotated opening (#454's RotRect fix) doesn't reach this silk"
   },
   {
    "gate": "dfm",

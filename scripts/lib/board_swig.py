@@ -424,8 +424,15 @@ def build(job: dict) -> dict:
         if "exclude_from_bom" in comp:
             fp.SetExcludedFromBOM(bool(comp["exclude_from_bom"]))
         board.Add(fp)
+        pins = comp.get("pins") or {}
         for pad in fp.Pads():
             want = netmap.get(f"{comp['ref']}.{pad.GetNumber()}")
+            # The schematic pin's name and type, as KiCad's own update writes
+            # them (#1220): the pin-name checks find pins by these.
+            pin = pins.get(pad.GetNumber())
+            if pin:
+                pad.SetPinFunction(pin[0])
+                pad.SetPinType(pin[1])
             # `unconnected-(...)` is a name the NETLIST EXPORTER invents for a
             # pin the schematic leaves unconnected, and whether the PCB must
             # carry it is NOT uniform: a flat schematic wants it, a hierarchical

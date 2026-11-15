@@ -679,6 +679,12 @@ def parse_bounds(value, param: str, scale: float, rec: bool = False,
             return None, None   # a sub-volt single figure is a characteristic
         if v < 0:
             return v, None      # P-channel figures print negative: a floor
+        # 'VCC supply (min -0.5)' = 6.5: the value is the max, the
+        # parenthesis the table's own min column. A positive min (a
+        # breakdown's) is no limit and falls through to the rule below.
+        m = re.search(r"\(MIN\s+(-\d+(?:\.\d+)?|0(?:\.0+)?)\)", p)
+        if m:
+            return float(m.group(1)) * scale, v
         if re.search(r"(?<![A-Z])MIN(?![A-Z])", p):
             return (v, None) if v <= 0 or rec else (None, None)
         if re.search(r"(?<![A-Z])MAX(?![A-Z])", p):
@@ -743,6 +749,13 @@ def classify_row(param: str, idx: dict, pinout: list[dict]):
         if not hits and len(tok) > 1 and tok[0] in "VI":
             hits = idx.get(tok[1:])
         if not hits and len(tok) == 3 and tok[0] == "V" \
+                and idx.get(tok[1]) and idx.get(tok[2]):
+            hits, ref = idx[tok[1]], idx[tok[2]][0]["name"]
+        # JEDEC's third-terminal suffix: VDSS / VGSS (gate or drain shorted
+        # to source), VCEO / VCBO / VEBO (third terminal open) name the same
+        # two pins as VDS / VGS / VCE.
+        if not hits and len(tok) == 4 and tok[0] == "V" \
+                and tok[1] != tok[2] and (tok[3] == "O" or tok[3] == tok[2]) \
                 and idx.get(tok[1]) and idx.get(tok[2]):
             hits, ref = idx[tok[1]], idx[tok[2]][0]["name"]
         for h in hits or []:

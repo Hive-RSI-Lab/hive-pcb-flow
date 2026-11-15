@@ -250,7 +250,14 @@ DATASHEET_SCHEMA: dict = {
                                      "entry direction in footprint-local "
                                      "coords (KiCad y down)"},
                 "pin1": {"type": "string",
-                         "description": "pad number that is pin 1 (default '1')"},
+                         # a pad or ball name, never prose: fp_verify looks
+                         # for a pad of this name (#1127, an MGM240P record's
+                         # "top-left in land pattern view ...")
+                         "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]{0,7}$",
+                         "description": "pad or ball name that is pin 1 "
+                         "(default '1'; 'A1' on a ball grid, even when "
+                         "that ball is depopulated). A name, not a "
+                         "description: put where pin 1 is in notes"},
                 "notes": {"type": "string"},
             },
         },

@@ -161,7 +161,9 @@ weighed like any other report:
   resistors (sqrt(P x R) capped at the max working voltage), Murata GRM
   and Samsung CL MLCCs (checked against the part number's voltage code),
   Murata BLM beads (current and temperature only: a bead's datasheet gives
-  no voltage, so it stays unrated). A figure that disagrees with the part
+  no voltage, so it stays unrated), JST PH headers (the one multi-pin
+  record filled: voltage between neighbouring contacts, current on every
+  contact, mounting pads left out). A figure that disagrees with the part
   number or the record's abs_max is reported, not written; rows written by
   hand are kept, and a rerun changes nothing. Without `--write` it only
   reports. Then rerun check_ratings: the filled parts leave rating_unrated.

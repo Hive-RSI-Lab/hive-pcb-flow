@@ -76,6 +76,13 @@ class Footprint:
     # places; constraints placement.pad_margin_mm lowers it for an imported
     # layout (hw-lab eda-crossover: SparkFun's 0402s 0.2 mm pad to pad)
     pad_margin: float = 0.25
+    # (own side, far side) courtyards as KiCad builds them for a rule's
+    # courtyard test (#1146), local frame: each piece kept, arcs and
+    # curves read, shrunk 0.005 mm; None where nothing is drawn. A side
+    # flagged in courtyard_unreadable holds something _courtyard_read did
+    # not build as KiCad would, and a test against it cannot be answered.
+    courtyard_exact: tuple = (None, None)
+    courtyard_unreadable: tuple[bool, bool] = (False, False)
 
     # -- derived, local frame -------------------------------------------
     def _pad_box_local(self) -> Polygon | None:
@@ -283,6 +290,12 @@ class Footprint:
         if self.courtyard_local is not None:
             self.courtyard_local = affinity.scale(
                 self.courtyard_local, xfact=1.0, yfact=-1.0, origin=(0, 0))
+        # the flip takes the own side's courtyard to the new own side, so
+        # the (own, far) order stays
+        self.courtyard_exact = tuple(
+            None if g is None else affinity.scale(
+                g, xfact=1.0, yfact=-1.0, origin=(0, 0))
+            for g in self.courtyard_exact)
 
     @property
     def is_movable(self) -> bool:
@@ -320,6 +333,9 @@ class PlaceModel:
         self.outline: Polygon = self.bg.outline
         self.rule_areas = self.bg.rule_areas
         self.footprints: dict[str, Footprint] = {}
+        # refs carried by more than one footprint: footprints keeps the
+        # last, where KiCad's rule tests match every one (#1146)
+        self.dup_refs: set[str] = set()
         self._parse(self.path)
 
     # ------------------------------------------------------------ parsing
@@ -329,6 +345,8 @@ class PlaceModel:
         for fp in _kids(tree, "footprint"):
             f = self._parse_fp(fp)
             if f is not None:
+                if f.ref in self.footprints:
+                    self.dup_refs.add(f.ref)
                 self.footprints[f.ref] = f
 
     def _parse_fp(self, fp) -> Footprint | None:
@@ -384,12 +402,16 @@ class PlaceModel:
                               (sz[0] if sz else 0.0, sz[1] if len(sz) > 1 else 0.0),
                               through, rot=(pad_abs - angle) % 360.0))
 
-        want = "B.CrtYd" if side == "back" else "F.CrtYd"
-        courtyard = _courtyard_poly(fp, want)
+        own, far = ("B.CrtYd", "F.CrtYd") if side == "back" else \
+            ("F.CrtYd", "B.CrtYd")
+        courtyard, own_exact, own_bad = _courtyard_read(fp, own)
+        _, far_exact, far_bad = _courtyard_read(fp, far)
         return Footprint(ref=ref, fpid=fpid, pos=pos, angle=angle, side=side,
                          attrs=frozenset(attrs), locked=locked, pads=pads,
                          courtyard_local=courtyard,
-                         courtyard_missing=courtyard is None)
+                         courtyard_missing=courtyard is None,
+                         courtyard_exact=(own_exact, far_exact),
+                         courtyard_unreadable=(own_bad, far_bad))
 
     # ------------------------------------------------------------ queries
     def movable(self) -> list[Footprint]:
@@ -407,34 +429,118 @@ class PlaceModel:
 
 def _courtyard_poly(fp_node, layer_name: str) -> Polygon | None:
     """Union of courtyard graphics on layer_name, in the footprint-local frame."""
-    areas, lines = [], []
-    for head in ("fp_rect", "fp_line", "fp_circle", "fp_poly", "fp_arc"):
+    return _courtyard_read(fp_node, layer_name)[0]
+
+
+def _bezier_points(p0, p1, p2, p3, n: int = 16) -> list[tuple[float, float]]:
+    """Sample a cubic Bezier (an fp_curve: start, two control points, end)
+    at n + 1 points, both ends included."""
+    ctrl = (p0, p1, p2, p3)
+    out = []
+    for i in range(n + 1):
+        t = i / n
+        u = 1.0 - t
+        w = (u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t)
+        out.append((sum(k * p[0] for k, p in zip(w, ctrl)),
+                    sum(k * p[1] for k, p in zip(w, ctrl))))
+    out[0], out[-1] = tuple(p0), tuple(p3)
+    return out
+
+
+# KiCad builds a courtyard to 0.005 mm and then shrinks it that much, so
+# that courtyards which only touch do not collide (BuildCourtyardCaches)
+COURTYARD_MAX_ERROR = 0.005
+# how far a courtyard arc's chords may stray inside it, as the rule test
+# reads it: well inside KiCad's own 0.005 mm
+COURTYARD_ARC_TOL = 0.001
+
+
+def _courtyard_read(fp_node, layer_name: str):
+    """(placement, exact, unreadable) for the graphics on layer_name, in
+    the footprint-local frame.
+
+    placement is what placement has always read (_courtyard_poly): closed
+    shapes and the outlines that lines and arcs close, united; the hull of
+    the lines when nothing closes; the hull of disjoint pieces. fp_curve
+    and the arcs of an fp_poly are not read, and a graphic too short to
+    read adds nothing.
+
+    exact is the courtyard as KiCad builds it for a rule's courtyard test
+    (#1146): the same pieces with fp_curve and fp_poly arcs read, arcs to
+    within COURTYARD_ARC_TOL, each disjoint piece kept, shrunk
+    COURTYARD_MAX_ERROR; None when nothing is drawn there.
+
+    unreadable is True when something is drawn that exact may not show as
+    KiCad builds it, so a test against it cannot be answered: a graphic
+    that cannot be read, a degenerate one, lines that do not all close
+    into the outline, or pieces that meet (KiCad may read one inside
+    another as a hole)."""
+    areas, lines = [], []           # placement, as always read
+    closed, opened = [], []         # exact
+    bad = False
+    for head in ("fp_rect", "fp_line", "fp_circle", "fp_poly", "fp_arc",
+                 "fp_curve"):
         for g in _kids(fp_node, head):
             lay = _kid(g, "layer")
             if lay is None or not _strs(lay) or _strs(lay)[0] != layer_name:
                 continue
-            if head == "fp_rect":
-                s, e = _nums(_kid(g, "start")), _nums(_kid(g, "end"))
-                areas.append(box(min(s[0], e[0]), min(s[1], e[1]),
-                                 max(s[0], e[0]), max(s[1], e[1])))
-            elif head == "fp_circle":
-                c, e = _nums(_kid(g, "center")), _nums(_kid(g, "end"))
-                r = math.hypot(e[0] - c[0], e[1] - c[1])
-                if r > 0:
-                    areas.append(Point(c[0], c[1]).buffer(r, quad_segs=16))
-            elif head == "fp_poly":
-                pts = _pts(_kid(g, "pts"))
-                if len(pts) >= 3:
-                    areas.append(Polygon(pts))
-            elif head == "fp_line":
-                s, e = _nums(_kid(g, "start")), _nums(_kid(g, "end"))
-                lines.append(LineString([(s[0], s[1]), (e[0], e[1])]))
-            else:  # fp_arc
-                s = _nums(_kid(g, "start"))
-                m = _nums(_kid(g, "mid"))
-                e = _nums(_kid(g, "end"))
-                pts = geom._arc_points((s[0], s[1]), (m[0], m[1]), (e[0], e[1]))
-                lines.append(LineString(pts))
+            try:
+                if head == "fp_rect":
+                    s, e = _nums(_kid(g, "start")), _nums(_kid(g, "end"))
+                    r = box(min(s[0], e[0]), min(s[1], e[1]),
+                            max(s[0], e[0]), max(s[1], e[1]))
+                    areas.append(r)
+                    if r.area > 0:
+                        closed.append(r)
+                    else:
+                        bad = True
+                elif head == "fp_circle":
+                    c, e = _nums(_kid(g, "center")), _nums(_kid(g, "end"))
+                    r = math.hypot(e[0] - c[0], e[1] - c[1])
+                    if r > 0:
+                        disc = Point(c[0], c[1])
+                        areas.append(disc.buffer(r, quad_segs=16))
+                        # finer for the rule test: within 0.005 mm of the
+                        # circle up to 66 mm radius
+                        closed.append(disc.buffer(r, quad_segs=64))
+                    else:
+                        bad = True
+                elif head == "fp_poly":
+                    node = _kid(g, "pts")
+                    pts = _pts(node)
+                    if len(pts) >= 3:
+                        areas.append(Polygon(pts))
+                    full = _pts(node, arcs=True, tol=COURTYARD_ARC_TOL)
+                    poly = Polygon(full) if len(full) >= 3 else None
+                    if poly is not None and poly.is_valid and poly.area > 0:
+                        closed.append(poly)
+                    else:
+                        bad = True
+                elif head == "fp_line":
+                    s, e = _nums(_kid(g, "start")), _nums(_kid(g, "end"))
+                    seg = LineString([(s[0], s[1]), (e[0], e[1])])
+                    lines.append(seg)
+                    opened.append(seg)
+                elif head == "fp_arc":
+                    s = _nums(_kid(g, "start"))
+                    m = _nums(_kid(g, "mid"))
+                    e = _nums(_kid(g, "end"))
+                    ends = ((s[0], s[1]), (m[0], m[1]), (e[0], e[1]))
+                    lines.append(LineString(geom._arc_points(*ends)))
+                    # finer for the rule test
+                    opened.append(LineString(geom._arc_points(
+                        *ends, n=64, tol=COURTYARD_ARC_TOL)))
+                else:  # fp_curve
+                    pts = _pts(_kid(g, "pts"))
+                    if len(pts) == 4:
+                        opened.append(LineString(_bezier_points(*pts, n=64)))
+                    else:
+                        bad = True
+            except (TypeError, IndexError, ValueError):
+                # a missing or short coordinate node (a KiCad 5 arc has no
+                # mid): the graphic cannot be read
+                bad = True
+
     if lines:
         rings = list(polygonize(unary_union(lines)))
         if rings:
@@ -443,12 +549,42 @@ def _courtyard_poly(fp_node, layer_name: str) -> Polygon | None:
             hull = unary_union(lines).convex_hull
             if hull.geom_type == "Polygon" and hull.area > EPS_AREA:
                 areas.append(hull)
-    if not areas:
-        return None
-    u = unary_union(areas)
-    if u.geom_type == "MultiPolygon":  # disjoint courtyard pieces: take hull
-        u = u.convex_hull
-    return u if (u.geom_type == "Polygon" and u.area > EPS_AREA) else None
+    placement = None
+    if areas:
+        u = unary_union(areas)
+        if u.geom_type == "MultiPolygon":  # disjoint courtyard pieces: hull
+            u = u.convex_hull
+        if u.geom_type == "Polygon" and u.area > EPS_AREA:
+            placement = u
+
+    exact, bad = _courtyard_exact(closed, opened, bad)
+    return placement, exact, bad
+
+
+def _courtyard_exact(closed: list, opened: list, bad: bool):
+    """(exact, unreadable) from the closed shapes and the open lines of
+    one courtyard layer (_courtyard_read)."""
+    pieces = list(closed)
+    if opened:
+        web = unary_union(opened)
+        pieces += [f for f in polygonize(web) if f.area > 0]
+    if not pieces:
+        return None, bad or bool(opened)
+    for i, a in enumerate(pieces):
+        if any(a.intersects(b) for b in pieces[i + 1:]):
+            bad = True      # meeting pieces: KiCad may make one a hole
+            break
+    u = unary_union(pieces)
+    if opened:
+        # every line must lie on the outline built: KiCad reads a dangling
+        # or an inner line as a malformed courtyard
+        edge = u.boundary.buffer(1e-4)
+        if not unary_union(opened).difference(edge).is_empty:
+            bad = True
+    exact = u.buffer(-COURTYARD_MAX_ERROR, join_style="mitre")
+    if exact.is_empty:
+        return None, True
+    return exact, bad
 
 
 # ---------------------------------------------------------------- net classes

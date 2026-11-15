@@ -179,3 +179,66 @@ def test_filled_bead_still_unrated_for_voltage(tmp_path):
     rec = rf.fill(_rec(BLM), BLM_PAGES)["record"]
     assert any(k == "rating_unrated" for k, _ in
                _kinds(_ws(tmp_path, "+5V", rec)))
+
+
+# ------------------------------------------------- a JST PH connector
+
+PH = "S2B-PH-SM4-TB"
+PH_PINS = [{"pin": "1", "name": "1", "type": "passive"},
+           {"pin": "2", "name": "2", "type": "passive"},
+           {"pin": "MP1", "name": "MP", "type": "passive"},
+           {"pin": "MP2", "name": "MP", "type": "passive"}]
+PH_TEXT = ("Specifications\n Current rating: 2 AɹAC/DC ïAWG #24ʣ\n"
+           " Voltage rating: 100 VɹAC/DC\n Temperature range: ô40ˆ "
+           "to +105ˆ (including temperature rise)")
+# the catalog's PDF text: every glyph 0x1F below its letter
+PH_PAGES = [{"page": 0, "text": "".join(
+    chr(ord(c) - 0x1F) if 0x20 <= ord(c) <= 0x7E else c for c in PH_TEXT)}]
+
+
+def _ph(**kw) -> dict:
+    return _rec(PH, pinout=[dict(p) for p in PH_PINS]) | kw
+
+
+def test_jst_ph_rates_its_contacts_not_its_mounting_pads():
+    rep = rf.fill(_ph(), PH_PAGES)
+    rows = rep["record"]["pin_ratings"]
+    volt = [r for r in rows if r["kind"] == "voltage"]
+    assert [(r["pins"], r["ref"], r["min"], r["max"]) for r in volt] == \
+        [(["1"], "2", -100.0, 100.0)]
+    cur = [r for r in rows if r["kind"] == "current"]
+    assert cur[0]["pins"] == ["1", "2"] and cur[0]["max"] == 2.0
+    assert "AWG #24" in cur[0]["source"] and "p1" in volt[0]["source"]
+    assert rep["record"]["operating_temp_c"] == [-40.0, 105.0]
+
+
+def test_jst_ph_ten_contacts_rate_each_neighbour_pair():
+    pins = [{"pin": str(i), "name": f"P{i}", "type": "passive"}
+            for i in range(1, 11)] + PH_PINS[2:]
+    rec = _rec("S10B-PH-SM4-TB(LF)(SN)", pinout=pins)
+    rows = rf.fill(rec, PH_PAGES)["record"]["pin_ratings"]
+    assert [(r["pins"][0], r["ref"]) for r in rows if r["kind"] == "voltage"] \
+        == [(str(i), f"P{i + 1}") for i in range(1, 10)]
+
+
+def test_a_multi_pin_part_that_is_no_known_connector_is_skipped():
+    rep = rf.fill(_rec("XYZ-4P", pinout=[dict(p) for p in PH_PINS]), PH_PAGES)
+    assert rep["filled"] == [] and "skipped" in rep["notes"][0]
+
+
+def test_pdf_for_finds_a_sanitized_file_name(tmp_path):
+    (tmp_path / "datasheets").mkdir()
+    pdf = tmp_path / "datasheets" / "12401610E4-2A.pdf"
+    pdf.write_bytes(b"%PDF")
+    assert rf.pdf_for({"mpn": "12401610E4#2A"}, tmp_path) == pdf
+
+
+def test_filled_connector_over_its_rating_is_caught_and_the_twin_is_quiet(
+        tmp_path):
+    # unfilled: only unrated
+    assert [k for k, _ in _kinds(_ws(tmp_path / "a", "+150V", _ph()))] == \
+        ["rating_unrated"]
+    rec = rf.fill(_ph(), PH_PAGES)["record"]
+    assert ("rating_over_voltage", "error") in \
+        _kinds(_ws(tmp_path / "b", "+150V", rec))
+    assert _kinds(_ws(tmp_path / "c", "+12V", rec)) == []
