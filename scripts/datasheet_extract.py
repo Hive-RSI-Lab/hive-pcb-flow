@@ -230,6 +230,25 @@ DATASHEET_SCHEMA: dict = {
                 "package": {"type": "string"},
                 "pad_count": {"type": "integer", "minimum": 1},
                 "pitch_mm": {"type": "number", "exclusiveMinimum": 0},
+                # a footprint with more than one pitch (a micro-SD socket's
+                # contacts and its card-detect pads): each run of pads is
+                # judged at its own pitch, the rest at pitch_mm (#1066)
+                "pitches_mm": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["pads", "pitch_mm"],
+                        "properties": {
+                            "pads": {"oneOf": [
+                                {"type": "string", "minLength": 1},
+                                {"type": "array", "minItems": 2,
+                                 "items": {"type": "string"}}]},
+                            "pitch_mm": {"type": "number",
+                                         "exclusiveMinimum": 0},
+                        },
+                    },
+                },
                 "pad_size_mm": {
                     "type": "array", "items": {"type": "number", "minimum": 0},
                     "minItems": 2, "maxItems": 2,
