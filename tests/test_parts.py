@@ -237,6 +237,45 @@ def test_fp_verify_flags_missing_pin1(tmp_path, capsys):
     assert any(v["kind"] == "pin1_missing" for v in payload["violations"])
 
 
+def _custom_pad(tmp_path, capsys, prims):
+    """fp_verify one custom SMD pad with the given primitives."""
+    fp = tmp_path / "m.kicad_mod"
+    fp.write_text(
+        '(footprint "M" (layer "F.Cu")\n'
+        '  (fp_rect (start -1 -1) (end 1 1) (layer "F.CrtYd") (width 0.05))\n'
+        '  (pad "1" smd custom (at 0 0 0) (size 0.3 0.3) (layers "F.Cu" "F.Mask")\n'
+        f'    (primitives {prims})))\n', encoding="utf-8")
+    ds = write_ds(tmp_path, {"mpn": "X", "package": "M",
+                             "land_pattern": {"package": "M"}})
+    code, payload = run_main(
+        fp_verify, ["--footprint", str(fp), "--datasheet-json", str(ds),
+                    "--svg", str(tmp_path / "o.svg")], tmp_path, capsys)
+    return code, [v for v in payload["violations"]
+                  if v["kind"] == "stroked_pad_primitive"]
+
+
+def test_fp_verify_warns_stroked_pad_ring(tmp_path, capsys):
+    # #1133: the T5848 GND ring, r 0.6625 with a 0.3 stroke; DRC sees only r 0.6625
+    code, w = _custom_pad(tmp_path, capsys,
+                          "(gr_circle (center 0 0) (end 0.6625 0) (width 0.3) (fill no))")
+    assert code == 0 and len(w) == 1 and w[0]["severity"] == "warning"
+    assert w[0]["primitives"] == ["gr_circle (width 0.3)"]
+    # the new stroke form, and a poly and a rect with no fill token, warn too
+    _, w = _custom_pad(tmp_path, capsys,
+                       "(gr_rect (start -0.5 -0.5) (end 0.5 0.5) (stroke (width 0.2)))"
+                       " (gr_poly (pts (xy 0 0) (xy 1 0) (xy 0 1)) (width 0.1))")
+    assert w[0]["primitives"] == ["gr_rect (width 0.2)", "gr_poly (width 0.1)"]
+
+
+def test_fp_verify_filled_or_open_pad_primitives_pass(tmp_path, capsys):
+    # the fix (filled polys), a filled circle, a zero-width outline and a line
+    for prims in ("(gr_poly (pts (xy 0 0) (xy 1 0) (xy 0 1)) (width 0) (fill yes))",
+                  "(gr_circle (center 0 0) (end 0.5 0) (width 0.2) (fill solid))",
+                  "(gr_circle (center 0 0) (end 0.5 0) (width 0) (fill no))",
+                  "(gr_line (start 0 0) (end 1 0) (width 0.2))"):
+        assert _custom_pad(tmp_path, capsys, prims) == (0, [])
+
+
 def test_fp_verify_courtyard_is_warning_not_failure(tmp_path, capsys):
     text = LEGACY_FP.read_text(encoding="utf-8")
     stripped = "\n".join(l for l in text.splitlines() if "F.CrtYd" not in l)

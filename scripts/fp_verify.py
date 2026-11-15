@@ -19,6 +19,11 @@ Checks (land_pattern fields drive which run):
   - annulus   : THT min over axes of (size-drill)/2 vs the 0.15 mm JLC floor,  (error)
                 and vs land_pattern drill_mm/annulus_mm when given
   - courtyard : a courtyard layer is present                       (warning)
+  - stroked_pad_primitive: a custom pad's closed primitive (gr_circle,
+                gr_poly, gr_rect) drawn with a stroke and no fill   (warning)
+                KiCad 10.0.6's DRC and connectivity see only its centre line
+                while the Gerber plots the full ring (#1133): a short on the
+                ring passes drc_routed and a real connection reads unconnected
   - mechanical: with the extraction's `mechanical` block, every lead fits
                 its hole and every locating post has one
                 (check_connector_fit's tht_pin_tight, post_holes_missing ...)
@@ -223,6 +228,19 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         local = ccf.LocalFrame(fp.name)
         used = ccf.check_pins(fp.name, local, fp.pads, mech, viol, mech_fact)
         ccf.check_posts(fp.name, local, fp.pads, mech, used, viol, mech_fact)
+
+    # --- stroked closed primitives in a custom pad (warning): KiCad 10.0.6's
+    # DRC and connectivity read only the stroke's centre line, the Gerber the
+    # whole ring, so DRC can miss a short on it (#1133, a TDK T5848 GND ring)
+    for p in copper:
+        if p.stroked_prims:
+            v("warning", p.center,
+              f"pad {p.number}: custom-pad primitive(s) {', '.join(p.stroked_prims)} "
+              "drawn stroked, not filled: KiCad's DRC and connectivity see only the "
+              "centre line, the Gerber the full ring, so a short on the ring can pass "
+              "DRC. Rebuild it as filled polygons (a ring: two filled gr_poly "
+              "half-annuli overlapping at the seams)",
+              "stroked_pad_primitive", primitives=p.stroked_prims)
 
     # --- courtyard presence (warning; LEARNINGS: easyeda2kicad sometimes omits it)
     if not fp.has_courtyard:

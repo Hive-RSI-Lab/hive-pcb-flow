@@ -67,6 +67,10 @@ class Pad:
     # drill (x, y) in the pad's own frame (a round drill is (d, d)); size and
     # drill both rotate with the pad, so axis i of one pairs with axis i of the other
     drill_xy: tuple[float, float] | None = None
+    # custom-pad primitives that are closed shapes drawn stroked, not filled:
+    # "gr_circle (width 0.3)". The Gerber and lib/geom.py see the ring the stroke
+    # draws; KiCad 10.0.6's DRC and connectivity see only its centre line (#1133)
+    stroked_prims: list[str] = field(default_factory=list)
 
     @property
     def center(self) -> tuple[float, float]:
@@ -100,6 +104,30 @@ class Footprint:
         return self.has_layer_kind("CrtYd")
 
 
+_CLOSED_PRIMS = ("gr_circle", "gr_poly", "gr_rect")
+
+
+def _stroked_prims(node) -> list[str]:
+    """Closed primitives of a custom pad drawn with a stroke and no fill, as
+    "gr_circle (width 0.3)". Filled means (fill yes|solid|true), the rule
+    lib/geom.py's _copper_prim uses to build the same copper."""
+    prims = _kid(node, "primitives")
+    out = []
+    for n in (prims[1:] if prims is not None else []):
+        if not _is_node(n) or _head(n) not in _CLOSED_PRIMS:
+            continue
+        wn = _kid(n, "width")
+        if wn is None and _kid(n, "stroke") is not None:
+            wn = _kid(_kid(n, "stroke"), "width")
+        w = (_nums(wn) or [0.0])[0] if wn is not None else 0.0
+        fill = _kid(n, "fill")
+        filled = fill is not None and any(
+            str(_tok(x)) in ("yes", "solid", "true") for x in fill[1:])
+        if w > 0 and not filled:
+            out.append(f"{_head(n)} (width {w:g})")
+    return out
+
+
 def _parse_pad(node) -> Pad | None:
     # (pad NUMBER TYPE SHAPE ...)
     if len(node) < 4:
@@ -124,7 +152,8 @@ def _parse_pad(node) -> Pad | None:
                at=(an[0], an[1], rot), size=(sn[0], sn[1]),
                layers=[str(_tok(t)) for t in (_kid(node, "layers") or [None])[1:]],
                drill=max(dn) if dn else None,
-               drill_xy=((dn[0], dn[1] if len(dn) > 1 else dn[0]) if dn else None))
+               drill_xy=((dn[0], dn[1] if len(dn) > 1 else dn[0]) if dn else None),
+               stroked_prims=_stroked_prims(node))
 
 
 def _strip_lib_prefix(name: str) -> str:
