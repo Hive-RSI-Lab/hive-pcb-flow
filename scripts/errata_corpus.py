@@ -208,8 +208,8 @@ def matches(violation: dict, catch: dict) -> bool:
 KICAD8_PCB = 20240108
 
 
-def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
-    """The board a check reads: the revision's own file, or, for one older
+def _upgraded(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The revision's own file, or, for one older
     than KiCad 8 (a `module`-era file, which geom reads no footprints from,
     or a KiCad 6/7 one, whose references are `fp_text` that placelib and
     check_connector_fit skip every footprint over, #1123), a copy `kicad-cli pcb upgrade` brought to the current format, as intake
@@ -242,6 +242,87 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
                          f"{(r.stderr or r.stdout).strip()[-200:]}")
     stamp.write_text(digest)
     return dest
+
+
+def _netlist(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The netlist of the revision's schematic, in the run dir: kicad-cli's
+    export, or for a KiCad 4/5 schematic (which kicad-cli exports empty)
+    legacy_net's. Kept while the schematic is unchanged."""
+    import hashlib
+    sys.path.insert(0, str(SCRIPTS / "lib"))
+    import env
+    import legacy_net
+    sch = repo / b[rev]["sch"]
+    net = empty.parent / f"{rev}.net"
+    stamp = net.with_suffix(".net.src")
+    digest = hashlib.sha256(str(sch).encode() + sch.read_bytes()).hexdigest()
+    if net.is_file() and stamp.is_file() and stamp.read_text() == digest:
+        return net
+    stamp.unlink(missing_ok=True)
+    if legacy_net.is_legacy(sch):
+        r = legacy_net.netlist(sch, net, pcb=repo / b[rev]["pcb"])
+        if r["status"] != "pass":
+            raise SystemExit(f"{b['id']} {rev}: {r['error']}")
+    else:
+        cli = env.find_kicad_cli()
+        if not cli:
+            raise SystemExit(f"{b['id']} {rev}: a netlist needs kicad-cli "
+                             "(bin/hwde env)")
+        subprocess.run([str(cli), "sch", "export", "netlist", "-o", str(net),
+                        str(sch)], capture_output=True, text=True,
+                       timeout=900, check=True)
+    stamp.write_text(digest)
+    return net
+
+
+def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
+    """The board a check reads: the revision's file (brought to KiCad 8 by
+    _upgraded where older), with the pin names its own schematic gives the
+    pads that carry none, as pin_backfill gives a board board_init made
+    before #1220. Every board gets the same step, from its own schematic
+    only: pin_backfill names a pad only where the board's net agrees with
+    the schematic's, and writes nothing when under half agree. The named
+    copy sits in the run dir (`{rev}-pins.kicad_pcb`, with what pin_backfill
+    said in `{rev}-pins.json`), nothing is written into the checkout, and it
+    is reused while the board, the schematic and pin_backfill are unchanged.
+    A revision with no schematic, or one whose netlist will not export, is
+    read without the names."""
+    import hashlib
+    base = _upgraded(b, rev, repo, empty)
+    if not b[rev].get("sch") or not (repo / b[rev]["sch"]).is_file():
+        return base
+    dest = empty.parent / f"{rev}-pins.kicad_pcb"
+    report = empty.parent / f"{rev}-pins.json"
+    stamp = dest.with_suffix(".src")
+    sch = repo / b[rev]["sch"]
+    digest = hashlib.sha256(
+        base.read_bytes() + b"\0" + str(sch).encode() + sch.read_bytes()
+        + b"\0" + (SCRIPTS / "pin_backfill.py").read_bytes()).hexdigest()
+    if stamp.is_file() and stamp.read_text().split("\n")[0] == digest:
+        return dest if stamp.read_text().split("\n")[1:2] == ["written"] \
+            else base
+    stamp.unlink(missing_ok=True)
+    dest.unlink(missing_ok=True)
+    try:
+        net = _netlist(b, rev, repo, empty)
+    except (SystemExit, subprocess.SubprocessError, OSError) as e:
+        report.write_text(json.dumps({"status": "no_netlist",
+                                      "error": str(e)[:300]}))
+        stamp.write_text(f"{digest}\nno_netlist")
+        return base
+    subprocess.run([sys.executable, str(SCRIPTS / "pin_backfill.py"),
+                    "--pcb", str(base), "--netlist", str(net),
+                    "--out", str(dest), "--out-report", str(report)],
+                   capture_output=True, text=True, timeout=900)
+    try:
+        status = json.loads(report.read_text(encoding="utf-8"))["status"]
+    except (OSError, ValueError, KeyError):
+        status = "error"
+    if status != "written" or not dest.is_file():
+        dest.unlink(missing_ok=True)
+        status = status if status != "written" else "error"
+    stamp.write_text(f"{digest}\n{status}")
+    return dest if status == "written" else base
 
 
 def _netlist_audit(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
@@ -349,24 +430,8 @@ def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
 def _check_straps(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board, with the netlist kicad-cli exports from its schematic
     (what the pipeline puts beside an hwde board)."""
-    sys.path.insert(0, str(SCRIPTS / "lib"))
-    import env
-    cli = env.find_kicad_cli()
-    if not cli:
-        raise SystemExit("check_straps catches need kicad-cli (bin/hwde env)")
-    net = empty.parent / f"{rev}.net"
-    import legacy_net
-    sch = repo / b[rev]["sch"]
-    if legacy_net.is_legacy(sch):  # KiCad 4/5: kicad-cli exports it empty
-        r = legacy_net.netlist(sch, net, pcb=repo / b[rev]["pcb"])
-        if r["status"] != "pass":
-            raise SystemExit(f"{b['id']} {rev}: {r['error']}")
-    else:
-        subprocess.run([str(cli), "sch", "export", "netlist", "-o", str(net),
-                        str(sch)], capture_output=True, text=True,
-                       timeout=900, check=True)
     return ["check_straps.py", "--pcb", str(_pcb(b, rev, repo, empty)),
-            "--netlist", str(net)]
+            "--netlist", str(_netlist(b, rev, repo, empty))]
 
 
 def _dfm(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
