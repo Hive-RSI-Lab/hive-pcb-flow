@@ -482,23 +482,92 @@ COVERAGE_KINDS = {"check_ratings": {
     "rating_regulator_output_unjudged", "rating_no_attributes"}}
 
 
-def coverage(rep: dict) -> dict:
-    """What a check's report says it could judge on a board: `nothing_to_judge`
-    (its reason) when it found nothing of its kind to look at, else `judged`;
-    `not_judged` counts the items it named but couldn't judge (a list, or a
-    dict of reason -> items or a count)."""
-    nj = rep.get("not_judged")
+def _n(v) -> int:
+    """A report field as a count: a list or dict by its length, a number as is."""
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (int, float)):
+        return int(v)
+    if isinstance(v, (list, tuple, dict)):
+        return len(v)
+    return 0
+
+
+def _rows(rep: dict) -> list[dict]:
+    return [c for c in rep.get("checked") or () if isinstance(c, dict)]
+
+
+def _sum(rep: dict, *keys: str) -> int:
+    return sum(_n(c.get(k)) for c in _rows(rep) for k in keys)
+
+
+# What each check's report shows it actually judged on a board (items it
+# checked, parts it compared): a check that says nothing_to_judge only when it
+# finds no part of its kind otherwise counts as judging a board it looked at
+# and judged nothing on. Read only from the report; the checks are untouched.
+EVIDENCE = {
+    "check_current": lambda r: _n(r.get("checked")),
+    "check_thermal": lambda r: _n(r.get("checked")),
+    "check_esd": lambda r: _sum(r, "connectors"),
+    "check_silk": lambda r: _sum(r, "silk_items", "refdes_checked"),
+    "check_mounting": lambda r: _n(r.get("checked")),
+    "check_wicking": lambda r: _sum(r, "vias", "smd_pads"),
+    "check_straps": lambda r: _sum(r, "mcus"),
+    "check_fp_geometry": lambda r: sum(_n(v) for v in (r.get("judged") or {}).values())
+    if isinstance(r.get("judged"), dict) else _n(r.get("judged")),
+    "check_fp_package": lambda r: _n(r.get("judged")),
+    "check_ratings": lambda r: _n(r.get("pins_checked")) + _n(
+        (r.get("operating_range") or {}).get("parts_checked"))
+    + _n(r.get("listing_comparison")),
+    "check_pinouts": lambda r: _n(r.get("connectors")),
+    "check_mate_pins": lambda r: sum(_n(r.get(k)) for k in
+                                     ("pairs", "stated_mates", "standard_headers")),
+    "check_connector_fit": lambda r: _n(r.get("edges")) + sum(
+        1 for p in r.get("parts") or () if isinstance(p, dict) and p.get("pins")),
+    "check_bom_sync": lambda r: sum(1 for v in (r.get("legs") or {}).values() if v),
+    "netlist_audit": lambda r: _n(r.get("pins_connected")) + sum(
+        _n(v) for k, v in r.items()
+        if k.endswith(("_checked", "_judged")) and isinstance(v, int)),
+    "dfm": lambda r: _n((r.get("coverage") or {}).get("ran")),
+}
+
+# Findings that say a check couldn't judge something, for the coverage count
+# only (the triage rows keep them): they don't show the check judged a board.
+NOT_A_JUDGEMENT = {**COVERAGE_KINDS, "check_straps": {"mcu_unknown"}}
+
+
+def _not_judged_count(nj) -> int:
     if isinstance(nj, dict):
-        n = sum(len(v) if isinstance(v, (list, tuple)) else
-                int(v) if isinstance(v, int) else 1 for v in nj.values())
-    elif isinstance(nj, (list, tuple)):
-        n = len(nj)
-    else:
-        n = 1 if nj else 0
+        return sum(len(v) if isinstance(v, (list, tuple)) else
+                   int(v) if isinstance(v, int) else 1 for v in nj.values())
+    if isinstance(nj, (list, tuple)):
+        return len(nj)
+    return 1 if nj else 0
+
+
+def coverage(rep: dict, script: str | None = None) -> dict:
+    """What a check's report says it could judge on a board. `judged` only when
+    it made at least one finding (not a can't-judge note) or its report shows
+    something it judged (EVIDENCE); `nothing_to_judge` (its reason) when it
+    says so; `judged_nothing` when it judged nothing and didn't say why.
+    `not_judged` counts the items it named but couldn't judge (a list, or a
+    dict of reason -> items or a count). For the footprint checks,
+    `parts_judged` / `parts_not_judged` count parts."""
+    n = _not_judged_count(rep.get("not_judged"))
+    out: dict = {"not_judged": n}
+    if script in ("check_fp_geometry", "check_fp_package"):
+        out["parts_judged"] = EVIDENCE[script](rep)
+        out["parts_not_judged"] = n
     if rep.get("nothing_to_judge"):
         return {"status": "nothing_to_judge",
-                "reason": str(rep["nothing_to_judge"])[:200], "not_judged": n}
-    return {"status": "judged", "not_judged": n}
+                "reason": str(rep["nothing_to_judge"])[:200], **out}
+    if script is None or script not in EVIDENCE:
+        return {"status": "judged", **out}
+    skip = NOT_A_JUDGEMENT.get(script, set())
+    found = any(v.get("kind") not in skip for v in rep.get("violations") or ()
+                if isinstance(v, dict))
+    judged = found or EVIDENCE[script](rep) > 0
+    return {"status": "judged" if judged else "judged_nothing", **out}
 
 
 def coverage_line(rows: list[tuple[str, str, dict]]) -> list[str]:
@@ -509,7 +578,8 @@ def coverage_line(rows: list[tuple[str, str, dict]]) -> list[str]:
     per: dict[str, dict[str, int]] = {}
     for _bid, script, r in rows:
         c = per.setdefault(script, {"judged": 0, "nothing_to_judge": 0,
-                                    "with_not_judged": 0, "crashed": 0})
+                                    "judged_nothing": 0, "with_not_judged": 0,
+                                    "crashed": 0})
         if "error" in r:
             c["crashed"] += 1
             continue
@@ -518,9 +588,16 @@ def coverage_line(rows: list[tuple[str, str, dict]]) -> list[str]:
             continue
         c[cov["status"]] += 1
         c["with_not_judged"] += bool(cov.get("not_judged"))
+        if "parts_judged" in cov:
+            c["parts_judged"] = c.get("parts_judged", 0) + cov["parts_judged"]
+            c["parts_not_judged"] = (c.get("parts_not_judged", 0)
+                                     + cov["parts_not_judged"])
     return [f"coverage {s}: judged {c['judged']}, nothing_to_judge "
-            f"{c['nothing_to_judge']}, with not_judged items "
+            f"{c['nothing_to_judge']}, judged nothing (unsaid) "
+            f"{c['judged_nothing']}, with not_judged items "
             f"{c['with_not_judged']}, crashed {c['crashed']}"
+            + (f"; parts judged {c['parts_judged']}, parts not_judged "
+               f"{c['parts_not_judged']}" if "parts_judged" in c else "")
             for s, c in sorted(per.items())]
 
 
@@ -557,7 +634,7 @@ def sweep(cache: Path, b: dict) -> dict:
         rep = cache / "runs" / b["id"] / f"rev_a-{script}.json"
         try:
             res[script]["coverage"] = coverage(
-                json.loads(rep.read_text(encoding="utf-8")))
+                json.loads(rep.read_text(encoding="utf-8")), script)
         except (OSError, ValueError):
             pass
     out = cache / "runs" / b["id"] / "sweep.json"
