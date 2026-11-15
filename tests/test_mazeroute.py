@@ -386,11 +386,17 @@ def test_a_stub_on_a_scrap_still_joins(tmp_path, mf_path):
     assert _tracks(ops, "GND") and len(r.islands("GND")) == 1
 
 
-def _via_on_b(tmp_path):
+# V's B.Cu teardrop: from inside its disk, left of the track's end, to the
+# track's width at x = 11
+_FLARE = [(9.6, 4.8), (10.2, 4.55), (11, 4.875), (11, 5.125), (10.2, 5.45),
+          (9.6, 5.2)]
+
+
+def _via_on_b(tmp_path, teardrop=False):
     """20 x 10, two layers: A's via V at (10, 5), 1 mm across, met on B.Cu
     alone, by a 0.25 mm track from its centre to (16, 5), as a rip of the
     track that met it on F.Cu leaves it; and a stub of A on B.Cu from
-    (2, 5) to (4, 5)."""
+    (2, 5) to (4, 5). teardrop: V's B.Cu teardrop too (_FLARE)."""
     import make_fixture as mf
     body = (mf.via(10, 5, "A", "00000000-0000-0000-0000-0000000007c1",
                    size=1.0, drill=0.4)
@@ -398,6 +404,13 @@ def _via_on_b(tmp_path):
                      "00000000-0000-0000-0000-0000000007c2")
             + mf.seg(2, 5, 4, 5, 0.25, "B.Cu", "A",
                      "00000000-0000-0000-0000-0000000007c3"))
+    if teardrop:
+        xy = " ".join(f"(xy {x} {y})" for x, y in _FLARE)
+        body += ('  (zone (net "A") (net_name "A") (layer "B.Cu")'
+                 ' (uuid "00000000-0000-0000-0000-0000000007c4")'
+                 ' (attr (teardrop (type padvia)))\n'
+                 f'    (polygon (pts {xy}))\n'
+                 f'    (filled_polygon (layer "B.Cu") (pts {xy})))\n')
     return geom.BoardGeom.from_file(mf.write(tmp_path / "via1.kicad_pcb",
                                              body, 20, 10))
 
@@ -424,6 +437,34 @@ def test_a_join_ends_past_a_via_met_on_one_layer(tmp_path, mf_path):
     assert any(LineString([o["start"], o["end"]]).buffer(o["width"] / 2)
                .intersects(track) for o in _tracks(ops, "A")
                if o["layer"] == "B.Cu")
+
+
+def test_a_join_ends_on_the_track_not_in_the_via_teardrop(tmp_path, mf_path):
+    """#1140, the same flip: with V's disk no end on B.Cu, the join ended
+    in V's B.Cu teardrop instead, inside the disk and 0.26 mm off the
+    track's centre line, so it held the via again. A teardrop is no end (a
+    refill makes it again), though it still joins its island: the join's
+    centre line reaches the track's copper."""
+    bg = _via_on_b(tmp_path, teardrop=True)
+    assert [z.teardrop for z in bg.zones_of()] == [True]
+    r = mazeroute.Router(bg)
+    flare = [Point(9.65, 5), Point(10.3, 4.72)]   # in the teardrop and in
+    #                                               V's disk, off the track
+    track = LineString([(10, 5), (16, 5)]).buffer(0.125)
+    assert not any(track.intersects(p) for p in flare)
+    assert all(Point(10, 5).distance(p) < 0.5 for p in flare)
+    whole = [i for i in r.islands("A") if "F.Cu" in i]
+    ends = [i for i in r.islands("A", ends=True) if "F.Cu" in i]
+    assert len(r.islands("A")) == len(r.islands("A", ends=True)) == 2
+    assert len(whole) == len(ends) == 1
+    for p in flare:
+        assert any(q.covers(p) for q in whole[0]["B.Cu"])
+        assert not any(q.covers(p) for q in ends[0]["B.Cu"])
+    ops = r.join_islands("A", 1)
+    assert len(r.islands("A")) == 1
+    joins = [o for o in _tracks(ops, "A") if o["layer"] == "B.Cu"]
+    assert any(LineString([o["start"], o["end"]]).intersects(track)
+               for o in joins)
 
 
 # ------------------------------------------------------------ DRU bans (#1140)

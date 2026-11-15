@@ -296,8 +296,13 @@ class Router:
         on pd_trigger, whose join ended on the disk of a via a rip had left
         on B.Cu alone). Meeting as part_repair._via_free counts it: copper
         that touches it, teardrops not; a pad or via meeting it on two or
-        more layers keeps it whole. Islands and pad counts are as
-        without."""
+        more layers keeps it whole. Teardrops are no end: a refill makes
+        them again from the copper they flare, so a route ending in one
+        alone is left hanging, or on the via the teardrop flares (#1140:
+        with only the via left out, that join ended in the via's B.Cu
+        teardrop, inside its disk and 0.26 mm off the track's centre line,
+        so it held the via again). They still join their island, so
+        islands and pad counts are as without."""
         cu = list(self.bg.copper_layers)
         pieces: list[tuple[frozenset, object, bool, bool]] = []
         vias: list[int] = []         # the pieces that are vias
@@ -357,6 +362,8 @@ class Router:
             g[None] += is_pad
             if not is_fill:
                 live.add(r)
+            if ends and i in tear:
+                continue
             for layer in ly:
                 if alone.get(i) != layer:
                     g.setdefault(layer, []).append(shape)
