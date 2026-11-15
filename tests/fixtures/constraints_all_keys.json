@@ -281,5 +281,20 @@
       {"name": "DQS0", "kind": "dqs", "clock": "CK",
        "nets": ["/DQS0_P", "/DQS0_N"]}
     ]
+  },
+  "design_intent": {
+    "modules": [
+      {
+        "ref": "U1",
+        "is": "Arduino Nano RP2040 Connect",
+        "why": "the BOM names the RP2040 Connect"
+      }
+    ],
+    "bus_unread": [
+      {
+        "net": "/ZXIORQ",
+        "why": "a memory-only device"
+      }
+    ]
   }
 }
