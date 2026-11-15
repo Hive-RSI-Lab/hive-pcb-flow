@@ -275,7 +275,8 @@ def _plane_carried(bg: geom.BoardGeom) -> set[str]:
     with traces across another net's
     thermal pour (bb-ldo: 25.6 mm of GND on F.Cu through the +3V3 pour,
     -2.6 % of the effective area)."""
-    return {z.net for z in bg.zones_of() if z.net and z.filled}
+    return {z.net for z in bg.zones_of()
+            if z.net and z.filled and not z.teardrop}
 
 
 def _finish_targets(unrouted: list[str], rip: list[tuple[str, str]],

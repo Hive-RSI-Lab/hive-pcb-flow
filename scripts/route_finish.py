@@ -529,6 +529,14 @@ def zone_join(pad, zone) -> int:
     return c
 
 
+def pour_nets(bg: geom.BoardGeom) -> set:
+    """The nets with a pour: a zone of the net that is not a teardrop. KiCad
+    builds a teardrop zone per teardropped track end, so counting those made
+    nearly every signal net of a teardropped board a pour net that no router
+    would rip (#1140)."""
+    return {z.net for z in bg.zones_of() if z.net and not z.teardrop}
+
+
 def thermal_pads(bg: geom.BoardGeom) -> list:
     """(pad, zone, layer, thermal gap, spoke width, zone min thickness) for
     each pad a zone of its net joins by thermal spokes on a layer the zone
@@ -1642,7 +1650,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
 
     # power and pour nets are never ripped: their copper is sized by rule
     # nor are constraints diff pairs: a pair ripped here comes back single-ended (#613)
-    keep_nets = {z.net for z in bg.zones_of()} | set(rules.net_width) | {""}
+    keep_nets = pour_nets(bg) | set(rules.net_width) | {""}
     keep_nets |= set(keep_nets_extra or ())
 
     def expired():

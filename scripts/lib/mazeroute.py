@@ -94,9 +94,9 @@ class Router:
         self.max_nodes = max_nodes
         self._conn = 0
         # power, pour and rule-width nets are never ripped (route_finish's
-        # keep_nets): their copper is sized by rule
-        self.keep_nets = ({z.net for z in bg.zones_of()}
-                          | set(self.rules.net_width) | {""})
+        # keep_nets): their copper is sized by rule. A teardrop is no pour.
+        self.keep_nets = (rf.pour_nets(bg) | set(self.rules.net_width)
+                          | {""})
         bans = getattr(self.rules, "bans", None)
         self.unread_rules = list(bans.unread) if bans else []
         new = [r for r in self.unread_rules if r not in _WARNED]

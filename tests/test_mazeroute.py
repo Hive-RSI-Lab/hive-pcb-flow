@@ -161,6 +161,40 @@ def test_reroute_keep_and_one_layer_refuse():
             "A", [14, 14, 16, 16], "A1.1", "A2.1")
 
 
+def _zone(net, pts, uid, teardrop):
+    attr = " (attr (teardrop (type padvia)))" if teardrop else ""
+    xy = " ".join(f"(xy {x} {y})" for x, y in pts)
+    return (f'  (zone (net "{net}") (net_name "{net}") (layer "F.Cu")'
+            f' (uuid "{uid}"){attr}\n    (polygon (pts {xy}))\n'
+            f'    (filled_polygon (layer "F.Cu") (pts {xy})))\n')
+
+
+@pytest.mark.parametrize("teardrop", [True, False])
+def test_a_teardrop_is_no_pour_so_reroute_still_rips_its_net(tmp_path,
+                                                            teardrop):
+    """#1140: KiCad builds a teardrop zone per teardropped track end, and
+    the routers took every zone's net for a pour that is never ripped, so
+    on a teardropped board almost no signal net could be pushed aside. A
+    real pour of B still keeps B."""
+    pcb = _board(tmp_path, "reroute")
+    text = pcb.read_text()
+    zone = _zone("B", [(14.7, 12.4), (15.3, 12.4), (15.1, 12.9),
+                       (14.9, 12.9)], "zB", teardrop)
+    pcb.write_text(text[:text.rstrip().rfind(")")] + zone + ")\n")
+    bg = geom.BoardGeom.from_file(pcb)
+    assert [z.teardrop for z in bg.zones_of()] == [teardrop]
+    assert ("B" in rf.pour_nets(bg)) is not teardrop
+    r = mazeroute.Router(bg)
+    assert ("B" in r.keep_nets) is not teardrop
+    if teardrop:
+        removed, ops, _ = r.reroute("A", [14, 14, 16, 16], "A1.1", "A2.1")
+        assert removed == [B_TRACK]
+        assert len(r.islands("A")) == 1 and len(r.islands("B")) == 1
+    else:
+        with pytest.raises(CheckError, match="nothing in"):
+            r.reroute("A", [14, 14, 16, 16], "A1.1", "A2.1")
+
+
 def test_reroute_that_fails_leaves_the_board_byte_identical(tmp_path):
     """The router fails in resolve_ops, before KiCad is started."""
     pcb = _board(tmp_path, "reroute")
