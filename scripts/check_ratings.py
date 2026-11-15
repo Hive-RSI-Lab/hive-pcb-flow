@@ -56,7 +56,13 @@ A named pin outranks a class; the tightest bound of the best tier wins.
 Findings (kind = violation `kind`, remediations under reference/remediations/):
  - rating_over_voltage (error): net above an absolute maximum - including a
    bound relative to the part's own supply (an input above supply);
-   a 2-pad part's `Voltage Rated` attribute below the volts across it.
+   a 2-pad part's `Voltage Rated` attribute below the volts across it; an
+   unlisted capacitor's rating read from its maker's voltage code in the MPN
+   (reference/mlcc_voltage_codes.yaml: Samsung CL, Murata GRM/GCM/GCJ/GRT,
+   Yageo CC/CX, KEMET C, Taiyo Yuden, Fenghua, TDK C; each series cited to
+   the maker's part-numbering guide) or a voltage written in its Value field
+   ("220u/16V", "_10V_"), the lower when the two differ (cap_code_rating,
+   #1307). A diode's Value voltage is a clamp voltage, so it is not read.
  - rating_reverse_polarity (error): net below an absolute minimum (a
    negative single figure, as P-channel parts print, is that minimum), or
    a ground pin sitting on a positive rail.
@@ -161,11 +167,14 @@ A pin on a net of unknown voltage is not a finding (counted in facts); a
 supply pin on one is named in not_judged by rail, since nothing compared it
 (#601). A connected pad the extraction's pinout has no row for is
 rating_unrated. A board where nothing could be compared with known volts
-reports nothing_to_judge.
+reports nothing_to_judge. Facts `parts_rated_unextracted` names each part
+compared with no extraction behind it (a distributor's listing, a part-number
+voltage code, a package table), which pins_checked does not count (#1307).
 
 The fact ledger (lib/ledgerlib.py): each refdes gets a `rating` fact (verified
 when a datasheet's rating was compared with known volts and held, listed when
-the number was the distributor's or a package table's, `rated_from` says which;
+the number was the distributor's, a capacitor's part-number voltage code or
+Value field's (part_code), or a package table's, `rated_from` says which;
 failed on an error finding, unknown when unrated or nothing could be compared)
 and a
 `pinout` fact (pinout_fact: the board's pad numbers and names against the
@@ -191,6 +200,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "lib"))
 import checklib  # noqa: E402
 import engcalc  # noqa: E402
+import mlcc  # noqa: E402
 from checklib import CheckError, violation  # noqa: E402
 
 SCRIPT = "check_ratings"
@@ -1389,11 +1399,9 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                 continue
             why = power_ic_why_unrated(b, bom, volts, vsrc, netfns) if power_ic \
                 else None
-            if _check_unextracted(b, bom_by_lcsc.get(b["lcsc"]), volts, emit,
-                                  unrated_passives, why):
-                compared(ref, "distributor"
-                         if bom_volts(bom_by_lcsc.get(b["lcsc"])) is not None
-                         else "package")
+            if tier := _check_unextracted(b, bom_by_lcsc.get(b["lcsc"]), volts,
+                                          emit, unrated_passives, why):
+                compared(ref, tier)
             continue
         extracted_output_findings(b, ext, bom_by_lcsc.get(b["lcsc"]), volts,
                                   vsrc, emit, fb_ctx)
@@ -1777,8 +1785,9 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                     and f["subject"] not in trusted)
     if unread:
         emit("rating_no_datasheet_read", "warning", unread[0], None,
-             f"{len(unread)} part(s) were rated from a distributor's attribute "
-             f"or a package table, with no datasheet read ({', '.join(unread[:8])}"
+             f"{len(unread)} part(s) were rated from a distributor's attribute,"
+             f" a part-number voltage code or a package table, with no "
+             f"datasheet read ({', '.join(unread[:8])}"
              f"{', ...' if len(unread) > 8 else ''}). This doesn't block "
              "release. To make them verified: run `datasheet_extract --fetch "
              "<ws>` and extract each PDF. A part with no number at all: "
@@ -1792,6 +1801,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
              "net_volts": {n: {"v": volts[n], "src": vsrc[n]}
                            for n in sorted(volts)},
              "pins_checked": checked_pins,
+             "parts_rated_unextracted": sorted(
+                 r for r, t in rated_by_ref.items() if "datasheet" not in t),
              "pins_covered_by_rule": covered_pins,
              "reversed_inputs": reversed_inputs,
              "pins_on_unknown_nets": unknown_net_pins,
@@ -1835,40 +1846,74 @@ NO_VOLTAGE_RATING_RE = re.compile(r"^(?:L|FB)\d")
 
 def _check_unextracted(b: dict, bom: dict | None, volts: dict, emit,
                        unrated_passives: list[str],
-                       why: str | None = None) -> bool:
+                       why: str | None = None) -> str | None:
     """A part with no extraction: a 2-net part's `Voltage Rated` attribute
-    is checked across it; anything else is an explicit unrated finding
-    (two-terminal BOM parts are collected into one finding by the caller).
-    True when a rating was compared with known volts."""
+    is checked across it, else a capacitor's voltage code (cap_code_rating),
+    else a resistor's package limit; anything else is an explicit unrated
+    finding (two-terminal BOM parts are collected into one finding by the
+    caller). The tier the compared rating came from (distributor, part_code,
+    package) when a rating was compared with known volts, else None."""
     ref, pads = b["ref"], b["pads"]
     nets = sorted(set(pads.values()))
     rated = bom_volts(bom)
-    src = "parts.json"
+    src, tier = "parts.json", "distributor"
+    if rated is None and len(nets) == 2 and (code := cap_code_rating(b, bom)):
+        (rated, src), tier = code, "part_code"
     if rated is None and len(nets) == 2 and re.match(r"^R\d", ref):
         rated = engcalc.resistor_umax_v(b.get("footprint"))
-        src = _package_src(b.get("footprint"))
+        src, tier = _package_src(b.get("footprint")), "package"
     if rated is not None and len(nets) == 2:
         va, vb = volts.get(nets[0]), volts.get(nets[1])
         if va is None or vb is None:
-            return False
+            return None
         if abs(va - vb) > rated + EPS:
             emit("rating_over_voltage", "error", ref, nets[0],
                  f"{ref} is rated {_fmt(rated)} V [{src}] but sits across "
                  f"{nets[0]} = {_fmt(va)} V and {nets[1]} = {_fmt(vb)} V",
                  limit_v=rated, net_v=abs(va - vb), rating=src)
-        return True
+        return tier
     if len(nets) <= 1:
-        return False  # a single-net part stresses nothing
+        return None  # a single-net part stresses nothing
     why = why or ("no datasheet extraction" if bom or b["lcsc"] else
                   "no LCSC part on the footprint and no extraction")
     if len(nets) == 2 and NO_VOLTAGE_RATING_RE.match(ref):
-        return False
+        return None
     if bom is not None and len(nets) == 2:
         unrated_passives.append(ref)
-        return False
+        return None
     emit("rating_unrated", "warning", ref, None,
          f"{ref} ({b['lcsc'] or 'no LCSC'}): {why}", pins=[why])
-    return False
+    return None
+
+
+CAP_REF_RE = re.compile(r"^C\d")
+
+
+def cap_code_rating(b: dict, bom: dict | None) -> tuple[float, str] | None:
+    """(volts, source) for a capacitor with no listed rating, read from the
+    maker's voltage code in its MPN (reference/mlcc_voltage_codes.yaml, each
+    series cited to the maker's part-numbering guide) or from a voltage
+    written in its Value field ("220u/16V"). When both give one and they
+    differ, the lower is held and the source names both. None for a part
+    that is not a capacitor (a diode's "5V1" is a clamp voltage, not a
+    rating) or that states neither."""
+    if not CAP_REF_RE.match(b["ref"]):
+        return None
+    mpn = b.get("mpn") or (bom or {}).get("mpn") or ""
+    code = mlcc.mpn_voltage(mpn)
+    val = mlcc.value_voltage(b.get("value"))
+    msrc = (f"part-number voltage code {code['code']} of {mpn}, "
+            f"{code['series']} ({code['cite']})") if code else ""
+    vsrc = f"Value field {b.get('value')!r} states {val['text']}" if val else ""
+    if code and val and abs(code["v"] - val["v"]) > EPS:
+        lo = min(code["v"], val["v"])
+        return lo, (f"{vsrc}, but the {msrc} says {_fmt(code['v'])} V: "
+                    f"the lower, {_fmt(lo)} V, is held")
+    if code:
+        return code["v"], msrc + (f"; {vsrc}" if val else "")
+    if val:
+        return val["v"], vsrc
+    return None
 
 
 def _package_src(footprint: str | None) -> str:
@@ -3135,17 +3180,23 @@ def _rating_wording(tiers: set[str], n: int) -> str:
     if "package" in tiers:
         return (f"{pins}the generic limiting voltage for its package{rails}; "
                 "no datasheet or distributor rating")
+    if "part_code" in tiers:
+        return (f"{pins}the voltage its part number's maker code or its Value "
+                f"field states{rails}; no datasheet or distributor rating")
     if "datasheet" in tiers:
         return (f"{pins}their datasheet rating or the distributor's listed "
                 f"rating{rails}; not all of it read from a datasheet")
     return f"{pins}the distributor's listed rating{rails}; no datasheet read"
 
 
-def _rating_source(tiers: set[str], b: dict, src: str) -> str:
+def _rating_source(tiers: set[str], b: dict, src: str,
+                   bom: dict | None = None) -> str:
     """Where the numbers of a rating fact came from; src is the extraction's."""
     listing = f"parts.json attributes of {b['lcsc']}"
     if "package" in tiers:
         return _package_src(b.get("footprint"))
+    if "part_code" in tiers:
+        return (cap_code_rating(b, bom) or (0.0, listing))[1]
     if "distributor" not in tiers:
         return src
     return f"{src}; {listing}" if "datasheet" in tiers else listing
@@ -3201,9 +3252,10 @@ def ledger_facts(board: list[dict], exts: dict, vios: list[dict],
         fact = {"subject": ref, "kind": "rating", "status": st, "value": val,
                 "source": "", "lcsc": b["lcsc"]}
         if st != "unknown":
-            weakest = next(t for t in ("package", "distributor", "datasheet")
-                           if t in tiers)
-            fact.update(source=_rating_source(tiers, b, src),
+            weakest = next(t for t in ("package", "part_code", "distributor",
+                                       "datasheet") if t in tiers)
+            fact.update(source=_rating_source(tiers, b, src,
+                                              bom_by_lcsc.get(b["lcsc"])),
                         rated_from=weakest)
         out.append(fact)
         pst, pval = pinout_fact(b, ext)

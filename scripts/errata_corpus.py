@@ -583,7 +583,7 @@ EVIDENCE = {
     "check_fp_package": lambda r: _n(r.get("judged")),
     "check_ratings": lambda r: _n(r.get("pins_checked")) + _n(
         (r.get("operating_range") or {}).get("parts_checked"))
-    + _n(r.get("listing_comparison")),
+    + _n(r.get("listing_comparison")) + _n(r.get("parts_rated_unextracted")),
     "check_pinouts": lambda r: _n(r.get("connectors")),
     "check_mate_pins": lambda r: sum(_n(r.get(k)) for k in
                                      ("pairs", "stated_mates", "standard_headers")),

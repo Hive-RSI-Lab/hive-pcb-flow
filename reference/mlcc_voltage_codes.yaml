@@ -1,0 +1,120 @@
+# mlcc_voltage_codes.yaml - a ceramic capacitor's rated voltage read from the
+# voltage code in its MPN, for check_ratings.py (read through
+# scripts/lib/mlcc.py mpn_voltage). A capacitor with no datasheet read and no
+# distributor voltage is still rated when its maker's ordering code names the
+# voltage: Samsung CL05A105KQ5NNNC = Q = 6.3 V, Murata GRM155R71C104KA88D =
+# 1C = 16 V (#1307).
+#
+#   match   regex matched in full on the upper-cased MPN, spaces removed;
+#           its named group `v` is the voltage code
+#   codes   {code: rated volts DC}: a code with no row leaves the part not
+#           rated, never guessed
+#   cite    the maker's ordering-information page the codes were read from
+#           (URL, page, the heading or line)
+#
+# The same letter means different voltages at different makers (A is 25 V at
+# Samsung, 4 V at Taiyo Yuden, 200 V at Yageo, 250 V at KEMET), so every
+# entry is one maker's own scheme and its regex pins the maker's whole
+# ordering-code shape. Where one maker's catalogs disagree on a code
+# (Samsung's general vs automotive tables, KEMET's and Yageo's high-voltage
+# tables), the code is left out. Safety-rated (X/Y, AC) and high-voltage
+# codes are left out: their rating is not the DC rail rating this check
+# compares. Add a row only with the page in hand.
+series:
+- name: Samsung Electro-Mechanics CL
+  match: ^CL[0-9A-Z]{2}[A-Z][0-9R]{3}[A-Z](?P<v>[A-Z])\w*$
+  # in both the general (MLCC_2512) and the automotive catalog; F (350 V),
+  # K (3 kV) are general-only and T, X, V automotive-only, so left out
+  codes: {"S": 2.5, "R": 4, "Q": 6.3, "P": 10, "O": 16, "A": 25, "L": 35,
+          "B": 50, "C": 100, "D": 200, "E": 250, "G": 500, "H": 630,
+          "I": 1000, "J": 2000}
+  cite: >-
+    Samsung Electro-Mechanics MLCC catalog (Dec 2025),
+    https://m.samsungsem.com/resources/file/jp/support/product_catalog/MLCC_2512.pdf
+    p6 "Part Numbering" (field 6 = rated voltage) and p7 "6 RATED VOLTAGE
+    CODE"; automotive catalog
+    https://m.samsungsem.com/resources/file/global/support/product_catalog/MLCC_Automotive_2512.pdf
+    p5
+- name: Murata GRM/GCM/GCJ/GRT
+  match: ^(?:GRM|GCM|GCJ|GRT)[0-9A-Z]{2}[0-9A-Z][0-9A-Z]{2}(?P<v>[0-9A-Z]{2})[0-9R]{3}[A-Z]\w*$
+  # standard codes and the "voltage derated" (*6) codes; E2 (250 Vac) and
+  # the safety codes (GB, GD, GF, MF, TF) are left out
+  codes: {"0D": 2, "0E": 2.5, "EA": 2.5, "0G": 4, "EB": 4, "0J": 6.3,
+          "EC": 6.3, "1A": 10, "ED": 10, "1C": 16, "EE": 16, "1E": 25,
+          "EF": 25, "YA": 35, "EG": 35, "1H": 50, "EH": 50, "1J": 63,
+          "1K": 80, "2A": 100, "EL": 100, "2D": 200, "2E": 250, "BB": 350,
+          "2W": 450, "LP": 450, "2H": 500, "LU": 500, "2J": 630, "LQ": 630,
+          "LV": 630, "3A": 1000, "LF": 1000, "LW": 1000, "3B": 1250,
+          "LG": 1250, "LX": 1250, "3D": 2000, "3F": 3150}
+  cite: >-
+    Murata "Part Numbering" for chip monolithic ceramic capacitors,
+    https://pim.murata.com/asset/pim4/ceramicCapacitorSMD/SMD-EN_PDF_CERAMICCAPACITORSMD
+    p1 "Series" (GCJ, GCM, GRM, GRT share the scheme) and p4 "Rated
+    Voltage" (GRM|18|8|B1|1H|102|K|A01|D)
+- name: Yageo CC/CX
+  match: ^C[CX]\d{4}[A-Z][A-Z][A-Z0-9]{3}(?P<v>[0-9A-Z])\w*$
+  # the general-purpose X7R and X5R tables; the high-voltage letters
+  # (B, Z, C, F, J, D, S, E) are left out
+  codes: {"4": 4, "5": 6.3, "6": 10, "7": 16, "8": 25, "9": 50, "0": 100,
+          "A": 200, "Y": 250}
+  cite: >-
+    Yageo CC X7R datasheet V.29,
+    https://yageogroup.com/content/datasheet/asset/file/UPY-GPHC_X7R_6_3V-TO-250V
+    p2 "(4) RATED VOLTAGE 5 = 6.3 V 0 = 100 V 6 = 10 V A = 200 V 7 = 16 V
+    Y = 250 V"; X5R V.32,
+    https://yageogroup.com/content/datasheet/asset/file/UPY-GPHC_X5R_4V-TO-50V
+    p2 (4 = 4 V); CX (X2Y, a YAGEO-group part), Rev 02,
+    https://yageogroup.com/content/datasheet/asset/file/DATASHEET_X2Y_SERIES_6-3V_TO_100V
+    p9 "ORDERING INFORMATION", code 12 rated voltage (CX0805MRX7R8BB223 =
+    25 V, p6)
+- name: KEMET C
+  match: ^C\d{4}[A-Z]\d{3}[A-Z](?P<v>[0-9A-Z])\w*$
+  # the X7R and C0G tables (they agree); the high-voltage letters (C, B, D,
+  # F, G, Z, H, K) are left out
+  codes: {"9": 6.3, "8": 10, "4": 16, "3": 25, "6": 35, "5": 50, "1": 100,
+          "2": 200, "A": 250}
+  cite: >-
+    KEMET C1002 X7R SMD,
+    https://yageogroup.com/content/datasheet/asset/file/KEM_C1002_X7R_SMD
+    p2 "Ordering Information" (rated voltage, the character after the
+    tolerance); C1003 C0G SMD,
+    https://yageogroup.com/content/datasheet/asset/file/KEM_C1003_C0G_SMD
+    p1
+- name: Taiyo Yuden (M/V series)
+  match: ^(?P<v>[AJLETGUHQS])[MV][KJSF]\d{3}[0-9A-Z]+(?:-[0-9A-Z]+)?$
+  codes: &ty {"A": 4, "J": 6.3, "L": 10, "E": 16, "T": 25, "G": 35, "U": 50,
+              "H": 100, "Q": 250, "S": 630}
+  cite: &tycite >-
+    Taiyo Yuden automotive MLCC catalog E14R01,
+    https://www.yuden.co.jp/en/product/support/pdf_spice_spara/upload/c_mlcc_C_e.pdf
+    p1 "PART NUMBER ... (2) Rated voltage"; the older numbering (voltage
+    first, UMK105...) in Taiyo Yuden's "High Quality" catalog (Oct 2019),
+    https://onlinecomponents.com/upload/parts/datasheets/mf-tai/mlcc_all_hq_indl_e.pdf
+    PDF p4 "PART NUMBER (1) Rated voltage", same codes
+- name: Taiyo Yuden (MCAS/MCAR/MCJC/MCRL)
+  match: ^(?:MCAS|MCAR|MCJC|MCRL)(?P<v>[AJLETGUHQS])\w*$
+  codes: *ty
+  cite: *tycite
+- name: Fenghua (FH)
+  match: ^\d{4}(?:CG|BS|BT|DS|DT|X|B)[0-9R]{3}[A-Z](?P<v>[0-9R]{3})N[TD]$
+  # the printed rule: two significant digits, then the number of zeros,
+  # R the decimal point
+  codes: {"4R0": 4, "6R3": 6.3, "100": 10, "160": 16, "250": 25, "350": 35,
+          "500": 50, "630": 63, "101": 100, "201": 200, "251": 250,
+          "501": 500, "631": 630, "102": 1000}
+  cite: >-
+    Fenghua general-purpose MLCC catalog A0006,
+    https://www.fhcomp.com/uploads/20260922/110408_%E9%80%9A%E7%94%A8%E5%9E%8B%E7%B3%BB%E5%88%97%E5%A4%9A%E5%B1%82%E7%89%87%E5%BC%8F%E9%99%B6%E7%93%B7%E7%94%B5%E5%AE%B9%E5%99%A8-A0006.pdf
+    PDF p3 "How To Order" (0805 CG 102 K 500 N T; 6R3 = 6.3 V, 500 = 50 V,
+    201 = 200 V)
+- name: TDK C
+  match: ^C\d{4}(?:[A-Z]\d[A-Z]|[A-Z]{2})(?P<v>\d[A-Z])\d{3}[A-Z]\w*$
+  # only the codes read on a fetched page; 1V, 2D, 2W, 2H, 3A not yet
+  codes: {"0G": 4, "0J": 6.3, "1A": 10, "1C": 16, "1E": 25, "1H": 50,
+          "2A": 100, "2E": 250, "2J": 630}
+  cite: >-
+    TDK C series catalog (DigiKey copy),
+    https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/364/C_Series_OpenMode_B11.pdf
+    p3 "C 3216 X7R 2A 105 K T 5XXX" (1C, 1E, 1H, 2A, 2E, 2J); TDK CGB
+    catalog (RS copy), https://docs.rs-online.com/2c3d/0900766b814e910f.pdf
+    p3 "Rated Voltage (DC) ... 0G 4.0V" (0G, 0J, 1A, 1C, 1E)
