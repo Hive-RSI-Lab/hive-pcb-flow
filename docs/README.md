@@ -199,7 +199,10 @@ A board isn't ready to order (attest refuses, order-ready drops) while any
 fact is failed or unknown. Stock is good for 72 hours, so run
 `bin/pcb-flow stock_check --workspace <ws>` right before the order packet; the
 person's flow is "I order it, it arrives, I plug it in", with no surprise at
-JLC's BOM review.
+JLC's BOM review. A BOM bought by MPN (a US-sourced one, no LCSC column, no
+DigiKey or Mouser keys) is checked with `stock_check --mpn --bom <BOM.csv>`
+against the distributor pages that answer without a key; a row no page
+answers for is not judged and blocks, never "in stock".
 
 ## Checklists count without the person's sign-off
 
