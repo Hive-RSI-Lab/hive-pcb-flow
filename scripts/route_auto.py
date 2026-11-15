@@ -683,6 +683,20 @@ def _restore_teardrops(bp, staged: Path, work: Path, td: list) -> int:
     return len(uu) - len(res.get("missing") or [])
 
 
+def _teardrops_back(bp, cli, staged: Path, work: Path, td: list, *,
+                    parity: bool) -> tuple[int, dict | None]:
+    """_restore_teardrops, then a refill and a fresh DRC when it turned any
+    back on: the setting makes no copper, KiCad builds the teardrop zones
+    on a refill, and the report's DRC has to see them (6-layer bench: 12
+    restored, then 0 drops and 12 dfm_ring_breakout until refilled).
+    Returns (restored, drc or None when nothing was restored)."""
+    n = _restore_teardrops(bp, staged, work, td)
+    if not n:
+        return 0, None
+    kc.run_drc(cli, staged, refill=True, save_board=True)
+    return n, kc.run_drc(cli, staged, parity=parity, all_track_errors=True)
+
+
 def _pre_index(pre: dict) -> dict:
     import shapely
     by: dict = {}
@@ -1101,7 +1115,10 @@ def run(argv: list[str] | None = None):
             maze_facts.pop("drc", None)
 
     # 6. sanity + swap the routed board in
-    teardrops_restored = _restore_teardrops(bp, staged, work, td_vias)
+    teardrops_restored, td_drc = _teardrops_back(
+        bp, cli, staged, work, td_vias, parity=sch.is_file())
+    if td_drc is not None:
+        drc = td_drc
     bg2 = geom.BoardGeom.from_file(staged)
     tracks_after = len(bg2.tracks_of())
     if fr_ok and tracks_after <= tracks_before \

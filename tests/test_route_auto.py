@@ -710,6 +710,8 @@ _TD_BOARD = """(kicad_pcb
     (uuid "0b8c4f3e-1a2b-4c3d-8e9f-0a1b2c3d4e5f")%s)
   (via (at 10 10) (size 0.5) (drill 0.2) (layers "F.Cu" "B.Cu") (net "/B")
     (uuid "1c9d5a4f-2b3c-4d4e-9f0a-1b2c3d4e5f60"))
+  (segment (start 5 5) (end 5 9) (width 0.15) (layer "F.Cu") (net "/A")
+    (uuid "2d0e6b5a-3c4d-4e5f-8a1b-2c3d4e5f6071"))
 )
 """
 _TD_ON = (" (teardrops (best_length_ratio 0.5) (max_length 1)"
@@ -741,3 +743,29 @@ def test_ses_import_keeps_the_escape_teardrop_setting(tmp_path):
     assert route_auto._teardrop_vias(routed) == [("/A", (5.0, 5.0))]
     # a second pass finds nothing left to do
     assert route_auto._restore_teardrops(bp, routed, work, td) == 0
+
+
+def test_restored_teardrops_are_built_before_the_report_drc(tmp_path):
+    """The setting alone makes no copper: KiCad builds the teardrop zones on
+    a refill. route_auto turned them back on after its last refill, so the
+    bench board kept 0 drops and 12 dfm_ring_breakout. _teardrops_back
+    refills and re-runs the DRC when it restored any; with none to restore
+    it touches nothing."""
+    import teardroplib as tdl
+    cli = env.find_kicad_cli()
+    bp = env.find_kicad_python(cli) if cli else None
+    if bp is None:
+        pytest.skip("KiCad bundled python not installed")
+    pre = tmp_path / "pre.kicad_pcb"
+    pre.write_text(_TD_BOARD % _TD_ON, encoding="utf-8")
+    td = route_auto._teardrop_vias(pre)
+    routed = tmp_path / "routed.kicad_pcb"
+    routed.write_text(_TD_BOARD % "", encoding="utf-8")
+    work = tmp_path / "w"
+    work.mkdir()
+    assert route_auto._teardrops_back(bp, cli, routed, work, [],
+                                      parity=False) == (0, None)
+    n, drc = route_auto._teardrops_back(bp, cli, routed, work, td,
+                                        parity=False)
+    assert n == 1 and drc is not None and "counts" in drc
+    assert tdl.read(routed, tdl.config(None)).drop_count >= 1
