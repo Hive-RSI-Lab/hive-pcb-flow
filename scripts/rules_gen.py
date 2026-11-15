@@ -72,6 +72,7 @@ sys.path.insert(0, str(SCRIPTS / "lib"))
 import check_current  # noqa: E402  (required_width_mm)
 import fabfloors  # noqa: E402  (the single source of fab minimums)
 import fabmaterial  # noqa: E402  (which laminate: floors + order)
+import fpwaivers  # noqa: E402  (vendor-geometry floors, #813)
 import impedance as imp  # noqa: E402
 
 REFERENCE = SCRIPTS.parent / "reference"
@@ -1296,8 +1297,16 @@ def build(constraints: dict, cap: dict, stackup: dict, baseline_only: bool,
     outer_oz = cap.get("outer_copper_oz", 1.0)
     cu_mm = CU_OZ_MM.get(outer_oz, 0.035)
     rules = baseline_rules(cap)
+    # a vendor footprint's own pads to its own pegs (#813): after the fab
+    # floors, before every design rule, so an HV or class rule still wins
+    waivers = fpwaivers.rules()
+    rules += [Rule(w["name"], w["constraint"], w["min_mm"], condition=w["condition"],
+                   comment=w["comment"]) for w in waivers]
     report: dict = {"power": [], "diff_pairs": [], "classes": [], "patterns": [],
-                    "hv_rules": [], "necks": []}
+                    "hv_rules": [], "necks": [],
+                    "footprint_waivers": [{k: w[k] for k in ("name", "footprint",
+                                                             "min_mm", "issue")}
+                                          for w in waivers]}
     if not baseline_only:
         pr, pf = power_rules(constraints, cu_mm)
         sr, sf, sw_warn = switch_node_rules(constraints, bg, pf, cu_mm)
@@ -1504,6 +1513,7 @@ def main(argv: list[str] | None = None) -> int:
             "impedance": report.get("impedance", []),
             "stripline_layers": report.get("stripline_layers", {}),
             "hv_rules": report["hv_rules"],
+            "footprint_waivers": report["footprint_waivers"],
             "isolation_rules": report.get("isolation_rules", []),
             "package_rules": report.get("package_rules", []),
             "necks": report["necks"],

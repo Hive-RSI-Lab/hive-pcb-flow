@@ -1,0 +1,41 @@
+# footprint_waivers.yaml - DRC floors a vendor footprint's OWN geometry is
+# held to, where it sits under a KiCad default the fab doesn't require (#813).
+#
+# Consumed by scripts/lib/fpwaivers.py: rules_gen emits each entry into the
+# board's .kicad_dru (after the aiee_* fab floors, before every design rule,
+# so an HV or class rule still wins), and board_init merges the entries whose
+# footprint is on the board into the .kicad_dru its setup DRC reads.
+#
+# An entry is narrow by construction. Its rule matches only when BOTH items
+# belong to a footprint with that library ID (KiCad 10 memberOfFootprint
+# takes 'lib:name', wildcards allowed) and, for `between: own_npth`, one of
+# them is an NPTH peg. A track, a via or another part's pad near the peg is
+# still held to the board's own hole clearance; a peg or pad moved closer than
+# min_mm still fails. Never add an entry to clear a board-level finding.
+#
+# Fields: footprint (lib:name, '*:name' for any nickname), constraint (only
+# hole_clearance today), between (own_npth), min_mm, measured_mm (what KiCad
+# measures on the vendor geometry), fab (the fab's published figure, quoted,
+# with the page and date), reason, issue.
+
+waivers:
+  - footprint: "*:USB-C-SMD_MC-311D"
+    constraint: hole_clearance
+    between: own_npth
+    min_mm: 0.18
+    measured_mm:
+      "A1-B12, B1-A12 (GND)": 0.1801
+      "A4-B9, B4-A9 (VBUS)": 0.2146
+    fab: >-
+      JLCPCB pcb-capabilities (https://jlcpcb.com/capabilities/pcb-capabilities,
+      fetched 2026-11-15): 'NPTH to Track 0.2mm'; 'NPTH pad annular ring
+      >=0.45mm ... to allow a 0.2 mm ring of copper to be removed around the
+      hole'. The GND pads' corners are 0.02 mm inside that ring: JLC pulls the
+      copper back there (a 0.02 mm sliver of a 0.6 x 1.15 mm pad), it isn't a
+      reject. pd-trigger shipped with this geometry (order W2026073002475378).
+    reason: >-
+      Vendor land pattern (MC-311D), pads against the part's own locating pegs.
+      KiCad 10.0.5+ reports them under its 0.25 mm default min_hole_clearance;
+      10.0.3 did not. LEARNINGS 2026-08-27: judge against the vendor geometry,
+      do not move the pads.
+    issue: 813

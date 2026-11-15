@@ -35,9 +35,10 @@ PD = REPO / "tests" / "fixtures" / "stages" / "pd_trigger"
 PD_PCB = PD / "route" / "pd-trigger.kicad_pcb"
 PD_NET = PD / "pd-trigger.net"
 PD_LIB = PD / "lib"
-# DRC on the routed pd-trigger since KiCad 10.0.5: J1's own pads against its own
-# peg holes, 0.18 and 0.21 mm against the 0.25 mm hole clearance. Vendor geometry.
-USBC_OWN_HOLES = 4
+# DRC on the routed pd-trigger: J1's own pads sit 0.18 and 0.21 mm from its own
+# peg holes (vendor geometry); since #813 the board's .kicad_dru carries the
+# footprint waiver (reference/footprint_waivers.yaml), so none remain.
+USBC_OWN_HOLES = 0
 CARRIER = REPO / "tests" / "fixtures" / "stages" / "lumina_carrier"
 CA_PCB = CARRIER / "routed.kicad_pcb"
 CA_NET = CARRIER / "lumina-carrier.net"
@@ -686,9 +687,8 @@ def test_replace_c2_reaches_drc_zero(tmp_path):
     import kc
     rep = kc.run_drc(env_mod.find_kicad_cli(), pcb, refill=True,
                      save_board=True)
-    # no warnings and nothing but J1's own holes
-    assert {v["check"] for v in rep["violations"]} == {"hole_clearance"}
-    assert all("J1" in v["refs"] for v in rep["violations"])
+    # no warnings, and J1's own holes are waived (#813)
+    assert rep["violations"] == []
     assert rep["counts"]["total"] == USBC_OWN_HOLES
 
 

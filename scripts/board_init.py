@@ -50,6 +50,11 @@ built as asked and the report says the size did not come from the placement
 (`build_mode.fixed_outline_override`, a worker note): the usual route is
 `--outline auto`, place, then `board_edit --outline fit`.
 
+A footprint listed in reference/footprint_waivers.yaml (#813: the MC-311D
+USB-C's pads sit 0.18 mm from its own pegs, under KiCad's 0.25 mm default)
+gets its cited floor merged into the board's .kicad_dru before the setup DRC,
+scoped to that footprint's own pads and pegs (lib/fpwaivers.py).
+
 Self-check acceptance (SPEC S8): schematic parity == 0 (every part+net imported
 correctly) AND zero setup DRC violations, EXCLUDING unconnected_items (the board
 is unrouted by design), AND the written project's floors >= the fab profile.
@@ -88,6 +93,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS / "lib"))
 from lib import env  # noqa: E402
 from lib import fabfloors  # noqa: E402
+from lib import fpwaivers  # noqa: E402
 import fabmaterial  # noqa: E402
 from lib import statelib  # noqa: E402
 import kc  # noqa: E402
@@ -278,6 +284,22 @@ SETUP_IGNORE_SOURCES = {"unconnected"}  # unrouted board -> unconnected expected
 # A SINGLE-footprint silk violation (own silk over own pad) is a library
 # defect and still fails (S14 finding: easyeda2kicad ships such footprints).
 _TRANSIENT_SILK_CHECKS = {"silk_overlap", "silk_over_copper"}
+
+
+def write_waivers(dru_path: Path, footprints: list[str]) -> list[str]:
+    """Merge the footprint waivers (#813) for the board's footprints into its
+    .kicad_dru, so the setup DRC holds a vendor footprint's own pads to its own
+    pegs at the cited floor and not at KiCad's 0.25 mm default. Only the
+    aiee_fpwaive_* rules are rewritten: a rules_gen .kicad_dru from an
+    earlier run keeps every other rule. Returns the rule names written."""
+    rules = fpwaivers.rules(footprints=footprints)
+    old = dru_path.read_text(encoding="utf-8") if dru_path.is_file() else None
+    if old is None and not rules:
+        return []
+    new = fpwaivers.merge_dru(old, rules)
+    if new != old:
+        dru_path.write_text(new, encoding="utf-8")
+    return [r["name"] for r in rules]
 
 
 def _rejects_unconnected_nets(check: dict) -> bool:
@@ -700,6 +722,8 @@ def main(argv: list[str] | None = None) -> int:
                 shutil.copy(args.schematic, sch_dst)
             has_sch = True
 
+        waivers = write_waivers(out_dir / f"{args.name}.kicad_dru",
+                                [c["fp"] for c in components])
         check = self_check(cli, pcb_path, has_sch)
         unconnected_nets_skipped = False
         if _rejects_unconnected_nets(check):
@@ -740,6 +764,7 @@ def main(argv: list[str] | None = None) -> int:
             "origin_source": origin_source,
             "aux_origin": worker.get("aux_origin"),
             "cutouts": worker.get("cutouts", []),
+            "footprint_waivers": waivers,
             "self_check": check, "worker_notes": worker_notes,
             "unconnected_nets_skipped": unconnected_nets_skipped,
         }
