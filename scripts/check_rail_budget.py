@@ -227,8 +227,10 @@ def check(pcb: Path, cons: dict | None, table: dict | None = None,
                           - {n for n in src["pads"].values() if is_ground(n)}) \
             if rx else []
         if not out_nets:
-            not_judged.append(f"source {src['ref']} ({src['value']}): no "
-                              "output pin found (give rail_budget.sources."
+            why = ("its pads carry no pin names on this board"
+                   if not any(src["fns"].values()) else "no output pin found")
+            not_judged.append(f"source {src['ref']} ({src['value']}): {why} "
+                              "(give rail_budget.sources."
                               f"{src['ref']}.pins)")
             continue
         sources_seen += 1

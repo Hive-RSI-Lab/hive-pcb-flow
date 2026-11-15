@@ -92,3 +92,13 @@ def test_nothing_to_judge_without_a_budget(tmp_path):
     assert rc == 0
     rep = json.loads(out.read_text())
     assert rep.get("nothing_to_judge"), rep
+
+
+def test_a_source_on_a_board_without_pin_names_says_so():
+    # 620 of 634 project boards carry no pad pin names; the note must say
+    # why the output pin is unknown and how to give it
+    budget = {"loads": BLINKY_BUDGET["loads"]}
+    viols, _, nj = crb.check(BLINKY2, _cons(budget))
+    assert viols == [], viols
+    assert any("U2" in n and "no pin names" in n
+               and "rail_budget.sources.U2.pins" in n for n in nj), nj
