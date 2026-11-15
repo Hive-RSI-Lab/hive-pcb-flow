@@ -10,6 +10,7 @@ sexpdata surgery on the frozen netlists - nothing extra is committed.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import shutil
@@ -1063,10 +1064,114 @@ def test_swap_dry_run_names_the_clash(tmp_path):
     # the track it lands on, and any other net within its clearance
     assert "/CFG2" in {c["net"] for c in entry["clashes"]}
     assert not {c["net"] for c in entry["clashes"]} & {"GND", "/VDD"}
+    # each says how close and why (#1146); only the new pad 3 is new copper
+    for c in entry["clashes"]:
+        assert {"clearance_mm", "gap_mm", "pad", "rule"} <= set(c), c
+        assert c["gap_mm"] < c["clearance_mm"] and c["pad"] == "3", c
+    assert min(c["gap_mm"] for c in entry["clashes"]
+               if c["net"] == "/CFG2") == 0.0
     payload = _run(pcb, net, "--lib", str(lib), "--dry-run",
                    "--no-keep-copper")
     assert payload["plan"]["swap_new_fp"][0]["keep_copper"] is False
     assert any("--no-keep-copper" in n for n in payload["plan"]["notes"])
+
+
+def _dru_board(tmp_path: Path, name: str, *rules) -> Path:
+    """PD_PCB staged in tmp_path/name, its .kicad_dru given clearance rules
+    (rule name, min mm, condition[, layer])."""
+    (tmp_path / name).mkdir()
+    pcb = _stage(tmp_path / name, PD_PCB)
+    dru = pcb.with_suffix(".kicad_dru")
+    dru.write_text(dru.read_text(encoding="utf-8") + "".join(
+        f'(rule "{r[0]}"\n'
+        + (f"\t(layer {r[3]})\n" if len(r) > 3 else "")
+        + f"\t(constraint clearance (min {r[1]}mm))\n"
+        f'\t(condition "{r[2]}")\n)\n' for r in rules), encoding="utf-8")
+    return pcb
+
+
+def _clash_nets(found) -> set:
+    return {it.net for it, _ in found}
+
+
+def test_swap_clash_weighs_footprint_rules_per_pair(tmp_path):
+    """A .kicad_dru clearance rule held to a footprint counts only where it
+    may hold (#1146): the voice board's package ratings (0.19 mm on J801's
+    pads) ripped copper at every swap on the board. C5's nearest other-net
+    copper is a /CFG2 track 0.19 mm off, clear of the 0.1524 mm floor."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    pads = bg.pads_of(ref="C5")
+    pcb = _dru_board(tmp_path, "far", (
+        "d3_court", 0.5,
+        "A.intersectsCourtyard('D3') && B.intersectsCourtyard('D3')"), (
+        "j1_member", 0.5,
+        "A.memberOfFootprint('J1') && B.memberOfFootprint('J1')"))
+    assert bu.swap_clash_details(bg, "C5", pads, pcb) == []
+    pcb = _dru_board(tmp_path, "r4", (
+        "r4_court", 0.5,
+        "A.intersectsCourtyard('R4') && B.intersectsCourtyard('R4')"))
+    assert bu.swap_clash_details(bg, "C5", pads, pcb) == []
+    # R4 swapped in the same update: its new courtyard is not known yet
+    assert _clash_nets(bu.swap_clash_details(
+        bg, "C5", pads, pcb, pending={"R4"})) == {"/CFG2"}
+    pcb = _dru_board(tmp_path, "c5", (
+        "c5_court", 0.5,
+        "A.intersectsCourtyard('C5') || B.intersectsCourtyard('C5')"))
+    found = bu.swap_clash_details(bg, "C5", pads, pcb)
+    assert _clash_nets(found) == {"/CFG2"}
+    assert all(info["clearance_mm"] == 0.5 and info["rule"]
+               == "rule c5_court" and info["gap_mm"] < 0.5
+               for _, info in found)
+    # the same rule held to B.Cu leaves C5's front pads alone
+    pcb = _dru_board(tmp_path, "c5b", (
+        "c5_back", 0.5,
+        "A.intersectsCourtyard('C5') || B.intersectsCourtyard('C5')",
+        "B.Cu"))
+    assert bu.swap_clash_details(bg, "C5", pads, pcb) == []
+
+
+def test_swap_clash_leaves_copper_the_old_pad_held(tmp_path):
+    """Copper the board already held as close to the old pad is not the
+    swap's to rip (#1146); a new pad's own clash still is."""
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    old = bg.pads_of(ref="C5")
+    pcb = _dru_board(tmp_path, "m", (
+        "c5_member", 0.5,
+        "A.memberOfFootprint('C5') || B.memberOfFootprint('C5')"))
+    assert _clash_nets(bu.swap_clash_details(bg, "C5", old, pcb)) \
+        == {"/CFG2"}
+    assert bu.swap_clash_details(bg, "C5", old, pcb, old_pads=old) == []
+    smaller = [dataclasses.replace(p, size=(p.size[0] - 0.2,
+                                            p.size[1] - 0.2)) for p in old]
+    assert bu.swap_clash_details(bg, "C5", smaller, pcb,
+                                 old_pads=old) == []
+    # a third (GND) pad on the nearest /CFG2 track
+    c = Point(placelib.PlaceModel(PD_PCB).footprints["C5"].pos)
+    t = min(bg.tracks_of(net="/CFG2"), key=lambda t: t.shape.distance(c))
+    q = nearest_points(t.shape, c)[0]
+    pad3 = dataclasses.replace(old[0], number="3", net="GND", shape="rect",
+                               size=(0.3, 0.3), center=(q.x, q.y),
+                               angle=0.0, rratio=0.0)
+    found = bu.swap_clash_details(bg, "C5", old + [pad3], pcb, old_pads=old)
+    assert found and {info["pad"] for _, info in found} == {"3"}
+    assert min(info["gap_mm"] for it, info in found
+               if it.net == "/CFG2") == 0.0
+    # swap_clashes: the same items, without the detail
+    assert bu.swap_clashes(bg, "C5", old + [pad3], pcb, old_pads=old) \
+        == [it for it, _ in found]
+
+
+def test_rule_layer_ok():
+    ok = bu._rule_layer_ok
+    assert ok(None, "In2.Cu") and ok("outer", "B.Cu")
+    assert not ok("outer", "In1.Cu")
+    assert ok("inner", "In12.Cu") and not ok("inner", "F.Cu")
+    assert ok("F.Cu", "F.Cu") and not ok("F.Cu", "B.Cu")
+    assert not ok("In1.Cu", "In2.Cu")
+    # a name it does not read takes in every layer: the stricter reading
+    assert ok("F.Silkscreen", "F.Cu") and ok("Edge.Cuts", "In1.Cu")
 
 
 @pytest.mark.smoke

@@ -1014,8 +1014,9 @@ def _snap_legs(ops):
             for op in ops if op["op"] == "add_track"]
 
 
-def _rules_clearance(pcb: Path, nets) -> tuple[dict, float, float,
-                                                dict | None, float, float]:
+def _rules_clearance(pcb: Path, nets, *, scoped: bool = True
+                     ) -> tuple[dict, float, float, dict | None, float,
+                                float]:
     """(per-net clearance, board floor, copper-to-edge, hard per-net, hard
     floor, hole clearance) from the .kicad_pro netclasses and the .kicad_dru
     beside the board. hard is None unless the .kicad_dru carries a
@@ -1025,7 +1026,12 @@ def _rules_clearance(pcb: Path, nets) -> tuple[dict, float, float,
     depends on the pair there, so the fallback takes the conservative
     maximum and a scoped rule can only make it stricter. Hole
     clearance: the board setup's min_hole_clearance (KiCad's 0.25 mm when
-    unset), raised by any .kicad_dru hole_clearance rule."""
+    unset), raised by any .kicad_dru hole_clearance rule. scoped=False
+    keeps a clearance rule held to a footprint (a courtyard or
+    memberOfFootprint test, route_critical.dru_condition_scoped) out of
+    the floor, for a caller that weighs such rules per pair itself
+    (board_update.swap_clash_details, #1146): there the safe reading is
+    the one that rips less."""
     import json  # noqa: PLC0415
     import route_critical as rc  # noqa: PLC0415 - heavy, lazy
     pro, dru = pcb.with_suffix(".kicad_pro"), pcb.with_suffix(".kicad_dru")
@@ -1063,7 +1069,9 @@ def _rules_clearance(pcb: Path, nets) -> tuple[dict, float, float,
         if r["nets"]:
             continue
         if r["constraint"] == "clearance":
-            floor = max(floor, r["min_mm"])
+            if scoped or not rc.dru_condition_scoped(
+                    rc.parse_dru_condition(r["condition"])):
+                floor = max(floor, r["min_mm"])
         elif r["constraint"] == "edge_clearance":
             edge = max(edge, r["min_mm"])
     if hard is not None and isinstance(rules.get("min_clearance"),

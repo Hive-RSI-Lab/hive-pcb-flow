@@ -449,6 +449,99 @@ def test_build_net_clearances_class_plus_dru(tmp_path):
     assert rc.build_net_clearances(bad, dru, nets) is None
 
 
+# A 4-layer board's clearance rules held to a footprint (#1146): a package
+# rating on J801's own pads, one on U702's courtyard, a BGA escape at U301.
+DRU_J801 = "A.memberOfFootprint('J801') && B.memberOfFootprint('J801')"
+DRU_U702 = ("A.intersectsCourtyard('U702') && B.intersectsCourtyard('U702')"
+            " && A.Type != 'Zone' && B.Type != 'Zone'")
+DRU_U301 = "A.intersectsCourtyard('U301') || B.intersectsCourtyard('U301')"
+
+
+def test_parse_dru_condition_reads_footprint_rules():
+    p = rc.parse_dru_condition
+    assert p(DRU_J801) == ("and", [("scope", "A", "member", "J801"),
+                                   ("scope", "B", "member", "J801")])
+    assert p(DRU_U702) == ("and", [
+        ("scope", "A", "court", "U702"), ("scope", "B", "court", "U702"),
+        ("type", "A", "!=", "Zone"), ("type", "B", "!=", "Zone")])
+    assert p(f"( {DRU_U301} )") == ("or", [("scope", "A", "court", "U301"),
+                                           ("scope", "B", "court", "U301")])
+    assert p("B.insideBackCourtyard('U1')") == ("scope", "B", "back", "U1")
+    assert p(None) == p("  ") == ("and", [])
+    # && binds tighter than ||, and a quoted || is no operator
+    assert p("A.NetName == 'a||b' || (A.Type == 'via' && B.Type == 'pad')") \
+        == ("or", [("net", "A", "==", "a||b"), ("and", [
+            ("type", "A", "==", "via"), ("type", "B", "==", "pad")])])
+    # what it does not read stays whole: negation, Layer, unbalanced parens
+    for text in ("!A.memberOfFootprint('J1')", "A.Layer == 'F.Cu'",
+                 "A.memberOfFootprint('J1'"):
+        assert p(text) == ("other", text)
+
+
+def test_dru_condition_scoped():
+    p = rc.parse_dru_condition
+    for text in (DRU_J801, DRU_U702, DRU_U301,
+                 "A.memberOfFootprint('J1') && A.NetName == 'X'"):
+        assert rc.dru_condition_scoped(p(text)), text
+    for text in (None, "A.NetName == 'VCC'", "A.Type == 'via'",
+                 "A.memberOfFootprint('J1') || A.NetName == 'X'",
+                 "!A.memberOfFootprint('J1')"):
+        assert not rc.dru_condition_scoped(p(text)), text
+
+
+def test_dru_selector_matches():
+    m = rc.dru_selector_matches
+    assert m("J801", "J801") is True and m("J8*", "J801") is True
+    assert m("U?01", "U301") is True and m("U?01", "U3001") is False
+    # the whole reference, case and [ ] read as they are
+    assert m("J1", "J10") is False and m("j801", "J801") is False
+    assert m("J[1]", "J1") is False and m("J[1]", "J[1]") is True
+    # a component class, or a library id with no fpid given: cannot tell
+    assert m("${CLASS:Power}", "U1") is None
+    assert m("aiee:R0603", "R4") is None
+    assert m("aiee:R0603", "R4", "aiee:R0603") is True
+    assert m("*:R0603", "R4", "aiee:R0805") is False
+
+
+def test_dru_rule_may_hold_tries_each_item_as_a():
+    from shapely.geometry import LineString
+    pad = geom.Pad(ref="J801", number="1", net="/VDD", shape="rect",
+                   size=(1.0, 1.0), center=(0.0, 0.0), angle=0.0,
+                   rratio=0.0, layers=("F.Cu",))
+    trk = geom.Track(net="/CFG2", layer="F.Cu", width=0.2,
+                     shape=LineString([(0, 1), (2, 1)]))
+    via = geom.Via(net="GND", at=(0.0, 2.0), diameter=0.6, drill=0.3,
+                   layers=("F.Cu", "B.Cu"))
+
+    def member(fn, sel, item):  # memberOfFootprint: a pad of the part
+        return isinstance(item, geom.Pad) and item.ref == sel
+
+    def at_pad(fn, sel, item):  # only the pad meets the courtyard
+        return item is pad
+
+    j801, u301 = (rc.parse_dru_condition(t) for t in (DRU_J801, DRU_U301))
+    assert rc.dru_rule_may_hold(j801, pad, pad, member)
+    assert not rc.dru_rule_may_hold(j801, pad, trk, member)
+    # an || on either item holds whichever is A
+    assert rc.dru_rule_may_hold(u301, trk, pad, at_pad)
+    assert rc.dru_rule_may_hold(u301, pad, trk, at_pad)
+    assert not rc.dru_rule_may_hold(u301, trk, via, at_pad)
+    # a scope it cannot answer may hold; Type != 'Zone' holds for copper
+    u702 = rc.parse_dru_condition(DRU_U702)
+    assert rc.dru_rule_may_hold(u702, pad, trk, lambda *_: None)
+    assert not rc.dru_rule_may_hold(u702, pad, trk, lambda *_: False)
+    # a one-way condition holds with the items either way round
+    one_way = rc.parse_dru_condition("A.Type == 'via' && B.Type == 'pad'")
+    assert rc.dru_rule_may_hold(one_way, pad, via, member)
+    assert not rc.dru_rule_may_hold(one_way, pad, trk, member)
+    # NetName: case-insensitive, * a wildcard; a track may be an arc
+    net = rc.parse_dru_condition("A.NetName == '/cfg*' && B.Type == 'Pad'")
+    assert rc.dru_condition_eval(net, trk, pad, member) is True
+    assert rc.dru_condition_eval(net, via, pad, member) is False
+    assert rc.dru_condition_eval(
+        rc.parse_dru_condition("A.Type == 'arc'"), trk, pad, member) is None
+
+
 def test_power_net_clearances_raises_track_nets_only(tmp_path):
     """KRT fractional-margin workaround: the power runs keep half a grid step
     more off nets already carrying tracks (usbbuck4: VBUS 0.1854 mm from the

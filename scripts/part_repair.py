@@ -742,7 +742,8 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         rip.add(it, "copper on an old pad")
     clashes = 0
     for r in refs:
-        hits = board_update.swap_clashes(bg0, r, new[r], base)
+        hits = board_update.swap_clashes(bg0, r, new[r], base,
+                                         pending=set(refs) - {r})
         clashes += len(hits)
         for it in hits:
             rip.add(it, f"other-net copper too close to {r}'s new pads")
