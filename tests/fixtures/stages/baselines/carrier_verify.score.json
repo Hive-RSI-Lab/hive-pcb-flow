@@ -27,6 +27,7 @@
    "check_ddr_timing": 0,
    "check_ep_paste": 13,
    "check_fp_attr": 0,
+   "check_fp_package": 0,
    "check_isolation": 0,
    "check_kelvin": 0,
    "check_length_groups": 0,
@@ -34,6 +35,7 @@
    "check_model_fit": 0,
    "check_model_paths": 23,
    "check_net_tie": 0,
+   "check_pinouts": 0,
    "check_power_path": 1,
    "check_reset_drive": 0,
    "check_rf_match": 0,
@@ -47,8 +49,7 @@
    "check_via_stubs": 0,
    "check_vias": 0,
    "check_wicking": 74,
-   "netlist_audit": 0,
-   "check_pinouts": 0
+   "netlist_audit": 0
   },
   "by_kind": {
    "antenna_side_clearance": 1,

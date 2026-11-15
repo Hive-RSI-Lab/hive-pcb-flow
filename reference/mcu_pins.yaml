@@ -10,6 +10,9 @@
 #               functions bring out (CHxN is channel x's complement, so it
 #               shares channel x)
 #   input_only  pins the part can only read
+#   i2c         GPIO: the one I2C block and line (I2C0_SDA) its alternate
+#               function brings out; a pin named GP4 or GPIO26_ADC0 is
+#               looked up by its GPIOn
 #   source      where the table comes from: the document, its revision, the table
 #
 # loads: parts whose inputs need an MCU function.
@@ -123,6 +126,48 @@ mcus:
       ("SLRD is the input-only read strobe", "SLWR is the input-only
       write strobe"); CTL0-2/FLAGA-C are O/Z
     input_only: [RDY0, RDY1, RDY2, RDY3, RDY4, RDY5]
+
+  - mpn: RP2040 (and the Raspberry Pi Pico / Pico W module)
+    # not Pico 2 / RP2350: its function table has not been read here
+    match: '^(RP2040|(Raspberry[ _]?Pi[ _]?)?Pico(?![ _-]?2)(?![A-Za-z0-9]))'
+    verified: true   # io_bank0.h at pico-sdk 2.1.0 read 2026-11-14
+    source: >-
+      Raspberry Pi pico-sdk 2.1.0,
+      src/rp2040/hardware_regs/include/hardware/regs/io_bank0.h, the
+      GPIOn_CTRL FUNCSEL values (the RP2040 datasheet section 2.19.2
+      function table): GPIOn's function 3 is I2C((n>>1)&1) SDA for even n,
+      SCL for odd n
+    i2c:
+      GPIO0: I2C0_SDA
+      GPIO1: I2C0_SCL
+      GPIO2: I2C1_SDA
+      GPIO3: I2C1_SCL
+      GPIO4: I2C0_SDA
+      GPIO5: I2C0_SCL
+      GPIO6: I2C1_SDA
+      GPIO7: I2C1_SCL
+      GPIO8: I2C0_SDA
+      GPIO9: I2C0_SCL
+      GPIO10: I2C1_SDA
+      GPIO11: I2C1_SCL
+      GPIO12: I2C0_SDA
+      GPIO13: I2C0_SCL
+      GPIO14: I2C1_SDA
+      GPIO15: I2C1_SCL
+      GPIO16: I2C0_SDA
+      GPIO17: I2C0_SCL
+      GPIO18: I2C1_SDA
+      GPIO19: I2C1_SCL
+      GPIO20: I2C0_SDA
+      GPIO21: I2C0_SCL
+      GPIO22: I2C1_SDA
+      GPIO23: I2C1_SCL
+      GPIO24: I2C0_SDA
+      GPIO25: I2C0_SCL
+      GPIO26: I2C1_SDA
+      GPIO27: I2C1_SCL
+      GPIO28: I2C0_SDA
+      GPIO29: I2C0_SCL
 
 loads:
   - mpn: DRV8874

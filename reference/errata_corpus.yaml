@@ -695,8 +695,14 @@ holdout:
     source_quote: "placed with the 7Seg 0.2in (GS-2011AB) symbol, whose pin numbering does not match the 0.8\" part; the common-anode and two segment pins land wrong"
     fault_class: LIB (symbol pin map vs part)
     blind: missed
-    verdict: missed
-    follow_up: "a part placed with another part's symbol (#1086)"
+    verdict: caught
+    caught_by: "#1134"
+    catch: {script: netlist_audit, kind: symbol_value_mismatch, refs: [U2, U4, U9, U11]}
+    note: >-
+      Not an independent catch: the rule (#1086) was written after this
+      defect was read. It reads the symbol's own size or part number against
+      the Value, not this board. The warning names all four 0.8 in digits on
+      v2.0 and is gone on v3.0.
 - id: cmm2-jlc
   url: https://github.com/Manawyrm/CMM2-JLC
   commit: 318b012b10ac030cdc8469f89d6df7e5b2cf0741
@@ -954,8 +960,16 @@ holdout:
     source_quote: "OLED CLK and SDA signals are transposed."
     fault_class: SCH (swapped signals)
     blind: missed
-    verdict: missed
-    follow_up: "a module footprint's pin labels against the module's pin order (SDA/SCK on OLED modules)"
+    verdict: caught
+    caught_by: "#1134"
+    catch: {script: netlist_audit, kind: mcu_i2c_role, refs: [U301]}
+    note: >-
+      Not an independent catch: the rule was written after this defect was
+      read, from the RP2040's I2C pin functions (pico-sdk io_bank0.h), not
+      from this board. It sees the swap on the Pico side: GPIO4 (I2C0 SDA)
+      on OLED_SCK and GPIO5 (I2C0 SCL) on OLED_SDA. It fires on v1.0 and
+      v1.1 too (the same wiring, before the erratum was written) and is
+      gone on v1.4.
   - id: pico-if1-v13-2
     summary: SD card reader card-detect pin not connected
     source_quote: "SD Card reader card detect pin needs connecting up."
@@ -984,8 +998,14 @@ holdout:
     source_quote: "Fix a symbol issue where pins was flipped and not ordered causing a clock problem"
     fault_class: LIB (symbol pinout)
     blind: missed
-    verdict: missed
-    follow_up: "symbol pin numbers against the datasheet for logic ICs check_pinouts does not know"
+    verdict: caught
+    caught_by: "#1134"
+    catch: {script: netlist_audit, kind: bus_order_flipped, refs: [U26, U27, U33, U34]}
+    note: >-
+      Not an independent catch: the rule was written after this defect was
+      read. On V5.0 one unit of each SN74LV393A divider chain counts its
+      QA..QD outputs onto the clock nets the other way round from its twin
+      unit. The warning is gone on V5.1.
   - id: gcm-v50-3
     summary: J7 on the wrong footprint
     source_quote: "Footprint of J7 have been correctly replaced"
