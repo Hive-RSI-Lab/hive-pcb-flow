@@ -269,6 +269,18 @@ def test_malformed_block_stops(tmp_path, bad):
         _run(_board(tmp_path), _cons(tmp_path, **bad))
 
 
+def test_comment_keys_pass_and_typos_still_stop(tmp_path):
+    """#1097: `_` comment keys on the ddr block and on a group pass, as
+    constraints_lint passes them; a misspelled key still stops."""
+    groups = [{"name": "BYTE0", "kind": "dq", "_why": "lane 0"},
+              {"name": "ADDR_CMD", "kind": "addr"},
+              {"name": "DQS0", "kind": "dqs", "clock": "CK"}]
+    _run(_board(tmp_path), _cons(tmp_path, _why="from the SoC guide",
+                                 groups=groups))
+    with pytest.raises(cdt.CheckError, match="unknown"):
+        _run(_board(tmp_path), _cons(tmp_path, rate_mt=800))
+
+
 def test_unrouted_net_not_judged(tmp_path):
     pcb = _board(tmp_path)
     lines = pcb.read_text().splitlines(keepends=True)

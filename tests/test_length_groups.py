@@ -237,6 +237,17 @@ def test_unrouted_open_and_stale(tmp_path):
     assert all(v["severity"] == "warning" for v in p["violations"])
 
 
+def test_comment_keys_pass_and_typos_still_stop(tmp_path):
+    """#1097: a `_why` on a group passes, as constraints_lint passes it;
+    a misspelled key still stops the check."""
+    pcb = board_bus(tmp_path, {"/D2": 0.4})
+    g = {"name": "BYTE0", "nets": ["D[0-3]"], "ref_nets": ["DQS"],
+         "tol_mm": 0.635, "_why": "DDR byte lane"}
+    assert run(pcb, [g])["status"] == "pass"
+    with pytest.raises(checklib.CheckError, match="unknown key"):
+        run(pcb, [dict(g, tol_mn=1)])
+
+
 def test_bad_group_is_an_error(tmp_path):
     pcb = board_bus(tmp_path, {})
     for bad in ({"name": "x"}, {"nets": ["D0"], "window_mm": [1, -1]},

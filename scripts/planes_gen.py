@@ -331,7 +331,7 @@ def build_plan(bg: geom.BoardGeom, constraints: dict | None,
     for i, z in enumerate(plan):
         if not isinstance(z, dict):
             raise CheckError(f"planes[{i}]: entries must be objects")
-        unknown = z.keys() - _PLANE_KEYS
+        unknown = checklib.data_keys(z) - _PLANE_KEYS
         if unknown:
             raise CheckError(f"planes[{i}]: unknown keys {sorted(unknown)}")
         net, layer = z.get("net"), z.get("layer")
