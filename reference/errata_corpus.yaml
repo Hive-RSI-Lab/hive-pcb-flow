@@ -1083,8 +1083,14 @@ holdout:
     source_quote: "**C9 (100 uF)** previously sat on an 0603 footprint that cannot physically host a 100 uF cap."
     fault_class: LIB (footprint too small for part)
     blind: missed
-    verdict: missed
-    follow_up: "capacitance against case size: no 100 uF part comes in 0603"
+    verdict: caught
+    caught_by: "#1129"
+    catch: {script: check_fp_package, kind: lcsc_value_mismatch, refs: [C9]}
+    note: >-
+      Not an independent catch: the rule was written after this defect was
+      read. It sees C9 through its JLC number, C12530, a 2.2 uF 0402 part
+      (also footprint_package_mismatch, 0402 on 0603), not through the case
+      size a 100 uF part needs. Needs --live (JLC's record). On V3, not on V4.
 - id: healthmonitor
   url: https://github.com/konstantinosfragkoulis/HealthMonitor
   commit: 2d22f3d8d10ca25a549e55dbbcf16ec4b56cc00f

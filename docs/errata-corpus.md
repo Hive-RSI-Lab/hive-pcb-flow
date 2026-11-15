@@ -19,7 +19,7 @@ only for the round's first reading: each round is swept once.
 - Holdout round 1, blind: 1 of 10 caught (1 caught, 9 missed).
 - Holdout round 1, with the rules written since: 2 of 10 caught (2 caught, 8 missed).
 - Holdout round 2, blind: 1 of 26 caught (1 caught, 25 missed).
-- Holdout round 2, with the rules written since: 1 of 26 caught (1 caught, 25 missed).
+- Holdout round 2, with the rules written since: 2 of 26 caught (2 caught, 24 missed).
 
 ## A new holdout round
 
@@ -342,7 +342,7 @@ round, pinned and swept before those rules are:
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | flexgrid-v3-1: 1N5819 and 1N4007 on D_SOD-123F; the fab stocks the SOD-123 W parts | LIB (wrong footprint variant) | missed | missed | the footprint against the stocked part's package (SOD-123F against SOD-123W) |
-| flexgrid-v3-2: C9 (100 uF) on an 0603 footprint that cannot hold the part | LIB (footprint too small for part) | missed | missed | capacitance against case size: no 100 uF part comes in 0603 |
+| flexgrid-v3-2: C9 (100 uF) on an 0603 footprint that cannot hold the part | LIB (footprint too small for part) | missed | caught on rev A, gone on rev B, since #1129 (`check_fp_package` lcsc_value_mismatch) | Not an independent catch: the rule was written after this defect was read. It sees C9 through its JLC number, C12530, a 2.2 uF 0402 part (also footprint_package_mismatch, 0402 on 0603), not through the case size a 100 uF part needs. Needs --live (JLC's record). On V3, not on V4. |
 
 ### healthmonitor: HM-Rev1 -> HM-Rev2
 

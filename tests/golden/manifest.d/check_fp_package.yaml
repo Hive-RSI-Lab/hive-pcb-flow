@@ -1,0 +1,14 @@
+# Seeded fault for check_fp_package (docs/miss-taxonomy.md class 1).
+mutants:
+  lcsc-0402-on-0603:
+    board: blinky2
+    script: mutations/lcsc_0402_on_0603.py
+    check: check_fp_package
+    defect: >-
+      BOM fault: C3's LCSC code C1525 is an 0402 capacitor on a C_0603
+      footprint, so JLC places an 0402 part on 0603 pads (oasis Rfbb1,
+      flexgrid-v3-2 C9)
+    expect:
+      kind: footprint_package_mismatch
+      ref: C3
+      pos: [135.7, 114.3]   # C3's origin

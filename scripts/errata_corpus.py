@@ -31,7 +31,9 @@ board, check_straps on the board with the netlist kicad-cli exports from the
 schematic, check_connector_fit, check_silk and check_esd on the board (no
 parts/, so check_esd reads no victim's abs max), check_pinouts on the
 schematic, check_bom_sync on the board with --live (the package of each LCSC part
-comes from JLC's record, as nothing in the foreign tree holds it), check_thermal on the board
+comes from JLC's record, as nothing in the foreign tree holds it),
+check_fp_package on the board with --live (each part's package from JLC's
+record of its LCSC/JLC number or of the exact part its MPN names), check_thermal on the board
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
@@ -216,6 +218,11 @@ def _check_bom_sync(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_bom_sync.py", "--pcb", str(_pcb(b, rev, repo, empty)), "--live"]
 
 
+def _check_fp_package(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    return ["check_fp_package.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--live"]
+
+
 def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board alone: with no thermal entry it screens the power ICs
     reference/thermal_parts.yaml knows (#884)."""
@@ -270,6 +277,7 @@ def _dfm(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
 RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_current": _check_current, "check_straps": _check_straps,
            "check_bom_sync": _check_bom_sync,
+           "check_fp_package": _check_fp_package,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
            "check_pinouts": _check_pinouts, "check_esd": _check_esd,
