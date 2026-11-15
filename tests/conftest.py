@@ -338,6 +338,9 @@ def _easyeda_offline(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("HWDE_EASYEDA_OFFLINE", "1")
     # nor asks JLC or LCSC for stock (test_stock_check fakes the sources)
     monkeypatch.setenv("HWDE_STOCK_OFFLINE", "1")
+    # nor reads or fills the user's keyless stock cache (#1241)
+    monkeypatch.setenv("HWDE_STOCK_CACHE",
+                       str(tmp_path_factory.mktemp("stock_cache_empty")))
     # and writes no board's ledger.json unless it says so (test_ledger)
     monkeypatch.setenv("HWDE_LEDGER_WRITE", "0")
     # and fsyncs nothing (safelib): every file here is scratch, and on a

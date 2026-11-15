@@ -35,6 +35,15 @@ def down(url):
     raise stocklib.SourceError("HTTP 403 from " + url)
 
 
+@pytest.fixture(autouse=True)
+def _no_waiting(monkeypatch):
+    """Back-off waits are recorded, not slept; the pacer starts clean."""
+    slept = []
+    monkeypatch.setattr(keyless_stock, "_sleep", slept.append)
+    monkeypatch.setattr(keyless_stock, "_last", [0.0])
+    return slept
+
+
 def only(*names):
     """The fixture page with just these distributors' blocks."""
     head, *blocks = re.split(r'(?=<div id="list\d+")', PAGE)
@@ -174,3 +183,132 @@ def test_cli_mpn_mode_needs_an_mpn_column_and_stays_live(tmp_path,
     assert stock_check.main(["--mpn", "--bom", str(bom), "--out",
                              str(out)]) == 2
     assert "no MPN column" in json.loads(out.read_text())["error"]
+
+
+# -- a polite client (#1241) ------------------------------------------------
+
+def _seq(*answers):
+    """A fetcher giving these answers in turn (an exception is raised)."""
+    asked = []
+
+    def fetch(url):
+        asked.append(url)
+        a = answers[min(len(asked), len(answers)) - 1]
+        if isinstance(a, Exception):
+            raise a
+        return a
+    fetch.asked = asked
+    return fetch
+
+
+def test_a_part_is_asked_once_a_day(tmp_path, monkeypatch):
+    f = page()
+    a = keyless_stock.judge(MPN, 10, fetch=f, cache=tmp_path)
+    b = keyless_stock.judge(MPN, 10, fetch=f, cache=tmp_path)
+    assert len(f.asked) == 1 and a["status"] == b["status"] == "ok"
+    assert b["cached_at"] == a["cached_at"]
+    # a day later it is asked again
+    real = keyless_stock.time.time
+    monkeypatch.setattr(keyless_stock.time, "time",
+                        lambda: real() + keyless_stock.CACHE_TTL + 1)
+    keyless_stock.judge(MPN, 10, fetch=f, cache=tmp_path)
+    assert len(f.asked) == 2
+
+
+def test_the_quiet_twin_no_cache_asks_every_time():
+    f = page()
+    keyless_stock.judge(MPN, 10, fetch=f)
+    keyless_stock.judge(MPN, 10, fetch=f)
+    assert len(f.asked) == 2
+
+
+def test_an_unanswered_part_is_not_cached(tmp_path):
+    f = _seq(stocklib.SourceError("HTTP 403 from x"), PAGE)
+    assert keyless_stock.judge(MPN, 10, fetch=f,
+                               cache=tmp_path)["status"] == "not_judged"
+    assert keyless_stock.judge(MPN, 10, fetch=f,
+                               cache=tmp_path)["status"] == "ok"
+    assert len(f.asked) == 2
+
+
+def test_throttle_backs_off_and_honours_retry_after(_no_waiting):
+    f = _seq(keyless_stock.Throttled("HTTP 429 from x", retry_after=7),
+             PAGE)
+    assert keyless_stock.judge(MPN, 10, fetch=f)["status"] == "ok"
+    assert _no_waiting == [7] and len(f.asked) == 2
+    _no_waiting.clear()
+    # no Retry-After: BACKOFF, then double it
+    f = _seq(keyless_stock.Throttled("HTTP 503 from x"),
+             keyless_stock.Throttled("HTTP 503 from x"), PAGE)
+    assert keyless_stock.judge(MPN, 10, fetch=f)["status"] == "ok"
+    b = keyless_stock.BACKOFF
+    assert _no_waiting == [b, 2 * b]
+
+
+def test_planted_still_throttled_is_not_judged_with_the_throttle_reason(
+        _no_waiting):
+    f = _seq(keyless_stock.Throttled("HTTP 429 from x", retry_after=999))
+    v = keyless_stock.judge(MPN, 1, fetch=f)
+    assert v["status"] == "not_judged" and v["reason"] == "throttled"
+    assert "throttled" in v["why"] and "HTTP 429" in v["why"]
+    assert len(f.asked) == keyless_stock.TRIES
+    assert max(_no_waiting) == keyless_stock.MAX_WAIT  # capped
+    # Findchips' empty page is its throttle too
+    v = keyless_stock.judge(MPN, 1, fetch=page(only("Nobody")))
+    assert v["reason"] == "throttled"
+    # the quiet twin: a 403 is no answer, asked once, not waited on
+    _no_waiting.clear()
+    f = _seq(stocklib.SourceError("HTTP 403 from x"))
+    v = keyless_stock.judge(MPN, 1, fetch=f)
+    assert v["reason"] == "no_answer" and len(f.asked) == 1
+    assert _no_waiting == []
+
+
+def test_http_text_paces_requests_and_sends_a_plain_user_agent(monkeypatch):
+    assert keyless_stock.PACE >= 1
+    sent, at = [], []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"ok"
+
+    def urlopen(req, timeout):
+        sent.append(req.get_header("User-agent"))
+        at.append(keyless_stock.time.monotonic())
+        return Resp()
+    monkeypatch.setattr(keyless_stock.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(keyless_stock, "PACE", 0.3)
+    keyless_stock.http_text("https://example.invalid/a")
+    keyless_stock.http_text("https://example.invalid/b")
+    assert at[1] - at[0] >= 0.29
+    assert sent == [stocklib.UA] * 2
+    assert not re.search(r"@|https?:|\.(com|org|net)\b", stocklib.UA)
+
+
+def test_http_text_turns_429_into_throttled(monkeypatch):
+    import email.message
+    import urllib.error
+    hdrs = email.message.Message()
+    hdrs["Retry-After"] = "12"
+
+    def urlopen(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many", hdrs,
+                                     None)
+    monkeypatch.setattr(keyless_stock.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(keyless_stock, "PACE", 0)
+    with pytest.raises(keyless_stock.Throttled) as e:
+        keyless_stock.http_text("https://example.invalid/a")
+    assert e.value.retry_after == 12
+
+
+def test_cache_dir_follows_the_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("HWDE_STOCK_CACHE", str(tmp_path))
+    assert keyless_stock.cache_dir() == tmp_path
+    monkeypatch.setenv("HWDE_STOCK_CACHE", "0")
+    assert keyless_stock.cache_dir() is None
