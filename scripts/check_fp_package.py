@@ -288,7 +288,8 @@ class Records:
                 if len(seen) > 1 else f"package {pk[0]!r} not read"
         r = exact[0]
         codes = ", ".join(x["code"] for x in exact[:4])
-        return {**r, "source": f"JLC's parts named {mpn} ({codes})"}, ""
+        return {**r, "source": f"JLC's parts named {mpn} ({codes})",
+                "rows": len(exact)}, ""
 
 
 # ------------------------------------------------------------------ values
@@ -351,8 +352,10 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
         kind = (re.match(r"[A-Z]+", ref.upper()) or [""])[0]
         if code and kind in _DESC_VAL:
             # "2.2 uF": engcalc reads the number alone without the unit
+            # and the Greek mu (U+03BC) is read as the micro sign
             want = engcalc.parse_value(re.sub(
-                r"(\d)\s+(?=[pnuµmkKMGR]|[Oo]hm|Ω)", r"\1", fp["value"]))
+                r"(\d)\s+(?=[pnuµmkKMGR]|[Oo]hm|Ω)", r"\1",
+                fp["value"].replace("\u03bc", "\u00b5")))
             got = record_value(kind, rec.get("description", ""))
             if want and got:
                 values += 1
@@ -376,6 +379,13 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
             # a mount alone, from an SMD or PLUGIN word in a connector's
             # name, is too weak a reading to fail a part on
             skip("the package names give only a mount")
+            continue
+        if warn and code is None and rec.get("rows", 2) < 2 \
+                and part["mount"] and foot["mount"] \
+                and part["mount"] != foot["mount"]:
+            # a Value such as BAT85 names a part sold in more than one
+            # body; one JLC row in SMD says nothing of a THT footprint
+            skip("the Value names a part JLC has once, in another mount")
             continue
         same = _norm(rec["package"]) == _norm(fp["fpid"].split(":")[-1])
         why_not = [] if same else pkgname.compare(part, foot, fp["pads"])

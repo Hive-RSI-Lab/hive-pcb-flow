@@ -124,6 +124,8 @@ def describe(name: str | None) -> dict:
             continue
         if fam in ("SMA", "SMB", "SMC") and _RF.search(n):
             continue  # an SMA coax connector, not the DO-214 diode case
+        if fam == "MELF" and re.search(r"0204(?![0-9])", n):
+            fam = "MINIMELF"  # MELF 0204 is the MiniMELF (SOD-80) body
         out["family"], out["mount"] = fam, mount
         groups = [g for g in m.groups() if g]
         if fam in ("SOT-23", "SC-70"):

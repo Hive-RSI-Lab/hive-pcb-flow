@@ -216,3 +216,31 @@ def test_cli_exit_codes(tmp_path):
 
 def test_registered():
     assert "check_fp_package" in [c["name"] for c in verify_all.load_checks()]
+
+
+def test_greek_mu_and_melf_0204(tmp_path):
+    # echoplayer writes "10 μF" with the Greek mu; glasgow's MELF-0204
+    # parts sit on MiniMELF footprints, the same 0204 body
+    pcb = board(
+        tmp_path,
+        footprint("C1", "Capacitor_SMD:C_0805_2012Metric", "10 μF",
+                  {"LCSC": "C15850"}),
+        footprint("R34", "Resistor_SMD:R_MiniMELF_MMA-0204", "1k",
+                  {"LCSC": "C123"}),
+        parts=[{"lcsc": "C15850", "package": "0805",
+                "description": "10uF 25V X5R 0805 MLCC"},
+               {"lcsc": "C123", "package": "MELF-0204",
+                "description": "1kΩ MELF resistor"}])
+    viols, facts = run(pcb)
+    assert viols == []
+    assert facts["judged"] == 2 and facts["values_judged"] == 2
+
+
+def test_value_name_in_another_mount_not_judged(tmp_path):
+    # sizif: BAT85 is a DO-35 part; JLC stocks only the LL-34 one
+    pcb = board(tmp_path, footprint(
+        "D4", "Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal", "BAT85",
+        kind=THT, attr="through_hole"))
+    fetch = jlc([row("C82531", "BAT85", "LL-34")])
+    viols, facts = run(pcb, live=True, fetch=fetch)
+    assert viols == [] and facts["judged"] == 0
