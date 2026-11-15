@@ -623,7 +623,8 @@ HTSSOP-32 stays `smd`. Parts marked `board_only`, `exclude_from_bom` or
   it has no record of, and looks up an MPN (or a D/Q/U Value) when every
   JLC row of that exact model agrees on one package; that's a warning, for
   sweeps, not the gate. `facts.judged` counts the parts it judged.
-  Miss class 1 in [miss-taxonomy.md](miss-taxonomy.md).
+  Miss class 1 in [miss-taxonomy.md](miss-taxonomy.md). Planted fault
+  `lcsc-0402-on-0603`: blinky2's C3 (C_0603) given C1525, an 0402 part.
 
 ## Net ties and their bridges
 
