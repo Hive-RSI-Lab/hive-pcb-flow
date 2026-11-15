@@ -65,6 +65,8 @@ worse, both list the new violations on work/B (where, which net, the items'
 uuids), so the next try knows what to rip or move. Zones are
 refilled, not reshaped: a PATCH_<net> zone (zone_patch) whose fill met an
 old pad and meets no new pad of its net is named in the report's notes.
+The new vias have no teardrops (route_edit's add_via sets none), so a via
+that is ripped and replaced loses its drops, and DRC does not see it.
 
 Contract: --pcb is read only, except with --apply on a pass. Exit 0 pass,
 1 violations (a net would not join, or the board got worse: --pcb untouched,
@@ -663,12 +665,22 @@ def new_violations(drc0: dict, drc1: dict, area=None) -> list[dict]:
 
 
 def _vline(v: dict) -> str:
-    at = f" at ({v['pos'][0]:.3f}, {v['pos'][1]:.3f})" if v.get("pos") else ""
+    """One REPORT.md line. An item away from the marker is named where it
+    is: KiCad puts a zone's marker (starved_thermal) at the zone's position,
+    which may be far from the pad that starves."""
+    def xy(p):
+        return f"({p[0]:.3f}, {p[1]:.3f})"
+    at = f" at {xy(v['pos'])}" if v.get("pos") else ""
     on = ", ".join(x for x in (v.get("layer") and f"on {v['layer']}",
                                v.get("net") and f"net {v['net']}") if x)
-    uu = [it["uuid"] for it in v.get("items") or [] if it.get("uuid")]
+    items = v.get("items") or []
+    uu = [it["uuid"] for it in items if it.get("uuid")]
+    away = [f"{it.get('msg') or 'item'} at {xy(it['pos'])}" for it in items
+            if it.get("pos") and v.get("pos")
+            and math.dist(it["pos"], v["pos"]) > 1e-3]
     return (f"{v['key']}{at}{' ' + on if on else ''}: {v.get('msg') or ''}"
-            + (f" (items {', '.join(uu)})" if uu else ""))
+            + (f" (items {', '.join(uu)})" if uu else "")
+            + (f"; {'; '.join(away)}" if away else ""))
 
 
 def _write_ops(path: Path, ops: list) -> None:

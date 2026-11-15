@@ -31,9 +31,11 @@ positions, never file hashes.
    `part_repair.py` instead: it rips the copper the move spoils in a window
    round each part, makes the move, routes every net back to as few islands as
    it had, and keeps the result only if DRC got no worse and no violation is
-   new near the move (exit 1 and nothing written otherwise). With bare place_edit, re-route the affected nets
-   (`reroute-net`) before believing `drc_routed`. Unconnected items in DRC are
-   the honest signal.
+   new near the move (exit 1 and nothing written otherwise). Its new vias have
+   no teardrops, so a via it rips and replaces loses its drops: turn them back
+   on in KiCad (`route_teardrops.py --force` would turn them on board-wide).
+   With bare place_edit, re-route the affected nets (`reroute-net`) before
+   believing `drc_routed`. Unconnected items in DRC are the honest signal.
 2. **Neighbour silk does not move.** The footprint's own silk travels with it;
    the label you slid out of its way three edits ago does not. `check_silk`
    (verify, P8) catches the overlap, DRC does not.

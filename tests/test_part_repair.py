@@ -206,6 +206,14 @@ def test_new_violations_name_what_the_gate_counts():
     md = pr.report_md(p)
     assert md.count("- drc:track_dangling at") == pr.SHOWN
     assert "- and 2 more in part_repair.json" in md
+    # KiCad puts a starved_thermal marker at the zone's position, which may
+    # be far from the pad that starves: the line names the pad where it is
+    st = _vat("drc", "starved_thermal", "GND", (4.5, 9.5), (34.025, 51.5))
+    st["items"][1]["msg"] = "Pad 2 [GND] of C221 on B.Cu"
+    p["new_violations"] = pr.new_violations(drc0, {"violations": [st]})
+    assert "- drc:starved_thermal at (4.500, 9.500) on F.Cu, net GND:" \
+        " starved_thermal here (items u0-4.5, u1-34.025); Pad 2 [GND] of" \
+        " C221 on B.Cu at (34.025, 51.500)" in pr.report_md(p)
 
 
 def test_dangling_prunes_only_free_copper_in_the_window(u1):
