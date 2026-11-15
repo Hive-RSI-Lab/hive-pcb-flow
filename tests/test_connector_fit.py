@@ -7,6 +7,7 @@ then fixed."""
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import check_connector_fit as ccf  # noqa: E402
 import check_ep_paste as cep  # noqa: E402
 import datasheet_extract  # noqa: E402
 import verify_all  # noqa: E402
+from _boards import stock_footprints  # noqa: E402
 
 
 def _board(tmp_path, body, setup="") -> Path:
@@ -282,6 +284,82 @@ def test_no_paste_on_the_ep_and_a_plugged_via(tmp_path):
     vs, facts = cep.check(_board(tmp_path, qfn() + via(
         extra=" (capping yes) (filling yes)")))
     assert _kinds(vs) == ["ep_paste_high"] and facts["vias_under_paste"] == 1
+
+
+def _thermal_vias(bottom='"B.Cu"'):
+    """qfn() as KiCad's stock *_ThermalVias footprints draw it: the exposed
+    pad again on the bottom, the copper its thermal vias land on."""
+    copy = f'    (pad "9" smd rect (at 0 0) (size 3 3) (layers {bottom}))\n'
+    return qfn('"F.Cu" "F.Mask"', True).replace(
+        "    (attr smd)\n", "    (attr smd)\n" + copy)
+
+
+def _flip(body):
+    """The footprint on the back: every F. layer to B. and back (the
+    geometry needn't mirror for this)."""
+    return re.sub(r'"([FB])\.', lambda m: '"B.' if m[1] == "F" else '"F.',
+                  body)
+
+
+@pytest.mark.parametrize("bottom", ['"B.Cu"', '"B.Cu" "B.Mask"'])
+def test_copper_on_the_far_side_is_not_an_exposed_pad(tmp_path, bottom):
+    # hive-pcb-flow #1174: the bottom copy was a second exposed pad with no
+    # paste, an error on 417 of KiCad's 482 stock *_ThermalVias footprints
+    for body, side in ((_thermal_vias(bottom), "F"),
+                       (_flip(_thermal_vias(bottom)), "B")):
+        vs, facts = cep.check(_board(tmp_path, body))
+        assert vs == [], side
+        assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
+            [("9", side)]
+
+
+def test_stock_thermal_vias_qfn_passes_on_either_side(tmp_path):
+    lib = stock_footprints()
+    mod = lib and lib / "Package_DFN_QFN.pretty" / \
+        "QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
+    if not (mod and mod.is_file()):
+        pytest.skip("needs KiCad's footprint library")
+    first, rest = mod.read_text(encoding="utf-8").split("\n", 1)
+    body = first + "\n  (at 15 10)\n" + rest.replace('"REF**"', '"U1"', 1)
+    for text, side in ((body, "F"), (_flip(body), "B")):
+        vs, facts = cep.check(_board(tmp_path, text + "\n"))
+        # only the far-side copy is #1174's: the footprint's own thru_hole
+        # via pads under its paste windows are not modelled (no board vias)
+        assert "ep_paste_missing" not in _kinds(vs), side
+        assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
+            [("17", side)]
+
+
+@pytest.mark.parametrize("ep_layers,windows,cover", [
+    ('"F.Cu" "B.Cu" "F.Paste" "F.Mask"', False, 1.0),
+    ('"*.Cu" "F.Paste" "F.Mask"', False, 1.0),
+    ('"*.Cu" "F.Mask"', True, 0.64)])
+def test_a_two_sided_ep_takes_its_paste_from_the_parts_side(
+        tmp_path, ep_layers, windows, cover):
+    # copper on both sides: the paste is on the part's side, not whichever
+    # side sorts first
+    body = qfn(ep_layers, windows)
+    for text, side in ((body, "F"), (_flip(body), "B")):
+        vs, facts = cep.check(_board(tmp_path, text))
+        assert [(e["pad"], e["side"], e["coverage"])
+                for e in facts["exposed_pads"]] == [("9", side, cover)], side
+        assert "ep_paste_missing" not in _kinds(vs), side
+
+
+def _pads_to_far_side(body):
+    """Every pad's layers to the other side; the footprint's own layer
+    stays (pads a hand flip left behind)."""
+    return re.sub(r"\(layers [^)]*\)", lambda m: _flip(m[0]), body)
+
+
+def test_a_footprint_with_all_its_pads_on_the_far_side_is_still_checked(
+        tmp_path):
+    for text, layer in (
+            (_pads_to_far_side(qfn('"F.Cu" "F.Mask"')), "B.Paste"),
+            (_pads_to_far_side(_flip(qfn('"F.Cu" "F.Mask"'))), "F.Paste")):
+        vs, facts = cep.check(_board(tmp_path, text))
+        assert [(v["kind"], v["layer"]) for v in vs] == \
+            [("ep_paste_missing", layer)], layer
 
 
 def _gfx_windows(prefix="fp", layer="F.Paste", fill="yes", at=(0, 0)):
