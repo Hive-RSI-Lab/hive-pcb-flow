@@ -1205,6 +1205,246 @@
    "kind": "dfm_slot_size_preferred",
    "verdict": "real",
    "reason": "plated slots shorter than twice their width (JLC asks for length >= 2x width); the slots in the footprint are drawn that way"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    100.59,
+    104.048
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    100.59,
+    104.898
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    100.59,
+    105.748
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    100.59,
+    106.598
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    101.44,
+    104.048
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    101.44,
+    104.898
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    101.44,
+    105.748
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    101.44,
+    106.598
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    102.29,
+    104.048
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    102.29,
+    104.898
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    102.29,
+    105.748
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    102.29,
+    106.598
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    103.14,
+    104.048
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    103.14,
+    104.898
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    103.14,
+    105.748
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ep_paste",
+   "net": "GND",
+   "refs": [
+    "U8"
+   ],
+   "pos": [
+    103.14,
+    106.598
+   ],
+   "kind": "paste_on_via",
+   "verdict": "real",
+   "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
   }
  ]
 }

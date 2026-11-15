@@ -4984,8 +4984,8 @@
     92.404
    ],
    "kind": "paste_on_via",
-   "verdict": "real",
-   "reason": "measured against the footprint's exposed pad, paste and vias (IPC-7093 coverage)"
+   "verdict": "false",
+   "reason": "U3 pad 25's paste windows reach only 0.01-0.02 mm past the 0.3 mm via rims, within stencil registration: a graze, not paste on the via (measured for #1198; check_ep_paste.RIM_MM)"
   },
   {
    "gate": "verify",
@@ -4999,8 +4999,8 @@
     92.404
    ],
    "kind": "paste_on_via",
-   "verdict": "real",
-   "reason": "measured against the footprint's exposed pad, paste and vias (IPC-7093 coverage)"
+   "verdict": "false",
+   "reason": "U3 pad 25's paste windows reach only 0.01-0.02 mm past the 0.3 mm via rims, within stencil registration: a graze, not paste on the via (measured for #1198; check_ep_paste.RIM_MM)"
   },
   {
    "gate": "verify",
@@ -5014,8 +5014,8 @@
     91.104
    ],
    "kind": "paste_on_via",
-   "verdict": "real",
-   "reason": "measured against the footprint's exposed pad, paste and vias (IPC-7093 coverage)"
+   "verdict": "false",
+   "reason": "U3 pad 25's paste windows reach only 0.01-0.02 mm past the 0.3 mm via rims, within stencil registration: a graze, not paste on the via (measured for #1198; check_ep_paste.RIM_MM)"
   },
   {
    "gate": "verify",
@@ -5029,8 +5029,8 @@
     91.104
    ],
    "kind": "paste_on_via",
-   "verdict": "real",
-   "reason": "measured against the footprint's exposed pad, paste and vias (IPC-7093 coverage)"
+   "verdict": "false",
+   "reason": "U3 pad 25's paste windows reach only 0.01-0.02 mm past the 0.3 mm via rims, within stencil registration: a graze, not paste on the via (measured for #1198; check_ep_paste.RIM_MM)"
   },
   {
    "gate": "verify",
