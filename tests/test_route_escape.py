@@ -407,28 +407,31 @@ def test_pad_under_ball_is_a_placement_fault(tmp_path):
     """#994 (haos-voice U301 over C305/C306): a far-side cap whose pads sit
     under balls of other nets leaves those balls no via site at all; the
     place gate's place_metrics flags it. Planted: C1's pads (/CAPA, /CAPB)
-    straight under C3 and C4. Quiet twin: the same part where each pad
-    takes its ball's net (a decoupler's via in pad)."""
+    straight under E5 and E6, four rings deep in a 10 x 10 field (at
+    this board's 0.089 mm tracks the outer four rings could leave on the
+    surface and are not judged). Quiet twin: the
+    same part where each pad takes its ball's net (a decoupler's via in
+    pad)."""
     import place_metrics
-    # C3 and C4 of the 6 x 6, 0.8 mm field centred on (20, 15)
-    planted = board(tmp_path, name="bad", connector=False,
+    # E5 and E6 of the 10 x 10, 0.8 mm field centred on (20, 15)
+    planted = board(tmp_path, name="bad", n=10,
                     extra=_back_cap("C1", 20.0, 14.6, "/CAPA", "/CAPB"))
     v, hits = place_metrics.under_ball(planted)
     errs = {x["ball"]: x for x in v if x["severity"] == "error"}
-    assert set(errs) == {"U1.C3", "U1.C4"}, v
+    assert set(errs) == {"U1.E5", "U1.E6"}, v
     assert all(x["kind"] == "pad_under_ball" and x["sites_free"] == 0
                and "C1" in x["refs"] for x in errs.values())
     over = {(x["ball"], x["pad_net"]) for x in v
             if x["severity"] == "error" and x["pad"].startswith("C1")
             and "under U1 ball" in x["msg"]}
-    assert ("U1.C3", "/CAPA") in over and ("U1.C4", "/CAPB") in over
+    assert ("U1.E5", "/CAPA") in over and ("U1.E6", "/CAPB") in over
     payload, _ = place_metrics.run(["--pcb", str(planted)])
     assert any(x.get("kind") == "pad_under_ball"
                for x in payload["violations"])
     assert "ball_via_sites" in payload["coverage"]["failed"]
 
-    quiet = board(tmp_path, name="ok", connector=False,
-                  extra=_back_cap("C1", 20.0, 14.6, "/S2_2", "/S2_3"))
+    quiet = board(tmp_path, name="ok", n=10,
+                  extra=_back_cap("C1", 20.0, 14.6, "/S4_4", "/S4_5"))
     v, hits = place_metrics.under_ball(quiet)
     assert v == [], v
     # it still covers other balls' dog-bone spots, each with sites to spare
