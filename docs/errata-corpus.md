@@ -40,9 +40,12 @@ round, pinned and swept before those rules are:
 2. Each goes in the round's own sealed file, `holdout/round-N.yaml`
    (a `holdout:` list), with `swept: {flow: SHA, date, round: N}`, SHA
    being main as it stands, and its defects with the designer's quote,
-   before anyone reads the findings. `errata_corpus.py sweep ID...` runs
-   every check on both revisions; `load` merges the sealed files, so
-   `run` and `table` see them too.
+   before anyone reads the findings. `errata_corpus.py sweep --sealed N
+   ID...` runs every check on both revisions; `load` merges the sealed
+   files, so `run` and `table` see them too. A sealed round's boards are
+   left out of `fetch`, `run` and `sweep` unless `--sealed N` asks for them,
+   and they live in their own cache (`--sealed-cache`, default
+   ~/.cache/hwde-holdout), apart from the training cache.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board
@@ -62,8 +65,12 @@ live only in the repo's top `holdout/` folder: `holdout/round-N.yaml`,
 `table`). It is outside `reference/` and `docs/`, so a grep there for a part
 or a check doesn't reach them. Rule builders open none of these, nor the round's
 boards or errata upstream, and their briefs quote only the taxonomy's
-Ranked table. Only the round's scorers read them. `tests/test_holdout_sealed.py`
-fails if a sealed defect id appears in any other tracked file. Unsealing a
+Ranked table. Only the round's scorers read them. A builder's own corpus
+sweep globs the training cache's `repos/` for training boards only, and
+never passes `--sealed` or opens the sealed cache. `tests/test_holdout_sealed.py`
+fails if a sealed defect id appears in any other tracked file, or if a
+sealed board is reachable from the default sweep or sits in the training
+cache. Unsealing a
 round (when a newer round replaces it as the blind test) moves its boards
 into `reference/errata_corpus.yaml` and its members into the taxonomy.
 
