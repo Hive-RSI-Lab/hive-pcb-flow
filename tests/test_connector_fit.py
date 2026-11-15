@@ -193,6 +193,89 @@ def test_window_pane_paste_clear_of_the_via_passes(tmp_path):
     assert ep["apertures"] == 4 and facts["vias_under_paste"] == 0
 
 
+def test_a_via_under_a_paste_window_names_the_exposed_pad(tmp_path):
+    # hive-pcb-flow #1150: a window is a paste-only pad with no number, so
+    # the error named "U1 pad " and its pads "U1:"
+    vs, _ = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"', True)
+                             + via(14.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert "the paste of U1 pad 9's paste window:" in vs[0]["msg"]
+    assert vs[0]["pads"] == ["U1:9"]
+
+
+def test_a_via_under_an_ep_and_its_window_lists_the_pad_once(tmp_path):
+    vs, _ = cep.check(_board(tmp_path, qfn(windows=True) + via(14.2, 9.2)))
+    assert _kinds(vs) == ["ep_paste_high", "paste_on_via"]
+    v = next(v for v in vs if v["kind"] == "paste_on_via")
+    assert "the paste of U1 pad 9, U1 pad 9's paste window:" in v["msg"]
+    assert v["pads"] == ["U1:9"]
+
+
+def _two_eps(body):
+    # pad 9 split into two exposed pads, 9 on the left and 10 on the right
+    eps = "".join(f'    (pad "{n}" smd rect (at {x} 0) (size 1.4 3)'
+                  ' (layers "F.Cu" "F.Mask"))\n'
+                  for n, x in (("9", -0.8), ("10", 0.8)))
+    one = ('    (pad "9" smd rect (at 0 0) (size 3 3)'
+           ' (layers "F.Cu" "F.Mask"))\n')
+    return body.replace(one, eps)
+
+
+def _with_window(body, x, size=0.6):
+    win = (f'    (pad "" smd rect (at {x} 0) (size {size} {size})'
+           ' (layers "F.Paste"))\n')
+    return body.replace("    (attr smd)\n", "    (attr smd)\n" + win)
+
+
+def test_a_window_takes_the_number_of_the_ep_it_lies_on(tmp_path):
+    # two exposed pads, each with its own windows; the via is under pad 10's
+    wins = "".join(f'    (pad "" smd rect (at {x} {y}) (size 1 1)'
+                   ' (layers "F.Paste"))\n'
+                   for x in (-0.8, 0.8) for y in (-0.8, 0.8))
+    body = _two_eps(qfn('"F.Cu" "F.Mask"')).replace(
+        "    (attr smd)\n", "    (attr smd)\n" + wins)
+    vs, _ = cep.check(_board(tmp_path, body + via(15.8, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert "the paste of U1 pad 10's paste window:" in vs[0]["msg"]
+    assert vs[0]["pads"] == ["U1:10"]
+
+
+def test_a_window_over_two_eps_takes_the_one_under_the_via(tmp_path):
+    # the window lies half on pad 9 and half on pad 10; the via is on 10
+    body = _with_window(_two_eps(qfn('"F.Cu" "F.Mask"')), 0, 1.2)
+    vs, _ = cep.check(_board(tmp_path, body + via(15.4, 10)))
+    v = next(v for v in vs if v["kind"] == "paste_on_via")
+    assert "the paste of U1 pad 10's paste window:" in v["msg"]
+    assert v["pads"] == ["U1:10"]
+
+
+def test_a_window_on_an_unnumbered_ep_names_the_exposed_pad(tmp_path):
+    # an exposed pad with no number is still found by its size and place
+    body = qfn('"F.Cu" "F.Mask"', True).replace('(pad "9" ', '(pad "" ')
+    vs, _ = cep.check(_board(tmp_path, body + via(14.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert "the paste of U1 exposed pad's paste window:" in vs[0]["msg"]
+    assert vs[0]["pads"] == ["U1:"]
+
+
+def test_a_via_under_a_window_clear_of_the_ep_is_only_listed(tmp_path):
+    body = _with_window(qfn('"F.Cu" "F.Mask"', True), 3)
+    vs, facts = cep.check(_board(tmp_path, body + via(18, 10)))
+    assert vs == []
+    assert facts["vias_in_paste"] == [
+        {"at": [18.0, 10.0], "side": "F", "pads": ["U1:"]}]
+
+
+def test_a_window_clear_of_the_ep_keeps_a_plain_name(tmp_path):
+    # the via is under the exposed pad's own paste and a window beside it
+    body = _with_window(qfn(), 1.85)
+    vs, _ = cep.check(_board(tmp_path, body + via(16.52, 10)))
+    assert _kinds(vs) == ["ep_paste_high", "paste_on_via"]
+    v = next(v for v in vs if v["kind"] == "paste_on_via")
+    assert "the paste of U1 paste window, U1 pad 9:" in v["msg"]
+    assert v["pads"] == ["U1:", "U1:9"]
+
+
 def test_no_paste_on_the_ep_and_a_plugged_via(tmp_path):
     vs, _ = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"')))
     assert _kinds(vs) == ["ep_paste_missing"]
