@@ -283,6 +283,109 @@ def test_apply_refuses_unknown_net_and_layer(tmp_path):
                                         layers=["In1.Cu"])])
 
 
+# ------------------------------------------------------------ joins (#1140)
+
+def _long(tmp_path, wall=False):
+    """100 x 10, two layers: A's pads A1 (2, 4) and A2 (98, 4) joined by a
+    0.25 mm track on F.Cu, and A3 at (50, 8) on its own, 3.4 mm above the
+    track. wall: a 1 mm GND wall at y=6.5 from x=20 to x=80 on both layers,
+    so A3's way to the track goes round an end of the wall, 30 mm off."""
+    import make_fixture as mf
+    body = (mf.pad("A1", 2, 4, "A") + mf.pad("A2", 98, 4, "A")
+            + mf.pad("A3", 50, 8, "A")
+            + mf.seg(2, 4, 98, 4, 0.25, "F.Cu", "A",
+                     "00000000-0000-0000-0000-0000000006a1"))
+    if wall:
+        for n, layer in enumerate(("F.Cu", "B.Cu")):
+            body += mf.seg(20, 6.5, 80, 6.5, 1.0, layer, "GND",
+                           f"00000000-0000-0000-0000-0000000006b{n}")
+    return geom.BoardGeom.from_file(mf.write(tmp_path / "long.kicad_pcb",
+                                             body, 100, 10))
+
+
+def _windows(monkeypatch):
+    """The windows Router.grid is asked for, in order."""
+    wins: list = []
+    real = mazeroute.Router.grid
+
+    def grid(self, net, a, b, win, width=None):
+        wins.append(win)
+        return real(self, net, a, b, win, width)
+    monkeypatch.setattr(mazeroute.Router, "grid", grid)
+    return wins
+
+
+def test_join_islands_tries_a_window_round_the_small_island_first(
+        tmp_path, mf_path, monkeypatch):
+    """A net that spans the board joined a pad to it on a grid of the
+    whole board, every try; the first try is now a window round the pad,
+    the rest of the net cut to it."""
+    r = mazeroute.Router(_long(tmp_path), grid=0.1)
+    assert [i[None] for i in r.islands("A")] in ([2, 1], [1, 2])
+    wins = _windows(monkeypatch)
+    ops = r.join_islands("A", 1)
+    assert _tracks(ops, "A") and len(r.islands("A")) == 1
+    assert len(wins) == 1
+    x0, _, x1, _ = wins[0]
+    assert x1 - x0 < 25 and x0 < 50 < x1
+
+
+def test_join_islands_falls_back_to_the_whole_net(tmp_path, mf_path,
+                                                  monkeypatch):
+    """When the window round the small island holds no path (the wall),
+    the join tries the whole net as before and still joins."""
+    r = mazeroute.Router(_long(tmp_path, wall=True), grid=0.1)
+    wins = _windows(monkeypatch)
+    ops = r.join_islands("A", 1)
+    assert _tracks(ops, "A") and len(r.islands("A")) == 1
+    assert wins[0][2] - wins[0][0] < 25
+    assert wins[-1][0] < 2 and wins[-1][2] > 98
+    xs = [x for o in _tracks(ops, "A") for x in (o["start"][0],
+                                                 o["end"][0])]
+    assert min(xs) < 20 or max(xs) > 80        # round an end of the wall
+
+
+def _scrap(tmp_path, stub=False):
+    """20 x 20, two layers: GND's pad G1 at (5, 10) in a GND zone on F.Cu
+    filled in two pieces, x 2 to 8 round G1 and x 14 to 18 with no pad, as
+    a move that cuts fill off its pads leaves it. stub: a GND track on the
+    second piece, as a rip leaves one."""
+    import make_fixture as mf
+    pts = lambda x0, x1: " ".join(f"(xy {x} {y})" for x, y in (
+        (x0, 7), (x1, 7), (x1, 13), (x0, 13)))
+    body = (mf.pad("G1", 5, 10, "GND")
+            + '  (zone (net "GND") (net_name "GND") (layer "F.Cu") (uuid'
+            ' "00000000-0000-0000-0000-0000000007a1")\n'
+            f'    (polygon (pts {pts(2, 18)}))\n'
+            f'    (filled_polygon (layer "F.Cu") (pts {pts(2, 8)}))\n'
+            f'    (filled_polygon (layer "F.Cu") (pts {pts(14, 18)})))\n')
+    if stub:
+        body += mf.seg(15, 10, 17, 10, 0.25, "F.Cu", "GND",
+                       "00000000-0000-0000-0000-0000000007b1")
+    return geom.BoardGeom.from_file(mf.write(tmp_path / "scrap.kicad_pcb",
+                                             body, 20, 20))
+
+
+def test_a_scrap_of_fill_is_no_island_to_join(tmp_path, mf_path):
+    """Fill a move cut off from its pads is the refill's to redo (or KiCad's
+    island removal's to drop): join_islands left it alone no more than a
+    stub, and routed to it, and part_repair's island counts saw a net cut
+    in two."""
+    r = mazeroute.Router(_scrap(tmp_path))
+    assert sorted(i[None] for i in r.islands("GND")) == [0, 1]
+    assert [i[None] for i in r.islands("GND", scraps=False)] == [1]
+    assert r.join_islands("GND", 1) == []
+
+
+def test_a_stub_on_a_scrap_still_joins(tmp_path, mf_path):
+    """A track left on the scrap is copper a rip left: it still counts, and
+    the join routes to it."""
+    r = mazeroute.Router(_scrap(tmp_path, stub=True))
+    assert sorted(i[None] for i in r.islands("GND", scraps=False)) == [0, 1]
+    ops = r.join_islands("GND", 1)
+    assert _tracks(ops, "GND") and len(r.islands("GND")) == 1
+
+
 # ------------------------------------------------------------ DRU bans (#1140)
 
 _FOUR = """(kicad_pcb (version 20260206) (generator "test")

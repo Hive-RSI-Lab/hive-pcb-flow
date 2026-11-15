@@ -510,7 +510,7 @@ class FakeRouter:
         self.pushes = 0
         self.calls: list = []
 
-    def islands(self, net):
+    def islands(self, net, scraps=True):
         return [{"F.Cu": [b], None: 1} for b in self.isl]
 
     def join_islands(self, net, want, near=None, width=None):

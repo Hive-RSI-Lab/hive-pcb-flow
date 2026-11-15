@@ -75,6 +75,25 @@ def _merge(*sides: dict) -> dict:
     return out
 
 
+def _bounds_area(poly) -> float:
+    x0, y0, x1, y1 = poly.bounds
+    return (x1 - x0) * (y1 - y0)
+
+
+def _clip(side: dict, win) -> dict:
+    """The side's polygons cut to box win, as polygons; a layer with none
+    left in it is dropped."""
+    out: dict = {}
+    for layer, ps in side.items():
+        for p in ps:
+            if not p.intersects(win):
+                continue
+            for q in shapely.get_parts(p.intersection(win)):
+                if q.geom_type == "Polygon" and q.area > 0:
+                    out.setdefault(layer, []).append(q)
+    return out
+
+
 class Router:
     """Routes on one board, each route an obstacle to the next."""
 
@@ -259,13 +278,16 @@ class Router:
 
     # --------------------------------------------------------- islands
 
-    def islands(self, net: str) -> list[dict]:
+    def islands(self, net: str, scraps: bool = True) -> list[dict]:
         """The net's copper as it stands in this router: the board's, less
         what is ripped (obs.hidden), plus what is routed (obs.added), as
         [{layer: [polygons]}]. Each island also lists its pads' count under
-        the key None."""
+        the key None. scraps=False leaves out the islands of zone fill alone
+        with no pad: fill a move cut off from its pads, which the refill
+        redoes or KiCad's island removal drops, so no route need join it
+        (#1140)."""
         cu = list(self.bg.copper_layers)
-        pieces: list[tuple[frozenset, object, bool]] = []
+        pieces: list[tuple[frozenset, object, bool, bool]] = []
         for it in self.obs.items + self.obs.added:
             if it.net != net or (it.uuid and it.uuid in self.obs.hidden):
                 continue
@@ -277,10 +299,10 @@ class Router:
             if ly and not shape.is_empty:
                 is_pad = it.uuid is None and it.conn < 0 \
                     and it.shape.geom_type == "Polygon" and not it.tied
-                pieces.append((ly, shape, is_pad))
+                pieces.append((ly, shape, is_pad, False))
         for znet, layer, poly in self.obs.fills:
             if znet == net:
-                pieces.append((frozenset({layer}), poly, False))
+                pieces.append((frozenset({layer}), poly, False, True))
         parent = list(range(len(pieces)))
 
         def find(i):
@@ -290,28 +312,36 @@ class Router:
             return i
 
         tree = shapely.STRtree([p[1] for p in pieces]) if pieces else None
-        for i, (ly, shape, _) in enumerate(pieces):
+        for i, (ly, shape, _, _) in enumerate(pieces):
             for j in tree.query(shape, predicate="intersects"):
                 j = int(j)
                 if j > i and ly & pieces[j][0]:
                     parent[find(j)] = find(i)
         groups: dict[int, dict] = {}
-        for i, (ly, shape, is_pad) in enumerate(pieces):
-            g = groups.setdefault(find(i), {None: 0})
+        live: set = set()
+        for i, (ly, shape, is_pad, is_fill) in enumerate(pieces):
+            r = find(i)
+            g = groups.setdefault(r, {None: 0})
             g[None] += is_pad
+            if not is_fill:
+                live.add(r)
             for layer in ly:
                 g.setdefault(layer, []).append(shape)
-        return list(groups.values())
+        return [g for r, g in groups.items() if scraps or r in live]
 
     def join_islands(self, net: str, want: int, near=None,
                      width=None) -> list:
         """Route between the net's islands until it has at most `want`,
         nearest pair first (to `near`'s centre when given); committed ops.
         Islands without a pad join too: a ripped track leaves stubs that
-        would hang dead otherwise."""
+        would hang dead otherwise; an island of zone fill alone does not
+        (islands scraps=False). Each pair is tried in a window round its
+        smaller island first, the rest of the net cut to it, then over the
+        whole of the net as before: a net with a plane spans the board, and
+        a grid of the whole board for every try cost minutes (#1140)."""
         ops: list = []
         for _ in range(64):
-            isl = self.islands(net)
+            isl = self.islands(net, scraps=False)
             if len(isl) <= want:
                 return ops
             sides = [{k: v for k, v in i.items() if k is not None}
@@ -326,8 +356,10 @@ class Router:
                     if best is None or d < best[0]:
                         best = (d, i, j)
             _, i, j = best
-            others = _merge(*[s for k, s in enumerate(sides) if k != i])
-            hit = self.find(net, sides[i], others, width)
+            hit = self._join_near(net, sides, polys, i, j, width)
+            if hit is None:
+                others = _merge(*[s for k, s in enumerate(sides) if k != i])
+                hit = self.find(net, sides[i], others, width)
             if hit is None:
                 hit = self.find(net, sides[j], _merge(
                     *[s for k, s in enumerate(sides) if k != j]), width)
@@ -337,6 +369,28 @@ class Router:
             self.commit(hit[0])
             ops += hit[0]
         raise CheckError(f"{net}: islands won't join")
+
+    def _join_near(self, net, sides, polys, i, j, width):
+        """join_islands' local try: from the smaller of islands i and j to
+        the rest of the net cut to a box round it, wide enough to hold the
+        other island's nearest copper and a margin past it; None when the
+        box would hold the whole net (the full try is the same) or no path
+        is found in it."""
+        whole = shapely.union_all(polys).bounds
+        gap = polys[i].distance(polys[j])
+        for a in sorted((i, j), key=lambda k: _bounds_area(polys[k])):
+            x0, y0, x1, y1 = polys[a].bounds
+            r = gap + self.margin
+            win = box(x0 - r, y0 - r, x1 + r, y1 + r)
+            if win.covers(box(*whole)):
+                continue
+            rest = _clip(_merge(*[s for k, s in enumerate(sides) if k != a]),
+                         win)
+            if rest:
+                hit = self.find(net, sides[a], rest, width)
+                if hit is not None:
+                    return hit
+        return None
 
     # --------------------------------------------------------- reroute
 
@@ -377,7 +431,8 @@ class Router:
         net back to as few islands as it had; in shuffled orders until one
         works (#927). Returns (removed uuids, added ops, {net: most islands
         it may end with}), with the router's state at that order's end."""
-        before = {net: len(self.islands(net))}
+        # counted as join_islands counts them: fill scraps left out
+        before = {net: len(self.islands(net, scraps=False))}
         rip = self.ripped_by(region, net, keep)
         if not rip:
             raise CheckError(
@@ -386,7 +441,7 @@ class Router:
                 " than its net's width stay)")
         victims = list(dict.fromkeys(it.net for it in rip))
         for v in victims:
-            before[v] = len(self.islands(v))
+            before[v] = len(self.islands(v, scraps=False))
         uuids = [it.uuid for it in rip]
         held_hidden, held_added, held_conn = set(self.obs.hidden), \
             list(self.obs.added), self._conn

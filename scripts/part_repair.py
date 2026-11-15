@@ -316,7 +316,7 @@ def join_net(router, net: str, want: int, near, width, keep, boxes=()):
     uuids, ops, maxes, tried = [], [], {}, []
     try:
         for b in boxes:
-            if len(router.islands(net)) <= want:
+            if len(router.islands(net, scraps=False)) <= want:
                 break
             if not _meets(router, net, b):
                 continue
@@ -963,7 +963,9 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                 else w
     queue = list(nets)
     for net in queue:
-        want, have = base_count(net), len(router.islands(net))
+        # a fill scrap the moves cut off is the refill's (Router.islands)
+        want, have = base_count(net), len(router.islands(net,
+                                                         scraps=False))
         joins[net] = {"islands_before": want, "after_rip": have}
         if have <= want:
             joins[net]["how"] = "still joined"
