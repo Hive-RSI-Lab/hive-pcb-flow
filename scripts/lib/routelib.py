@@ -619,7 +619,10 @@ _KICAD_LAYERS = tuple(
        for s in "FB"]
     + ["Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts",
        "Margin", "Rescue"] + [f"User.{i}" for i in range(1, 46)])
-_DNF_CAP = 256          # alternatives one condition may expand to
+_DNF_CAP = 256          # alternatives one condition may expand to, or
+#                         its token count when that is more: an || chain
+#                         grows with its text (rules_gen ORs every net of
+#                         an impedance class), only && of ||s blows up
 _COND_TOKEN = re.compile(
     r"\s*(?:('[^']*')|(&&|\|\||==|!=|!|\(|\))|([A-Za-z_][A-Za-z0-9_.]*))")
 
@@ -664,6 +667,7 @@ def _cond_dnf(cond: str) -> list[tuple]:
         elif m.group(3) is not None:
             toks.append(("id", m.group(3)))
     at = [0]
+    cap = max(_DNF_CAP, len(toks))
 
     def peek():
         return toks[at[0]] if at[0] < len(toks) else (None, None)
@@ -678,7 +682,7 @@ def _cond_dnf(cond: str) -> list[tuple]:
         while peek() == ("op", "||"):
             take()
             alts = alts + conj()
-            if len(alts) > _DNF_CAP:
+            if len(alts) > cap:
                 raise _Unread("too many alternatives")
         return alts
 
@@ -689,7 +693,7 @@ def _cond_dnf(cond: str) -> list[tuple]:
             rhs = atom()
             alts = [tuple(a + b for a, b in zip(x, y))
                     for x in alts for y in rhs]
-            if len(alts) > _DNF_CAP:
+            if len(alts) > cap:
                 raise _Unread("too many alternatives")
         return alts
 

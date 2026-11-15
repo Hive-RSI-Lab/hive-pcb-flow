@@ -250,6 +250,31 @@ def test_dru_layer_bans():
         routelib.dru_layer_bans('(rule "x" (constraint disallow track)', _SIX)
 
 
+
+def test_dru_bans_read_a_long_or_chain():
+    """#1140 review: rules_gen ORs every net of an impedance class into one
+    condition. A chain of 300 nets, alone or && a layer term, is read; only
+    && of ||s that multiplies past the cap stays unread."""
+    nets = [f"/D{i}" for i in range(300)]
+    chain = " || ".join(f"A.NetName == '{n}'" for n in nets)
+    dru = ('(version 1)\n(rule "aiee_z90_outer_only"\n\t(layer "inner")\n'
+           f'\t(constraint disallow track)\n\t(condition "{chain}")\n)\n'
+           '(rule "chain_and_layer"\n\t(constraint disallow track)\n'
+           f'\t(condition "({chain}) && A.Layer != \'F.Cu\'")\n)\n')
+    bans = routelib.dru_layer_bans(dru, _SIX)
+    assert bans.unread == []
+    for n in (nets[0], nets[256], nets[-1]):
+        assert bans.track_layers(n) == set(_SIX) - {"F.Cu"}, n
+    assert bans.track_layers("/E") == set()
+    assert routelib.dru_track_bans(dru, _SIX)[nets[-1]] == set(_SIX) - {"F.Cu"}
+    # 2**10 alternatives from 10 small ORs: still named, not guessed
+    blow = " && ".join(f"(A.NetName == '/a{i}' || A.NetName == '/b{i}')"
+                       for i in range(10))
+    bad = ('(rule "blow"\n\t(constraint disallow track)\n'
+           f'\t(condition "{blow}")\n)\n')
+    assert routelib.dru_layer_bans(bad, _SIX).unread == ["blow"]
+
+
 _PRO = {"net_settings": {
     "classes": [{"name": "Default"}, {"name": "USB", "priority": 0},
                 {"name": "PWR", "priority": 1}],
