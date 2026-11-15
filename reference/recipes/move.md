@@ -38,11 +38,18 @@ positions, never file hashes.
    new near the move (exit 1 and nothing written otherwise). A new via on a
    net whose removed vias had teardrops (ripped, pushed, or pruned before or
    after the refill) takes the nearest one's settings (route_edit's add_via
-   `teardrops`, carried in its route file). The run then fails when such a
-   new via lacks a drop on a layer where the via it took them from lacked
-   none, or a via it kept in the repair area with teardrops on lacks one on
-   a layer where it lacked none before; a via the run removes is not
-   checked, nor are pads. DRC has no check for a missing drop.
+   `teardrops`, carried in its route file). After the refill the run counts,
+   per layer, the tracks into each via that a drop answers. It fails when a
+   new via has fewer than the via it took them from had, as far as the
+   tracks into it now allow (lost when answered `a1 < min(a0, n1)`), and
+   the same for a via it kept in the repair area with teardrops on, against
+   its own count before; the report names each track left without a drop
+   and why (too wide for the via, grazing its copper, or none made). A
+   track with no drop where none was lost (short) is only a note. A track
+   that crosses a via's copper off the centre is not asked for a drop:
+   KiCad makes only a sliver there. A via the run removes is not checked,
+   nor are pads; one with teardrops on that passed them to no new via is a
+   note. DRC has no check for a missing drop.
    With bare place_edit, re-route the affected nets (`reroute-net`) before
    believing `drc_routed`. Unconnected items in DRC are the honest signal.
 2. **Neighbour silk does not move.** The footprint's own silk travels with it;

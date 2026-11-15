@@ -93,12 +93,15 @@ is judged by, as far as the tracks into it now allow: a new via by the via
 it took its teardrops from, a via on both boards in the area with
 teardrops on by itself before (a layer in its own net's pour counts). It
 names each track left without one and why: too wide for one, grazing the
-copper, crossing it off the centre, or none made. A via that took or had
+copper, or none made. A track that crosses a via's copper off the centre
+is not asked for one: KiCad makes only a sliver of a drop there, with no
+fillet. A via that took or had
 teardrops and has them off fails it too, as does a via a new one landed on
 (route_edit makes nothing there) in place of a removed via with teardrops
 on, when its own are off. A new via with a track short of a drop and no
-loss is a note, not a failure. Not checked: the vias the run removes, and
-pads. DRC has no check for a missing drop: this is the only one.
+loss is a note, not a failure. Not checked: the vias the run removes (one
+with teardrops on that passed them to no new via is a note), and pads. DRC
+has no check for a missing drop: this is the only one.
 
 Contract: --pcb is read only, except with --apply on a pass. Exit 0 pass,
 1 violations (a net would not join, or the board got worse: --pcb untouched,
@@ -986,6 +989,30 @@ def late_teardrops(kept: list, made: dict, td_src: list, gone: list,
     return again
 
 
+def unplaced_teardrops(gone: list, params: dict, placed,
+                       on_work) -> list:
+    """The vias the run took off the board with teardrops on that passed
+    them to no via on the work board (#1138): no new via of their net
+    took them (each takes its nearest's, restore_teardrops) or the one
+    that did was pruned, and no via landed in their place. Their drops
+    went with them: a note, not a failure, as the check judges the vias
+    on the work board. gone: every via the run took off; params: uuid ->
+    teardroplib.params_of on the base board; placed: the uuids of the
+    removed vias a via on the work board took them from or stood in for;
+    on_work: the work board's via uuids. Entries of via, net, at."""
+    out, seen = [], set()
+    for v in sorted(gone, key=lambda v: (v.uuid or "")):
+        if not v.uuid or v.uuid in seen:
+            continue
+        seen.add(v.uuid)
+        if v.uuid in on_work or v.uuid in placed \
+                or _td_params(params.get(v.uuid)) is None:
+            continue
+        out.append({"via": v.uuid, "net": v.net,
+                    "at": [round(v.at[0], 4), round(v.at[1], 4)]})
+    return out
+
+
 def neck_width(size: float, p: dict, widths, wide: float,
                floor: float) -> float | None:
     """The width a track into a new via of size with teardrop settings p
@@ -1140,8 +1167,7 @@ def _td_line(e: dict) -> str:
             f" {e['why']}")
 
 
-_TD_WHY = {"no drop": "has none", "grazes": "grazes the copper",
-           "crosses": "crosses it off the centre"}
+_TD_WHY = {"no drop": "has none", "grazes": "grazes the copper"}
 
 
 def _td_reasons(it, layer: str) -> str:
@@ -1206,7 +1232,8 @@ def teardrop_loss(b0, b1, new_src: dict, area,
     pour counts, as KiCad makes the drop there too): fewer than on the via
     it is judged by, or than the tracks into it now if fewer, is lost, and
     each track without a drop is named with why (too wide, grazing the
-    copper, crossing it off the centre, or none made). A new via that took
+    copper, or none made); a track crossing the copper off the centre is
+    not into the via (teardroplib Item.into). A new via that took
     a lost via's teardrops (new_src: its uuid -> that via's) is judged by
     that via and must have them on; a join of it with no drop and nothing
     lost is short. A via on both boards, in the area, with teardrops on on
@@ -2162,11 +2189,24 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                                       tdl.read(work, None, area=reach_td),
                                       new_src, area, td_landed)
     on_work = {it.uuid for it in bg1.vias_of()}
+    td_from = {u: s for u, s in new_src.items() if u in on_work}
+    td_in = {u: s for u, s in td_landed.items() if u in on_work}
+    td_unplaced = unplaced_teardrops(
+        td_gone, td_params, set(td_from.values()) | set(td_in.values()),
+        on_work)
     payload["teardrops"] = {
-        "restored": sum(u in on_work for u in new_src),
-        "from": {u: s for u, s in new_src.items() if u in on_work},
-        "landed": {u: s for u, s in td_landed.items() if u in on_work},
-        "lost": td_lost, "short": td_short}
+        "restored": len(td_from), "from": td_from, "landed": td_in,
+        "lost": td_lost, "short": td_short, "unplaced": td_unplaced}
+    if td_unplaced:
+        payload["notes"].append(
+            f"teardrops: {len(td_unplaced)} via(s) the run removed had"
+            " teardrops on and passed them to no via on the board (no new"
+            " via of the net took them), so their drops went with them: "
+            + "; ".join(f"{e['net']} via at ({e['at'][0]:.3f},"
+                        f" {e['at'][1]:.3f})"
+                        for e in td_unplaced[:TD_SHOWN])
+            + (f"; and {len(td_unplaced) - TD_SHOWN} more in"
+               " part_repair.json" if len(td_unplaced) > TD_SHOWN else ""))
     if td_short:
         payload["notes"].append(
             "teardrops: a track into a via has no drop, though the via lost"
@@ -2272,11 +2312,13 @@ def report_md(p: dict) -> str:
             f" {w['track']['width']:.3f} mm {w['net']} track"
             for w in p["waived_thermals"]] + [""]
     td = p.get("teardrops") or {}
-    if td.get("restored") or td.get("lost"):
+    if td.get("restored") or td.get("lost") or td.get("unplaced"):
         lines += [f"Teardrops: {td.get('restored', 0)} new via(s) took them"
                   " from the vias the run removed"
                   + (f"; {len(td['lost'])} via(s) short of drops the base"
                      " board had (below)" if td.get("lost") else "")
+                  + (f"; {len(td['unplaced'])} removed via(s) passed theirs"
+                     " to no via (notes)" if td.get("unplaced") else "")
                   + ".", ""]
     if p.get("necks"):
         lines += ["Necks: a track too wide for a drop on a new via that"

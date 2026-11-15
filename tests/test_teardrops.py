@@ -205,11 +205,19 @@ def test_a_track_through_a_via_is_one_join_and_wants_its_own_drop(tmp_path):
     by = {it.name: it for it in tdl.read(pcb).items}
     assert by[VIA_B].joins == {"F.Cu": 2} and by[VIA_B].drops == {"F.Cu": 1}
     assert by[VIA_B].deficit("F.Cu") == 1 and by[VIA_B].missing() == ["F.Cu"]
-    # crossing the copper off the centre, no end in it: no join
+    # crossing the copper off the centre, no end in it: no join and not
+    # into the via (KiCad 10.0.6 made only a sliver of a drop on such a
+    # track, probed live), but the ring rule names it: run it into the
+    # copper
     pcb = _edit(_copy(tmp_path, DROPPED, "off.kicad_pcb"),
                 _add_track((11.2, 21.98), (15.2, 21.98), 0.25))
     by = {it.name: it for it in tdl.read(pcb).items}
-    assert by[VIA_B].joins == {"F.Cu": 1} and by[VIA_B].missing() == []
+    b = by[VIA_B]
+    assert b.joins == {"F.Cu": 1} and b.missing() == []
+    assert "F.Cu" not in b.held
+    assert b.grazes == {"F.Cu": [(0.25, "crosses")]}
+    assert b.into("F.Cu") == 1 and b.unanswered("F.Cu") == []
+    assert b.undropped() == ["F.Cu"]
 
 
 def test_a_track_grazing_a_via_is_no_join(tmp_path):
@@ -332,9 +340,10 @@ def test_matched_pairs_each_drop_with_one_join():
 def test_tracks_into_an_item_answered_or_named_per_layer():
     """A drop answers one track into the item; each track no drop
     answers says why: a join with no drop, a track too wide for one, a
-    graze or an off-centre crossing. deficit counts the joins alone,
-    missing the unheld layers with one, undropped the unheld layers with
-    a graze or crossing narrow enough for a drop."""
+    graze. An off-centre crossing is not into the item (KiCad makes only
+    a sliver of a drop for it). deficit counts the joins alone, missing
+    the unheld layers with one, undropped the unheld layers with a graze
+    or crossing narrow enough for a drop."""
     from shapely.geometry import LineString
 
     def band(x, w):
@@ -357,17 +366,19 @@ def test_tracks_into_an_item_answered_or_named_per_layer():
     assert it.too_wide(0.55) and not it.too_wide(0.5)
     assert tdl.too_wide(0.5, 0.5, lim)
     assert tdl.too_wide(0.1, 0.6, (0.0, 1.0, 0.9))
-    # F.Cu: the too-wide track and one join have a drop each
-    assert (it.answered("F.Cu"), it.into("F.Cu")) == (2, 4)
+    # F.Cu: the too-wide track and one join have a drop each; the
+    # crossing is not into it
+    assert (it.answered("F.Cu"), it.into("F.Cu")) == (2, 3)
     assert it.answered_widths("F.Cu") == [0.2, 0.55]
-    assert it.unanswered("F.Cu") == [(0.2, "no drop"), (0.3, "crosses")]
+    assert it.unanswered("F.Cu") == [(0.2, "no drop")]
     assert (it.deficit("F.Cu"), it.deficit("B.Cu")) == (1, 1)
     assert (it.answered("In1.Cu"), it.into("In1.Cu")) == (0, 1)
     assert it.unanswered("In1.Cu") == [(0.6, "grazes")]
     assert it.deficit("In1.Cu") == 0
     assert it.missing() == ["F.Cu"]
     assert it.missing(in_pours=True) == ["B.Cu", "F.Cu"]
-    # In1.Cu's graze is too wide for a drop, B.Cu's is held
+    # In1.Cu's graze is too wide for a drop, B.Cu's is held; F.Cu's
+    # crossing still asks the track to run into the copper
     assert it.undropped() == ["F.Cu"]
     # one drop in a too-wide track's band and a join's: it is the join's
     two = tdl.Item("via", "A", (0, 0), Point(0, 0).buffer(0.3), ("F.Cu",),

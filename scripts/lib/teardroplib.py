@@ -26,17 +26,21 @@ Terms:
          item's copper on that layer, where the track's centreline, run on,
          crosses at least the track's width of copper (a shorter chord is a
          graze: no drop), or neither end in it and the track over the
-         item's centre (a track through it). A stub wholly inside, or a
-         track crossing the copper off the centre with no end in it, gets
-         none; read() keeps the grazes and those crossings apart
-         (Item.grazes), so a check can name them. A track through a via
-         got three drops in 10.0.6 (both ways, one twice); it counts as one
-         join. The track must be narrower than
-         max_width_mm, width_ratio x and filter_ratio x the item's smaller
-         copper size, from the item's own teardrop settings when it has
-         them on, else from the constraints (10.0.6, a 0.6 mm via at
-         filter_ratio 0.9: 0.54 mm got none, 0.53 mm one; max_width 0.3 and
-         width_ratio 0.5 stopped a 0.35 mm track). Not modelled: KiCad
+         item's centre (a track through it). A stub wholly inside gets
+         none. A track crossing the copper off the centre with no end in
+         it gets only a sliver of a drop, on one side inside the copper or
+         just out to the track's edge (probed on a 0.6 mm via: 0.15 and
+         0.25 mm tracks 0.15-0.27 mm off its centre, either way): no
+         fillet, so it is no join and no track into the item. read()
+         keeps the grazes and those crossings apart (Item.grazes), so the
+         ring rule can name them. A track through a via got three drops
+         in 10.0.6 (both ways, one twice); it counts as one join. The
+         track must be narrower than max_width_mm, width_ratio x and
+         filter_ratio x the item's smaller copper size, from the item's
+         own teardrop settings when it has them on, else from the
+         constraints (10.0.6, a 0.6 mm via at filter_ratio 0.9: 0.54 mm
+         got none, 0.53 mm one; max_width 0.3 and width_ratio 0.5 stopped
+         a 0.35 mm track). Not modelled: KiCad
          skips a pad (not a via) sharing a pour with the track when its
          teardrops say no drops on pads in zones
   held   a join on a layer where same-net zone fill already touches the
@@ -55,18 +59,19 @@ Terms:
          A join no drop answers is missing, so a track's lost drop shows
          even when a track through the item left extra ones.
          Item.answered counts the tracks drops answer at any width,
-         Item.into the tracks into the item (joins at any width, grazes,
-         crossings) and Item.unanswered names the rest
+         Item.into the tracks into the item (joins at any width and
+         grazes, not crossings) and Item.unanswered names the rest
 
 Ring breakout (dfm_check family `teardrop`): the fab drills within
 +/- drill_wander_mm of the pad centre (JLC 0.075). A ring under
 min_ring_abs_mm + drill_wander_mm (JLC 0.05 + 0.075 = 0.125) can lose its
 copper at the track neck; IPC-2221 / IPC-6012 class 2 accept that breakout
 only where the land is filleted. Such an item with an unheld join lacking a
-drop, or an unheld track that grazes its copper or crosses it off the
-centre (KiCad makes that no drop: the track must run into the copper), is
-`dfm_ring_breakout`. A track too wide for a drop (too_wide) is neither: by
-the item's own limits it gets none. On a board where teardrops are REQUIRED
+drop, or with an unheld track that grazes its copper (KiCad makes it no
+drop) or crosses it off the centre (only a sliver of one), is
+`dfm_ring_breakout`: the track must run into the copper. A track too wide
+for a drop (too_wide) is neither: by the item's own limits it gets none.
+On a board where teardrops are REQUIRED
 (rigid-flex: a rule area named FLEX_*, or constraints `teardrops.required`),
 any item with such a join or track is `dfm_teardrop_missing` (error) and a
 breakout is an error too; elsewhere breakout is a warning.
@@ -307,11 +312,13 @@ class Item:
     def unanswered(self, layer: str) -> list[tuple[float, str]]:
         """The tracks into the item on layer that no drop answers, as
         (width, why): "no drop" (a join), "too wide" (too_wide), and
-        "grazes" or "crosses" (see join in the module docstring)."""
+        "grazes" (see join in the module docstring). A crossing is not
+        into the item (into)."""
         cs, hit = self._answer(layer)
         out = [(w, "too wide" if self.too_wide(w) else "no drop")
                for i, (w, _) in enumerate(cs) if i not in hit]
-        return out + list(self.grazes.get(layer, []))
+        return out + [g for g in self.grazes.get(layer, [])
+                      if g[1] == "grazes"]
 
     def answered(self, layer: str) -> int:
         """Tracks on layer, at any width, that a drop answers. An item
@@ -329,12 +336,14 @@ class Item:
         return sorted(cs[i][0] for i in hit)
 
     def into(self, layer: str) -> int:
-        """Tracks into the item on layer: its joins at any width, grazes
-        and off-centre crossings. An item read() did not fill: its
-        joins."""
+        """Tracks into the item on layer: its joins at any width and its
+        grazes. An off-centre crossing is not: KiCad gives it only a
+        sliver of a drop, so a check that drops stay (part_repair) does
+        not ask one for it. An item read() did not fill: its joins."""
         if layer not in self.cands and layer not in self.grazes:
             return self.joins.get(layer, 0)
-        return len(self.cands.get(layer, [])) + len(self.grazes.get(layer, []))
+        return len(self.cands.get(layer, [])) + sum(
+            1 for _, why in self.grazes.get(layer, []) if why == "grazes")
 
     def deficit(self, layer: str) -> int:
         """Joins on layer that no drop answers (see drop in the module
@@ -345,8 +354,9 @@ class Item:
 
     def undropped(self) -> list[str]:
         """Unheld layers with a track narrow enough for a drop that grazes
-        the copper or crosses it off the centre: KiCad makes it none, and
-        the ring rule asks for the track to run into the copper."""
+        the copper (KiCad makes it none) or crosses it off the centre (only
+        a sliver of one, no fillet): the ring rule asks for the track to
+        run into the copper."""
         return sorted(l for l, gs in self.grazes.items()
                       if l not in self.held
                       and any(not self.too_wide(w) for w, _ in gs))
@@ -505,11 +515,12 @@ def _chord(coords, shape, inside) -> float:
 def _join_band(t, at, cu, chord_shape, ends) -> tuple:
     """(band, None): the band a drop for track t on this item lies in (see
     drop in the module docstring); or (None, why) when KiCad 10.0.6 makes
-    it none: "inside" (t wholly in the copper), "crosses" (its centreline
-    crosses the copper off the centre, no end in it), "grazes" (it enters
-    on a chord shorter than its width), None (its centreline never meets
-    the copper: not into the item). ends: (x, y) -> the tracks of t's net
-    and layer with an end there, keyed by _end_key."""
+    it none, or no fillet: "inside" (t wholly in the copper), "crosses"
+    (its centreline crosses the copper off the centre, no end in it: a
+    sliver of a drop), "grazes" (it enters on a chord shorter than its
+    width), None (its centreline never meets the copper: not into the
+    item). ends: (x, y) -> the tracks of t's net and layer with an end
+    there, keyed by _end_key."""
     a, b = t.shape.coords[0][:2], t.shape.coords[-1][:2]
     ins = [cu.contains(Point(a)), cu.contains(Point(b))]
     if ins[0] and ins[1]:
@@ -794,9 +805,9 @@ def ring_findings(board: Board, *, req: bool, wander: float = DRILL_WANDER_MM,
         layers = sorted(set(miss) | set(bare))
         why = ""
         if bare:
-            why = (f"; on {', '.join(bare)} a track grazes the copper or "
-                   f"crosses it off its centre, which KiCad gives no drop: "
-                   f"run the track into the copper")
+            why = (f"; on {', '.join(bare)} a track grazes the copper "
+                   f"(KiCad gives it no drop) or crosses it off its centre "
+                   f"(only a sliver of one): run the track into the copper")
         breakout = it.ring_mm is not None and it.ring_mm < lim - 1e-9
         if breakout and layers:
             out.append({

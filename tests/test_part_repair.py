@@ -1033,18 +1033,15 @@ def test_teardrop_loss_judges_a_smaller_via_at_the_size_it_replaced():
                                 {"n": "s"}, box(-1, -1, 1, 1)) == ([], [])
 
 
-@pytest.mark.parametrize("why, said", [
-    ("grazes", "grazes the copper"),
-    ("crosses", "crosses it off the centre")])
-def test_teardrop_loss_names_a_track_kicad_drops_on_at_no_width(why, said):
+def test_teardrop_loss_names_a_track_kicad_drops_on_at_no_width():
     """The run moved the track into a kept via so that it grazes the
-    copper (or crosses it off the centre): KiCad makes it no drop at any
-    width, and the drop the via had is lost."""
+    copper: KiCad makes it no drop at any width, and the drop the via had
+    is lost."""
     a = (0.2, _band(0, 0.2))
     b0 = SimpleNamespace(items=[
         _cvia("k", 0.6, {"F.Cu": [a]}, {"F.Cu": [Point(0, -1)]})])
     k1 = _cvia("k", 0.6, {})
-    k1.grazes = {"F.Cu": [(0.2, why)]}
+    k1.grazes = {"F.Cu": [(0.2, "grazes")]}
     assert k1.into("F.Cu") == 1 and k1.answered("F.Cu") == 0 \
         and k1.deficit("F.Cu") == 0
     lost, short = pr.teardrop_loss(b0, SimpleNamespace(items=[k1]), {},
@@ -1052,7 +1049,28 @@ def test_teardrop_loss_names_a_track_kicad_drops_on_at_no_width(why, said):
     assert short == [] and [(e["via"], e["layers"], e["why"])
                             for e in lost] == [
         ("k", ["F.Cu"], "on F.Cu 0 of 1 tracks into it have a drop, against"
-         f" 1 before (a 0.2 mm track): a 0.2 mm track {said}")]
+         " 1 before (a 0.2 mm track): a 0.2 mm track grazes the copper")]
+
+
+def test_teardrop_loss_asks_no_drop_of_a_track_crossing_a_via():
+    """A track that crosses a via's copper off the centre, no end in it,
+    gets only a sliver of a drop from KiCad 10.0.6 (probed): no fillet,
+    so it is not into the via and the check asks no drop of it, on a new
+    via that took a removed via's teardrops or on a kept via. The ring
+    rule still names it (undropped)."""
+    b0 = SimpleNamespace(items=[
+        _cvia("s", 0.6, {"F.Cu": [(0.2, _band(0, 0.2))]},
+              {"F.Cu": [Point(0, -1)]})])
+    n = _cvia("n", 0.6, {})
+    n.grazes = {"F.Cu": [(0.25, "crosses")]}
+    assert n.into("F.Cu") == 0 and n.unanswered("F.Cu") == [] \
+        and n.undropped() == ["F.Cu"]
+    assert pr.teardrop_loss(b0, SimpleNamespace(items=[n]), {"n": "s"},
+                            box(-1, -1, 1, 1)) == ([], [])
+    kept = _cvia("s", 0.6, {})
+    kept.grazes = {"F.Cu": [(0.25, "crosses")]}
+    assert pr.teardrop_loss(b0, SimpleNamespace(items=[kept]), {},
+                            box(-1, -1, 1, 1)) == ([], [])
 
 
 def test_teardrop_loss_names_a_graze_by_a_track_too_wide_for_the_via():
@@ -1132,8 +1150,36 @@ def test_report_says_how_many_new_vias_took_teardrops():
     assert ("Teardrops: 0 new via(s) took them from the vias the run"
             " removed; 1 via(s) short of drops the base board had (below)."
             ) in pr.report_md(p)
+    p["teardrops"] = {"restored": 1, "lost": [], "short": [],
+                      "unplaced": [{"via": "u", "net": "A", "at": [0, 0]}]}
+    assert ("Teardrops: 1 new via(s) took them from the vias the run"
+            " removed; 1 removed via(s) passed theirs to no via (notes)."
+            ) in pr.report_md(p)
     p["teardrops"] = {"restored": 0, "lost": [], "short": []}
     assert "Teardrops:" not in pr.report_md(p)
+
+
+def test_unplaced_teardrops_names_removed_vias_whose_drops_went():
+    """A via the run removed with teardrops on whose settings no via on the
+    work board took or stood in for is named, once, with its net and
+    place: a note (#1138). One with them off, one a new via took them
+    from, one a via landed in place of, and one still on the board are
+    not."""
+    on = {"enabled": True, "length_ratio": 0.5}
+    gone = [SimpleNamespace(uuid="z", net="B", at=(9.0, 9.12345)),
+            SimpleNamespace(uuid="a", net="A", at=(0.0, 0.0)),
+            SimpleNamespace(uuid="b", net="A", at=(4.0, 0.0)),
+            SimpleNamespace(uuid="c", net="A", at=(8.0, 0.0)),
+            SimpleNamespace(uuid="d", net="C", at=(1.0, 1.0)),
+            SimpleNamespace(uuid="e", net="C", at=(2.0, 2.0)),
+            SimpleNamespace(uuid="z", net="B", at=(9.0, 9.12345)),
+            SimpleNamespace(uuid="", net="C", at=(3.0, 3.0))]
+    params = {"z": on, "a": on, "b": on, "c": dict(on, enabled=False),
+              "d": on, "e": on}
+    got = pr.unplaced_teardrops(gone, params, {"a", "d"}, {"e", "w1"})
+    assert got == [{"via": "b", "net": "A", "at": [4.0, 0.0]},
+                   {"via": "z", "net": "B", "at": [9.0, 9.1235]}]
+    assert pr.unplaced_teardrops(gone, {}, set(), set()) == []
 
 
 def test_gates_fail_on_a_new_violation_near_the_repair():
