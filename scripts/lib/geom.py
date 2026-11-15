@@ -82,6 +82,13 @@ _FR4_ER = 4.5
 # Typical finished-copper thicknesses (mm): 1 oz outer, 0.5 oz inner.
 _CU_OUTER = 0.035
 _CU_INNER = 0.0152
+# KiCad's ZONE_CONNECTION as `(zone_connect N)` stores it: how a zone joins a
+# pad of its net (Pad.zone_connect, Zone.connect).
+ZONE_CONNECT_INHERIT = -1
+ZONE_CONNECT_NONE = 0
+ZONE_CONNECT_THERMAL = 1
+ZONE_CONNECT_SOLID = 2
+ZONE_CONNECT_THT_THERMAL = 3       # thermal for a through-hole pad, else solid
 
 
 class GeomError(RuntimeError):
@@ -136,6 +143,26 @@ def _strs(n) -> list[str]:
     # constraints net or "F.Cu" would never match it
     return [_tok(x) if isinstance(x, sexpdata.Symbol) else x
             for x in n[1:] if isinstance(x, str)]
+
+
+def _num_of(n, *names):
+    """The first number of n's first child named one of `names`, or None."""
+    for name in names:
+        k = _kid(n, name)
+        if k is not None and _nums(k):
+            return _nums(k)[0]
+    return None
+
+
+def _thermal_of(n) -> dict:
+    """A pad's or footprint's own zone connection and thermal overrides
+    (Pad.zone_connect ...): None where it does not say. KiCad 7 renamed
+    (thermal_width) to (thermal_bridge_width)."""
+    zc = _num_of(n, "zone_connect")
+    return {"zone_connect": int(zc) if zc is not None else None,
+            "thermal_gap": _num_of(n, "thermal_gap"),
+            "spoke_width": _num_of(n, "thermal_bridge_width", "thermal_width"),
+            "spoke_angle": _num_of(n, "thermal_bridge_angle")}
 
 
 def _uuid_of(node) -> "Optional[str]":
@@ -260,6 +287,15 @@ class Pad:
     # The symbol pin's electrical type, `(pintype "power_out")` ("" when the
     # board has none); a "+no_connect" suffix is dropped.
     pintype: str = ""
+    # How a zone of its net joins it: the pad's `(zone_connect N)`, else its
+    # footprint's, as ZONE_CONNECT_* (-1: the zone's own). The thermal
+    # overrides likewise (the pad's `(thermal_gap x)`, `(thermal_bridge_width
+    # x)` and `(thermal_bridge_angle x)`, or the footprint's): None to take
+    # the zone's, and KiCad's spoke angle default (thermal_spokes) for it.
+    zone_connect: int = -1
+    thermal_gap: Optional[float] = None
+    spoke_width: Optional[float] = None
+    spoke_angle: Optional[float] = None
 
     @cached_property
     def copper_center(self) -> tuple[float, float]:
@@ -327,6 +363,16 @@ class Zone:
     # teardropped via or pad. It is copper of that net but not a pour, so a
     # "nets with a zone are planes" rule must skip it (#633).
     teardrop: bool = False
+    # How the fill joins its net's pads, `(connect_pads [yes|no|
+    # thru_hole_only] ...)`: ZONE_CONNECT_* (thermal when the token has no
+    # keyword, as KiCad reads it).
+    connect: int = 1
+    # `(fill (thermal_gap x) (thermal_bridge_width x))` and
+    # `(min_thickness x)`; None when the zone does not say (KiCad's 0.5,
+    # 0.5 and 0.25 then).
+    thermal_gap: Optional[float] = None
+    spoke_width: Optional[float] = None
+    min_thickness: Optional[float] = None
 
     @property
     def filled(self) -> bool:
@@ -883,8 +929,9 @@ class BoardGeom:
                                     "attrs": tuple(str(_tok(x)) for x in _strs(attr))
                                     if attr is not None else ()}
             first_pad = len(self._pads)
+            fp_th = _thermal_of(fp)
             for pad in _kids(fp, "pad"):
-                self._add_pad(pad, fx, fy, fangle, ref)
+                self._add_pad(pad, fx, fy, fangle, ref, fp_th)
             nets = frozenset(p.net for p in self._pads[first_pad:] if p.net)
             self._add_fp_copper(fp, fx, fy, fangle, ref, nets)
             tie = _kid(fp, "net_tie_pad_groups")
@@ -922,7 +969,7 @@ class BoardGeom:
             self.fp_copper.append({"ref": ref, "layer": ln, "nets": nets,
                                    "shape": shape})
 
-    def _add_pad(self, pad, fx, fy, fangle, ref):
+    def _add_pad(self, pad, fx, fy, fangle, ref, fp_th=None):
         """Back-side (flipped) footprints need NO special handling: pcbnew
         Flip() bakes the mirror into the stored values - pad locals are
         already mirrored, angles negated, and the pad (layers) list renamed
@@ -967,6 +1014,11 @@ class BoardGeom:
                 if len(on) >= 2:
                     drill_off = (on[0], on[1])
         custom = _custom_pad(pad, w, h) if pshape == "custom" else None
+        th = _thermal_of(pad)
+        for k, v in (fp_th or {}).items():
+            if th[k] is None or (k == "zone_connect"
+                                 and th[k] == ZONE_CONNECT_INHERIT):
+                th[k] = v
         made = Pad(
             custom=custom,
             ref=ref, number=number, net=self._resolve_net(pad),
@@ -981,7 +1033,12 @@ class BoardGeom:
                           if len(pf) > 1 and isinstance(pf[1], str)), ""),
             castellated=any(_tok(x) == "pad_prop_castellated"
                             for prop in _kids(pad, "property")
-                            for x in prop[1:]))
+                            for x in prop[1:]),
+            zone_connect=ZONE_CONNECT_INHERIT if th["zone_connect"] is None
+            else th["zone_connect"],
+            thermal_gap=th["thermal_gap"] or None,
+            spoke_width=th["spoke_width"] or None,
+            spoke_angle=th["spoke_angle"])
         if npth and drill:
             self.npth.append(made)
         if layers:
@@ -1043,6 +1100,9 @@ class BoardGeom:
                         fills.setdefault(fln, []).append(poly)
             cp = _kid(zone, "connect_pads")
             cl = _kid(cp, "clearance") if cp is not None else None
+            kw = [_tok(x) for x in cp[1:] if isinstance(x, sexpdata.Symbol)] \
+                if cp is not None else []
+            fnode = _kid(zone, "fill")
             nm = _kid(zone, "name")
             at = _kid(zone, "attr")
             pg = _kid(zone, "polygon")
@@ -1056,7 +1116,21 @@ class BoardGeom:
                                     and _strs(nm) else "",
                                     outline=tuple(ring),
                                     teardrop=at is not None
-                                    and _kid(at, "teardrop") is not None))
+                                    and _kid(at, "teardrop") is not None,
+                                    connect={
+                                        "yes": ZONE_CONNECT_SOLID,
+                                        "no": ZONE_CONNECT_NONE,
+                                        "thru_hole_only":
+                                            ZONE_CONNECT_THT_THERMAL,
+                                    }.get(kw[0] if kw else "",
+                                          ZONE_CONNECT_THERMAL),
+                                    thermal_gap=_num_of(fnode, "thermal_gap")
+                                    if fnode is not None else None,
+                                    spoke_width=_num_of(
+                                        fnode, "thermal_bridge_width")
+                                    if fnode is not None else None,
+                                    min_thickness=_num_of(zone,
+                                                          "min_thickness")))
             zid += 1
 
     def _parse_outline(self, root) -> Polygon:

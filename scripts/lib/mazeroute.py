@@ -80,14 +80,14 @@ class Router:
 
     def __init__(self, bg, *, rules=None, layers=None, grid: float = GRID,
                  margin: float = MARGIN, via_cost_mm: float = VIA_COST_MM,
-                 max_nodes: int = 3_000_000):
+                 max_nodes: int = 3_000_000, spokes: bool = False):
         self.bg = bg
         self.rules = rules or rf.board_rules(Path(bg.path), bg)
         self.layers = list(layers) if layers else rf.routable_layers(bg)
         bad = [x for x in self.layers if x not in bg.copper_layers]
         if bad:
             raise CheckError(f"not copper layers of this board: {bad}")
-        self.obs = rf.Obstacles(bg)
+        self.obs = rf.Obstacles(bg, spokes=spokes)
         self.g = grid
         self.margin = margin
         self.via_cost_mm = via_cost_mm

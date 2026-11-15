@@ -795,9 +795,17 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
         raise CheckError("other-net copper touches the parts' pads after the"
                          " rips (a rip missed it; KiCad would put it on the"
                          " pad's net): " + "; ".join(shorts))
-    router = mazeroute.Router(bgw)
+    # spokes: the routes keep off the thermal spokes the refill keeps (#1140)
+    router = mazeroute.Router(bgw, spokes=True)
     if router.unread_rules:     # #1140: left to the DRC gate
         payload["unread_dru_rules"] = router.unread_rules
+    for ref, num, layer, n in router.obs.short_spokes(refs):
+        payload["notes"].append(
+            f"{ref}.{num} on {layer}: the refill after the moves leaves it"
+            f" {n} thermal spoke{'' if n == 1 else 's'} where DRC asks"
+            f" {rf.SPOKES_MIN} (starved thermal); the copper already round"
+            " the pad starves the fill there, so no route of this run mends"
+            " it: move that copper or the part, or join the pad solid")
     base_isl: dict = {}
 
     def base_count(n):
