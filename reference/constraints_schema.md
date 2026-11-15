@@ -641,8 +641,10 @@ Consumers per key (script -> phase):
   "esd": {"connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
           "clamps": ["D1"], "level_kv": 8, "victim_abs_max_v": {"/USB*": 6}},
 
-  // check_mate_pins (MECH-05): a connector and its mate. ref and mate_ref
-  // are required; mate_pcb: the mate's board, relative to this file (absent:
+  // check_mate_pins (MECH-05): a connector and its mate. ref and one of
+  // mate_ref or mate_standard are required; mate_standard: a mate with no
+  // board, by its name in connector_pinmap.yaml mate_standards (gender and
+  // row spacing are checked against it, #1124); mate_pcb: the mate's board, relative to this file (absent:
   // this board); mount stack (default) | flip | cable, as in
   // reference/connector_pinmap.yaml; rotation: the mate board's turn,
   // degrees CCW in the top view (0); net_map {net here: the mate's name}.
@@ -655,7 +657,8 @@ Consumers per key (script -> phase):
                     "rotation": 0, "net_map": {"+3V3": "VDD"}},
                    {"ref": "J3", "mate_ref": "J1", "mount": "cable",
                     "cable": {"kind": "ffc", "type": "A", "length_mm": 100,
-                              "pitch_mm": 0.5}}],
+                              "pitch_mm": 0.5}},
+                   {"ref": "Z1", "mate_standard": "zx-spectrum-edge"}],
 
   // route_teardrops adds them, dfm_check judges them. required: true |
   // false | null (null: true on a board with a FLEX_* area); a missing
