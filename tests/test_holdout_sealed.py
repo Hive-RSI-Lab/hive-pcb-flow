@@ -201,8 +201,27 @@ def test_no_sealed_board_in_the_training_cache():
     ids = set(ec.sealed_rounds())
     if not cache.is_dir() or not ids:
         pytest.skip("no training cache here")
-    names = {p.name.split("@")[0] for d in ("repos", "runs")
-             if (cache / d).is_dir() for p in (cache / d).iterdir()}
-    n = len(names & ids)
+    n = ec.sealed_in(cache, ids)
     assert not n, (f"{n} sealed-round board(s) in the training cache {cache}; "
                    "move them to the sealed cache (see \"A new holdout round\")")
+
+
+def test_every_command_stops_on_a_sealed_board_in_the_training_cache(
+        tmp_path, monkeypatch, capsys):
+    """A sealed board fetched into the training cache before its round was
+    sealed (or by a branch older than the seal) stops every command, with a
+    count and no ids, until a scorer moves it."""
+    m = _two_rounds(tmp_path)
+    cache, sealed = tmp_path / "train", tmp_path / "sealed"
+    seen = _record(monkeypatch)
+    base = ["--manifest", str(m), "--cache", str(cache), "--sealed-cache", str(sealed)]
+    (cache / "repos" / ("open@" + "a" * 12)).mkdir(parents=True)
+    ec.main(["fetch", *base])           # training boards only: fine
+    (cache / "runs" / ("shut@" + "b" * 12)).mkdir(parents=True)
+    for cmd in ("sweep", "fetch", "run", "table"):
+        seen.clear()
+        with pytest.raises(SystemExit) as e:
+            ec.main([cmd, *base, *(["--sealed", "2"] if cmd == "sweep" else [])])
+        assert "1 sealed-round board(s) in the training cache" in str(e.value)
+        assert "shut" not in str(e.value) and seen == [], cmd
+    assert ec.sealed_in(cache, {"shut", "open"}) == 2
