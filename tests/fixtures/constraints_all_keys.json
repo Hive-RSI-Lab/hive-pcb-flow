@@ -185,7 +185,9 @@
     "mounting": {"by": "clip", "why": "snaps into the case's clips"},
     "mount_heights": {"U1": {"height_mm": 16.0, "datum": "body_underside",
                              "tol_mm": 0.3, "source": "README: 16 mm standoff",
-                             "model": "standoff"}}
+                             "model": "standoff"}},
+    "module_standoff": [{"refs": ["U1"], "height_mm": 11.0,
+                         "why": "on female headers"}]
   },
   "pinouts": [{"ref": "J4", "standard": "audio-trs"}],
   "testpoints": {
