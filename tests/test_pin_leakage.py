@@ -228,3 +228,57 @@ def test_ecp5_user_io_keeps_its_pulldown():
     pins whose function names a sysCONFIG role."""
     hits, _ = _audit(*_alert("100k"))
     assert abs(hits[0]["sink_a"] - 170e-6) < 1e-9
+
+
+def _five_volt_pullup(r, supply_pin=("1", "VDD", "power_in"), spec_supply=None):
+    """#1104: R1 from +5V into an STM32G031 PA0 (5 uA leakage, VIL/VIH
+    0.3/0.7 x VDD) whose VDD is +3V3: its thresholds are 0.99 / 2.31 V, not
+    1.5 / 3.5 V of the pull's rail."""
+    pnum, func, ptype = supply_pin
+    nets = {"+5V": [_m("R1", "1")],
+            "+3V3": [_m("U6", pnum, func, ptype)],
+            "GND": [_m("U6", "9", "VSS", "power_in")],
+            "/WAKE": [_m("R1", "2"), _m("U6", "7", "PA0", "bidirectional")]}
+    comps = {"U6": "STM32G031G6Ux", "R1": r}
+    parsed = {"components": {k: {"value": v, "libsource": ("", "")}
+                             for k, v in comps.items()}, "nets": nets}
+    cons = {"voltages": [{"net": "+5V", "voltage": 5.0},
+                         {"net": "+3V3", "voltage": 3.3}]}
+    viol, facts = netlist_audit.audit(parsed, cons, None, pin_requirements=[],
+                                      pin_states=[])
+    return [x for x in viol if x["kind"] in KINDS], facts
+
+
+def test_thresholds_come_from_the_receivers_vdd_not_the_pull_rail():
+    # 5 V - 750k * 5 uA = 1.25 V: between 0.99 and 2.31 (a warning); against
+    # the pull's 5 V it read below VIL 1.5, a false error
+    hits, facts = _five_volt_pullup("750k")
+    assert [h["severity"] for h in hits] == ["warning"], hits
+    assert 1.2 < hits[0]["level_v"] < 1.3
+    assert facts["pulls_vs_leakage_checked"] == 1
+    # 5 V - 400k * 5 uA = 3.0 V: over the part's VIH 2.31 (quiet); against
+    # 5 V it sat under VIH 3.5, a false warning
+    assert _five_volt_pullup("400k")[0] == []
+
+
+def test_supply_named_pin_counts_when_the_symbol_types_it_passive():
+    hits, _ = _five_volt_pullup("750k", supply_pin=("1", "VDD", "passive"))
+    assert [h["severity"] for h in hits] == ["warning"]
+
+
+def test_no_known_supply_falls_back_to_the_pull_rail():
+    # U6's only rail pin is not a supply: thresholds are 0.3/0.7 of 5 V
+    hits, _ = _five_volt_pullup("750k", supply_pin=("1", "PB7", "bidirectional"))
+    assert [h["severity"] for h in hits] == ["error"]
+
+
+def test_part_supply_v_follows_the_spec_supply_regex():
+    nets = {"+3V3": [_m("U1", "1", "VDD", "power_in")],
+            "+1V8": [_m("U1", "2", "VDDIO", "power_in")]}
+    cp = {"U1": {"1": "+3V3", "2": "+1V8"}}
+    rails = {"+3V3": 3.3, "+1V8": 1.8}
+    assert netlist_audit._part_supply_v("U1", {}, nets, cp, rails) == 3.3
+    assert netlist_audit._part_supply_v("U1", {"supply": "^VDDIO$"}, nets, cp,
+                                        rails) == 1.8
+    assert netlist_audit._part_supply_v("U1", {"supply": "^VCCIO"}, nets, cp,
+                                        rails) is None

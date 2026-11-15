@@ -108,7 +108,9 @@ schematic-level structural problems BEFORE board work starts:
    The worst-case level is the pulls' Thevenin source less that current
    through their resistance; error when a listed receiver reads it as the
    wrong state, warning when it sits between VIL and VIH (receivers not
-   listed: 0.3 / 0.7 of the rail). A net with a push-pull output is skipped,
+   listed: 0.3 / 0.7 of the rail). A row's vil_frac / vih_frac and
+   internal pull-up refer to the part's own supply pin, not the pull's
+   rail (#1104). A net with a push-pull output is skipped,
    and so is a level the pulls alone already put in that band (a divider
    into an ADC input sits mid-rail by design, #1100).
  - driver_contention (warning): a reset input pin_leakage.yaml lists that
@@ -959,6 +961,31 @@ def _leak_row(specs: list[dict], comp: dict, m: dict
     return None
 
 
+def _part_supply_v(ref: str, spec: dict, nets: dict,
+                   comp_pins: dict[str, dict[str, str]],
+                   rails: dict[str, float]) -> float | None:
+    """The volts of a pin_leakage.yaml part's own supply, the rail its
+    vil_frac / vih_frac and internal pull-up refer to (#1104): its pins
+    whose function matches the spec's `supply` regex when it has one, else
+    its power_in pins or pins named as a supply (VDD, VCC, VDDIO, ...);
+    the highest known rail among them, None when none is known."""
+    rx = re.compile(spec["supply"], re.I) if spec.get("supply") else None
+    volts = []
+    for pnum, net in comp_pins.get(ref, {}).items():
+        if net not in rails or _is_ground_name(net):
+            continue
+        m = next((x for x in nets.get(net, []) if x["ref"] == ref
+                  and x["pin"] == pnum), {})
+        func = _norm_pin(m.get("pinfunction"))
+        if rx is not None:
+            if func and rx.search(func):
+                volts.append(rails[net])
+        elif (_base_type(m.get("pintype")) == "power_in"
+              or _SUPPLY_PIN_RE.match(func)):
+            volts.append(rails[net])
+    return max(volts) if volts else None
+
+
 def _zero_ohm_groups(nets: dict, comps: dict,
                      comp_pins: dict[str, dict[str, str]]
                      ) -> list[list[str]]:
@@ -1027,12 +1054,18 @@ def _pull_vs_leakage(nets: dict, comps: dict,
         if not pulls or not rows:
             continue
         top = max(v for v, _, _ in pulls)
+        # each listed pin's own supply (#1104): its thresholds and its
+        # internal pull-up refer to that, not to the pull's rail
+        vdd = {(ref, pin): _part_supply_v(ref, spec, nets, comp_pins, rails)
+               for ref, pin, spec, _ in rows}
         # a listed internal pull-up (a reset pin's own) at its weakest
         for ref, pin, spec, row in rows:
-            if row.get("rpu") and top > 0:
-                pulls.append((top, float(max(row["rpu"])),
+            rail = vdd[(ref, pin)] or top
+            if row.get("rpu") and rail > 0:
+                pulls.append((rail, float(max(row["rpu"])),
                                f"{ref}.{pin} internal pull-up "
                                f"{max(row['rpu']) / 1e3:g}k max"))
+        top = max(v for v, _, _ in pulls)
         g = sum(1 / r for _, r, _ in pulls)
         vth = sum(v / r for v, r, _ in pulls) / g
         rth = 1 / g
@@ -1045,9 +1078,10 @@ def _pull_vs_leakage(nets: dict, comps: dict,
         level = min(max(level, 0.0), top)
         recv = []
         for ref, pin, spec, row in rows:
-            vil = row.get("vil", (row["vil_frac"] * top
+            rail = vdd[(ref, pin)] or top
+            vil = row.get("vil", (row["vil_frac"] * rail
                                   if "vil_frac" in row else None))
-            vih = row.get("vih", (row["vih_frac"] * top
+            vih = row.get("vih", (row["vih_frac"] * rail
                                   if "vih_frac" in row else None))
             if vil is not None and vih is not None:
                 recv.append((f"{ref}.{pin}", float(vil), float(vih)))

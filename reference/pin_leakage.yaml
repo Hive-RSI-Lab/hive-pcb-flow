@@ -19,7 +19,12 @@
 #   leak      A   the most input leakage, either way
 #   rpu       ohm [min, max] of an internal pull-up resistor to its supply
 #   vil / vih V   the receiver's input thresholds, or
-#   vil_frac / vih_frac   the same as a fraction of the pull's rail
+#   vil_frac / vih_frac   the same as a fraction of the part's own supply
+# supply: (per part, optional) regex on the pin function of the pin(s)
+#   whose rail vil_frac / vih_frac and rpu refer to (VDDIO on a split-rail
+#   part). Without it: the highest known rail on the part's power_in pins
+#   or pins named as a supply (VDD, VCC, ...); with no such rail known,
+#   the pull's rail (#1104).
 #   reset     true on a reset input: two push-pull drivers from other parts
 #             on its net fight (driver_contention)
 #   source    the datasheet, its revision, the table or section
