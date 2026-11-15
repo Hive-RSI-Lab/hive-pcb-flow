@@ -103,6 +103,10 @@ KICAD_HOLE_CLEARANCE = 0.25   # board setup default min hole clearance
 KICAD_HOLE_TO_HOLE = 0.25     # board setup default min hole to hole
 SAME_NET_HOLE_MM = 0.13       # JLC HDI, one net, edge to edge (jlc_capabilities hdi)
 EXIT_MM = 1.0                 # #784, how far an open stub tip's corridor runs
+SPOKES_MIN = 2                # KiCad's min_resolved_spokes default: fewer
+#                               is DRC's starved thermal (#1140)
+SPOKE_DEFAULTS = (0.5, 0.5, 0.25)   # KiCad's thermal gap, spoke width and zone
+#                                     min thickness when the board says none
 VIA_PAD_KEEP_MM = 0.1         # drill edge to an own-net SMD pad: past its
 #                               mask opening and registration (check_wicking)
 FINE_MARGIN_MM = 0.005        # #923 point 3, the fine rung's clearance margin:
@@ -135,6 +139,21 @@ class Rules:
     #                                          take a via (filled + capped)
     necks: dict = field(default_factory=dict)  # net -> {layer: [(zone,
     #                    width)]}: where its tracks may narrow (#924)
+    bans: object = None   # routelib.DruBans: the .kicad_dru's disallow
+    #                       track and via rules (#1140)
+    sized_nets: frozenset = frozenset()   # nets a DRU width or gap rule
+    #       sizes, whatever its bounds: never ripped (#1140)
+
+    def net_layers(self, net: str, layers) -> list:
+        """Of `layers`, those the board's DRU lets the net have a track on
+        (#1140: a route on a layer a disallow rule bans fails DRC)."""
+        banned = self.bans.track_layers(net) if self.bans else set()
+        return [ly for ly in layers if ly not in banned]
+
+    def via_bans(self, net: str) -> set:
+        """The via kinds (through, micro, blind, buried) a DRU disallow
+        rule keeps off the net."""
+        return self.bans.via_kinds(net) if self.bans else set()
 
     def width(self, net: str) -> float:
         w = max(self.net_width.get(net, 0.0) + 0.001, self.min_width)
@@ -177,12 +196,14 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
                     and r["condition"].strip() == VIA_ONLY)):
                 base[r["constraint"]] = max(base.get(r["constraint"], 0.0),
                                             r["min_mm"])
-    pro_rules = {}
+    pro_json: dict = {}
     try:
-        pro_rules = json.loads(pro.read_text(encoding="utf-8")).get(
-            "board", {}).get("design_settings", {}).get("rules", {})
+        pro_json = json.loads(pro.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
+    pro_json = pro_json if isinstance(pro_json, dict) else {}
+    pro_rules = (pro_json.get("board") or {}).get(
+        "design_settings", {}).get("rules", {}) or {}
     # The via's annular ring: the DRU's, or the .kicad_pro's, whichever is
     # larger (KiCad's 0.1 mm stock default when neither sets one).
     annular = max(base.get("annular_width", 0.0),
@@ -199,6 +220,7 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
         floors["via_diameter"], base.get("via_diameter", 0.0), 0.6))
     vd = via_drill or (common[1] if common else max(
         floors["via_drill"], base.get("hole_size", 0.0), 0.3))
+    classes = routelib.pro_net_classes(pro_json, bg.nets)
     build, entry = hdilib.board_build(bg)
     hdi: dict = {}
     if build:
@@ -224,6 +246,11 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
         net_width=rc.dru_net_floors(dru, "track_width"),
         net_clearance=rc.dru_net_floors(dru, "clearance"),
         necks=board_necks(pcb, bg, rc.dru_neck_rules(dru, "track_width")),
+        bans=routelib.dru_layer_bans(
+            dru.read_text(encoding="utf-8") if dru.is_file() else "",
+            list(bg.copper_layers), net_classes=classes,
+            layer_names=getattr(bg, "layer_user_names", None)),
+        sized_nets=frozenset(rc.dru_sized_nets(dru, bg.nets, classes)),
         margin=margin, **hdi)
 
 
@@ -302,10 +329,17 @@ class Item:
 
 
 class Obstacles:
-    """The board's copper and holes, indexed for windowed rasterising."""
+    """The board's copper and holes, indexed for windowed rasterising.
+    spokes=True: spokes_near() also gives the thermal spokes a route must
+    leave (#1140); off, it gives none, as before."""
 
-    def __init__(self, bg: geom.BoardGeom):
+    def __init__(self, bg: geom.BoardGeom, *, spokes: bool = False):
         self.bg = bg
+        self.spokes = spokes
+        self._spoke_pads = None      # (pad, zone, layer, gap, width, min)
+        self._spoke_tree = None
+        self._spoke_live: dict = {}  # index into _spoke_pads -> live spokes
+        self._net_cu: dict = {}      # (net, layer) -> its copper (_net_copper)
         cu = frozenset(bg.copper_layers)
         items: list[Item] = []
         for t in bg.tracks_of():
@@ -335,6 +369,9 @@ class Obstacles:
         #                          net's board tracks/vias cost, not block
         self.fills = [(z.net, layer, p) for z in bg.zones_of()
                       for layer, ps in z.fills.items() for p in ps]
+        # beside fills: a teardrop's, which meets no via for KiCad (#1140)
+        self.fill_teardrop = [bool(z.teardrop) for z in bg.zones_of()
+                              for ps in z.fills.values() for _ in ps]
         self.fill_tree = STRtree([p for _, _, p in self.fills]) \
             if self.fills else None
 
@@ -350,6 +387,272 @@ class Obstacles:
         if self.fill_tree is None:
             return []
         return [self.fills[i] for i in self.fill_tree.query(win)]
+
+    def _thermal_index(self):
+        if self._spoke_pads is None:
+            self._spoke_pads = thermal_pads(self.bg)
+            self._spoke_tree = STRtree([
+                box(*p.poly.buffer(gap + mt + sw).bounds)
+                for p, _, _, gap, sw, mt in self._spoke_pads]) \
+                if self._spoke_pads else None
+        return self._spoke_pads
+
+    def _net_copper(self, net: str, layer: str):
+        """(shapes, owners, STRtree) of `net`'s copper on `layer` as KiCad's
+        connectivity meets a zone with it: a pad or via by its copper, a
+        track by its ends, another fill by its polygon. Owners are ("pad",
+        ref, number), ("via" or "track", uuid) or ("zone", id, index).
+        Built on first use."""
+        key = (net, layer)
+        if key not in self._net_cu:
+            shapes, owners = [], []
+            for p in self.bg.pads_of():
+                if (p.net or "") == net and layer in p.layers:
+                    shapes.append(p.poly)
+                    owners.append(("pad", p.ref, p.number))
+            for v in self.bg.vias_of():
+                if (v.net or "") == net and (not v.layers
+                                             or v.spans(layer)):
+                    shapes.append(v.poly)
+                    owners.append(("via", v.uuid))
+            for t in self.bg.tracks_of():
+                if (t.net or "") == net and t.layer == layer:
+                    c = list(t.shape.coords)
+                    shapes.append(shapely.multipoints([c[0], c[-1]]))
+                    owners.append(("track", t.uuid))
+            for z in self.bg.zones_of():
+                if (z.net or "") == net and not z.teardrop:
+                    for i, f in enumerate(z.fills.get(layer, ())):
+                        shapes.append(f)
+                        owners.append(("zone", id(z), i))
+            self._net_cu[key] = (shapes, owners,
+                                 STRtree(shapes) if shapes else None)
+        return self._net_cu[key]
+
+    def _joined(self, pad, zone, layer: str):
+        """A test of whether a fill polygon of `zone` on `layer` meets copper
+        of its net other than `pad` and itself: KiCad's DRC does not count
+        spokes into an island that joins only the pad
+        (m_SingleConnectionOutlines, connectivity_algo.cpp)."""
+        shapes, owners, tree = self._net_copper(zone.net or "", layer)
+
+        def joined(poly) -> bool:
+            if tree is None:
+                return False
+            for i in tree.query(poly, predicate="intersects"):
+                o = owners[int(i)]
+                if o == ("pad", pad.ref, pad.number):
+                    continue
+                if o[0] == "zone" and shapes[int(i)].equals(poly):
+                    continue
+                return True
+            return False
+        return joined
+
+    def _live(self, i: int) -> list:
+        if i not in self._spoke_live:
+            p, z, layer, gap, sw, mt = self._spoke_pads[i]
+            self._spoke_live[i] = thermal_spokes(
+                p, z.fills.get(layer, ()), gap, sw, mt,
+                joined=self._joined(p, z, layer))
+        return self._spoke_live[i]
+
+    def spokes_near(self, win) -> list:
+        """(zone net, layer, keep-out, zone clearance) of the spokes kept for
+        each thermal pad near win: its best SPOKES_MIN live ones in the
+        board's fill (thermal_spokes). Other-net copper held its clearance
+        off them leaves the refill those spokes, so a route does not starve
+        a thermal pad (C221 on the voice board). Built per pad on first use.
+        None unless the Obstacles were made with spokes=True."""
+        if not self.spokes or not self._thermal_index():
+            return []
+        out = []
+        for i in self._spoke_tree.query(win):
+            p, z, layer = self._spoke_pads[int(i)][:3]
+            out += [(z.net, layer, shape, z.clearance)
+                    for _, shape in self._live(int(i))[:SPOKES_MIN]]
+        return out
+
+    def spoke_count(self, i: int) -> int:
+        """The spokes KiCad's DRC counts for thermal pad i (zones/zc.cpp):
+        its live spokes into fill that meets other copper of the net, then,
+        short of SPOKES_MIN, each net track from inside the pad's ring to
+        the fill; only when that gives none, its spokes into an island only
+        it meets. -1 when no fill reaches it, which DRC leaves to its
+        connectivity check."""
+        p, z, layer, gap, *_ = self._spoke_pads[i]
+        live = self._live(i)
+        if not live:
+            return -1
+        n = sum(1 for (tied, *_), _ in live if tied)
+        if n < SPOKES_MIN:
+            ring = p.poly.buffer(gap / 2)
+            fills = z.fills.get(layer, ())
+            anchor = Point(p.copper_center)
+            for t in self.bg.tracks_of():
+                if (t.net or "") != (p.net or "") or t.layer != layer:
+                    continue
+                c = list(t.shape.coords)
+                a, b = Point(c[0]), Point(c[-1])
+                # only a track joined to the pad itself: an end in its
+                # copper or its anchor on the track (GetConnectedTracks)
+                if not (p.poly.intersects(a) or p.poly.intersects(b)
+                        or t.shape.distance(anchor) <= t.width / 2):
+                    continue
+                for x, y in ((a, b), (b, a)):
+                    if ring.contains(x) and any(f.intersects(y)
+                                                for f in fills):
+                        n += 1
+                        break
+        return n if n else len(live)
+
+    def short_spokes(self, refs) -> list:
+        """(ref, pad number, layer, spokes) of refs' thermal pads that
+        KiCad's DRC finds joined by fewer spokes than it asks (spoke_count:
+        between none and SPOKES_MIN; with none the pad is not joined there
+        at all, which DRC leaves to its connectivity check). No route mends
+        that: the fill around the pad is what starves it."""
+        refs = set(refs)
+        out = []
+        for i, (p, z, layer, *_) in enumerate(self._thermal_index()):
+            if p.ref in refs:
+                n = self.spoke_count(i)
+                if 0 < n < SPOKES_MIN:
+                    out.append((p.ref, p.number, layer, n))
+        return out
+
+
+def zone_join(pad, zone) -> int:
+    """How `zone` joins `pad` (a pad of its net), as geom.ZONE_CONNECT_*:
+    the pad's or its footprint's own setting, else the zone's; a
+    through-hole-only zone is thermal to a through-hole pad and solid to
+    others. A .kicad_dru zone_connection rule is not read."""
+    c = pad.zone_connect if pad.zone_connect != geom.ZONE_CONNECT_INHERIT \
+        else zone.connect
+    if c == geom.ZONE_CONNECT_THT_THERMAL:
+        c = geom.ZONE_CONNECT_THERMAL if pad.kind == "thru_hole" \
+            else geom.ZONE_CONNECT_SOLID
+    return c
+
+
+def pour_nets(bg: geom.BoardGeom) -> set:
+    """The nets with a pour: a zone of the net that is not a teardrop. KiCad
+    builds a teardrop zone per teardropped track end, so counting those made
+    nearly every signal net of a teardropped board a pour net that no router
+    would rip (#1140)."""
+    return {z.net for z in bg.zones_of() if z.net and not z.teardrop}
+
+
+def thermal_pads(bg: geom.BoardGeom) -> list:
+    """(pad, zone, layer, thermal gap, spoke width, zone min thickness) for
+    each pad a zone of its net joins by thermal spokes on a layer the zone
+    has fill on. A teardrop zone is not a pour and joins nothing."""
+    zones: dict = {}
+    for z in bg.zones_of():
+        if z.net and not z.teardrop and z.filled:
+            zones.setdefault(z.net, []).append(z)
+    gap0, sw0, mt0 = SPOKE_DEFAULTS
+    out = []
+    for p in bg.pads_of():
+        for z in zones.get(p.net or "", ()):
+            if zone_join(p, z) != geom.ZONE_CONNECT_THERMAL:
+                continue
+            gap = p.thermal_gap or z.thermal_gap or gap0
+            sw = p.spoke_width or z.spoke_width or sw0
+            mt = z.min_thickness or mt0
+            out += [(p, z, layer, gap, sw, mt) for layer in p.layers
+                    if z.fills.get(layer)]
+    return out
+
+
+def thermal_spokes(pad, fills, gap: float, sw: float, mt: float,
+                   joined=None, mids: bool = False) -> list:
+    """The live thermal spokes of `pad` in `fills` (one zone's polygons on
+    one layer), best first, as (score, keep-out). A spoke is where a fill
+    polygon crosses the pad outline grown by half the thermal gap, as
+    KiCad's DRC counts them for DRCE_STARVED_THERMAL (zones/zc.cpp). Its
+    keep-out is a bar the spoke's width from the pad edge to where KiCad's
+    refill ends the spoke and tests it for fill (spoke_end), with a disc
+    there as wide as the zone's min thickness: the refill keeps a spoke
+    whose end lands in fill that width allows. joined(poly) says whether
+    other copper of the net meets that polygon (default: all do); DRC does
+    not count a spoke into an island only the pad meets. Best is joined,
+    then in the largest polygon, then with the most fill within 1 mm of
+    its end. mids=True: (score, keep-out, (x, y)), the last where the
+    spoke crosses the ring (its middle there)."""
+    sw = min(sw, min(pad.size)) if min(pad.size) > 0 else sw
+    edge = pad.poly.buffer(gap / 2).exterior
+    out = []
+    for poly in fills:
+        if not poly.intersects(edge):
+            continue
+        lines = [g for g in shapely.get_parts(poly.intersection(edge))
+                 if g.geom_type == "LineString" and g.length > 1e-6]
+        if not lines:
+            continue
+        merged = shapely.line_merge(shapely.multilinestrings(lines))
+        tied = joined(poly) if joined is not None else True
+        for piece in shapely.get_parts(merged):
+            if piece.is_ring:          # fill all round the ring: no spoke
+                continue
+            m = piece.interpolate(0.5, normalized=True)
+            end = spoke_end(pad, (m.x, m.y), gap, mt)
+            if end is None:
+                continue
+            ux, uy = end[1]
+            p_in = (m.x - ux * gap / 2, m.y - uy * gap / 2)
+            p_out = end[0]
+            if (p_out[0] - p_in[0]) * ux + (p_out[1] - p_in[1]) * uy < 1e-6:
+                p_out = (m.x + ux * (gap + mt) / 2, m.y + uy * (gap + mt) / 2)
+            shape = shapely.union(
+                LineString([p_in, p_out]).buffer(sw / 2, cap_style="flat"),
+                Point(p_out).buffer(max(mt, sw) / 2))
+            near = poly.intersection(Point(p_out).buffer(1.0)).area
+            out.append(((bool(tied), round(poly.area, 6), round(near, 6)),
+                        shape) + (((m.x, m.y),) if mids else ()))
+    out.sort(key=lambda f: f[0], reverse=True)
+    return out
+
+
+SPOKE_EPS = 0.005    # KiCad's max error, which its refill grows the box by
+
+
+def spoke_end(pad, through, gap: float, mt: float):
+    """((x, y), (ux, uy)): where KiCad's refill ends the thermal spoke of
+    `pad` that crosses its thermal ring at `through`, and the spoke's
+    direction; None at the spoke's origin. zone_filler.cpp runs a spoke
+    from the centre of the pad's own-frame bounding box (its copper box,
+    unturned) to that box grown by the thermal gap and half the zone's min
+    thickness, and keeps it if that end is in fill; a round pad's box is
+    met on its axis whatever the spoke's angle. A custom pad's spokes along
+    its own segments (KiCad's proxy spokes) are not modelled."""
+    if pad.custom is not None and not pad.custom.is_empty:
+        x0, y0, x1, y1 = pad.custom.bounds
+    else:
+        w, h = pad.size
+        x0, y0, x1, y1 = -w / 2, -h / 2, w / 2, h / 2
+    a = math.radians(pad.angle)
+    ca, sa = math.cos(a), math.sin(a)
+    # the pad's frame turns to the board's by -angle (geom._pad_polygon)
+    lx, ly = (x0 + x1) / 2, (y0 + y1) / 2
+    cx0, cy0 = pad.copper_center
+    ox, oy = cx0 + lx * ca + ly * sa, cy0 - lx * sa + ly * ca
+    dx, dy = through[0] - ox, through[1] - oy
+    d = math.hypot(dx, dy)
+    if d < 1e-9:
+        return None
+    ux, uy = dx / d, dy / d
+    vx, vy = ux * ca - uy * sa, ux * sa + uy * ca      # in the pad's frame
+    grow = gap + SPOKE_EPS + mt / 2
+    hx, hy = (x1 - x0) / 2 + grow, (y1 - y0) / 2 + grow
+    round_pad = pad.shape == "circle" or (
+        pad.shape == "oval" and abs(pad.size[0] - pad.size[1]) < 1e-9)
+    if round_pad and pad.custom is None:
+        reach = hx
+    else:
+        reach = min(hx / abs(vx) if abs(vx) > 1e-12 else math.inf,
+                    hy / abs(vy) if abs(vy) > 1e-12 else math.inf)
+    return ((ox + ux * reach, oy + uy * reach), (ux, uy))
 
 
 # ------------------------------------------------------------------- grid
@@ -414,8 +717,18 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
                rip_cost: float = 40.0, necks: bool = True) -> Grid:
     """The search grid of one connection. Where the net has a neck zone
     (Rules.necks) a cell is cleared for the neck width, and path_to_ops lays
-    the neck width there (#924). necks=False: the full width everywhere."""
+    the neck width there (#924). necks=False: the full width everywhere.
+    The grid's layers are `layers` less those a DRU disallow rule keeps the
+    net's tracks off (#1140; Grid.layers): a through via still crosses
+    them, held off their other-net copper by vblk; a side on one is reached
+    by a via into it, as a plane's is. A via kind the DRU disallows the
+    net (Rules.via_bans) is left out. CheckError when no layer is left."""
     bg = obs.bg
+    allowed = rules.net_layers(net, layers)
+    if not allowed:
+        raise CheckError(f"{net}: the board's .kicad_dru keeps its tracks"
+                         f" off every layer asked for ({', '.join(layers)})")
+    layers = allowed
     minx, miny, maxx, maxy = _on_board(window, bg.outline)
     x0 = math.floor(minx / g) * g
     y0 = math.floor(miny / g) * g
@@ -495,6 +808,19 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
         inside = shapely.contains_xy(poly, X, Y)
         cost[k][inside] *= pour_cost
 
+    for znet, layer, shape, zclr in obs.spokes_near(win):
+        # a thermal pad's kept spokes (#1140): the zone's clearance off them
+        if znet == net:
+            continue
+        c = max((zclr or 0.0) + rules.margin, rules.clr(net, znet))
+        if layer in layers:
+            m = _mask(shape, c + w / 2, *args)
+            if m:
+                blk[layers.index(layer)][m[0]] |= m[1]
+        m = _mask(shape, c + vr, *args)
+        if m:
+            vblk[m[0]] |= m[1]
+
     for ra in bg.rule_areas + bg.footprint_rule_areas:
         fl = ra.get("flags", {})
         poly = ra["outline"]
@@ -542,6 +868,12 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
                       neck, dict(pour_cost=pour_cost, inner_cost=inner_cost,
                                  rip_cost=rip_cost))
     span_moves = _span_moves(obs, rules, net, layers, win, args, K, blk, outline)
+    no_via = rules.via_bans(net)
+    if "through" in no_via:
+        vblk[:] = True
+    if no_via and span_moves:
+        span_moves = [[mv for mv in ms if mv[1].kind not in no_via]
+                      for ms in span_moves]
     return Grid(
         x0=x0, y0=y0, nx=nx, ny=ny, g=g, layers=list(layers),
         blk=[m.ravel().astype(np.uint8).tobytes() for m in blk],
@@ -628,6 +960,12 @@ def _span_moves(obs, rules: Rules, net: str, layers: list, win, args, K: int,
                     stack = shapely.dwithin(
                         it.hole.centroid, shapely.points(X[hit[0]], Y[hit[0]]), 0.01)
                     m[hit[0]] |= hit[1] & ~stack
+        for znet, layer, shape, zclr in obs.spokes_near(win):
+            if znet != net and layer in on:
+                hit = _mask(shape, max((zclr or 0.0) + rules.margin,
+                                       rules.clr(net, znet)) + vr, *args)
+                if hit:
+                    m[hit[0]] |= hit[1]
         for ra in obs.bg.rule_areas + obs.bg.footprint_rule_areas:
             if ra.get("flags", {}).get("vias") == "not_allowed" \
                     and not ra["outline"].is_empty and ra["outline"].intersects(win):
@@ -1260,6 +1598,9 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
         the floor width from the start. hide: leave this pass's own routes
         out."""
         net = job["net"]
+        if not rules.net_layers(net, layers):
+            job["banned"] = sorted(layers)      # #1140: DRC would fail it
+            return None, None, None
         floor = rules.width_floor(net), rules.via_floor
         start = (floor if rules.spans and net not in keep_nets
                  else (rules.width(net), None))
@@ -1316,7 +1657,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
 
     # power and pour nets are never ripped: their copper is sized by rule
     # nor are constraints diff pairs: a pair ripped here comes back single-ended (#613)
-    keep_nets = {z.net for z in bg.zones_of()} | set(rules.net_width) | {""}
+    keep_nets = pour_nets(bg) | set(rules.net_width) | rules.sized_nets | {""}
     keep_nets |= set(keep_nets_extra or ())
 
     def expired():
@@ -1415,6 +1756,8 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                 job.update(status="skipped", reason="cut by the deadline")
             else:
                 job.update(status="failed", reason=(
+                    "the .kicad_dru keeps its tracks off every routable layer"
+                    if job.get("banned") else
                     "search stopped at --max-nodes; a path may exist"
                     if job.get("gave_up") else "no path on the grid"))
         if log:
@@ -1845,6 +2188,9 @@ def _rules_facts(rules: Rules) -> dict:
     if facts.get("spans"):
         facts["spans"] = [dataclasses.asdict(s) for s in facts["spans"]]
     facts["via_in_pad_refs"] = sorted(facts.get("via_in_pad_refs", ()))
+    facts["sized_nets"] = sorted(facts.get("sized_nets", ()))
+    if facts.get("bans") is not None:
+        facts["bans"] = facts["bans"].facts()
     return facts
 
 

@@ -476,6 +476,49 @@ def test_parse_dru_rules_reads_parens_as_kicad_does():
         "(a #b)", '(c "\\"(")']
 
 
+def test_dru_sized_nets_reads_every_width_and_gap_rule(tmp_path):
+    """#1140: the impedance rules' (min ..)(opt ..)(max ..) and negated
+    courtyard escape parse_dru_rules, so their nets went unkept."""
+    dru = tmp_path / "b.kicad_dru"
+    dru.write_text("""(version 1)
+(rule "aiee_track_width_floor"
+\t(constraint track_width (min 0.0762mm))
+\t(condition "A.Type == 'track'")
+)
+(rule "aiee_diff_w_USB_In2"
+\t(layer "In2.Cu")
+\t(constraint track_width (min 0.1454mm) (opt 0.1616mm) (max 0.1778mm))
+\t(condition "(A.NetName == '/USB0_DP' || A.NetName == '/USB0_DM') && !(A.intersectsCourtyard('U301'))")
+)
+(rule "gap"
+\t(constraint diff_pair_gap (min 0.18mm))
+\t(condition "A.NetName == '/eth_?x*'")
+)
+(rule "cls"
+\t(constraint track_width (max 0.3mm))
+\t(condition "A.NetClass == 'RF'")
+)
+(rule "aiee_iso_HV_LV"
+\t(constraint track_width (min 0.5mm))
+\t(condition "A.NetName == 'V48' && B.NetName == 'GND'")
+)
+(rule "hv"
+\t(constraint clearance (min 0.635mm))
+\t(condition "A.NetName == 'V48'")
+)
+(rule "clk" (constraint track_width (min 0.1mm) (max 0.2mm)) (condition "A.NetName == 'SPI_CLK'"))
+# (rule "old" (constraint track_width (min 0.1mm)) (condition "A.NetName == 'GND'"))
+""", encoding="utf-8")
+    nets = {"/USB0_DP", "/USB0_DM", "/ETH_TX+", "/eth_rx-", "/D[0]", "ANT",
+            "V48", "GND", "SPI_CLK", ""}
+    # a one-line rule counts and a commented one doesn't (#1163's reader)
+    assert rc.dru_sized_nets(dru, nets, {"ANT": ("RF",)}) == {
+        "/USB0_DP", "/USB0_DM", "/ETH_TX+", "/eth_rx-", "ANT", "SPI_CLK"}
+    assert rc.dru_net_floors(dru, "track_width") == {}
+    assert rc.dru_sized_nets(None, nets) == set()
+    assert rc.dru_sized_nets(tmp_path / "nope.kicad_dru", nets) == set()
+
+
 def test_build_net_clearances_class_plus_dru(tmp_path):
     pro = tmp_path / "b.kicad_pro"
     pro.write_text(json.dumps({"net_settings": {
