@@ -939,7 +939,7 @@ def check_holes(fab, rules, vios: list, cast=(), bg=None,
     # a board with no vias: every plated hole is a pad hole
     check_hole_to_track(fab, rules, vios, is_via or (
         (lambda h: False) if bg is not None else None), cast,
-        _npth_matcher(bg), _same_net_matcher(bg))
+        _npth_matcher(bg), _same_net_matcher(bg), _pour_matcher(bg))
 
     lo_he = rules.get("min_hole_to_edge_mm")
     outline = fab.outline
@@ -997,7 +997,8 @@ def check_hole_to_inner(fab, rules, vios: list) -> None:
 
 
 def check_hole_to_track(fab, rules, vios: list, is_via=None,
-                        cast=(), is_npth=None, same_net=None) -> None:
+                        cast=(), is_npth=None, same_net=None,
+                        pour_at=None) -> None:
     """A drill or routed slot to outer copper it isn't joined to (#454),
     from JLC's capabilities page (read 2026-11-15): 'Via hole to Track
     0.2mm', 'PTH to Track 0.28mm 0.35mm is recommended', 'NPTH to Track
@@ -1021,7 +1022,15 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
     same_net: _same_net_matcher(bg). Copper of the hole's own net that the
     gerber shows apart from its pad on this layer (a via with its unused
     outer pad left bare, beside its own pour) is the same conductor, so a
-    drill that breaks into it shorts nothing."""
+    drill that breaks into it shorts nothing.
+
+    A non-plated hole near a pour (decided on the thread, 2026-11-15) is
+    one warning per board with reason pour_pullback, not an error: the
+    pour is refilled to its zone clearance and fab CAM pulls it back from
+    a bare hole. bedlift was built at JLC with four such holes. A track or
+    pad under the figure stays an error. pour_at: _pour_matcher(bg), is
+    the copper nearest the hole pour only; with no board it stays an
+    error."""
     hard_p, lo_p = _floors(rules, "min_pth_to_track_mm")
     lo_v = rules.get("min_via_to_track_mm")
     lo_n = rules.get("min_npth_to_track_mm")
@@ -1056,6 +1065,7 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
     tol = GEOM_TOL_MM + KICAD_ARC_ERROR_MM
     band: list = []
     vband: list = []
+    pband: list = []
     for name in names():
         if name not in ("F.Cu", "B.Cu"):
             continue
@@ -1068,11 +1078,22 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
         tree = STRtree(comps)
         for shape, pos, what, hard, lo in drilled:
             near = [comps[int(i)] for i in tree.query(shape.buffer(reach))]
-            gaps = [c.distance(shape) for c in near if not c.intersects(shape)
+            gaps = [(c.distance(shape), c) for c in near
+                    if not c.intersects(shape)
                     and not (same_net is not None and same_net(pos, c, name))]
             if not gaps:
                 continue
-            d = min(gaps)
+            if pour_at is not None and what.startswith("non-plated"):
+                under = [(g, c) for g, c in gaps if _below(g, hard, tol)]
+                pour = [(g, c) for g, c in under
+                        if pour_at(nearest_points(c, shape)[0], name)]
+                if pour and len(pour) == len(under):
+                    pband.append((min(g for g, _ in pour), pos, name, what))
+                    continue
+                # a track or pad under the figure: judged by it alone
+                poured = {id(c) for _, c in pour}
+                gaps = [(g, c) for g, c in gaps if id(c) not in poured]
+            d = min(g for g, _ in gaps)
             if hard is None:
                 if _below(d, lo, tol):
                     vband.append((d, pos, name))
@@ -1102,6 +1123,22 @@ def check_hole_to_track(fab, rules, vios: list, is_via=None,
         v["items"] = [{"msg": f"via hole {b[0]:.4f} mm",
                        "pos": [checklib.rnd(b[1][0]), checklib.rnd(b[1][1])]}
                       for b in vband]
+        vios.append(v)
+    if pband:
+        pband.sort(key=lambda b: b[0])
+        worst, pos, layer, _ = pband[0]
+        v = checklib.violation(
+            CHECK, "warning", pos, layer, None, [],
+            f"{len(pband)} non-plated holes under JLC's 'NPTH to Track' "
+            f"{lo_n} mm from a copper pour (worst {worst:.4f} mm): the pour "
+            "is refilled to its zone clearance and fab CAM pulls it back "
+            "from a bare hole; set the zone clearance to clear it",
+            SOURCE, kind="dfm_hole_to_track", reason="pour_pullback",
+            count=len(pband), min_mm=lo_n,
+            distance_mm=checklib.rnd(worst), hole="non-plated hole")
+        v["items"] = [{"msg": f"{b[3]} {b[0]:.4f} mm",
+                       "pos": [checklib.rnd(b[1][0]), checklib.rnd(b[1][1])]}
+                      for b in pband]
         vios.append(v)
 
 
@@ -1219,6 +1256,42 @@ def _same_net_matcher(bg):
         return any(items[int(i)][1] == net and items[int(i)][0].intersects(probe)
                    for i in tree.query(probe))
     return same_net
+
+
+def _pour_matcher(bg):
+    """-> pour_at(pt, layer): is the copper at point `pt` on `layer` a zone
+    fill and nothing else (no track, pad or via there)? None with no board.
+    The gerber flattens a pour and the tracks it swallows into one shape,
+    so the board settles which one comes nearest a hole."""
+    if bg is None or not all(hasattr(bg, f) for f in
+                             ("vias_of", "pads_of", "tracks_of", "zones_of")):
+        return None
+    trees: dict = {}
+    near = GEOM_TOL_MM + KICAD_ARC_ERROR_MM
+
+    def layer_trees(layer):
+        if layer not in trees:
+            drawn = [t.poly for t in bg.tracks_of(layer=layer)]
+            drawn += [p.poly for p in bg.pads_of(layer=layer)]
+            drawn += [v.poly for v in bg.vias_of(layer=layer)]
+            drawn = [g for g in drawn if g is not None and not g.is_empty]
+            fills = [z.fill_on(layer) for z in bg.zones_of(layer=layer)
+                     if z.filled]
+            fills = [g for g in fills if g is not None and not g.is_empty]
+            trees[layer] = (STRtree(drawn) if drawn else None, drawn,
+                            STRtree(fills) if fills else None, fills)
+        return trees[layer]
+
+    def pour_at(pt, layer) -> bool:
+        dt, drawn, ft, fills = layer_trees(layer)
+        if ft is None:
+            return False
+        probe = pt.buffer(near)
+        if dt is not None and any(drawn[int(i)].intersects(probe)
+                                  for i in dt.query(probe)):
+            return False
+        return any(fills[int(i)].intersects(probe) for i in ft.query(probe))
+    return pour_at
 
 
 def _npth_matcher(bg):

@@ -131,6 +131,9 @@ class D356Error(ValueError):
     pass
 
 
+_REF_FIELD = 6   # columns 21-26: kicad-cli cuts a longer ref to 6
+
+
 def parse(text: str) -> D356:
     """IPC-D-356(A) text -> D356 (board space, mm)."""
     d = D356()
@@ -149,7 +152,7 @@ def parse(text: str) -> D356:
         line = raw.ljust(80)
         net = line[3:17].strip()
         net = d.aliases.get(net, net)
-        ref = line[20:26].strip()
+        ref = line[20:20 + _REF_FIELD].strip()
         pin = line[27:31].strip() if line[26] == "-" else ""
         m = _TAIL.search(line, 31)
         if m is None:
@@ -194,9 +197,14 @@ def resolve(d: D356, bg) -> list[dict]:
         elif (tp.ref, tp.pin) in pads:
             net = pads[(tp.ref, tp.pin)]
         else:
-            # the pin field holds 4 characters ("A1-B12" -> "A1-B"): the
-            # ref's pad under the point whose number starts with it
-            for p in by_ref.get(tp.ref, ()):
+            # the pin field holds 4 characters ("A1-B12" -> "A1-B") and the
+            # ref field 6 ("mister1" -> "mister", #1281): the pad under the
+            # point whose ref and number start with them
+            cands = by_ref.get(tp.ref, ())
+            if not cands and len(tp.ref) >= _REF_FIELD:
+                cands = [p for r, ps in by_ref.items()
+                         if r.startswith(tp.ref) for p in ps]
+            for p in cands:
                 if str(p.number).startswith(tp.pin) \
                         and abs(p.center[0] - tp.x) < 0.01 \
                         and abs(p.center[1] - tp.y) < 0.01:
