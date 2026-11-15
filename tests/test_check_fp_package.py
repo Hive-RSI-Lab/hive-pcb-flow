@@ -163,6 +163,18 @@ def test_quiet_cases(tmp_path):
                                    "no part number on the footprint": 1}
 
 
+def test_value_with_a_space_before_the_unit(tmp_path):
+    pcb = board(tmp_path, footprint(
+        "C5", "Capacitor_SMD:C_0402_1005Metric", "100 nF", {"LCSC": "C1525"}),
+        footprint("C6", "Capacitor_SMD:C_0402_1005Metric", "100 pF",
+                  {"LCSC": "C1525"}),
+        parts=[{"lcsc": "C1525", "package": "0402",
+                "description": "100nF 16V X7R ±10% 0402 MLCC"}])
+    viols, facts = run(pcb)
+    assert [v["refs"] for v in viols] == [["C6"]]
+    assert facts["values_judged"] == 2
+
+
 def test_parts_json_refdes_wins_over_a_stale_board_field(tmp_path):
     pcb = board(tmp_path, footprint(
         "R42", "Resistor_SMD:R_0402_1005Metric", "100k", {"LCSC": "C25744"}),

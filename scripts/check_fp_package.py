@@ -350,7 +350,9 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
         # the value of a passive bought by number
         kind = (re.match(r"[A-Z]+", ref.upper()) or [""])[0]
         if code and kind in _DESC_VAL:
-            want = engcalc.parse_value(fp["value"])
+            # "2.2 uF": engcalc reads the number alone without the unit
+            want = engcalc.parse_value(re.sub(
+                r"(\d)\s+(?=[pnuµmkKMGR]|[Oo]hm|Ω)", r"\1", fp["value"]))
             got = record_value(kind, rec.get("description", ""))
             if want and got:
                 values += 1
