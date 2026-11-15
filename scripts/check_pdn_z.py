@@ -113,9 +113,9 @@ from pathlib import Path
 for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
     os.environ.setdefault(_v, "1")
 
-import numpy as np
-import shapely
-import shapely.affinity
+import numpy as np  # noqa: E402 (after the BLAS thread pin)
+import shapely  # noqa: E402
+import shapely.affinity  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))

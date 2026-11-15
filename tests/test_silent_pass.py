@@ -31,7 +31,7 @@ from test_check_cap_load import PCB as CAP_PCB  # noqa: E402
 from test_check_cap_load import _netlist as cap_netlist  # noqa: E402
 from test_check_ratings import MCU, _run as ratings_run, _ws  # noqa: E402
 from test_check_si import board as si_board, fp as si_fp, seg  # noqa: E402
-from test_check_wicking import _board as wick_board, _setup, _via  # noqa: E402
+from test_check_wicking import _board as wick_board, _setup  # noqa: E402
 from test_mate_pins import HDR4, _board as mate_board, _fp as mate_fp  # noqa: E402
 
 
