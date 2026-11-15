@@ -25,6 +25,7 @@ import env  # noqa: E402
 import geom  # noqa: E402
 import route_escape as re_  # noqa: E402
 import rules_gen  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 
 # JLC 6-layer 1 oz row (reference/jlc_capabilities.yaml)
 JLC6 = {"track_width": 0.0889, "clearance": 0.0889, "via_diameter": 0.45,
@@ -391,6 +392,56 @@ def test_power_first_vias_the_power_pins_not_the_field(tmp_path):
         [], {"placed": 0, "note": "no constraints.json"})
 
 
+def _back_cap(ref, x, y, n1, n2):
+    """An 0402 on B.Cu at (x, y), pads 0.8 mm apart along x."""
+    pads = "".join(
+        f'    (pad "{k}" smd rect (at {dx} 0) (size 0.5 0.5)\n'
+        f'      (layers "B.Cu" "B.Mask") (net "{net}") (uuid "u-{ref}-{k}"))\n'
+        for k, dx, net in ((1, -0.4, n1), (2, 0.4, n2)))
+    return (f'  (footprint "t:{ref}" (layer "B.Cu") (at {x} {y} 0)\n'
+            f'    (property "Reference" "{ref}" (at 0 0 0) (layer "B.SilkS"))\n'
+            f'{pads}  )\n')
+
+
+def test_pad_under_ball_is_a_placement_fault(tmp_path):
+    """#994 (haos-voice U301 over C305/C306): a far-side cap whose pads sit
+    under balls of other nets leaves those balls no via site at all; the
+    place gate's place_metrics flags it. Planted: C1's pads (/CAPA, /CAPB)
+    straight under E5 and E6, four rings deep in a 10 x 10 field (at
+    this board's 0.089 mm tracks the outer four rings could leave on the
+    surface and are not judged). Quiet twin: the
+    same part where each pad takes its ball's net (a decoupler's via in
+    pad)."""
+    import place_metrics
+    # E5 and E6 of the 10 x 10, 0.8 mm field centred on (20, 15)
+    planted = board(tmp_path, name="bad", n=10,
+                    extra=_back_cap("C1", 20.0, 14.6, "/CAPA", "/CAPB"))
+    v, hits = place_metrics.under_ball(planted)
+    errs = {x["ball"]: x for x in v if x["severity"] == "error"}
+    assert set(errs) == {"U1.E5", "U1.E6"}, v
+    assert all(x["kind"] == "pad_under_ball" and x["sites_free"] == 0
+               and "C1" in x["refs"] for x in errs.values())
+    over = {(x["ball"], x["pad_net"]) for x in v
+            if x["severity"] == "error" and x["pad"].startswith("C1")
+            and "under U1 ball" in x["msg"]}
+    assert ("U1.E5", "/CAPA") in over and ("U1.E6", "/CAPB") in over
+    payload, _ = place_metrics.run(["--pcb", str(planted)])
+    assert any(x.get("kind") == "pad_under_ball"
+               for x in payload["violations"])
+    assert "ball_via_sites" in payload["coverage"]["failed"]
+
+    quiet = board(tmp_path, name="ok", n=10,
+                  extra=_back_cap("C1", 20.0, 14.6, "/S4_4", "/S4_5"))
+    v, hits = place_metrics.under_ball(quiet)
+    assert v == [], v
+    # it still covers other balls' dog-bone spots, each with sites to spare
+    assert hits and all(h["sites_free"] and not h["over_ball"]
+                        for h in hits)
+    # and a board with no ball field has nothing to judge
+    assert place_metrics.under_ball(board(
+        tmp_path, name="none", n=2, connector=False)) == ([], [])
+
+
 # ============================================================ live (slow)
 
 def test_live_escape_synthetic_bga(tmp_path):
@@ -415,6 +466,8 @@ def test_live_escape_synthetic_bga(tmp_path):
     # no via sits in a ball (dog-bone, not via-in-pad)
     (g,) = bgalib.find_bgas(bg)
     assert re_.via_in_pad_nets(bg, g, {v.uuid for v in bg.vias_of()}) == {}
+    # 0.8 mm dog-bone vias have ring to spare: no teardrop setting
+    assert b["teardrops"] == 0
 
 
 def test_live_power_first_lands_before_the_escape(tmp_path):
@@ -880,6 +933,23 @@ def test_live_fine_via_escape_6_layer_quiet(tmp_path):
     assert sum(re_.via_in_pad_nets(bg, g, new).values()) >= 4
     assert {(round(v.diameter, 3), round(v.drill, 3))
             for v in bg.vias_of()} == {(0.25, 0.15)}
+    # the 0.05 mm ring is under JLC's 0.05 + 0.075 wander: every fine via
+    # carries KiCad's teardrop setting, so the routers' inner-layer joins
+    # get drops at the next refill (dfm_ring_breakout)
+    tb = tdl.read(pcb, tdl.config(None))
+    vias = [it for it in tb.items if it.kind == "via"]
+    assert vias and all(it.enabled for it in vias)
+    assert b["teardrops"] == len(vias)
+
+
+def test_breakout_vias_only_under_the_ring_limit():
+    """0.25/0.15 (ring 0.05) is under 0.05 + 0.075; a 0.45/0.2 via (0.125,
+    on the limit) and 0.6/0.3 are not; a via with no uuid can't be named."""
+    v = [geom.Via("/a", (0, 0), 0.25, 0.15, ("F.Cu", "B.Cu"), "u1"),
+         geom.Via("/b", (1, 0), 0.45, 0.2, ("F.Cu", "B.Cu"), "u2"),
+         geom.Via("/c", (2, 0), 0.6, 0.3, ("F.Cu", "B.Cu"), "u3"),
+         geom.Via("/d", (3, 0), 0.25, 0.15, ("F.Cu", "B.Cu"), None)]
+    assert [x.uuid for x in re_.breakout_vias(v)] == ["u1"]
 
 
 def test_live_fault_fine_via_outside_the_courtyard_is_ripped(tmp_path,

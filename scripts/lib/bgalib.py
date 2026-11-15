@@ -323,3 +323,95 @@ def _put_rule(dru_text: str, name: str, new: str, changed: list[str]) -> str:
         dru_text += new
     changed.append(name)
     return dru_text
+
+
+def via_sites(bga: Bga, ball_center, angle: float = 0.0) -> list[tuple]:
+    """Where a via for a ball can go: in the ball itself (via in pad), and
+    on a fine field only there; on a coarser one also the four dog-bone
+    spots half a pitch away on the diagonals (turned with the part)."""
+    x, y = ball_center
+    sites = [(x, y)]
+    if bga.pitch > FINE_PITCH_MM + 1e-9:
+        h = bga.pitch / 2
+        a = math.radians(angle)
+        c, s = math.cos(a), math.sin(a)
+        for dx, dy in ((h, h), (h, -h), (-h, h), (-h, -h)):
+            sites.append((x + dx * c + dy * s, y - dx * s + dy * c))
+    return sites
+
+
+def pads_under_balls(bg, bgas: list[Bga], via_d: float, clearance: float,
+                     track_w: float = 0.2) -> list[dict]:
+    """Balls whose via sites sit under a pad of another net (#994): a cap
+    placed in the field on the far side, its pad straight below a ball of
+    another rail. A through via at a site would short to that pad, so a
+    ball with every site covered has nowhere to escape at any via size -
+    a placement fault the escape step only finds when it runs out of
+    spots. One entry per (ball, pad) with the sites it covers and whether
+    any site of the ball is left. A pad of the ball's own net is welcome
+    (a decoupler's via in pad). Only balls that need a via of their own
+    are judged: deeper than the rings that can leave on the surface (ring
+    r needs r tracks through the diagonal channel between two balls, at
+    track_w and clearance; never fewer than the outer two rings), with no
+    ball of the same net beside it to share a via, and on a net with
+    another pad to reach (a no-connect ball, KiCad's unconnected-..., or a
+    one-pad net needs none). The 66 training boards (5 with a ball field,
+    all shipped) showed each skipped case as a false fault: glasgow's U8
+    leaves ring 3 on 0.09 mm surface tracks, byte-hamr's GND balls share
+    vias."""
+    from collections import Counter
+
+    from shapely.geometry import Point
+
+    reach = via_d / 2 + clearance
+    net_pads = Counter(p.net for p in bg.pads_of() if p.net)
+    out: list[dict] = []
+    for bga in bgas:
+        x0, y0, x1, y1 = bga.bbox
+        m = bga.pitch
+        others = [p for p in bg.pads_of() if p.ref != bga.ref
+                  and any(lay != bga.layer for lay in p.layers)
+                  and x0 - m <= p.center[0] <= x1 + m
+                  and y0 - m <= p.center[1] <= y1 + m]
+        if not others:
+            continue
+        angle = (bg.footprints.get(bga.ref, {}).get("angle") or 0.0)
+        balls = list(bg.pads_of(ref=bga.ref))
+        pad_d = min(min(b.size) for b in balls)
+        gap = m * math.sqrt(2) - pad_d
+        surface = max(1, int((gap - clearance) / (track_w + clearance)))
+        for ball in balls:
+            if bga.nets.get(ball.number) is None or ball.net is None \
+                    or ball.net.startswith("unconnected-") \
+                    or net_pads[ball.net] < 2:
+                continue
+            bx, by = ball.center
+            ring = round(min(bx - x0, x1 - bx, by - y0, y1 - by) / m)
+            if ring <= surface or any(
+                    b.net == ball.net and b is not ball
+                    and math.dist(b.center, ball.center) < 1.5 * m
+                    for b in balls):
+                continue
+            sites = via_sites(bga, ball.center, angle)
+            covered: dict[int, set] = {}
+            for p in others:
+                if p.net == ball.net:
+                    continue
+                hit = {i for i, s in enumerate(sites)
+                       if p.poly.distance(Point(s)) < reach - 1e-6}
+                if hit:
+                    covered[id(p)] = hit
+            if not covered:
+                continue
+            free = set(range(len(sites))) - set().union(*covered.values())
+            for p in others:
+                if id(p) in covered:
+                    out.append({
+                        "bga": bga.ref, "ball": ball.number,
+                        "ball_net": ball.net, "pos": ball.center,
+                        "pad_ref": p.ref, "pad": p.number,
+                        "pad_net": p.net,
+                        "over_ball": 0 in covered[id(p)],
+                        "sites_covered": len(covered[id(p)]),
+                        "sites": len(sites), "sites_free": len(free)})
+    return out

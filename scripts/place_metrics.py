@@ -5,7 +5,10 @@ Read-only. Emits the S2 normalized-violation schema for placement LEGALITY
 missing courtyards, connector mating - lib/matinglib.py: a mating connector's
 mouth must face and reach a board edge with its insertion zone clear, and a
 vertical one needs finger room; an edge connector no family knows is a
-warning, mating_edge_unjudged, which the release gate makes an error, #954) plus decoupler DISTANCE violations (reusing S4
+warning, mating_edge_unjudged, which the release gate makes an error, #954;
+ball via sites - a far-side pad of another net over a BGA ball or its
+dog-bone spots, pad_under_ball, an error when a ball that needs a via has no site
+left, #994) plus decoupler DISTANCE violations (reusing S4
 check_decoupling's association logic, filtered to kind=decoupler_distance -
 loop/via inductance stays P8's job because it needs routing), and a `metrics`
 facts block for the annealer/agent:
@@ -36,8 +39,9 @@ on error-severity violations; the fast-route-completion gate term arrives with
 S10/S11 route feedback.
 
 U2 (codex C7): the payload carries a `coverage` matrix over the legality
-families {courtyard, outline, edges, keepouts, decoupler_distance, mating}
-(mating needs only the board, so it always runs). A missing
+families {courtyard, outline, edges, keepouts, decoupler_distance, mating,
+ball_via_sites} (mating and ball_via_sites need only the board, so they
+always run). A missing
 sidecar lands its families in coverage.skipped_error in BOTH modes (visible
 coverage hole); --strict additionally makes that a status "error" (exit 2) -
 release contexts must not read "pass" when the edge/keepout/decoupler legs
@@ -58,6 +62,45 @@ import checklib  # noqa: E402
 import geom  # noqa: E402
 import matinglib  # noqa: E402
 import placelib  # noqa: E402
+import bgalib  # noqa: E402
+
+
+def under_ball(pcb: Path) -> tuple[list[dict], list[dict]]:
+    """A pad on the far side of a ball field over a ball of another net
+    (#994, haos-voice U301 K10/L10/L17/L18 over C305/C306): the ball's via
+    would short to the pad. An error when no via site is left for a ball
+    that needs one (its own pad and, on a coarse field, the four
+    dog-bones; bgalib.pads_under_balls says which balls need one). A pad
+    over a ball with a dog-bone still free is no fault and is not
+    reported. The via is the fab floor's smallest, at its clearance (the
+    board's .kicad_pro), so a fault here holds at any via size. Fix: move
+    or turn the part. Returns (violations, every pad-over-site hit)."""
+    import route_escape
+
+    bg = geom.load_board(pcb)
+    bgas = bgalib.find_bgas(bg)
+    if not bgas:
+        return [], []
+    fl = route_escape.escape_floors(pcb.with_suffix(".kicad_pro"))
+    via_d = max(fl["via_diameter"], fl["via_drill"] + 2 * fl["annular"])
+    hits = bgalib.pads_under_balls(bg, bgas, via_d, fl["clearance"],
+                                   fl["track_width"])
+    out = []
+    for h in hits:
+        if h["sites_free"]:
+            continue
+        out.append(checklib.violation(
+            "place", "error", h["pos"], None, h["ball_net"],
+            [h["bga"], h["pad_ref"]],
+            f"{h['pad_ref']} pad {h['pad']} ({h['pad_net']}) sits under "
+            f"{h['bga']} ball {h['ball']} ({h['ball_net']}): a {via_d:g} mm "
+            f"via there would short to it and no via site is left for the "
+            f"ball - move or turn {h['pad_ref']}", "place_metrics",
+            kind="pad_under_ball",
+            ball=f"{h['bga']}.{h['ball']}", pad=f"{h['pad_ref']}.{h['pad']}",
+            pad_net=h["pad_net"], sites_free=h["sites_free"],
+            sites=h["sites"]))
+    return out, hits
 
 
 def _sidecar(pcb: Path, explicit: str | None, name: str) -> Path | None:
@@ -75,6 +118,7 @@ PLACE_FAMILIES = {
     "keepouts": ("keepout_violation",),
     "decoupler_distance": ("decoupler_distance",),
     "mating": matinglib.KINDS + ("mating_edge_unjudged",),
+    "ball_via_sites": ("pad_under_ball",),
 }
 
 
@@ -147,6 +191,8 @@ def collect(pcb: Path, constraints_path: Path | None,
         model, pcb, placement, parts if parts.is_dir() else None)
     violations.extend(mating_v)
     violations.extend(edge_unjudged(model, mating_facts))
+    ball_v, _ = under_ball(pcb)
+    violations.extend(ball_v)
     decoupling_facts: list[dict] = []
     if decoupling_path:
         import check_decoupling

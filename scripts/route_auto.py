@@ -635,6 +635,52 @@ def _preexisting(bg) -> dict:
             "tracks": [(t.net, t.layer, t.shape) for t in bg.tracks_of()]}
 
 
+def _teardrop_vias(pcb: Path) -> list[tuple]:
+    """(net, at) of the vias with KiCad's teardrop setting on: the escape
+    sets it on its inner-layer ring breakouts (route_escape
+    enable_breakout_teardrops)."""
+    import sexpdata
+    import teardroplib as tdl
+    root = sexpdata.loads(Path(pcb).read_text(encoding="utf-8"))
+    out = []
+    for v in tdl._kids(root, "via"):
+        if not tdl._enabled(v):
+            continue
+        at, net = tdl._kid(v, "at"), tdl._kid(v, "net")
+        if at is None or net is None:
+            continue
+        nn = tdl._strs(net) or [str(x) for x in tdl._nums(net)]
+        out.append((nn[0] if nn else None, tuple(tdl._nums(at)[:2])))
+    return out
+
+
+def _restore_teardrops(bp, staged: Path, work: Path, td: list) -> int:
+    """KiCad's SES import replaces every via, the teardrop setting with it:
+    turn it back on for the vias that had it before routing (same net, same
+    spot). Returns how many."""
+    if not td:
+        return 0
+    import teardroplib as tdl
+
+    def near(net, at, pts):
+        return any(n == net and abs(at[0] - a[0]) <= PRE_TOL
+                   and abs(at[1] - a[1]) <= PRE_TOL for n, a in pts)
+    on = _teardrop_vias(staged)
+    uu = [v.uuid for v in geom.BoardGeom.from_file(staged).vias_of()
+          if v.uuid and near(v.net, v.at, td) and not near(v.net, v.at, on)]
+    if not uu:
+        return 0
+    cfg = tdl.config(None)
+    res = routelib.run_worker(bp, {
+        "verb": "enable", "board": str(staged), "out": str(staged),
+        "vias": uu, "pads": [],
+        "params": {k: cfg[k] for k in (
+            "length_ratio", "max_length_mm", "width_ratio", "max_width_mm",
+            "filter_ratio", "curved")}},
+        work, worker=SCRIPTS / "lib" / "teardrop_swig.py")
+    return len(uu) - len(res.get("missing") or [])
+
+
 def _pre_index(pre: dict) -> dict:
     import shapely
     by: dict = {}
@@ -689,6 +735,58 @@ def _lost_preexisting(pre: dict, bg) -> list[dict]:
                          "start": [round(x1, 4), round(y1, 4)],
                          "end": [round(x2, 4), round(y2, 4)]})
     return lost
+
+
+def _all_timed_out(rungs: list[dict]) -> bool:
+    """Every rung that ran was killed at the time limit (hard or stall)
+    before Freerouting wrote its session."""
+    return bool(rungs) and all(r.get("timed_out") and not r.get("ses_written")
+                               for r in rungs)
+
+
+def _timeout_report(pcb: Path, rungs: list[dict], limit: int, work: Path,
+                    fallback: str, **facts) -> dict:
+    """The report of a run whose every Freerouting rung hit the time limit
+    with no session (an escaped board: passes of 30 s to 3.5 min on a
+    6-layer BGA field). Not a crash and not a routed board: the board is
+    untouched, the routing is NOT JUDGED, and the reason says why, with
+    the last pass each rung reached so the caller can raise --timeout-s."""
+    last = [{"rung": r["rung"], "passes": r.get("passes"),
+             "unrouted_at_kill": r.get("unrouted"),
+             "kill_reason": r.get("kill_reason")} for r in rungs]
+    why = (f"route_timeout: every Freerouting rung ({len(rungs)}) hit the "
+           f"{limit} s limit before writing a session and {fallback}; the "
+           "board is untouched and its routing not judged (raise "
+           "--timeout-s, or fewer passes per rung)")
+    v = checklib.violation("route_auto", "error", None, None, None, [], why,
+                           "route_auto", kind="route_timeout",
+                           rungs=last, limit_s=limit)
+    return {"script": "route_auto", "status": "violations",
+            "board": str(pcb), "counts": checklib.summarize([v]),
+            "violations": [v],
+            "facts": {"completion": None, "nothing_to_judge": why,
+                      "timed_out": True, "rungs": rungs, "best_rung": None,
+                      "work_dir": str(work), **facts}}
+
+
+def _maze_no_rip_retry(maze) -> dict:
+    """maze(rip_board) runs route_finish.finish_staged on the staged board.
+    When a rip of another net's track left that net split, the island guard
+    (#939) undoes every pass from the first rip on, the good joins with it
+    (kept False, rip_split_undone). On an escaped BGA field the dog-bones
+    crowd the channels, so the ripped net has no way back: the 6-layer
+    bench's U1 ripped /A4_1 and kept nothing, 19 left where the same pass
+    without ripping ends at 7. Once more without ripping the board's
+    tracks keeps the joins that need no rip; the first try's numbers ride
+    along as retry_no_rip_board."""
+    facts = maze(True)
+    if facts.get("kept") or not facts.get("rip_split_undone"):
+        return facts
+    first = {k: facts.get(k) for k in (
+        "unconnected_before", "unconnected_after", "rip_split_undone")}
+    facts = maze(False)
+    facts["retry_no_rip_board"] = first
+    return facts
 
 
 def run(argv: list[str] | None = None):
@@ -758,6 +856,7 @@ def run(argv: list[str] | None = None):
     routable = _routable_nets(bg)
     tracks_before = len(bg.tracks_of())
     pre = _preexisting(bg)
+    td_vias = _teardrop_vias(staged)
 
     # 2. DSN export (plane layers marked power)
     if args.power_layers == "auto":
@@ -936,6 +1035,9 @@ def run(argv: list[str] | None = None):
     if not fr_ok:
         shutil.copy2(pristine, staged)
     if not fr_ok and (args.no_krt_finish or env.find_krt() is None):
+        if _all_timed_out(rungs):
+            return _timeout_report(pcb, rungs, args.timeout_s, work,
+                                   "the KRT fallback is off"), args.out_report
         raise CheckError("no Freerouting rung produced an importable session "
                          f"and the KRT fallback is unavailable; see {work} "
                          "logs (board untouched)")
@@ -965,6 +1067,11 @@ def run(argv: list[str] | None = None):
         if finish_facts and finish_facts.get("kept"):
             drc = finish_facts.pop("drc")
     if not fr_ok and not (finish_facts and finish_facts.get("kept")):
+        if _all_timed_out(rungs):
+            return _timeout_report(
+                pcb, rungs, args.timeout_s, work,
+                "the KRT fallback did not improve the board",
+                krt_finish=finish_facts), args.out_report
         raise CheckError("Freerouting produced nothing usable and the KRT "
                          f"fallback did not improve the board; see {work} "
                          "(board untouched)")
@@ -975,19 +1082,24 @@ def run(argv: list[str] | None = None):
     maze_facts = None
     if not args.no_maze_finish and (_drc_unrouted(drc) or _err_counts(drc)):
         import route_finish
-        maze_facts = route_finish.finish_staged(
-            cli, staged, drc, parity=sch.is_file(), refill=has_zones,
-            rip_errors=True,
-            protect_uuids=_protect_uuids(pre, geom.BoardGeom.from_file(staged)),
-            layers=(",".join(ly for ly in bg.copper_layers
-                             if ly not in power_layers)
-                    if power_layers else "auto"))
+
+        def _maze(rip_board):
+            sbg = geom.BoardGeom.from_file(staged)
+            return route_finish.finish_staged(
+                cli, staged, drc, parity=sch.is_file(), refill=has_zones,
+                rip_errors=True, rip_board=rip_board,
+                protect_uuids=_protect_uuids(pre, sbg),
+                layers=(",".join(ly for ly in bg.copper_layers
+                                 if ly not in power_layers)
+                        if power_layers else "auto"))
+        maze_facts = _maze_no_rip_retry(_maze)
         if maze_facts.get("kept"):
             drc = maze_facts.pop("drc")
         else:
             maze_facts.pop("drc", None)
 
     # 6. sanity + swap the routed board in
+    teardrops_restored = _restore_teardrops(bp, staged, work, td_vias)
     bg2 = geom.BoardGeom.from_file(staged)
     tracks_after = len(bg2.tracks_of())
     if fr_ok and tracks_after <= tracks_before \
@@ -1033,6 +1145,7 @@ def run(argv: list[str] | None = None):
             "krt_finish": finish_facts,
             "ses_import_check": ses_check,
             "maze_finish": maze_facts,
+            "teardrops_restored": teardrops_restored,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),
             "neckdowns_snapped": dedup_facts.get("neckdowns_snapped", 0),
             "work_dir": str(work),
