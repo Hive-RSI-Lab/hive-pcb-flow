@@ -502,3 +502,17 @@ def test_polarity_counts_only_parts_it_compared(tmp_path):
     assert facts["refs_checked"] == 0
     assert facts["refs_no_common_pads"] == ["D1"]
     assert facts["refs_only_in_netlist"] == ["D2"]
+
+
+def test_ratings_reason_needs_a_rating_source(tmp_path):
+    """Only a part with something to rate it by is held back by its nets: a
+    passive with no part number is a passive with no field, and a part on
+    nothing but ground isn't counted (#1330)."""
+    ws = _ws(tmp_path, [
+        ("R1", "", {"1": "NET_A", "2": "NET_B"}),
+        ("U1", "", {"1": "NET_A", "2": "NET_C", "3": "NET_D"}),
+        ("NT1", "", {"1": "GND", "2": "GND"})], {})
+    p = ratings_run(ws)
+    assert p["parts_not_compared"] == {
+        "passive with no voltage field on its parts row": ["R1"],
+        "no part number": ["U1"]}

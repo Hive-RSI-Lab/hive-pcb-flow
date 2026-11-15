@@ -1814,7 +1814,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         board, exts, bom_by_lcsc, read_from, held_back, rated_by_ref, trusted,
         emit, out)
     nothing, unjudged = (None, None) if checked_by_ref else \
-        why_nothing_judged(board, exts, out, volts)
+        why_nothing_judged(board, exts, out, volts, bom_by_lcsc)
     facts = {"parts_on_board": len(board), "extractions": sorted(exts),
              "keyed_by_mpn": by_mpn,
              "net_volts": {n: {"v": volts[n], "src": vsrc[n]}
@@ -3262,28 +3262,33 @@ PASSIVE_REF = re.compile(r"^(C|R|RN|D|LED|F|FB|L|Y|X|TVS|Z)\d", re.I)
 
 
 def why_nothing_judged(board: list[dict], exts: dict, vios: list[dict],
-                       volts: dict) -> tuple[str, dict[str, list[str]]]:
+                       volts: dict, bom_by_lcsc: dict | None = None
+                       ) -> tuple[str, dict[str, list[str]]]:
     """Why a board where no rating met a known voltage judged nothing: each
-    connected part by the first thing that kept it out (#1330). A part the
-    check called unrated: no part number, a two-terminal part whose parts row
-    has no voltage field, a part number with no datasheet read, or a datasheet
-    read whose pins carry no rating it uses. Any other part had a rating or a
-    rule but no net it touches has a known voltage. The reason reads biggest
-    group first, with its count; the rest follow in brackets."""
+    part with a non-ground net by the first thing that kept it out (#1330).
+    A part with a rating source (a datasheet read, or a field on its parts
+    row) that the check didn't call unrated: no net it touches has a known
+    voltage. Any other part: no part number, a two-terminal part whose parts
+    row has no voltage field, a part number with no datasheet read, or a
+    datasheet read whose pins carry no rating it uses. The reason reads
+    biggest group first, with its count; the rest follow in brackets."""
+    bom_by_lcsc = bom_by_lcsc or {}
     unrated = {r for v in vios if v.get("kind") in
                ("rating_unrated", "rating_no_attributes")
                for r in v.get("refs") or () if r}
     why: dict[str, list[str]] = {}
     for b in sorted(board, key=lambda x: x["ref"]):
         nets = set(b["pads"].values()) - {""}
-        if not nets:
+        if not nets or all(is_ground(n) for n in nets):
             continue
-        if b["ref"] not in unrated:
+        has_src = b["lcsc"] in exts or bool(
+            (bom_by_lcsc.get(b["lcsc"]) or {}).get("attributes"))
+        if b["ref"] not in unrated and has_src:
             r = "no known voltage on its nets"
+        elif PASSIVE_REF.match(b["ref"]) and len(nets) <= 2:
+            r = "passive with no voltage field on its parts row"
         elif not (b["lcsc"] or b.get("mpn")):
             r = "no part number"
-        elif PASSIVE_REF.match(b["ref"]) and len(nets) == 2:
-            r = "passive with no voltage field on its parts row"
         elif b["lcsc"] in exts:
             r = "datasheet read but no pin rating it can use"
         else:
