@@ -3150,3 +3150,72 @@ def test_buck_beside_a_boost_block_is_still_a_buck(tmp_path_factory):
     term, = rip["terms"]
     assert term["from"] == "U9" and "AN4067" in term["formula"]
     assert rip["amps"] == pytest.approx(5 * (1 - 5 / 24) / (10e-6 * 500e3) / 12 ** 0.5)
+
+
+# ---- run time budget: a net still running at the deadline is not_judged
+# `timeout`, never a silent rc failure; nets finished before it keep theirs
+
+def _expire_on(monkeypatch, net):
+    """check_net that finds the budget already spent when it reaches `net`."""
+    real = check_current.check_net
+
+    def check_net(bg, entry, cons=None):
+        if entry["net"] == net:
+            check_current._DEADLINE[0] = 0.0
+        return real(bg, entry, cons)
+    monkeypatch.setattr(check_current, "check_net", check_net)
+
+
+def test_budget_runout_lists_the_net_as_timeout(tmp_path_factory,
+                                                monkeypatch):
+    bg = _board(tmp_path_factory, "budget", _GND_RETURN_BODY)
+    full = _run_cli(bg, [{"net": "VBUS", "current_a": 5.0}])
+    assert any(v["net"] == "GND" for v in full["violations"])
+    _expire_on(monkeypatch, "GND")
+    payload = _run_cli(bg, [{"net": "VBUS", "current_a": 5.0}])
+    assert payload["timed_out_nets"] == ["GND"]
+    msg = [n for n in payload["not_judged"] if n.startswith("timeout: ")]
+    assert len(msg) == 1 and "GND" in msg[0] and "while judging" in msg[0]
+    assert "--time-budget" in msg[0]
+    # VBUS was finished first: its findings and its checked row stand
+    assert [v for v in payload["violations"] if v["net"] == "VBUS"] == \
+        [v for v in full["violations"] if v["net"] == "VBUS"]
+    assert not any(v["net"] == "GND" for v in payload["violations"])
+    assert [c["net"] for c in payload["checked"]] == ["VBUS"]
+    assert check_current._DEADLINE[0] is None
+
+
+def test_budget_runout_skips_the_nets_after_it(tmp_path_factory,
+                                               monkeypatch):
+    bg = _board(tmp_path_factory, "budget1", _GND_RETURN_BODY)
+    _expire_on(monkeypatch, "VBUS")
+    payload = _run_cli(bg, [{"net": "VBUS", "current_a": 5.0}])
+    assert payload["timed_out_nets"] == ["VBUS", "GND"]
+    assert payload["violations"] == [] and payload["checked"] == []
+    assert payload.get("nothing_to_judge") is None
+    msgs = [n for n in payload["not_judged"] if n.startswith("timeout: ")]
+    assert "while judging" in msgs[0] and "before reaching it" in msgs[1]
+
+
+def test_budget_default_sits_under_the_harness_cap(tmp_path_factory):
+    assert 0 < check_current.TIME_BUDGET_S < 900
+    bg = _board(tmp_path_factory, "budget0", _GND_RETURN_BODY)
+    cons = bg.path.parent / "cons.json"
+    cons.write_text(json.dumps({"power": [{"net": "VBUS", "current_a": 5.0}]}),
+                    encoding="utf-8")
+    payload = check_current.run(["--pcb", str(bg.path), "--constraints",
+                                 str(cons), "--time-budget", "0"])[0]
+    assert "timed_out_nets" not in payload
+
+
+def test_pour_geometry_is_built_once(tmp_path_factory):
+    """zone_fill and fill_on hand back the same union each time, so the pour
+    stages share it instead of re-unioning the zones per track and stage."""
+    bg = _board(tmp_path_factory, "fillonce", PLANE_FED_BODY)
+    z = bg.zones_of("+3V3")[0]
+    assert z.fill_on("B.Cu") is z.fill_on("B.Cu")
+    assert bg.zone_fill("+3V3", "B.Cu") is bg.zone_fill("+3V3", "B.Cu")
+    t = bg.tracks_of("+3V3")[0] if bg.tracks_of("+3V3") else None
+    if t is not None:
+        first = check_current.covered_by_own_copper(bg, "+3V3", t)
+        assert check_current.covered_by_own_copper(bg, "+3V3", t) == first

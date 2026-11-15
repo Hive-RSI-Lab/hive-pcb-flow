@@ -380,7 +380,13 @@ class Zone:
         return any(polys for polys in self.fills.values())
 
     def fill_on(self, layer: str) -> MultiPolygon | Polygon:
-        return _union(self.fills.get(layer, []))
+        """The union of this zone's fill on `layer`, built once: fills are
+        never changed after parsing, and callers that compare geometry by
+        identity (check_current's pour stages) need the same object back."""
+        cache = self.__dict__.setdefault("_fill_on", {})
+        if layer not in cache:
+            cache[layer] = _union(self.fills.get(layer, []))
+        return cache[layer]
 
     def fill_area(self, layer: str) -> float:
         return self.fill_on(layer).area
@@ -1279,7 +1285,11 @@ class BoardGeom:
                 and (layer is None or layer in z.layers or layer in z.fills)]
 
     def zone_fill(self, net: str, layer: str) -> MultiPolygon | Polygon:
-        return _union([z.fill_on(layer) for z in self.zones_of(net, layer)])
+        key = ("zone_fill", net, layer)
+        if key not in self._union_cache:
+            self._union_cache[key] = _union(
+                [z.fill_on(layer) for z in self.zones_of(net, layer)])
+        return self._union_cache[key]
 
     def net_copper(self, net: str, layer: str) -> MultiPolygon | Polygon:
         """Union of ALL copper (tracks+pads+vias+zone fill) of `net` on `layer`."""
