@@ -1070,7 +1070,7 @@ holdout:
     fault_class: LIB (footprint too small for part)
     blind: missed
     verdict: caught
-    caught_by: "#PRNUM"
+    caught_by: "#1129"
     catch: {script: check_fp_package, kind: lcsc_value_mismatch, refs: [C9]}
     note: >-
       Not an independent catch: the rule was written after this defect was

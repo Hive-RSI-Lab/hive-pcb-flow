@@ -57,6 +57,17 @@ parts on an ordinary board.
    - flexgrid-v3-1: 1N5819 and 1N4007 on SOD-123F, but the stocked parts are SOD-123W.
    - flexgrid-v3-2: C9, 100 uF, on 0603. No 100 uF part comes in 0603.
 
+   `check_fp_package` (#1129) is this class's check. Scored on training and
+   both holdout rounds, so it is not independent:
+   - It catches flexgrid-v3-2 on V3 and not on V4. It sees C9 through its
+     JLC number, a 2.2 uF 0402 part.
+   - It doesn't catch flexgrid-v3-1. The diodes name a part only in their
+     Value, and JLC sells parts named 1N5819 or 1N4007 in DO-41, SMA and
+     SOD-123 packages, so the check won't pick one.
+   - ice1usb-r01-1 and gcm-v50-3 give no part number on rev A, so the check
+     has nothing to judge.
+   - Not built yet: a case-size limit per value (the largest C a case holds).
+
 2. **Connector mechanics vs the mate** (afcfa's area, #1027 and #1052).
    - Gender: gcm-v50-4 and gp8b-v50-1.
    - Holes too small, where check_connector_fit says nothing: zxdiag-v10-2 and mdbt-micro-50q-1.
