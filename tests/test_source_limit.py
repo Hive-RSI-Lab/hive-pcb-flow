@@ -269,7 +269,7 @@ def test_an_unverified_regulator_row_gives_not_judged_only():
 # ----------------------------------------------------------- the table
 
 @pytest.mark.parametrize("section,need", [
-    ("regulators", ("iout_max", "tj_max", "theta_ja", "in", "out")),
+    ("regulators", ("iout_max", "in", "out")),
     ("loads", ("i_supply", "supply")),
     ("gpio", ("pins", "supply"))])
 def test_source_rows_are_cited_and_verified(section, need):
@@ -280,6 +280,8 @@ def test_source_rows_are_cited_and_verified(section, need):
         assert row.get("verified") is True, row["mpn"]
         for k in need:
             assert row.get(k) is not None, (row["mpn"], k)
+        # the heat pair comes together or not at all (XC6206: Pd only)
+        assert ("tj_max" in row) == ("theta_ja" in row), row["mpn"]
         cited = {f for c in row["cite"] for f in c["fields"]}
         nums = {k for k in ("iout_max", "tj_max", "theta_ja", "i_supply",
                             "pin_max", "total_max") if k in row}
@@ -301,3 +303,56 @@ def test_drafter_reads_a_regulator_row():
     assert (r["iout_max"], r["tj_max"], r["theta_ja"]) == (0.2, 125, 179.1)
     for c in r["cite"]:
         assert part_rows.check_cite(r, c, pages) == []
+
+
+# ------------------------------------------- #1176: XC6206, XC6220, HT7533
+
+def _ldo3(reg, load, vin="+5V", out_pin="VOUT"):
+    # the three-pin SOT-23/SOT-89 LDOs name their pins VIN / VOUT / VSS
+    comps = {"U3": reg, "U2": load}
+    nets = {vin: [_m("U3", "3", "VIN", "power_in")],
+            "GND": [_m("U3", "1", "VSS", "power_in"),
+                    _m("U2", "1", "GND", "power_in")],
+            "+3V3": [_m("U3", "2", out_pin, "power_out"),
+                     _m("U2", "2", "3V3", "power_in")]}
+    return comps, nets
+
+
+def test_an_xc6206_feeding_an_esp32_module_is_caught():
+    viol, _ = _audit(*_ldo3("XC6206P332MR", "ESP32-C3-WROOM-02"))
+    assert _hits(viol) == [("rail_over", "error")]
+    hit = next(v for v in viol if v["kind"] == "rail_over")
+    assert hit["limit_a"] == 0.2 and hit["load_a"] == 0.5
+
+
+def test_an_ht7533_feeding_an_esp32_module_is_caught():
+    viol, _ = _audit(*_ldo3("HT7533-1", "ESP32-S3-WROOM-1-N8R8"))
+    hit = next(v for v in viol if v["kind"] == "rail_over")
+    assert hit["limit_a"] == 0.07 and hit["load_a"] == 0.5
+
+
+def test_an_xc6220_feeding_the_same_module_is_quiet():
+    viol, facts = _audit(*_ldo3("XC6220B331MR", "ESP32-C3-WROOM-02"))
+    assert _hits(viol) == []
+    assert _nj(facts, "rail_over") == []
+
+
+def test_a_low_voltage_xc6206_has_no_row():
+    # the 1.2-2.9 V types are rated for less than 200 mA: no row, no hit
+    viol, facts = _audit(*_ldo3("XC6206P182MR", "ESP32-C3-WROOM-02"))
+    assert _hits(viol) == []
+
+
+def test_xc6206_heat_is_not_judged_without_theta_ja():
+    # its datasheet gives package Pd only: 6 V to 3.3 V on 6 LEDs would
+    # run hot on any SOT-23 LDO, but the rule says so as not judged
+    comps, nets = _led_rail(4, "68", reg="XC6206P332MR", vin="+5V")
+    for n in nets.values():
+        for m in n:
+            if m["ref"] == "U1":
+                m["pinfunction"] = {"IN": "VIN", "OUT": "VOUT",
+                                    "GND": "VSS"}[m["pinfunction"]]
+    viol, facts = _audit(comps, nets)
+    assert ("ldo_heat", "error") not in _hits(viol)
+    nj = _nj(facts, "ldo_heat")
+    assert len(nj) == 1 and "no theta_ja" in nj[0]
