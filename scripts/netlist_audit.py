@@ -526,7 +526,7 @@ def _driven(nets: dict, names: set[str], ref: str) -> bool:
 def _pin_requirements(nets: dict, comps: dict,
                       comp_pins: dict[str, dict[str, str]],
                       specs: list[dict]):
-    """Yield (severity, net, ic, req, found, elsewhere, off_value) per
+    """Yield (severity, net, ic, req, found, elsewhere, off_value, unread) per
     datasheet-required pin part that is missing or not drawn with its IC;
     found is None when a `distinct` pair of pins is tied into one net."""
     hierarchical = len({c.get("sheet") for c in comps.values()} - {None}) > 1
@@ -559,32 +559,36 @@ def _pin_requirements(nets: dict, comps: dict,
                 if a & b:
                     if req.get("distinct"):
                         # tied straight across: the part it needs is not there
-                        yield "error", sorted(a & b)[0], ref, req, None, [], []
+                        yield ("error", sorted(a & b)[0], ref, req, None, [],
+                               [], [])
                     continue  # the two pins are one net: nothing to span
                 lo, hi = _req_window(req)
-                found, off = [], []
+                found, off, unread = [], [], []
                 for other, pins in sorted(comp_pins.items()):
                     if other == ref or _part_kind(other) not in req["kinds"]:
                         continue
                     if not (any(n in a for n in pins.values())
                             and any(n in b for n in pins.values())):
                         continue
-                    val = engcalc.parse_value(comps.get(other, {}).get("value"))
-                    if (lo is not None or hi is not None) and (
-                            val is None or (lo is not None and val < lo * 0.999)
-                            or (hi is not None and val > hi * 1.001)):
+                    val = engcalc.part_value(comps.get(other, {}).get("value"),
+                                             _part_kind(other))
+                    if (lo is not None or hi is not None) and val is None:
+                        unread.append(other)  # no value to judge it by
+                        continue
+                    if (lo is not None and val < lo * 0.999) or (
+                            hi is not None and val > hi * 1.001):
                         off.append(other)
                         continue
                     found.append(other)
                 net = sorted(a)[0] if a else None
                 if not found:
                     yield (req.get("severity", "error"), net, ref, req, [],
-                           [], off)
+                           [], off, unread)
                     continue
                 sheet = comp.get("sheet")
                 if hierarchical and sheet and not any(
                         comps.get(f, {}).get("sheet") == sheet for f in found):
-                    yield "warning", net, ref, req, [], found, off
+                    yield "warning", net, ref, req, [], found, off, []
 
 
 # ------------------------------------------------------------ compare mode
@@ -3835,7 +3839,7 @@ def audit(parsed: dict, constraints: dict,
     pr_ok = {(h[2], h[3]["id"], h[3]["pin"], h[3]["to"]) for h in
              _pin_requirements(nets, comps, comp_pins,
                                _verified_only(specs))}
-    for sev, net, ic, req, found, elsewhere, off in _pin_requirements(
+    for sev, net, ic, req, found, elsewhere, off, unread in _pin_requirements(
             nets, comps, comp_pins, specs):
         judged = (ic, req["id"], req["pin"], req["to"]) in pr_ok
         want = req.get("value") or "/".join(req["kinds"])
@@ -3848,6 +3852,14 @@ def audit(parsed: dict, constraints: dict,
                f"'{net}', so there is no {req['id']} between them",
                part=req["id"], pin=req["pin"], to=req["to"], tied=True,
                off_value=[])
+        elif unread and not elsewhere:
+            # a part spans the pins but its value can't be read: not judged,
+            # never reported off-value (#1160 false finding: "0805,C0.1")
+            names = ", ".join(f"{u} ({comps[u].get('value')!r})"
+                              for u in unread)
+            not_judged.append(
+                f"pin_part_missing ({sev}) on {net or ic}: {what}: "
+                f"{names} spans those pins, but its value can't be read")
         elif not elsewhere:
             extra = (f"; off-value parts across it: {', '.join(off)}"
                      if off else "")

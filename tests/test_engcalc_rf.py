@@ -180,3 +180,13 @@ def test_cli_i2c_bare_cb_is_pf(capsys):
     _, bare = run(capsys, "i2c", "--vdd", "3.3", "--rp", "2k2", "--cb", "50")
     _, unit = run(capsys, "i2c", "--vdd", "3.3", "--rp", "2k2", "--cb", "50p")
     assert bare["result"] == unit["result"]
+
+
+@pytest.mark.parametrize("text,kind,want", [
+    ("0805,C0.1", "C", 1e-7), ("0603 100n", "C", 1e-7), ("C0.1", "C", 1e-7),
+    ("0.1", "C", 1e-7), ("10", "C", 1e-5), ("100n", "C", 1e-7),
+    ("0805", "C", None), ("TBD", "C", None), (None, "C", None),
+    ("0402,10k", "R", 1e4), ("10", "R", 10.0), ("4k7", None, 4700.0)])
+def test_part_value_reads_bom_forms(text, kind, want):
+    got = engcalc.part_value(text, kind)
+    assert got == (pytest.approx(want) if want is not None else None)
