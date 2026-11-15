@@ -282,6 +282,15 @@ schematic-level structural problems BEFORE board work starts:
    open-drain pull above or below a receiver's limits; a receiver with
    no row is not_judged. Class 15 of the gaps list; fact
    io_domain_pairs_checked.
+ - pair_polarity_swap (error for USB 2.0 and LVDS, else a warning),
+   pair_split (error), pair_lane_order (error): a differential line's
+   P/N, or an LVDS lane's place, across a connector against the
+   connector's stated pinout (constraints connector_pinouts, its pin
+   names, or the USB / Type-C / 8P8C standard pinout for its footprint),
+   followed through series parts to the first part naming the pair. A
+   common-mode choke or transformer that names no pins, an Ethernet
+   crossover, and a chip pair on a connector nothing names are
+   not_judged. lib/pair_order.py (#1217); fact connector_pairs_checked.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -4177,6 +4186,73 @@ def _source_limits(nets: dict, comps: dict,
     yield ("checked", checked)
 
 
+def _pair_rules(v, not_judged, violations, nets, comps, comp_pins, rails,
+                stated):
+    """Report lib/pair_order.py's findings; connector pairs checked."""
+    import pair_order as po  # noqa: PLC0415
+    h = {"part_kind": _part_kind, "is_ground": _is_ground_name}
+    swapped_nets = {x.get("net") for x in violations
+                    if x.get("kind") == "pin_net_swap"}
+    why = {"usb": "USB 2.0 receivers take the pair as wired: the host "
+                  "reads J for K and the device never enumerates "
+                  "[USB 2.0 spec 7.1.7]",
+           "lvds": "an LVDS receiver has no polarity correction, so every "
+                   "bit of that lane arrives inverted",
+           "eth": "most PHYs correct a reversed pair (10BASE-T and "
+                  "1000BASE-T autopolarity; 100BASE-TX's MLT-3 doesn't "
+                  "care), but check this PHY's datasheet before relying "
+                  "on it",
+           "mdi": "1000BASE-T PHYs correct a reversed pair, but check "
+                  "this PHY's datasheet before relying on it",
+           "e1": "AMI is polarity-free, but a framer counting bipolar "
+                 "violations or a B8ZS/HDB3 substitution reads them "
+                 "inverted on a crossed TIP/RING",
+           "lane": "some bridges can swap a lane's polarity in a "
+                   "register; without that the lane reads inverted"}
+    checked = 0
+    for hit in po.pair_order(nets, comps, comp_pins, rails, h, stated):
+        if "checked" in hit:
+            checked = hit["checked"]
+            continue
+        if "not_judged" in hit:
+            not_judged.append(hit["not_judged"])
+            continue
+        if swapped_nets & set(hit["walked"]):
+            continue  # rule 8 already names the crossed pin
+        c, f, lab = hit["conn"], hit["far"], hit["label"]
+        fv = comps.get(f, {}).get("value")
+        fp, fn_ = hit["far_funcs"], hit["far_pins"]
+        refs = [c, f]
+        if hit["rule"] == "pair_polarity_swap":
+            v(hit["sev"], "pair_polarity_swap", hit["p_net"], refs,
+              f"{c}'s {lab} (named by {hit['how']}) meets {f} ({fv}) the "
+              f"other way round: {c} pin {hit['p_pin']} (+) on "
+              f"'{hit['p_net']}' reaches {f} {fp['P']} (pin {fn_['P']}), "
+              f"and pin {hit['n_pin']} (-) on '{hit['n_net']}' reaches "
+              f"{fp['N']} (pin {fn_['N']}). {why[hit['family']]}. Swap "
+              f"the two lines at one end",
+              connector=c, part=f, family=hit["family"], nets=hit["nets"])
+        elif hit["rule"] == "pair_split":
+            v("error", "pair_split", hit["p_net"], refs,
+              f"{c}'s {lab} (named by {hit['how']}) is split at {f} "
+              f"({fv}): its + line '{hit['p_net']}' reaches {fp['P']} "
+              f"(pin {fn_['P']}) and its - line '{hit['n_net']}' reaches "
+              f"{fp['N']} (pin {fn_['N']}), halves of two different "
+              f"pairs. Neither pair is a pair any more: the twist and the "
+              f"far end's termination no longer carry one signal. Wire "
+              f"both lines of the pair to one pair of {f}",
+              connector=c, part=f, family=hit["family"], nets=hit["nets"])
+        elif hit["rule"] == "pair_lane_order":
+            v("error", "pair_lane_order", hit["p_net"], refs,
+              f"{c}'s {lab} (named by {hit['how']}) reaches {f} ({fv})'s "
+              f"{hit['far_key']} pair ({fp['P']}/{fp['N']}): the lanes "
+              f"are out of order, and an LVDS serializer sends each bit "
+              f"on a fixed lane, so the panel reads the wrong bits. Put "
+              f"lane {hit['key']} on {f}'s {hit['key']} pins",
+              connector=c, part=f, family=hit["family"], nets=hit["nets"])
+    return checked
+
+
 def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
                   io_table, abs_table, pl_specs, io_tolerance):
     """Report lib/signal_domains.py's findings; (polarity pins, I/O pairs)
@@ -5594,6 +5670,14 @@ def audit(parsed: dict, constraints: dict,
           f"table: OE low enables, DIR sets the way]",
           oe_net=oe_net, dir_net=dir_net)
 
+    # 37. a differential or paired line's P/N and pair order across a
+    # connector, against the connector's stated pinout or a standard one
+    # (lib/pair_order.py, #1217; built from the USB, Type-C and IEEE 802.3
+    # pin tables and planted faults)
+    pairs_checked = _pair_rules(v, not_judged, violations, nets, comps,
+                                comp_pins, pl_rails,
+                                constraints.get("connector_pinouts") or [])
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -5642,6 +5726,7 @@ def audit(parsed: dict, constraints: dict,
         "bus_groups_checked": bus_checked,
         "uart_parts_checked": uart_checked,
         "transceivers_checked": xcvr_checked,
+        "connector_pairs_checked": pairs_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged

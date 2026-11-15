@@ -1,0 +1,16 @@
+# Seeded pair-order fault for netlist_audit's pair_polarity_swap (#1217).
+# The mutant ships a changed usbbuck4.net beside the board and no
+# schematic, so the audit reads the planted netlist; the copper is
+# untouched. Quiet twins: tests/test_pair_order.py.
+mutants:
+  usb-pair-crossed:
+    board: usbbuck4
+    script: mutations/usb_pair_crossed.py
+    check: netlist_audit
+    defect: >-
+      NETLIST fault: a micro-B USB port's D+ line runs through its series
+      resistor to the bridge's USBDM pin and D- to USBDP, so the pair is
+      crossed and the device never enumerates
+    expect:
+      kind: pair_polarity_swap
+      ref: J98

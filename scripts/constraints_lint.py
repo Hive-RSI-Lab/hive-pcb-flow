@@ -332,7 +332,8 @@ SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
     "placement", "coating", "antennas", "pcb_antennas", "si", "cable_pf",
     "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
     "isolation", "mechanical", "transformers", "pinouts",
-    "design_intent", "switched_loads", "rail_budget"}
+    "design_intent", "switched_loads", "rail_budget",
+    "connector_pinouts"}
 PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
@@ -749,6 +750,23 @@ class _FileLint:
                              f"{path}: design_intent must be {{modules: "
                              "[{ref: U1, is: <part>, why: text}], "
                              "bus_unread: [{net: N, why: text}]}", path)
+            elif key == "connector_pinouts":
+                # netlist_audit rule 37 (#1217): a connector's own pin
+                # names where its symbol's are bare numbers - the pair's
+                # P/N and lane order are judged against them
+                if not (isinstance(val, list) and all(
+                        isinstance(e, dict)
+                        and isinstance(e.get("ref"), str) and e["ref"]
+                        and isinstance(e.get("pins"), dict) and e["pins"]
+                        and all(isinstance(n, str) and n.strip()
+                                for n in e["pins"].values())
+                        and isinstance(e.get("source", ""), str)
+                        and not set(e) - {"ref", "pins", "source"}
+                        for e in val)):
+                    self.add("error", "bad_type",
+                             f"{path}: connector_pinouts must be a list of "
+                             "{ref: J3, pins: {pin: name}, source?: text}",
+                             path)
             elif key == "pinouts":
                 # check_pinouts (#1027): an off-board connector held to a row
                 # of reference/connector_pinouts.yaml
