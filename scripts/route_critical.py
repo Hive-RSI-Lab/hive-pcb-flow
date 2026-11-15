@@ -446,46 +446,79 @@ def pair_via_size(floors: dict) -> float:
 # the head of a (rule ...) form and its name, quoted or bare
 _DRU_RULE_HEAD_RE = re.compile(
     r'\(\s*rule(?![^\s()"])\s*(?:"((?:[^"\\\n]|\\.)*)"?|([^\s()"]+))?')
-_DRU_CONSTRAINT_RE = re.compile(
-    r'\(constraint\s+(\w+)\s+\(min\s+([\d.]+)\s*mm\)\)')
 _DRU_NETNAME_RE = re.compile(r"\.NetName\s*==\s*'([^']+)'")
 _DRU_CONDITION_RE = re.compile(r'\(condition\s+"((?:[^"\\]|\\.)*)"\s*\)')
 _DRU_LAYER_RE = re.compile(r'\(layer\s+"?([^\s")]+)"?\s*\)')
+# the constraint types whose min is a length floor: not a count or angle,
+# and not length or skew, whose min is a tuning target (#1273)
+_DRU_FLOOR_TYPES = (routelib.DRU_VALUE_TYPES - routelib.DRU_UNITLESS_TYPES
+                    - routelib.DRU_TIME_TYPES)
+_DRU_WARNED: set[str] = set()
+
+
+def _dru_warn(msg: str) -> None:
+    """One stderr line per DRU problem per run: the readers call
+    parse_dru_rules once per constraint type they want (#1273)."""
+    if msg not in _DRU_WARNED:
+        _DRU_WARNED.add(msg)
+        print(f"route_critical: {msg}", file=sys.stderr)
 
 
 def parse_dru_rules(text: str) -> list[dict]:
-    """Named (rule ...) blocks with a (min Xmm) constraint ->
-    [{name, constraint, min_mm, nets, condition, layer}]. nets = NetName
-    literals in the condition ([] for unconditioned/baseline rules);
-    condition = the raw condition string (None when absent); layer = the
-    (layer ...) clause token (None when absent). The rules are the file's
-    top-level forms as KiCad reads them (routelib.dru_forms), so a rule may
-    close on any line and comment lines are skipped (#1163); inside a rule
-    only the shapes rules_gen emits are recognized, and anything else simply
-    yields no row. A barrier rule (aiee_iso_*) yields none on purpose: it
-    holds between two domains, and every reader here takes a NetName as
-    net-wide, which would hold a net 8 mm from its own domain.
-    routelib.dru_barriers reads those."""
+    """Named (rule ...) blocks -> [{name, constraint, min_mm, nets,
+    condition, layer}], one row per (constraint ...) clause whose min KiCad
+    reads as a length (routelib.dru_value): 0.2mm, 20mil (0.508), 0.01in,
+    wherever the min sits beside opt and max, and the later of two mins in
+    one clause, as KiCad holds it. constraint is the type KiCad checks (an
+    old name such as hole reads as hole_size). nets = NetName literals in
+    the condition ([] for unconditioned/baseline rules); condition = the raw
+    condition string (None when absent); layer = the (layer ...) clause
+    token (None when absent). The rules are the file's top-level forms as
+    KiCad reads them (routelib.dru_forms), so a rule may close on any line
+    and comment lines are skipped (#1163). A barrier rule (aiee_iso_*)
+    yields none on purpose: it holds between two domains, and every reader
+    here takes a NetName as net-wide, which would hold a net 8 mm from its
+    own domain. routelib.dru_barriers reads those.
+
+    One value KiCad rejects (0.5MM, 20mils, a bare 0.2 on a length) drops
+    the whole file in KiCad, and DRC then holds none of its rules: this
+    returns [] for such a file, as DRC reads it, and says why on stderr;
+    kc.run_drc fails the board on it (#1273). A floor's min that KiCad reads
+    but this does not evaluate (0.1mm + 0.05mm, an angle) gives no row and
+    a stderr line, so a reader can tell the floor is unknown, not absent."""
+    errs = routelib.dru_unit_errors(text)
+    if errs:
+        more = f" (and {len(errs) - 1} more)" if len(errs) > 1 else ""
+        _dru_warn("KiCad ignores every rule in this .kicad_dru, so none is "
+                  f"read: {errs[0]}{more}")
+        return []
     out: list[dict] = []
     for form in routelib.dru_forms(text):
         m = _DRU_RULE_HEAD_RE.match(form)
-        if not m:
+        rule = routelib.dru_rule_constraints(form) if m else None
+        if rule is None:
             continue
         name = re.sub(r"\\(.)", r"\1", m.group(1)) \
             if m.group(1) is not None else m.group(2) or ""
         body = form[m.end():]
         if name.startswith("aiee_iso_"):
             continue
-        c = _DRU_CONSTRAINT_RE.search(body)
-        if not c:
-            continue
         cond = _DRU_CONDITION_RE.search(body)
         lay = _DRU_LAYER_RE.search(body)
-        out.append({"name": name, "constraint": c.group(1),
-                    "min_mm": float(c.group(2)),
-                    "nets": sorted(set(_DRU_NETNAME_RE.findall(body))),
-                    "condition": cond.group(1) if cond else None,
-                    "layer": lay.group(1) if lay else None})
+        nets = sorted(set(_DRU_NETNAME_RE.findall(body)))
+        for ctype, vals in rule[1]:
+            mins = [v for key, v in vals if key == "min"]
+            mm = routelib.dru_value(mins[-1], ctype)[0] if mins else None
+            if mm is None:
+                if mins and ctype in _DRU_FLOOR_TYPES:
+                    _dru_warn(f'rule "{name}": ({ctype} (min {mins[-1]})) '
+                              "is not a length this reader evaluates, so no "
+                              "floor is read from it")
+                continue
+            out.append({"name": name, "constraint": ctype,
+                        "min_mm": mm, "nets": nets,
+                        "condition": cond.group(1) if cond else None,
+                        "layer": lay.group(1) if lay else None})
     return out
 
 

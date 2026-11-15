@@ -94,9 +94,10 @@ Known limitations (adversarial-review verdicts, accepted with reasons):
    not read; a part the update adds or swaps with no spot yet, as a dry
    run's adds; a courtyard it cannot build as KiCad does): both can only
    rip more. DRC on the staged board stays the truth. It weighs only the
-   rules route_critical.parse_dru_rules reads: one written otherwise (a
-   second constraint, mil or inch, opt or max before min) or a barrier
-   rule (aiee_iso_*) is left out, where KiCad holds it (#1273).
+   rules route_critical.parse_dru_rules reads: a barrier rule (aiee_iso_*)
+   or a min it does not evaluate (a sum such as 0.1mm + 0.05mm) is left
+   out, where KiCad holds it, and a file KiCad drops whole for a value it
+   rejects holds none, in KiCad as here (#1273).
 
 CLI (SPEC section 6):
   board_update.py --pcb B.kicad_pcb --netlist NEW.net

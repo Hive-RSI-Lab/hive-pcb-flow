@@ -476,6 +476,90 @@ def test_parse_dru_rules_reads_parens_as_kicad_does():
         "(a #b)", '(c "\\"(")']
 
 
+CFG2 = "A.NetName == '/CFG2'"
+
+
+def _mins(text):
+    return [(r["constraint"], round(r["min_mm"], 6))
+            for r in rc.parse_dru_rules(text)]
+
+
+def _rule(clauses):
+    return f'(rule "r" {clauses}\n  (condition "{CFG2}"))\n'
+
+
+def test_parse_dru_rules_reads_values_as_kicad_does(monkeypatch, capsys):
+    """#1273: a min reads as KiCad 10 reads it: 20mil and 0.02in are
+    0.508 mm, a blank before the unit is fine, a min sits anywhere beside
+    opt and max, the later of two mins holds, and each (constraint ...)
+    clause of a rule is a row of its own."""
+    monkeypatch.setattr(rc, "_DRU_WARNED", set())
+    assert _rules(_rule("(constraint clearance (min 20mil))")) == [
+        ("r", pytest.approx(0.508), CFG2)]
+    for clause, mins in [
+            ("(constraint clearance (opt 0.6mm) (min 0.5mm))",
+             [("clearance", 0.5)]),
+            ("(constraint track_width (min 0.1mm))\n"
+             "  (constraint clearance (min 0.5mm))",
+             [("track_width", 0.1), ("clearance", 0.5)]),
+            ("(constraint track_width (min 0.02in))", [("track_width", 0.508)]),
+            ("(constraint clearance (min 0.5mm) (max 1mm))",
+             [("clearance", 0.5)]),
+            ("(constraint clearance (min 0.5 mm))", [("clearance", 0.5)]),
+            ("(constraint clearance (min 0.2mm) (min 0.3mm))",
+             [("clearance", 0.3)]),
+            ("(constraint hole (min 0.3mm))", [("hole_size", 0.3)]),
+            ("(constraint via_count (min 2))", []),
+            ("(constraint track_width (min 0.1mm))\n"
+             "  (constraint clearance (min 0.1mm + 0.05mm))",
+             [("track_width", 0.1)])]:
+        assert _mins(_rule(clause)) == mins, clause
+    assert "not a length this reader evaluates" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0.5", "500um", "0.5MM", "20mils"])
+def test_parse_dru_rules_reads_nothing_from_a_file_kicad_drops(
+        value, monkeypatch, capsys):
+    """#1273: one value KiCad rejects drops the whole file, so DRC holds
+    none of its rules: parse_dru_rules returns none either, and says why."""
+    monkeypatch.setattr(rc, "_DRU_WARNED", set())
+    good = _rule("(constraint clearance (min 0.2mm))")
+    assert _mins(good) == [("clearance", 0.2)]
+    bad = good + _rule(f"(constraint track_width (min {value}))")
+    assert rc.parse_dru_rules(bad) == []
+    err = capsys.readouterr().err
+    assert "KiCad ignores every rule" in err and value in err
+
+
+@pytest.mark.parametrize("value", ["0.1mm + 0.05mm", "1deg"])
+def test_parse_dru_rules_names_a_floor_it_cannot_read(
+        value, monkeypatch, capsys):
+    """#1273: a min KiCad reads but this does not evaluate gives no row, so
+    no wrong floor, and one stderr line per run says the floor is unknown."""
+    monkeypatch.setattr(rc, "_DRU_WARNED", set())
+    text = _rule(f"(constraint clearance (min {value}))")
+    assert rc.parse_dru_rules(text) == []
+    assert rc.parse_dru_rules(text) == []
+    err = capsys.readouterr().err
+    assert err.count("is not a length this reader evaluates") == 1
+    assert value in err
+
+
+def test_dru_net_floors_empty_when_kicad_drops_the_file(
+        tmp_path, monkeypatch, capsys):
+    """#1273: a net floor from a file KiCad drops is no floor at all."""
+    monkeypatch.setattr(rc, "_DRU_WARNED", set())
+    good = ('(version 1)\n(rule "vbus_w" (constraint track_width (min 1mm))'
+            '\n  (condition "A.NetName == \'VBUS\'"))\n')
+    dru = tmp_path / "b.kicad_dru"
+    dru.write_text(good, encoding="utf-8")
+    assert rc.dru_net_floors(dru, "track_width") == {"VBUS": 1.0}
+    dru.write_text(good + '(rule "x" (constraint clearance (min 0.2MM)))\n',
+                   encoding="utf-8")
+    assert rc.dru_net_floors(dru, "track_width") == {}
+    assert "KiCad ignores every rule" in capsys.readouterr().err
+
+
 def test_build_net_clearances_class_plus_dru(tmp_path):
     pro = tmp_path / "b.kicad_pro"
     pro.write_text(json.dumps({"net_settings": {

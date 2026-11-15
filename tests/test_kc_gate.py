@@ -244,6 +244,32 @@ def test_drc_gate_parity_flows_to_kc(monkeypatch, tmp_path):
     assert seen == {"parity": True, "all_track_errors": False}
 
 
+def test_run_drc_fails_a_board_whose_rules_kicad_drops(monkeypatch, tmp_path):
+    """#1273: one value KiCad's rule parser rejects drops the whole
+    .kicad_dru, and kicad-cli then checks none of its rules and reports
+    nothing; run_drc puts an error row first, so the gate fails."""
+    monkeypatch.setattr(kc, "_run_json_report", lambda cli, args, pcb: {
+        "coordinate_units": "mm", "violations": []})
+    board = tmp_path / "b.kicad_pcb"
+    board.write_text("(kicad_pcb)\n", encoding="utf-8")
+    assert kc.run_drc(Path("kicad-cli"), board)["status"] == "pass"
+    dru = tmp_path / "b.kicad_dru"
+    dru.write_text('(version 1)\n(rule "hv" (constraint clearance '
+                   '(min 0.5MM))\n  (condition "A.NetName == \'HV\'"))\n',
+                   encoding="utf-8")
+    rep = kc.run_drc(Path("kicad-cli"), board)
+    assert rep["status"] == "violations"
+    row = rep["violations"][0]
+    assert all(key in row for key in kc.SCHEMA_KEYS)
+    assert row["check"] == "rules_file_ignored" and row["severity"] == "error"
+    assert "b.kicad_dru" in row["msg"] and "0.5MM" in row["msg"]
+    g = {"tool": "drc", "fail_severities": ["error"], "max_count": 0}
+    assert gate.evaluate("drc", g, rep)["status"] == "fail"
+    dru.write_text('(version 1)\n(rule "hv" (constraint clearance '
+                   '(min 20mil)))\n', encoding="utf-8")
+    assert kc.run_drc(Path("kicad-cli"), board)["status"] == "pass"
+
+
 def test_drc_routed_gate_refuses_stale_fills(tmp_path):
     """A board with an unfilled zone exits 2 with a stale-fill message
     instead of being graded (offline: the preflight runs before kicad-cli

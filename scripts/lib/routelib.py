@@ -438,6 +438,244 @@ def dru_forms(dru_text: str) -> list[str]:
     return forms
 
 
+# KiCad 10 reads each (min/opt/max ...) value of a rule through its
+# expression evaluator, and one value it rejects is a parse error that drops
+# the WHOLE .kicad_dru while kicad-cli says nothing (#1273). What follows was
+# read from its drc_rule_parser.cpp and measured on 10.0.6: a length takes mm,
+# mil or in, spelled exactly so (a blank before the unit is fine); 20mil and
+# 0.02in hold at 0.508 mm, and 0.5, 500um, 0.05cm, 0.5MM, 20mils, 1e-2mm and
+# .5mm each void the file.
+DRU_LENGTH_UNITS = {"mm": 1.0, "mil": 0.0254, "in": 25.4}
+# every unit it reads, by kind: an angle and two delays besides the lengths
+DRU_UNIT_KINDS = {"mm": "length", "mil": "length", "in": "length",
+                  "deg": "angle", "fs": "time", "ps": "time"}
+# the constraint types whose values it reads that way; assertion, disallow,
+# zone_connection and min_resolved_spokes are written in other forms
+DRU_VALUE_TYPES = frozenset((
+    "annular_width", "bridged_mask", "clearance", "connection_width",
+    "courtyard_clearance", "creepage", "diff_pair_gap", "diff_pair_uncoupled",
+    "edge_clearance", "hole_clearance", "hole_size", "hole_to_hole", "length",
+    "physical_clearance", "physical_hole_clearance", "silk_clearance", "skew",
+    "solder_mask_expansion", "solder_mask_sliver", "solder_paste_abs_margin",
+    "solder_paste_rel_margin", "text_height", "text_thickness",
+    "thermal_relief_gap", "thermal_spoke_width", "track_angle",
+    "track_segment_length", "track_width", "via_count", "via_dangling",
+    "via_diameter"))
+# old type names it still takes, as the type each stands for
+DRU_TYPE_ALIASES = {"hole": "hole_size",
+                    "mechanical_clearance": "physical_clearance",
+                    "mechanical_hole_clearance": "physical_hole_clearance"}
+# types whose values are plain numbers: a unit on one voids the file, and a
+# bare number is fine (on every other type a bare number voids it)
+DRU_UNITLESS_TYPES = frozenset(("bridged_mask", "track_angle", "via_count",
+                                "via_dangling"))
+# the only types a delay (fs, ps) may be given for
+DRU_TIME_TYPES = frozenset(("length", "skew"))
+_DRU_KIND_NAMES = {"length": "a length", "angle": "an angle", "time": "a delay"}
+# a value's own tokens: a number (a comma reads as a point), a word, an
+# operator or paren, a run of blanks, or any other character
+_DRU_EXPR_RE = re.compile(
+    r"(?P<num>\d+(?:[.,]\d*)?)|(?P<word>[^\W\d]\w*)|(?P<op>[-+*/()])"
+    r"|(?P<blank> +)|(?P<other>.)", re.S)
+# the first token of a list: its keyword, bare or quoted
+_DRU_HEAD_RE = re.compile(r'[ \t\r\n]*(?:"(?:[^"\\\n]|\\.)*"?|[^ \t\r\n()"]+)')
+
+
+class DruList(list):
+    """One (...) of a form read by dru_tree: its items, and as .raw the text
+    between its parens as written (#1273)."""
+    __slots__ = ("raw",)
+
+    def __init__(self, raw: str = ""):
+        super().__init__()
+        self.raw = raw
+
+
+def dru_tree(form: str) -> list:
+    """One form of dru_forms as nested lists, read with the same lexer: a
+    (...) is a DruList, a "..." string one atom without its quotes and
+    escapes, and other text splits at blanks. A list left open closes at
+    the end of the form (#1273)."""
+    form = form or ""
+    stack: list[tuple[DruList, int]] = [(DruList(), 0)]
+    for m in _DRU_TOKEN_RE.finditer(form):
+        kind, tok = m.lastgroup, m.group()
+        if kind == "open":
+            stack.append((DruList(), m.end()))
+        elif kind == "close" and len(stack) > 1:
+            done, start = stack.pop()
+            done.raw = form[start:m.start()]
+            stack[-1][0].append(done)
+        elif kind == "str":
+            body = tok[1:-1] if len(tok) > 1 and tok.endswith('"') else tok[1:]
+            stack[-1][0].append(re.sub(r"\\(.)", r"\1", body))
+        elif kind == "text":
+            stack[-1][0].extend(tok.split())
+    while len(stack) > 1:
+        done, start = stack.pop()
+        done.raw = form[start:]
+        stack[-1][0].append(done)
+    return next((x for x in stack[0][0] if isinstance(x, list)), DruList())
+
+
+def dru_rule_constraints(form: str) -> tuple[str, list] | None:
+    """A (rule NAME ...) form -> (NAME, [(TYPE, [(KEY, VALUE), ...])]): one
+    entry per (constraint TYPE ...) clause in file order, an old type name
+    read as the one it stands for (hole is hole_size), and each (min|opt|max
+    VALUE) of the clause in its own order with VALUE as written, blanks
+    inside it kept. KiCad holds every clause of a rule and checks min and
+    max wherever they sit beside opt (#1273). None for a form that is not a
+    rule."""
+    tree = dru_tree(form)
+    if not tree or tree[0] != "rule":
+        return None
+    name = tree[1] if len(tree) > 1 and isinstance(tree[1], str) else ""
+    out = []
+    for node in tree[2:]:
+        if not (isinstance(node, list) and len(node) > 1
+                and node[0] == "constraint" and isinstance(node[1], str)):
+            continue
+        vals = []
+        for sub in node[2:]:
+            if isinstance(sub, DruList) and sub and sub[0] in ("min", "opt",
+                                                               "max"):
+                head = _DRU_HEAD_RE.match(sub.raw)
+                rest = sub.raw[head.end():] if head else sub.raw
+                vals.append((sub[0], rest.strip(" \t\r\n")))
+        out.append((DRU_TYPE_ALIASES.get(node[1], node[1]), vals))
+    return name, out
+
+
+def _dru_wrapped(toks: list) -> bool:
+    """Whether a value's tokens are one (...) from first to last."""
+    depth = 0
+    for i, tok in enumerate(toks):
+        if tok == ("op", "("):
+            depth += 1
+        elif tok == ("op", ")"):
+            depth -= 1
+            if depth <= 0:
+                return depth == 0 and i == len(toks) - 1
+    return False
+
+
+def _dru_scan(value: str | None, ctype: str) -> tuple:
+    """One value of a `ctype` constraint as KiCad 10's rule parser reads it
+    -> (mm, kinds, why): mm for a plain length (20mil, -0.1mm, (0.2 mm)),
+    the set of unit kinds it names, and why KiCad rejects it. kinds is None
+    where this reader cannot follow the value (a string, a name, a character
+    it does not know), and it then gives no verdict (#1273)."""
+    text = (value or "").strip(" \t\r\n")
+    if not text:
+        return None, frozenset(), "has no value"
+    if '"' in text or "'" in text:
+        return None, None, None
+    if re.search(r"[\t\n\r\f\v]", text):
+        return None, frozenset(), ("has a tab or line break inside, which "
+                                   "KiCad's evaluator rejects")
+    if re.search(r"(?<!\w)\.\d", text):
+        return None, frozenset(), ("has a number with no digit before its "
+                                   "point (write 0.5, not .5)")
+    toks = [(m.lastgroup, m.group()) for m in _DRU_EXPR_RE.finditer(text)
+            if m.lastgroup != "blank"]
+    kinds, follow = set(), True
+    for i, (kind, tok) in enumerate(toks):
+        before = toks[i - 1] if i else ("", "")
+        if kind == "other":
+            follow = False
+        elif kind != "word":
+            continue
+        elif before[0] == "num":
+            if re.match(r"[eE](\d|$)", tok):
+                return None, frozenset(), ("has an exponent, which KiCad "
+                                           "does not read")
+            if ctype in DRU_UNITLESS_TYPES:
+                return None, frozenset(), (f"has unit {tok!r}, but {ctype} "
+                                           "takes a plain number")
+            if tok not in DRU_UNIT_KINDS:
+                return None, frozenset(), (f"has unit {tok!r}, which KiCad "
+                                           "does not read (mm, mil, in)")
+            kinds.add(DRU_UNIT_KINDS[tok])
+        elif before == ("op", "/") and tok in DRU_UNIT_KINDS:
+            return None, frozenset(), (f"has unit {tok!r} after '/', which "
+                                       "KiCad does not read")
+        else:
+            follow = False
+    if not follow:
+        return None, None, None
+    core = toks
+    while core:
+        if core[0] == ("op", "+"):
+            core = core[1:]
+        elif _dru_wrapped(core):
+            core = core[1:-1]
+        else:
+            break
+    if not core:
+        return None, None, None
+    if (len(core) == 1 and core[0][0] == "num"
+            and ctype not in DRU_UNITLESS_TYPES):
+        return None, frozenset(), "has no unit"
+    if kinds == {"time"} and ctype not in DRU_TIME_TYPES:
+        return None, frozenset(kinds), ("is a delay, which KiCad takes only "
+                                        "for length and skew")
+    mm = None
+    body = core[1:] if core[0] == ("op", "-") else core
+    if (len(body) == 2 and body[0][0] == "num"
+            and body[1][1] in DRU_LENGTH_UNITS):
+        mm = float(body[0][1].replace(",", ".")) * DRU_LENGTH_UNITS[body[1][1]]
+        mm = -mm if body is not core else mm
+    return mm, frozenset(kinds), None
+
+
+def dru_value(value: str | None, constraint: str) -> tuple:
+    """One (min/opt/max ...) value of a constraint as KiCad 10 reads it ->
+    (mm, None) for a plain length, 20mil read as 0.508; (None, None) for one
+    it reads that is not a plain length (a count, an angle, a delay, a sum)
+    or that this reader cannot follow; (None, why) for one it rejects, which
+    voids the whole file (#1273). An old type name reads as the one it stands
+    for; a type whose values are not read this way gives (None, None)."""
+    ctype = DRU_TYPE_ALIASES.get(constraint, constraint)
+    if ctype not in DRU_VALUE_TYPES:
+        return None, None
+    mm, _, why = _dru_scan(value, ctype)
+    return mm, why
+
+
+def dru_unit_errors(dru_text: str) -> list[str]:
+    """Each value in a .kicad_dru that KiCad 10's rule parser rejects, as
+    'rule "NAME": (TYPE (KEY VALUE)) why': a unit it does not read, a bare
+    number where a unit is due, a unit on a count, a delay where only a
+    length goes, two kinds of unit in one clause. One is enough for KiCad to
+    drop the whole file: DRC then holds none of its rules, kicad-cli says
+    nothing, and the board falls back to its netclass, zone and board-setup
+    values (#1273). [] for a file whose values KiCad reads. Other parse
+    errors (a misspelled keyword, a bad condition, a type given twice) are
+    not looked for here."""
+    out = []
+    for form in dru_forms(dru_text):
+        rule = dru_rule_constraints(form)
+        for ctype, vals in rule[1] if rule else ():
+            if ctype not in DRU_VALUE_TYPES:
+                continue
+            last = None
+            for key, value in vals:
+                _, kinds, why = _dru_scan(value, ctype)
+                one = (next(iter(kinds)) if not why and kinds
+                       and len(kinds) == 1 else None)
+                if one and last and one != last:
+                    why = (f"is {_DRU_KIND_NAMES[one]} after "
+                           f"{_DRU_KIND_NAMES[last]}, and KiCad takes one "
+                           "kind of unit per constraint")
+                last = one
+                if why:
+                    shown = value.translate({9: "\\t", 10: "\\n", 11: "\\v",
+                                             12: "\\f", 13: "\\r"})
+                    out.append(f'rule "{rule[0]}": ({ctype} ({key}'
+                               f'{" " + shown if shown else ""})) {why}')
+    return out
+
+
 def dru_barriers(dru_text: str) -> list[dict]:
     """rules_gen's aiee_iso_<barrier>_* rules as [{a: [globs], b: [globs],
     clearance_mm}], one per pair of domains, at the larger of its outer and
