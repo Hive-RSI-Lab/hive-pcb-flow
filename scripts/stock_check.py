@@ -25,7 +25,10 @@ distributor pages that answer without an API key (lib/keyless_stock.py):
 a row is ok only when one authorized distributor holds the whole need
 (--country US: in that country's stock; --brokers: brokers count too),
 short when none does, not_found when the page lists no offer with that
-exact MPN, and not_judged, blocking, when no page answers. Rows marked
+exact MPN, and not_judged, blocking, when no page answers (reason
+"throttled" when the page kept saying "not now"). Answers are kept a day
+(HWDE_STOCK_CACHE, default ~/.cache/hwde/keyless_stock; 0 turns it off).
+Rows marked
 Buy=no or Assembly Class dnp/board_feature are skipped. No ledger facts
 are written in this mode (the ledger keys stock by LCSC code).
 
@@ -121,6 +124,8 @@ def check_mpn_rows(rows: list[dict], boards: int = DEFAULT_BOARDS,
                    brokers: bool = False) -> dict:
     """check_rows' report for MPN rows, judged by lib/keyless_stock."""
     import keyless_stock
+    # a live run keeps each part's answer a day (#1241); a test's fetcher not
+    cache = keyless_stock.cache_dir() if fetch is None else None
     fetch = fetch or keyless_stock.http_text
 
     def one(r):
@@ -130,7 +135,8 @@ def check_mpn_rows(rows: list[dict], boards: int = DEFAULT_BOARDS,
                  "why": "the row names no MPN"}
         else:
             v = keyless_stock.judge(r["mpn"], need, fetch=fetch,
-                                    country=country, brokers=brokers)
+                                    country=country, brokers=brokers,
+                                    cache=cache)
         return {**v, "refs": r["refs"], "comment": r["value"]}
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
