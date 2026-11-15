@@ -117,6 +117,14 @@ SENSE_PIN = re.compile(
     r"^[~/]?(V?IN\d*[-+−PN]\d*|[-+]\d*IN\d*|I?SENSE.*|I?SNS.*|ISEN.*|CS[-+PN]?\d*|"
     r"S[PN][ABC]?\d*|ISN\d*|ISP\d*|IS[-+]\d*|VS[-+]\d*)$", re.I)
 OUTPUT_PIN = re.compile(r"^(V?OUT\d*|SW\d*)$", re.I)
+_DASHES = str.maketrans({"\u2013": "-", "\u2014": "-", "\u2010": "-",
+                         "\u2011": "-", "\u2212": "-"})
+
+
+def _pin(name: str) -> str:
+    """The pin name as the regexes read it: an en dash or a minus sign in a
+    symbol's "IN–" is the plain "-" (INA228 symbols use U+2013)."""
+    return (name or "").translate(_DASHES)
 
 
 def _kind(ref: str) -> str:
@@ -151,7 +159,7 @@ def taps_on(bg, net: str, shunt: str, pin=SENSE_PIN) -> dict[str, list[dict]]:
         if p.ref == shunt:
             continue
         if _kind(p.ref) in IC_KINDS and (
-                not p.pinfunction or pin.match(p.pinfunction)):
+                not p.pinfunction or pin.match(_pin(p.pinfunction))):
             out.setdefault(p.ref, []).append(
                 {"pad": p, "via": None, "pin": p.pinfunction})
             continue
@@ -163,7 +171,7 @@ def taps_on(bg, net: str, shunt: str, pin=SENSE_PIN) -> dict[str, list[dict]]:
             continue
         for q in bg.pads_of(net=next(iter(far))):
             if _kind(q.ref) in IC_KINDS and (
-                    not q.pinfunction or pin.match(q.pinfunction)):
+                    not q.pinfunction or pin.match(_pin(q.pinfunction))):
                 out.setdefault(q.ref, []).append(
                     {"pad": p, "via": p.ref, "pin": q.pinfunction or q.number,
                      "far": q.net})

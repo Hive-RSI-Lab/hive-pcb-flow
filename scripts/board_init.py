@@ -216,9 +216,14 @@ def parse_netlist(path: Path) -> tuple[list[dict], dict]:
                     # the pad; without them every check that finds a pin by
                     # name can't judge the board.
                     pf, pt = _find1(node, "pinfunction"), _find1(node, "pintype")
+                    fn = str(_sym(pf[1])) if pf and len(pf) > 1 else ""
+                    # kicad-cli's netlist suffixes the pin number onto a
+                    # name ("IN-_1" on pin 1); the pad keeps the symbol's
+                    # own name ("IN-"), as Update PCB writes it.
+                    if fn.endswith(f"_{p}") and len(fn) > len(str(p)) + 1:
+                        fn = fn[: -len(str(p)) - 1]
                     pins.setdefault(str(r), {})[str(p)] = [
-                        str(_sym(pf[1])) if pf and len(pf) > 1 else "",
-                        str(_sym(pt[1])) if pt and len(pt) > 1 else ""]
+                        fn, str(_sym(pt[1])) if pt and len(pt) > 1 else ""]
     for c in components:
         c["pins"] = pins.get(str(c["ref"]), {})
     missing = [c["ref"] for c in components if not c["fp"]]

@@ -91,6 +91,20 @@ def test_parse_netlist_carries_pin_names(tmp_path):
     assert all(v[0] == "" and v[1] == "passive" for v in r["pins"].values())
 
 
+def test_parse_netlist_drops_pin_number_suffix(tmp_path):
+    # kicad-cli writes "IN-_1" for pin 1 named "IN-"; the pad gets "IN-",
+    # as Update PCB writes it, so name-matching checks (kelvin's sense-pin
+    # regex) still find it. A name that is only the suffix stays as is.
+    names = {"U2": {"1": ("IN-_1", "input"), "2": ("VOUT_2", "power_out"),
+                    "3": ("_3", "power_in")}}
+    net = _write_net(tmp_path, _netlist(BLINKY2, names))
+    comps, _ = board_init.parse_netlist(net)
+    u2 = next(c for c in comps if c["ref"] == "U2")["pins"]
+    assert u2["1"] == ["IN-", "input"]
+    assert u2["2"] == ["VOUT", "power_out"]
+    assert u2["3"] == ["_3", "power_in"]   # nothing would be left
+
+
 def test_blinky2_carries_no_pin_names():
     # the golden is a board_init board from before #1220
     assert "(pinfunction" not in BLINKY2.read_text("utf-8")
