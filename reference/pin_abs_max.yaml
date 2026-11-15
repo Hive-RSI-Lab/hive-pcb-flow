@@ -1,0 +1,561 @@
+# The voltage a part's pins take, from each datasheet's absolute maximum
+# ratings table, for netlist_audit.py's offboard_input rule (class 3 of
+# docs/miss-taxonomy.md): a net that leaves the board is judged against
+# the receiving pin's limits, both ways, with its level and its clamps.
+#
+# receivers:
+#   match     regex tried against the part's Value, then its symbol name
+#             (case-insensitive)
+#   pins      regex on the pin function (upper-cased, ~{...} dropped) of
+#             the pins the row covers; without it, every pin not of a
+#             power type
+#   pintypes  regex on the KiCad pin type, when only some pins carry the
+#             rating (logic parts: VI is the inputs' rating)
+#   supply    regex on the pin function whose rail VDD is in vmax_vdd
+#   vdd       V: that rail on a module whose supply pin isn't the I/O rail
+#   vmin      V: the lowest the pins take (a negative number); none: not
+#             rated below ground in the table
+#   vmax      V: the most the pins take, or
+#   vmax_vdd  V: the most above the supply rail
+# diodes: small-signal silicon diodes a design uses as clamps.
+#   vf_max    V: the datasheet's guaranteed most forward drop at if_ma
+#             mA. A clamp to a rail lets the pin go that far past the
+#             rail; past the pin's rating, the clamp doesn't protect it.
+# cite / verified as in io_levels.yaml: `bin/hwde part_rows --verify`
+# checks each quote is on its page and each cited number is in the quote.
+# A finding only an unverified row makes is reported as not judged.
+#
+# Rated by clamp current only (VI < 0 or VI > VCC at +-20 mA; CD74AC161,
+# CD74AC238, SN74HC595, SN74HC166): no voltage row, so not judged.
+#
+# Seeded from the errata corpus: smart-lcc-2, fc980c-2, zxdiag-v11-2/-3.
+
+receivers:
+- mpn: RP2040
+  match: ^RP2040$
+  verified: true
+  pins: ^(GPIO|QSPI|SW|RUN|XIN)
+  supply: ^IOVDD
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: RP2040 Datasheet (build 2024-10), 5.5.1 Absolute Maximum Ratings
+  cite:
+  - doc: rp2040.pdf
+    sha256: be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c
+    page: 615
+    quote: Voltage at IO VPIN -0.5 IOVDD + 0.5 V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: Raspberry Pi Pico (RP2040, IOVDD 3.3 V)
+  match: ^(RaspberryPi_)?Pico\b
+  verified: true
+  pins: ^(GP(IO)?\d|SW|RUN)
+  vdd: 3.3
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: RP2040 Datasheet (build 2024-10), 5.5.1; the Pico runs IOVDD from its 3V3 regulator
+  cite:
+  - doc: rp2040.pdf
+    sha256: be56fbb75ba0ae9e26558a73c93ac3e75c2ad4e6878d3b6703de2a76d886ea8c
+    page: 615
+    quote: Voltage at IO VPIN -0.5 IOVDD + 0.5 V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: RP2350
+  match: ^RP2350
+  verified: true
+  pins: ^(GPIO|QSPI|SW|RUN|XIN)
+  supply: ^IOVDD
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: RP2350 Datasheet, 14.9.1 Absolute Maximum Ratings
+  cite:
+  - doc: rp2350.pdf
+    sha256: a638d6780da919162660691bfa02c6dcf7c2a0b6e9f18e2d7519c80b664a2e39
+    page: 1336
+    quote: VPIN −0.5 IOVDD + 0.5 V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: ATmega4809
+  match: ATMEGA4809
+  verified: true
+  pins: ^P[A-F]\d
+  supply: ^VDD
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: ATmega4808/4809 Data Sheet DS40002173, 34.2 Absolute Maximum Ratings
+  cite:
+  - doc: atmega4809.pdf
+    sha256: e4613588222f20834a400dfe97509bed9417e2dc624f6ca8e245f359c465c1f2
+    page: 460
+    quote: VPIN Pin voltage with respect to GND -0.5 VDD+0.5 V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: Arduino Nano Every ABX00027 (ATmega4809 at 5 V)
+  match: ^ABX00027
+  verified: true
+  pins: ^(D\d|A\d|TX|RX)
+  vdd: 5.0
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: ATmega4809 Data Sheet 34.2; the Nano Every runs the ATmega4809 from +5V
+  cite:
+  - doc: atmega4809.pdf
+    sha256: e4613588222f20834a400dfe97509bed9417e2dc624f6ca8e245f359c465c1f2
+    page: 460
+    quote: VPIN Pin voltage with respect to GND -0.5 VDD+0.5 V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: ATmega328P
+  match: ATMEGA328P(-|$|\b)(?!B)
+  verified: true
+  pins: ^P[BCD]\d(?!.*RESET)
+  supply: ^VCC$
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: ATmega328P datasheet DS40002061, 28.1 Absolute Maximum Ratings
+  cite:
+  - doc: atmega328p.pdf
+    sha256: fb84858d0b12c695a12b13f0c74b962d81210247d440c7a24c0ed23dfabfdfaf
+    page: 258
+    quote: Voltage on any pin except RESET with respect to ground –0.5 VCC + 0.5 V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: ATmega328PB
+  match: ATMEGA328PB
+  verified: true
+  pins: ^P[BCDE]\d(?!.*RESET)
+  supply: ^VCC$
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: ATmega328PB datasheet DS40001906, Absolute Maximum Ratings
+  cite:
+  - doc: atmega328pb.pdf
+    sha256: 3fecad6c2b7954a10b0df4d3a096354599bff2e4aaad766b616f2340d6e998ca
+    page: 350
+    quote: Voltage on any Pin except RESET with respect to Ground -0.5V to VCC+0.5V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: SAM4L
+  match: SAM4L
+  verified: true
+  pins: ^P[A-C]\d
+  supply: ^VDDIO$
+  vmin: -0.3
+  vmax_vdd: 0.3
+  source: SAM4L datasheet 42023, 42.2 Absolute Maximum Ratings
+  cite:
+  - doc: sam4l.pdf
+    sha256: 957b57b4e63cafc31a993dd9d6eb0d8006fca131ee6d566da493fb27fea44a2e
+    page: 1121
+    quote: Voltage on input pins with respect to ground ..........................-0.3V to V VDD (1)+0.3V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: SST39SF040
+  match: SST39SF0[124]0
+  verified: true
+  pins: ^(A([0-8]|1\d)|D\d|~?(CE|OE|WE))$
+  supply: ^V(DD|CC)$
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: SST39SF010A/020A/040 DS20005022C, Absolute Maximum Stress Ratings
+  cite:
+  - doc: sst39sf040.pdf
+    sha256: 5b3899c2221a08b670c10c8a02ca9c8aac1658692d2f9fd5ca5e7b93c684fe66
+    page: 11
+    quote: -0.5V to VDD+0.5V Transient Voltage (<20 ns) on Any Pin
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: ECP5 / ECP5-5G
+  match: ^LFE5
+  verified: true
+  pins: ^(P[LRTB]\d|PCLK|CFG|TCK|TDI|TDO|TMS|PROGRAMN|INITN|DONE|CS|SN|WRITE|MCLK|SO|SI)
+  vmin: -0.5
+  vmax: 3.63
+  source: ECP5 and ECP5-5G Family Data Sheet FPGA-DS-02012, 3.1 Absolute Maximum Ratings
+  cite:
+  - doc: ecp5.pdf
+    sha256: 26570f8bb2b800123120829cacd75d818d7a985d573797610521b5bda2e293c3
+    page: 51
+    quote: Input or I/O Transient Voltage Applied –0.5 3.63 V
+    fields:
+    - vmin
+    - vmax
+- mpn: STM32F030x4 (FT pins)
+  match: STM32F030
+  verified: true
+  pins: ^P[A-F]\d
+  supply: ^VDD
+  vmin: -0.3
+  vmax_vdd: 4.0
+  source: STM32F030x4/6/8/C DS9773, Table 19 Voltage characteristics
+  cite:
+  - doc: stm32f030f4.pdf
+    sha256: faac9340687f69518930b13c314561570c7298c4d083bf64a4a39c51587a31dc
+    page: 42
+    quote: Input voltage on FT and FTf pins V SS − 0.3 V DDIOx + 4.0
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: STM32G030 (FT pins)
+  match: STM32G030
+  verified: true
+  pins: ^P[A-F]\d
+  supply: ^VDD
+  vmin: -0.3
+  vmax_vdd: 4.0
+  source: STM32G030x6/x8 DS12991, Table 18 Voltage characteristics
+  cite:
+  - doc: stm32g030f6.pdf
+    sha256: bd4d70f72b2e82c5965a2b92ef3b9c96ad48c0ecdf195cf900d14cd47bff09f5
+    page: 40
+    quote: Input voltage on FT_xx - 0.3 V DD + 4.0
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: STM32G031 (FT pins)
+  match: STM32G031
+  verified: true
+  pins: ^(P[A-F]\d|SYS_SW)
+  supply: ^VDD
+  vmin: -0.3
+  vmax_vdd: 4.0
+  source: STM32G031x4/x6/x8 DS12992, Table 18 Voltage characteristics
+  cite:
+  - doc: g031.pdf
+    sha256: 0e25cbbf2cd173845545b61b91a9a7011724b4e5bd7b00498176129d48684e99
+    page: 45
+    quote: Input voltage on FT_xx -0.3 V DD + 4.0
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: SN74AHC05
+  match: ^(SN)?74AHC05
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHC05 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahc05.pdf
+    sha256: 64df285810ba22ba4c9018fcb9b33a305e17a2a861cc80370e0b064ecb74040a
+    page: 2
+    quote: Input voltage range, VI (see Note 1) –0.5 V to 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHC138
+  match: ^(SN)?74AHC138
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHC138 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahc138.pdf
+    sha256: 92a9e29060495cb20c3a4eb370753eb773b64ce7981a959de9d033cac1d916a7
+    page: 5
+    quote: VI (2) Input voltage range −0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHC1G04
+  match: ^(SN)?74AHC1G04
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHC1G04 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahc1g04.pdf
+    sha256: 880e5b3989b61227f74cd60e621aeee851648e34e701fb012a0ff97983ed4bb8
+    page: 4
+    quote: VI Input voltage range(2) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHC244
+  match: ^(SN)?74AHC244
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHC244 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahc244.pdf
+    sha256: 0242fba6c663d7d4e4a06d7e69704b676bfef5192d5a1012dd93b0a8393db9a9
+    page: 5
+    quote: VI Input voltage (2) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHC273
+  match: ^(SN)?74AHC273
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHC273 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahc273.pdf
+    sha256: 5431ccf466c17a392356ad26de68a912c6fc6538d55d4418d4ddb6be21314b0a
+    page: 4
+    quote: VI Input voltage range(2) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHC374
+  match: ^(SN)?74AHC374
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHC374 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahc374.pdf
+    sha256: 9ecbe6a9fadf3932c29f4b5bb24c31d7eaa97ff7c4ff31db57b86f44e050c43b
+    page: 4
+    quote: VI Input voltage range(2) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHCT244
+  match: ^(SN)?74AHCT244
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHCT244 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahct244.pdf
+    sha256: 23be049aaa49559a91367f84eed4b2f4cde6e6f6932e683ea2bd645d0dec6c28
+    page: 4
+    quote: VI Input voltage range(2) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHCT273
+  match: ^(SN)?74AHCT273
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHCT273 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahct273.pdf
+    sha256: 11faeaf14e80d50587f62bc0a2b61b97edd17b253430ed5c9fc0ecb245549d41
+    page: 4
+    quote: VI Input voltage range(2) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74AHCT595
+  match: ^(SN)?74AHCT595
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74AHCT595 datasheet, Absolute Maximum Ratings (VI)
+  cite:
+  - doc: sn74ahct595.pdf
+    sha256: 95659ecdcc6ac16c570e840d53d622c7f83fc0a25059bb0da34bed0535b121e8
+    page: 4
+    quote: VI Input voltage range(2) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74CBTLV16212
+  match: 74CBTLV16212
+  verified: true
+  vmin: -0.5
+  vmax: 4.6
+  source: TI SN74CBTLV16212 SCDS050, Absolute Maximum Ratings
+  cite:
+  - doc: sn74cbtlv16212.pdf
+    sha256: a4c71d087fdef1e220c201a1608c4e733924aee1347da51cf18486afde5ff0a1
+    page: 4
+    quote: Input voltage range, VI (see Note 1) −0.5 V to 4.6 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74CB3T3245
+  match: 74CB3T3245
+  verified: true
+  vmin: -0.5
+  vmax: 7.0
+  source: TI SN74CB3T3245 SCDS136, Absolute Maximum Ratings
+  cite:
+  - doc: sn74cb3t3245.pdf
+    sha256: be4bb22c4c00331973dca3f2f962f5d4ea4bad393a34b7b812cfae4a09bb6eea
+    page: 4
+    quote: VI/O Switch I/O voltage(2) (3) (4) –0.5 7 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74LS245
+  match: ^(SN)?74LS245
+  verified: true
+  vmax: 7.0
+  source: TI SN74LS245 SDLS146, Absolute Maximum Ratings
+  cite:
+  - doc: sn74ls245.pdf
+    sha256: 4303dec02451c832ff5e17495e1a2cea2a3a988868c6b9490349e39ec463eebc
+    page: 4
+    quote: VI Input voltage (1) 7 V
+    fields:
+    - vmax
+- mpn: SN74LVC245A
+  match: ^(SN)?74LVC245A
+  verified: true
+  vmin: -0.5
+  vmax: 6.5
+  source: TI SN74LVC245A SCAS218, Absolute Maximum Ratings
+  cite:
+  - doc: sn74lvc245a.pdf
+    sha256: ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3
+    page: 4
+    quote: VI Input voltage range (2) –0.5 6.5 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74LVC1G08
+  match: ^(SN)?74LVC1G08
+  verified: true
+  pintypes: input
+  vmin: -0.5
+  vmax: 6.5
+  source: TI SN74LVC1G08 SCES217, Absolute Maximum Ratings
+  cite:
+  - doc: sn74lvc1g08.pdf
+    sha256: f30261db71823981aa9057ced4846f1dee467d4ce67998e5a3366872a79f688d
+    page: 4
+    quote: VI Input voltage range(2) –0.5 6.5 V
+    fields:
+    - vmin
+    - vmax
+- mpn: SN74LVC8T245
+  match: ^(SN)?74LVC8T245
+  verified: true
+  vmin: -0.5
+  vmax: 6.5
+  source: TI SN74LVC8T245 SCES584, Absolute Maximum Ratings
+  cite:
+  - doc: sn74lvc8t245.pdf
+    sha256: a2493b65471e5c873e3f71afbe152ac4d0f9233045c5ec289bda602a4b453cf0
+    page: 6
+    quote: VI/O ports (B port) –0.5 6.5
+    fields:
+    - vmin
+    - vmax
+- mpn: CD74HC4067
+  match: ^CD74HC(T)?4067
+  verified: true
+  supply: ^VCC$
+  vmin: -0.5
+  vmax_vdd: 0.5
+  source: 'TI CD74HC4067 SCHS209, Absolute Maximum Ratings: the input diode current rating holds only
+    between -0.5 V and VCC+0.5 V'
+  cite:
+  - doc: cd74hc4067.pdf
+    sha256: be0091cbec79831f5ced7d5d42016eadb88b8fad431a1d460a94b9f4f98a421d
+    page: 5
+    quote: IIK DC input diode current For VI < -0.5V or VI > VCC + 0.5V
+    fields:
+    - vmin
+    - vmax_vdd
+- mpn: INA233 (bus pins)
+  match: ^INA233
+  verified: true
+  pins: ^(SDA|SCL)$
+  vmin: -0.3
+  vmax: 6.0
+  source: TI INA233 SBOS790, 7.1 Absolute Maximum Ratings
+  cite:
+  - doc: ina233.pdf
+    sha256: 33ccbb5b59f20c2907a64c0a23881cd6baeac434c9482b2e16572b89a5ca0845
+    page: 4
+    quote: VSDA SDA, SCL pin voltages GND – 0.3 6 V
+    fields:
+    - vmin
+    - vmax
+- mpn: INA233 (address pins)
+  match: ^INA233
+  verified: true
+  pins: ^A[01]$
+  vmin: -0.3
+  vmax: 6.0
+  source: TI INA233 SBOS790, 7.1 Absolute Maximum Ratings
+  cite:
+  - doc: ina233.pdf
+    sha256: 33ccbb5b59f20c2907a64c0a23881cd6baeac434c9482b2e16572b89a5ca0845
+    page: 4
+    quote: VA A0, A1 pin voltages GND – 0.3 6 V
+    fields:
+    - vmin
+    - vmax
+- mpn: INA233 (VBUS)
+  match: ^INA233
+  verified: true
+  pins: ^V ?BUS$
+  vmin: -0.3
+  vmax: 40.0
+  source: TI INA233 SBOS790, 7.1 Absolute Maximum Ratings
+  cite:
+  - doc: ina233.pdf
+    sha256: 33ccbb5b59f20c2907a64c0a23881cd6baeac434c9482b2e16572b89a5ca0845
+    page: 4
+    quote: VVBUS VBUS pin voltage –0.3 40 V
+    fields:
+    - vmin
+    - vmax
+- mpn: TCA9555
+  match: ^TCA9555
+  verified: true
+  vmin: -0.5
+  vmax: 6.0
+  source: TI TCA9555 SCPS200, Absolute Maximum Ratings
+  cite:
+  - doc: tca9555.pdf
+    sha256: 9706a3ccbf0bc915387949ab82bc0020a1a5bfdd67d8f51c4605a8d4b16bb231
+    page: 5
+    quote: VI Input voltage (2) –0.5 6 V
+    fields:
+    - vmin
+    - vmax
+- mpn: CY7C68013A (EZ-USB FX2LP)
+  match: ^CY7C6801[345]
+  verified: true
+  pins: ^(P[A-E]\d|SCL|SDA|WAKEUP|RDY|CTL|IFCLK|CLKOUT|~?RESET|INT)
+  vmax: 5.25
+  source: Cypress CY7C68013A 38-08032, Absolute Maximum Ratings
+  cite:
+  - doc: fx2.pdf
+    sha256: 67d39521d4c859392bdf5cccf27ef6c4eb172430a7c52cb17e0d26b66904905b
+    page: 42
+    quote: DC input voltage to any input pin[27] ........................... 5.25 V
+    fields:
+    - vmax
+diodes:
+- mpn: 1N914 / 1N916 / 1N4148 (and SMD LL4148, 1N4148W)
+  match: ^(1N914|1N916|1N4148|LL4148|1N4448|FDLL4148|1N4148W)
+  verified: true
+  vf_max: 1.0
+  if_ma: 10
+  source: onsemi 1N914/D Rev. 6, Electrical Characteristics
+  cite:
+  - doc: 1n914.pdf
+    sha256: c37773162d772732439557c9cbd2ae18f70b64c31c37ce132b57d8b172d2ee60
+    page: 2
+    quote: 914 / 916 / 4148 IF = 10 mA 1.0 V
+    fields:
+    - vf_max
+    - if_ma

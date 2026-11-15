@@ -637,6 +637,122 @@ boards:
       catch. J7's supply, /3.3V, has no capacitor of 10 uF or more; v8 feeds
       J7 from its own filtered rail with 47 uF on it and is clean. The blind and swept fields are kept as the
       record.
+- id: smart-lcc
+  url: https://github.com/magnusnordlander/smart-lcc
+  commit: 8f4f0c26a3d17ff0c846170c0741dc469ed158e7
+  licence: CERN-OHL-P-2.0
+  rev_a: {name: Rev A, commit: 0da2e0994198e0421076b9e808ffcb825b447d44,
+          sch: pcb/smart-lcc/smart-lcc.sch, pcb: pcb/smart-lcc/smart-lcc.kicad_pcb}
+  rev_b: {name: Rev B, commit: 8a939a5f3801481efa9ddee81d55864d9bed8a62,
+          sch: pcb/smart-lcc/smart-lcc.sch, pcb: pcb/smart-lcc/smart-lcc.kicad_pcb}
+  source: pcb/errata.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
+  note: >-
+    Each revision is a commit ("Added Mk 1 manufacturing data", "Rev B as
+    sent to manufacturing"); the licence is pcb/LICENSE.
+  defects:
+  - id: smart-lcc-1
+    summary: auxiliary UART RX and TX crossed the wrong way
+    source_quote: "Aux RX and TX should be flipped"
+    fault_class: SCH (signal direction)
+    blind: missed
+    verdict: missed
+    follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
+  - id: smart-lcc-2
+    summary: no zener/diode protection on the RX and TX ports
+    source_quote: "Add Zeners to RX, and diodes to TX (primary and auxilliary) to protect those ports from burning out accidentally"
+    fault_class: SCH (port protection)
+    blind: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: offboard_input_unprotected, net: TX_TO_CONTROL_BOARD}
+    follow_up: "check_esd counting a bare zener to ground as a port clamp, seeded from a training board"
+    note: >-
+      Swept with check_esd (#1089): rev A's RX_FROM_AUX, TX_TO_AUX,
+      RX_FROM_CONTROL_BOARD_5V and TX_TO_CONTROL_BOARD are esd_unclamped, but
+      so are they on rev B, whose fix is four Device:D_Zener_Small parts
+      (D5-D8) with no part number, which CLAMP_RE does not read as clamps.
+      A finding the fix leaves standing isn't a catch. Swept blind as a
+      holdout board (round 1), then moved here: netlist_audit rule 24's
+      offboard_input_unprotected (TX_TO_CONTROL_BOARD on J1, a cable that
+      also carries +12V, straight onto U1's TX pin) was written knowing this
+      defect, and rev B's zeners D5-D8 count as its clamps, so the catch is
+      a training catch. The blind and swept fields are kept as the record.
+- id: fc980c
+  url: https://github.com/wlhlm/fc980c-controller
+  commit: 6e5bdc90e22744e33c552bb7725e03fd9a6de9f5
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: rev1, sch: rev1/fc980c-controller.kicad_sch, pcb: rev1/fc980c-controller.kicad_pcb,
+          cpl: rev1/jlcpcb/production_files/CPL-fc980c-controller.csv}
+  rev_b: {name: rev2, sch: rev2/fc980c-controller.kicad_sch, pcb: rev2/fc980c-controller.kicad_pcb,
+          cpl: rev2/jlcpcb/production_files/CPL-fc980c-controller.csv}
+  source: README.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
+  note: The licence is rev1/LICENSE.txt and the README's "CERN OHL-S v2".
+  defects:
+  - id: fc980c-1
+    summary: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13
+    source_quote: "SWDIO has been routed to the wrong pin on the MCU (PA15 instead of PA13)"
+    fault_class: SCH (pin function vs datasheet)
+    blind: missed
+    verdict: missed
+    follow_up: "SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070)"
+  - id: fc980c-2
+    summary: KEY_STATE open-collector line has no 5V pull-up
+    source_quote: "the KEY_STATE pin is missing a 5V pull-up resistor"
+    fault_class: SCH (missing pull-up)
+    blind: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: offboard_input_floating, net: KEY_STATE}
+    follow_up: "an off-board control input left floating needs a stiff pull (#1079)"
+    note: >-
+      Swept blind as a holdout board (round 1), then moved here: netlist_audit
+      rule 24's offboard_input_floating (KEY_STATE on J3, a cable that brings
+      +5V, read by the 3.3 V STM32 with no pull) was written knowing this
+      defect, so its catch is a training catch. The blind and swept fields are
+      kept as the record.
+- id: zxdiag-v11
+  url: https://github.com/derekfountain/zx-spectrum-diagnostics
+  commit: 1d701d1ba594a27bab07d94cc576350a4e535c09
+  licence: GPL-3.0
+  rev_a: {name: v1.1, commit: a6d874e92e14834dd6f81a66c2ae44a377eacba6, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
+  rev_b: {name: v1.2, commit: 1d701d1ba594a27bab07d94cc576350a4e535c09, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
+  source: pcb/errata.txt
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  defects:
+  - id: zxdiag-v11-1
+    summary: /IORQ not connected to the Pico
+    source_quote: "Missing off /IORQ was a mistake."
+    fault_class: SCH (missing connection)
+    blind: missed
+    verdict: missed
+    follow_up: "a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137)"
+  - id: zxdiag-v11-2
+    summary: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V
+    source_quote: "Due to the standard 1N4148 diodes I used for clamping the -5V input to the Pico, I have the possibility of -0.7V going into the ADC. The minimum allowed by the Pico is -0.5V."
+    fault_class: SCH (input beyond absolute maximum)
+    blind: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: offboard_input_clamp, net: MIN5V_DIV}
+    follow_up: "a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC)"
+    note: >-
+      Swept blind as a holdout board (round 2), then moved here with
+      zxdiag-v11-3: netlist_audit rule 24's offboard_input_clamp (D103's 1N4148
+      vf_max of 1.0 V lets MIN5V_DIV to -1 V against the RP2040's -0.5 V) was
+      written knowing this defect, so its catch is a training catch. The blind
+      and swept fields are kept as the record.
+  - id: zxdiag-v11-3
+    summary: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference
+    source_quote: "The top of the -5V voltage divider comes from +5V, which is from the system under test and hence isn't reliable."
+    fault_class: SCH (reference from an unreliable rail)
+    blind: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: offboard_input_rail_absent, net: MIN5V_DIV}
+    follow_up: "a measurement divider whose reference comes from an off-board rail"
+    note: >-
+      Moved with zxdiag-v11-2: rule 24's offboard_input_rail_absent solves
+      the divider with the system-under-test +5V gone and finds -5 V at the
+      Pico pin. zxdiag-v10 (v1.0 and v1.1, still holdout) carries the same
+      divider unfixed; rule 24 flags it there too, on both revisions.
 holdout:
 - id: netscore-main
   url: https://github.com/arcticlula/Netscore
@@ -739,67 +855,6 @@ holdout:
       and Rev.B joins it to U2 (SDRAM) A12. The finding is one of 33
       dangling_net warnings on Rev.A (32 stay on Rev.B, PG3 among them), so
       the flow names the fault, but a reader has to pick it out of the list.
-- id: smart-lcc
-  url: https://github.com/magnusnordlander/smart-lcc
-  commit: 8f4f0c26a3d17ff0c846170c0741dc469ed158e7
-  licence: CERN-OHL-P-2.0
-  rev_a: {name: Rev A, commit: 0da2e0994198e0421076b9e808ffcb825b447d44,
-          sch: pcb/smart-lcc/smart-lcc.sch, pcb: pcb/smart-lcc/smart-lcc.kicad_pcb}
-  rev_b: {name: Rev B, commit: 8a939a5f3801481efa9ddee81d55864d9bed8a62,
-          sch: pcb/smart-lcc/smart-lcc.sch, pcb: pcb/smart-lcc/smart-lcc.kicad_pcb}
-  source: pcb/errata.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
-  note: >-
-    Each revision is a commit ("Added Mk 1 manufacturing data", "Rev B as
-    sent to manufacturing"); the licence is pcb/LICENSE.
-  defects:
-  - id: smart-lcc-1
-    summary: auxiliary UART RX and TX crossed the wrong way
-    source_quote: "Aux RX and TX should be flipped"
-    fault_class: SCH (signal direction)
-    blind: missed
-    verdict: missed
-    follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
-  - id: smart-lcc-2
-    summary: no zener/diode protection on the RX and TX ports
-    source_quote: "Add Zeners to RX, and diodes to TX (primary and auxilliary) to protect those ports from burning out accidentally"
-    fault_class: SCH (port protection)
-    blind: missed
-    verdict: missed
-    follow_up: "check_esd counting a bare zener to ground as a port clamp, seeded from a training board"
-    note: >-
-      Swept with check_esd (#1089): rev A's RX_FROM_AUX, TX_TO_AUX,
-      RX_FROM_CONTROL_BOARD_5V and TX_TO_CONTROL_BOARD are esd_unclamped, but
-      so are they on rev B, whose fix is four Device:D_Zener_Small parts
-      (D5-D8) with no part number, which CLAMP_RE does not read as clamps.
-      A finding the fix leaves standing isn't a catch, so this stays missed;
-      a zener rule seeded here would move the board to training.
-- id: fc980c
-  url: https://github.com/wlhlm/fc980c-controller
-  commit: 6e5bdc90e22744e33c552bb7725e03fd9a6de9f5
-  licence: CERN-OHL-S-2.0
-  rev_a: {name: rev1, sch: rev1/fc980c-controller.kicad_sch, pcb: rev1/fc980c-controller.kicad_pcb,
-          cpl: rev1/jlcpcb/production_files/CPL-fc980c-controller.csv}
-  rev_b: {name: rev2, sch: rev2/fc980c-controller.kicad_sch, pcb: rev2/fc980c-controller.kicad_pcb,
-          cpl: rev2/jlcpcb/production_files/CPL-fc980c-controller.csv}
-  source: README.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
-  note: The licence is rev1/LICENSE.txt and the README's "CERN OHL-S v2".
-  defects:
-  - id: fc980c-1
-    summary: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13
-    source_quote: "SWDIO has been routed to the wrong pin on the MCU (PA15 instead of PA13)"
-    fault_class: SCH (pin function vs datasheet)
-    blind: missed
-    verdict: missed
-    follow_up: "SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070)"
-  - id: fc980c-2
-    summary: KEY_STATE open-collector line has no 5V pull-up
-    source_quote: "the KEY_STATE pin is missing a 5V pull-up resistor"
-    fault_class: SCH (missing pull-up)
-    blind: missed
-    verdict: missed
-    follow_up: "an off-board control input left floating needs a stiff pull (#1079)"
 - id: lofence
   url: https://github.com/kiu/lofence
   commit: 9a1d09bd57b84be4a4ec193df7fd8c69c1f981a8
@@ -882,36 +937,6 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint"
-- id: zxdiag-v11
-  url: https://github.com/derekfountain/zx-spectrum-diagnostics
-  commit: 1d701d1ba594a27bab07d94cc576350a4e535c09
-  licence: GPL-3.0
-  rev_a: {name: v1.1, commit: a6d874e92e14834dd6f81a66c2ae44a377eacba6, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
-  rev_b: {name: v1.2, commit: 1d701d1ba594a27bab07d94cc576350a4e535c09, sch: pcb/zx-spectrum-diagnostics.kicad_sch, pcb: pcb/zx-spectrum-diagnostics.kicad_pcb}
-  source: pcb/errata.txt
-  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
-  defects:
-  - id: zxdiag-v11-1
-    summary: /IORQ not connected to the Pico
-    source_quote: "Missing off /IORQ was a mistake."
-    fault_class: SCH (missing connection)
-    blind: missed
-    verdict: missed
-    follow_up: "a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico"
-  - id: zxdiag-v11-2
-    summary: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V
-    source_quote: "Due to the standard 1N4148 diodes I used for clamping the -5V input to the Pico, I have the possibility of -0.7V going into the ADC. The minimum allowed by the Pico is -0.5V."
-    fault_class: SCH (input beyond absolute maximum)
-    blind: missed
-    verdict: missed
-    follow_up: "a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC)"
-  - id: zxdiag-v11-3
-    summary: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference
-    source_quote: "The top of the -5V voltage divider comes from +5V, which is from the system under test and hence isn't reliable."
-    fault_class: SCH (reference from an unreliable rail)
-    blind: missed
-    verdict: missed
-    follow_up: "a measurement divider whose reference comes from an off-board rail"
 - id: pico-if1-v10
   url: https://github.com/derekfountain/zx-spectrum-pico-interface-one
   commit: 7d1be0cb53fe19f4c43f2c90e31ed24b3ee89d19

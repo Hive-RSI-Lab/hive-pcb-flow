@@ -15,11 +15,11 @@ only for the round's first reading: each round is swept once.
 
 ## Count
 
-- Training: 38 of 44 caught (38 caught, 2 missed, 4 not_static).
-- Holdout round 1, blind: 1 of 10 caught (1 caught, 9 missed).
-- Holdout round 1, with the rules written since: 3 of 10 caught (3 caught, 7 missed).
-- Holdout round 2, blind: 1 of 26 caught (1 caught, 25 missed).
-- Holdout round 2, with the rules written since: 4 of 26 caught (4 caught, 22 missed).
+- Training: 42 of 51 caught (42 caught, 5 missed, 4 not_static).
+- Holdout round 1, blind: 1 of 6 caught (1 caught, 5 missed).
+- Holdout round 1, with the rules written since: 3 of 6 caught (3 caught, 3 missed).
+- Holdout round 2, blind: 1 of 23 caught (1 caught, 22 missed).
+- Holdout round 2, with the rules written since: 4 of 23 caught (4 caught, 19 missed).
 
 ## A new holdout round
 
@@ -187,6 +187,34 @@ round, pinned and swept before those rules are:
 |---|---|---|---|
 | identidem-1: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it | PI (local decoupling) | caught on rev A, gone on rev B (`check_pinouts` pulsed_load_no_bulk) | Swept blind as a holdout board (missed, with the flow at db43cb8), then moved here: check_pinouts' pulsed_load_no_bulk (#1090) was seeded from makers' supply notes for pulsed loads (Garmin's LIDAR-Lite, SIMCom's SIM800), but written knowing this defect, so its catch is a training catch. J7's supply, /3.3V, has no capacitor of 10 uF or more; v8 feeds J7 from its own filtered rail with 47 uF on it and is clean. The blind and swept fields are kept as the record. |
 
+### smart-lcc: Rev A -> Rev B
+
+[https://github.com/magnusnordlander/smart-lcc](https://github.com/magnusnordlander/smart-lcc) at `8f4f0c26a3d1`, CERN-OHL-P-2.0; errata `pcb/errata.md`.
+
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| smart-lcc-1: auxiliary UART RX and TX crossed the wrong way | SCH (signal direction) | missed | off-board and standard connector pinouts, with the mate stated (#1027) |
+| smart-lcc-2: no zener/diode protection on the RX and TX ports | SCH (port protection) | caught (not run here) (`netlist_audit` offboard_input_unprotected) | check_esd counting a bare zener to ground as a port clamp, seeded from a training board |
+
+### fc980c: rev1 -> rev2
+
+[https://github.com/wlhlm/fc980c-controller](https://github.com/wlhlm/fc980c-controller) at `6e5bdc90e227`, CERN-OHL-S-2.0; errata `README.md`.
+
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| fc980c-1: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13 | SCH (pin function vs datasheet) | missed | SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070) |
+| fc980c-2: KEY_STATE open-collector line has no 5V pull-up | SCH (missing pull-up) | caught (not run here) (`netlist_audit` offboard_input_floating) | an off-board control input left floating needs a stiff pull (#1079) |
+
+### zxdiag-v11: v1.1 -> v1.2
+
+[https://github.com/derekfountain/zx-spectrum-diagnostics](https://github.com/derekfountain/zx-spectrum-diagnostics) at `1d701d1ba594`, GPL-3.0; errata `pcb/errata.txt`.
+
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | missed | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137) |
+| zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | caught (not run here) (`netlist_audit` offboard_input_clamp) | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
+| zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | caught (not run here) (`netlist_audit` offboard_input_rail_absent) | a measurement divider whose reference comes from an off-board rail |
+
 ## Holdout round 1
 
 ### netscore-main: main-board v3.0 -> main-board v3.1
@@ -214,24 +242,6 @@ round, pinned and swept before those rules are:
 |---|---|---|---|---|
 | cmm2-1: no mounting holes | MECH (mounting) | missed | missed | a board with no mounting holes (#1088) |
 | cmm2-2: SDRAM address line A12 not connected | SCH (net connectivity) | caught | caught on rev A, gone on rev B (`netlist_audit` dangling_net) | PG2 is the STM32H743's FMC_A12. Rev.A labels it on U1 pin 106 alone, and Rev.B joins it to U2 (SDRAM) A12. The finding is one of 33 dangling_net warnings on Rev.A (32 stay on Rev.B, PG3 among them), so the flow names the fault, but a reader has to pick it out of the list. |
-
-### smart-lcc: Rev A -> Rev B
-
-[https://github.com/magnusnordlander/smart-lcc](https://github.com/magnusnordlander/smart-lcc) at `8f4f0c26a3d1`, CERN-OHL-P-2.0; errata `pcb/errata.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
-
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| smart-lcc-1: auxiliary UART RX and TX crossed the wrong way | SCH (signal direction) | missed | missed | off-board and standard connector pinouts, with the mate stated (#1027) |
-| smart-lcc-2: no zener/diode protection on the RX and TX ports | SCH (port protection) | missed | missed | check_esd counting a bare zener to ground as a port clamp, seeded from a training board |
-
-### fc980c: rev1 -> rev2
-
-[https://github.com/wlhlm/fc980c-controller](https://github.com/wlhlm/fc980c-controller) at `6e5bdc90e227`, CERN-OHL-S-2.0; errata `README.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
-
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| fc980c-1: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13 | SCH (pin function vs datasheet) | missed | missed | SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070) |
-| fc980c-2: KEY_STATE open-collector line has no 5V pull-up | SCH (missing pull-up) | missed | missed | an off-board control input left floating needs a stiff pull (#1079) |
 
 ### lofence: rev_a -> rev_b
 
@@ -268,16 +278,6 @@ round, pinned and swept before those rules are:
 |---|---|---|---|---|
 | zxdiag-v10-1: Edge connector footprint has its rows about 2.5 mm apart instead of 5 mm | LIB (wrong footprint geometry) | missed | missed | an edge connector's row spacing against the mating connector's |
 | zxdiag-v10-2: Edge connector header holes too small for the pins | PCB (drill size) | missed | missed | check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint |
-
-### zxdiag-v11: v1.1 -> v1.2
-
-[https://github.com/derekfountain/zx-spectrum-diagnostics](https://github.com/derekfountain/zx-spectrum-diagnostics) at `1d701d1ba594`, GPL-3.0; errata `pcb/errata.txt`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
-
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | missed | missed | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico |
-| zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | missed | missed | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
-| zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | missed | missed | a measurement divider whose reference comes from an off-board rail |
 
 ### pico-if1-v10: v1.0 -> v1.1
 
