@@ -616,3 +616,76 @@ def test_mounting_hole_circle_is_not_the_outline(tmp_path):
     p.write_text(src.replace(lines, "").replace(window, ""), encoding="utf-8")
     assert geom.BoardGeom.from_file(p).outline.area == pytest.approx(
         math.pi * 4, rel=0.01)
+
+
+# #1165: easyeda2kicad's custom pads are `(gr_poly (pts ...) (width 0.1))` with
+# no fill token, and KiCad fills them in a KiCad 5-format file. A 2 x 2 mm
+# square poly on a 0.2 mm anchor, stroked 0.1 mm.
+_POLY_PAD = ('(pad "1" smd custom (at 0 0) (size 0.2 0.2) (layers "F.Cu")'
+             ' (net "A") (options (clearance outline) (anchor rect))'
+             ' (primitives (gr_poly (pts (xy -1 -1) (xy 1 -1) (xy 1 1)'
+             ' (xy -1 1)) (width 0.1){fill})))')
+_FP_POLY = ('(fp_poly (pts (xy 3 -1) (xy 5 -1) (xy 5 1) (xy 3 1))'
+            ' (layer "F.Cu") (width 0.1){fill})')
+
+
+def _fill_board(tmp_path, head, version, fill="", extra=""):
+    src = (f'({head} {version}(generator "test")\n'
+           '  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))\n'
+           '  (footprint "t:U" (at 10 10) (layer "F.Cu")\n'
+           '    (property "Reference" "U1" (at 0 0))\n'
+           f'    {_POLY_PAD.format(fill=fill)}\n'
+           f'    {_FP_POLY.format(fill=fill)})\n'
+           f'{extra})\n')
+    p = tmp_path / "fill.kicad_pcb"
+    p.write_text(src, encoding="utf-8")
+    return geom.BoardGeom.from_file(p)
+
+
+@pytest.mark.parametrize("version", ["", "(version 20171130) ", "(version 20210108) "])
+def test_legacy_fill_less_poly_pad_is_solid(tmp_path, version):
+    """#1165, the planted fault: in a KiCad 5-format file (no version, or one
+    up to 20210108) a stroked poly pad primitive with no fill token was read as
+    a 0.1 mm ring round an empty middle; KiCad fills it, so it is solid."""
+    bg = _fill_board(tmp_path, "kicad_pcb", version)
+    assert bg.legacy_fill
+    pad = bg.pads_of(ref="U1")[0]
+    assert pad.poly.area == pytest.approx(2.1 ** 2, rel=0.01)
+    assert pad.poly.contains(geom.Point(10.5, 10.5))
+    fpc = [c["shape"] for c in bg.fp_copper if c["ref"] == "U1"]
+    assert fpc and fpc[0].area == pytest.approx(2.1 ** 2, rel=0.01)
+
+
+def test_fill_less_file_is_legacy_whatever_its_version(tmp_path):
+    """A file with no fill token anywhere is read the old way too: its
+    writer never says fill, so leaving one out does not mean an outline."""
+    assert _fill_board(tmp_path, "kicad_pcb", "(version 20260206) ").legacy_fill
+    assert geom.legacy_fill([geom.sexpdata.Symbol("module"), "x"])
+
+
+@pytest.mark.parametrize("fill,extra", [
+    (" (fill none)", ""),
+    (" (fill no)", ""),
+    # a modern file that writes fill tokens elsewhere: an absent one is no fill
+    ("", '  (gr_rect (start 0 0) (end 20 20) (stroke (width 0.1)) (fill no)'
+         ' (layer "Edge.Cuts"))\n'),
+])
+def test_modern_unfilled_poly_pad_stays_outline(tmp_path, fill, extra):
+    """#1165, the quiet twin: in a file that writes fill tokens, a stroked
+    poly that says no fill, or leaves it out, is still the 0.1 mm ring."""
+    bg = _fill_board(tmp_path, "kicad_pcb", "(version 20260206) ", fill, extra)
+    assert not bg.legacy_fill
+    pad = bg.pads_of(ref="U1")[0]
+    ring = 2.1 ** 2 - 1.9 ** 2 + 0.2 * 0.2  # the stroke, and the anchor inside it
+    assert pad.poly.area == pytest.approx(ring, rel=0.02)
+    assert not pad.poly.contains(geom.Point(10.5, 10.5))
+    fpc = [c["shape"] for c in bg.fp_copper if c["ref"] == "U1"]
+    assert fpc and fpc[0].area < 1.0
+
+
+def test_legacy_fill_less_circle_stays_ring(tmp_path):
+    """KiCad 5 drew a stroked gr_circle with no fill as a ring, so a
+    legacy file keeps it one."""
+    n = geom.sexpdata.loads('(gr_circle (center 0 0) (end 1 0) (width 0.1))')
+    assert geom._copper_prim(n, legacy=True).area == pytest.approx(
+        math.pi * (1.05 ** 2 - 0.95 ** 2), rel=0.02)
