@@ -1003,6 +1003,93 @@ def test_live_a_net_that_fails_joins_again_first(kicad, tmp_path,
     assert _copper(fresh) == _copper(out / "work" / pcb.name)
 
 
+def _quarter_in(s, end):
+    """route_cleanup.Seg s with its `end` end ("a" or "b") moved a quarter
+    of the way along it."""
+    p, q = (s.a, s.b) if end == "b" else (s.b, s.a)
+    at = (round(p[0] + 0.75 * (q[0] - p[0]), 4),
+          round(p[1] + 0.75 * (q[1] - p[1]), 4))
+    return dataclasses.replace(s, **{end: at})
+
+
+def test_live_the_late_prune_folds_each_pass_into_the_ops(kicad, tmp_path,
+                                                          monkeypatch):
+    """#1140: what each re-prune after a refill finds goes into the ops.
+    A dead route of the run leaves its add op (trimmed), a dead board track
+    is removed (pruned), and a cut shortens a route's add op or moves a
+    board track's end (shortened), from where the track was before, also
+    when a later pass cuts it again or removes it. The replay makes the
+    work board. The peels are made up (the R6 job leaves none) and the gate
+    is left out (a made-up removal can split a net)."""
+    import route_cleanup
+    pcb = _copy(tmp_path, "kicad")
+    cu = list(geom.BoardGeom.from_file(pcb).copper_layers)
+    base = {s.uuid for s in route_cleanup.parse_items(pcb, cu)[0]}
+    real = pr._dangling
+    seen: list = []     # the board's tracks as each late pass found them
+    pick: dict = {}
+
+    def late(board, bg, nets, *, seed=None, cuts=None, **k):
+        if "adds" in k or seed is None:     # the first prune, _dead_on
+            return real(board, bg, nets, seed=seed, cuts=cuts, **k)
+        segs = {s.uuid: s for s in route_cleanup.parse_items(board, cu)[0]}
+        seen.append(segs)
+        if len(seen) == 1:
+            runs = sorted(u for u, s in segs.items()
+                          if u not in base and s.length > 0.2)
+            olds = sorted(u for u, s in segs.items()
+                          if u in base and s.net in nets and s.length > 1)
+            assert len(runs) >= 2 and len(olds) >= 3, (runs, olds)
+            pick.update(r1=runs[0], r2=runs[1], b1=olds[0], b2=olds[1],
+                        b3=olds[2])
+            for u in (pick["r1"], pick["b2"]):
+                cuts[u] = (segs[u], _quarter_in(segs[u], "b"))
+            return [pick["b1"]], []
+        if len(seen) == 2:
+            for u in (pick["r1"], pick["b3"]):
+                cuts[u] = (segs[u], _quarter_in(segs[u], "a"))
+            return [pick["r2"], pick["b2"]], []
+        return [], []
+    monkeypatch.setattr(pr, "_dangling", late)
+    monkeypatch.setattr(pr, "gates", lambda *a, **k: [])
+    out = tmp_path / "out"
+    assert pr.main(["--pcb", str(pcb), "--op", json.dumps(RENUMBER),
+                    "--out", str(out)]) == 0
+    p = _report(out)
+    assert p["status"] == "pass" and len(seen) == 3
+    first, last = seen[0], seen[1]
+    r1, r2, b1, b2, b3 = (pick[k] for k in ("r1", "r2", "b1", "b2", "b3"))
+
+    def ends(s):
+        return [pr._r(v) for q in (s.a, s.b) for v in q]
+    assert p["pruned"][-2:] == [b1, b2]
+    assert [(o["start"], o["end"]) for o in p["trimmed"]][-1:] \
+        == [(list(first[r2].a), list(first[r2].b))]
+    rows = {(r["uuid"], tuple(r["from"])): r["to"] for r in p["shortened"]}
+    assert (b2, tuple(ends(first[b2]))) not in rows      # cut, then gone
+    assert rows[(b3, tuple(ends(first[b3])))] \
+        == ends(_quarter_in(last[b3], "a"))
+    r1_now = _quarter_in(last[r1], "a")                  # cut twice
+    assert rows[("", tuple(ends(first[r1])))] == ends(r1_now)
+    ops = json.loads((out / pr.ROUTE_FILE).read_text(
+        encoding="utf-8"))["ops"]
+    assert {o["uuid"] for o in ops if o["op"] == "remove"} >= {b1, b2}
+    assert not any(o.get("uuid") == b2 for o in ops if o["op"] != "remove")
+    assert [o["which"] for o in ops if o.get("uuid") == b3] == ["start"]
+    adds = [(o["start"], o["end"]) for o in ops if o["op"] == "add_track"]
+    assert (list(r1_now.a), list(r1_now.b)) in adds
+    assert (list(first[r2].a), list(first[r2].b)) not in adds
+    work = out / "work" / pcb.name
+    now = {s.uuid: s for s in route_cleanup.parse_items(work, cu)[0]}
+    assert not {b1, b2, r2} & set(now)
+    assert (now[b3].a, now[b3].b) == (_quarter_in(last[b3], "a").a,
+                                      last[b3].b)
+    assert (now[r1].a, now[r1].b) == (r1_now.a, r1_now.b)
+    fresh = _copy(tmp_path, "fresh")
+    _replay_cmds(p, fresh)
+    assert _copper(fresh) == _copper(work)
+
+
 def test_live_a_board_changed_during_the_run_is_not_replaced(
         kicad, tmp_path, monkeypatch):
     pcb = _copy(tmp_path, "kicad")

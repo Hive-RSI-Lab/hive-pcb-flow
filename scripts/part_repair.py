@@ -1196,18 +1196,28 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
 
     # the refill reshapes the pours, so copper the prune kept for a pour
     # that no longer meets it is a dead end now: peel again on the
-    # refilled board, as DRC finds it, until nothing more goes (#1140)
-    area = gate_area()
-    late_nets = nets | pour_nets(area)
-    extra = late_nets - nets
-    late_anchors = anchors | (_dead_on(base, bg0, extra) if extra
-                              else set())
+    # refilled board, as DRC finds it, until nothing more goes (#1140).
+    # Each pass reads the pour nets of the area as it has grown; a pass
+    # after the last refill only checks, and names what is left.
+    seen = set(nets)
+    late_anchors = set(anchors)
     drop: set = set()
-    for _ in range(REPRUNE):
+    for npass in range(REPRUNE + 1):
+        area = gate_area()
+        late_nets = nets | pour_nets(area)
+        extra = late_nets - seen
+        if extra:
+            late_anchors |= _dead_on(base, bg0, extra)
+            seen |= extra
         late: dict = {}
         dead = _dangling(work, bg1, late_nets, seed=area,
                          anchors=late_anchors, cuts=late)[0]
         if not dead and not late:
+            break
+        if npass == REPRUNE:
+            payload["notes"].append(
+                f"after {REPRUNE} refills the prune still finds dead "
+                f"copper: {', '.join(sorted(set(dead) | set(late)))}")
             break
         step = [{"op": "remove", "uuid": u} for u in dead]
         for u, (was, new) in late.items():
@@ -1228,7 +1238,7 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                 moved.pop(u, None)
         drc1 = kc.run_drc(cli, work, refill=True, save_board=True)
         bg1 = geom.BoardGeom.from_file(work)
-        area = gate_area()
+    area = gate_area()
     payload["trimmed"] += [kept[i] for i in sorted(drop)]
     payload["shortened"] = [
         _cut_note(u, was.net, was.layer, (was.a, was.b), (new.a, new.b))

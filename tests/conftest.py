@@ -167,6 +167,7 @@ SLOW = {
     "tests/test_part_repair.py::test_live_rotate_and_flip_r6_rejoin_and_replay": _TOOLS,
     "tests/test_part_repair.py::test_live_a_join_that_must_push_other_nets_aside": _TOOLS,
     "tests/test_part_repair.py::test_live_a_worse_board_writes_nothing_and_names_why": _TOOLS,
+    "tests/test_part_repair.py::test_live_the_late_prune_folds_each_pass_into_the_ops": _TOOLS,
 }
 
 
