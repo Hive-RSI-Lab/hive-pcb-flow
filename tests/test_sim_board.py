@@ -41,6 +41,9 @@ BOARD = [
                              "7": ("/GATE_PULL", "IO7")}),
     ("R4", "470", "R_0402_1005Metric", {"1": ("+3V3", ""), "2": ("/SDA", "")}),
     ("R5", "4.7k", "R_0402_1005Metric", {"1": ("+3V3", ""), "2": ("/SCL", "")}),
+    # the bus's peer: it leaves the board here
+    ("J1", "Conn_01x02", "PinHeader_1x02_P2.54mm_Vertical",
+     {"1": ("/SDA", ""), "2": ("/SCL", "")}),
     ("R6", "22", "R_0402_1005Metric", {"1": ("/LED", ""), "2": ("/LED_A", "")}),
     ("D1", "red", "LED_0603_1608Metric", {"1": ("GND", "K"),
                                           "2": ("/LED_A", "A")}),
@@ -176,7 +179,8 @@ def test_board_model(tmp_path):
     assert d1["type"] == "led" and d1["a"] == "/LED_A"
     q1 = next(e for e in model["elems"] if e["ref"] == "Q1")
     assert q1["type"] == "pmos" and q1["roles"]["G"] == "/GATE"
-    assert {u["ref"] for u in model["unmodelled"]} == {"U1", "U2", "U3"}
+    assert {u["ref"] for u in model["unmodelled"]} == {"U1", "U2", "U3",
+                                                        "J1"}
     io, od = sim_board.io_nets(board, rails, model)
     assert io == {"/SDA": 3.3, "/SCL": 3.3, "/LED": 3.3, "/GATE_PULL": 3.3}
     assert "/EN" not in io and not od
@@ -770,8 +774,9 @@ def test_i2c_strap_pins_sharing_the_name(tmp_path):
     opts = {"i2c_cb_pf": None, "i2c_khz": 400}
     vios, facts = [], {}
     sim_board.i2c_findings(b, rails, model, opts, vios, [], facts)
-    assert sorted(v["net"] for v in vios
-                  if v["kind"] == "i2c_pullup_missing") == \
+    # one IC and no connector: a port with no peer, not judged (#1063)
+    assert vios == [] and facts["i2c"] == []
+    assert sorted(n for x in facts["i2c_no_peer"] for n in x["nets"]) == \
         ["/HUB_CFG_SEL0", "/HUB_NON_REM1"]
     vios = []
     sim_board.i2c_findings(b, rails, model, {**opts, "pin_modes":
@@ -794,12 +799,142 @@ def test_engine_pd_sink_fault_led(tmp_path, need_engine):
     (led,) = rep["leds"]
     # (3.3 - ~1.9) / (220 + 25 + RS), not (21 - ~2) / ...
     assert 4e-3 < led["current_a"]["io_high"] < 7e-3
-    for kind in ("led_overcurrent", "gpio_overcurrent", "resistor_overpower",
+    for kind in ("led_overcurrent", "resistor_overpower",
                  "i2c_pullup_missing"):
         assert _kinds(rep, kind) == [], kind
+    # 5.6 mA sourced is past the 4 mA IOH the CYPD3177's high level is
+    # specified at (reference/gpio_drive.yaml), not the flat 20 mA (#1063)
+    (g,) = {v["scenario"]: v for v in _kinds(rep, "gpio_overcurrent")
+            }.values()
+    assert g["refs"] == ["U101"] and g["limit_a"] == 0.004
+    assert "IOH" in g["msg"] and "002-25383" in g["msg"]
     (s,) = rep["io_supply"]
     assert (s["ref"], s["pins"], s["volts"]) == ("U101", ["23"], 3.3)
     cp = subprocess.run([sys.executable, str(SCRIPTS / "sim_board.py"),
                          "--net", str(net), "--io-supply", "U101"],
                         capture_output=True, text=True, timeout=300)
     assert cp.returncode == 2 and "want REF=PIN" in cp.stdout
+
+
+# --- #1063: per-pin drive limits, and an I2C bus needs a peer ------------
+
+def test_gpio_drive_table_rows_are_well_formed():
+    rows = sim_board.load_gpio_drive()
+    assert rows
+    for r in rows:
+        assert r["match"] and r["source"].strip()
+        assert isinstance(r.get("verified"), bool)
+        for k in ("ioh_a", "iol_a"):
+            assert r.get(k) is None or 0 < float(r[k]) <= 0.1
+
+
+DRIVE_BOARD = [
+    ("U1", "MCU", "QFN-24", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                             "3": ("/LED", "IO3")}),
+    ("R1", "1k", "R_0402_1005Metric", {"1": ("/LED", ""),
+                                       "2": ("/LED_A", "")}),
+    ("D1", "red", "LED_0603_1608Metric", {"1": ("GND", "K"),
+                                          "2": ("/LED_A", "A")})]
+
+
+def _drive_run(tmp_path, mcu, r_led):
+    """(gpio_overcurrent findings, unknowns) for an IC pin driving an LED
+    through r_led from 3.3 V."""
+    rows = [(r, mcu if r == "U1" else v, f,
+             p) if r != "R1" else (r, r_led, f, p)
+            for r, v, f, p in DRIVE_BOARD]
+    net = write_net(tmp_path / f"d{r_led}.net", rows)
+    out = net.with_suffix(".json")
+    subprocess.run([sys.executable, str(SCRIPTS / "sim_board.py"),
+                    "--net", str(net), "--out", str(out)],
+                   capture_output=True, text=True, timeout=300)
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    return _kinds(rep, "gpio_overcurrent"), rep["known_unknowns"]
+
+
+def test_gpio_limit_from_table_quiet_and_fault(tmp_path, need_engine):
+    # quiet: a CYPD3177 pin sourcing ~1.4 mA is inside its 4 mA IOH
+    got, unknowns = _drive_run(tmp_path, "CYPD3177-24LQXQ", "1k")
+    assert got == []
+    assert not any(u["what"] == "GPIO drive limit" for u in unknowns)
+    # fault kept: ~5.6 mA is past it, though under the flat 20 mA
+    got, _ = _drive_run(tmp_path, "CYPD3177-24LQXQ", "220")
+    (v,) = {x["scenario"]: x for x in got if x["scenario"] == "io_high"
+            }.values()
+    assert v["refs"] == ["U1"] and v["limit_a"] == 0.004
+    assert "IOH" in v["msg"]
+
+
+def test_gpio_limit_without_row_assumed_and_said(tmp_path, need_engine):
+    # no row: ~11 mA passes the flat 20 mA, and the report says it assumed
+    got, unknowns = _drive_run(tmp_path, "SOME_MCU", "100")
+    assert got == []
+    (u,) = [u for u in unknowns if u["what"] == "GPIO drive limit"]
+    assert u["ref"] == "U1" and "20 mA" in u["why"]
+    # fault kept: ~30 mA is still flagged against it
+    got, _ = _drive_run(tmp_path, "SOME_MCU", "22")
+    assert got and all(v["limit_source"] == "assumed" and "20 mA" in v["msg"]
+                       for v in got)
+
+
+def _i2c_board(tmp_path, extra, r_pull="2.2k"):
+    rows = [("U1", "SOC", "QFN-24", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                                     "3": ("/I2C0_SDA", "SDA"),
+                                     "4": ("/I2C0_SCL", "SCL")}),
+            ("R1", r_pull, "R_0402_1005Metric", {"1": ("+3V3", ""),
+                                                 "2": ("/I2C0_SDA", "")}),
+            ("R2", r_pull, "R_0402_1005Metric", {"1": ("+3V3", ""),
+                                                 "2": ("/I2C0_SCL", "")})]
+    b = sim_board.load_board(write_net(tmp_path / "i.net", rows + extra))
+    rails = sim_board.resolve_rails(
+        b, {}, {"voltages": [{"net": "+3V3", "voltage": 3.3}]}, None, {})
+    model = sim_board.build_model(b, {}, rails)
+    vios, unknowns, facts = [], [], {}
+    sim_board.i2c_findings(b, rails, model, {"i2c_cb_pf": None,
+                                             "i2c_khz": 400},
+                           vios, unknowns, facts)
+    return vios, unknowns, facts
+
+
+PEER = ("U2", "SENSOR", "DFN-8", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                                  "3": ("/I2C0_SDA", "SDA"),
+                                  "4": ("/I2C0_SCL", "SCL")})
+
+
+def test_i2c_one_ic_net_is_not_a_bus(tmp_path):
+    # quiet: an SoC port pulled up with nothing else on it, even with a
+    # pull-up too strong for a bus
+    vios, unknowns, facts = _i2c_board(tmp_path, [], "330")
+    assert vios == [] and facts["i2c"] == []
+    assert [x["ic"] for x in facts["i2c_no_peer"]] == ["U1", "U1"]
+    (u,) = [u for u in unknowns if u["what"] == "I2C port with no peer"]
+    assert u["ref"] == "U1" and "unused or off-board" in u["why"]
+    # and with no pull-up at all
+    rows = [PEER[:3] + ({"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                         "3": ("/X_SDA", "SDA")},)]
+    vios, _, _ = _i2c_board(tmp_path, rows)
+    assert [v for v in vios if v["net"] == "/X_SDA"] == []
+
+
+def test_i2c_bus_with_a_peer_still_judged(tmp_path):
+    # fault kept: a second IC makes it a bus, and 330 ohm is too strong
+    vios, _, facts = _i2c_board(tmp_path, [PEER], "330")
+    assert {v["kind"] for v in vios} == {"i2c_pullup_strong"}
+    assert facts["i2c_no_peer"] == []
+    # fault kept: a bus with a peer and no pull-up
+    rows = [PEER, ("U3", "SENSOR", "DFN-8", {
+        "1": ("+3V3", "VDD"), "2": ("GND", "GND"), "3": ("/B_SDA", "SDA")})]
+    rows[0] = PEER[:3] + ({**PEER[3], "5": ("/B_SDA", "SDA")},)
+    vios, _, _ = _i2c_board(tmp_path, rows)
+    assert [v["kind"] for v in vios if v["net"] == "/B_SDA"] == \
+        ["i2c_pullup_missing"]
+
+
+def test_i2c_off_board_bus_judged_with_capacitance_unknown(tmp_path):
+    j = ("J5", "Conn_01x04", "PinHeader_1x04", {"1": ("/I2C0_SDA", ""),
+                                                "2": ("/I2C0_SCL", "")})
+    vios, unknowns, facts = _i2c_board(tmp_path, [j], "330")
+    assert {v["kind"] for v in vios} == {"i2c_pullup_strong"}
+    assert all(r["off_board"] == ["J5"] for r in facts["i2c"])
+    assert any(u["what"] == "I2C bus capacitance off the board"
+               and "J5" in u["why"] for u in unknowns)
