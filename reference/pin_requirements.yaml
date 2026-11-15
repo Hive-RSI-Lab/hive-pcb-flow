@@ -17,14 +17,31 @@
 #           x2.2) unless min/max (base units, F/H/ohm) say otherwise.
 #           No value and no min/max: any part of the kind does.
 #   when    connected: only when `pin` is on a real net (an unused buck's
-#           SW_BK left open needs no inductor)
+#           SW_BK left open needs no inductor); undriven: also only when no
+#           pin of another part than a two-pin R/C/L is on `pin`'s net (a
+#           reference input fed from an ADC reference needs no divider)
+#   distinct  true: `pin` and `to` tied into one net is the part missing
+#           (AD8232 SW shorted to IAOUT has no second high-pass capacitor);
+#           without it a tie means there is nothing to span
+#   severity  error (default) | warning, when the part is missing
 #   source  where the datasheet says it (document, revision, table/section)
-# verified: false means typed from memory of the datasheet, not re-read.
+#   cite    [{doc, sha256, page, table, quote, fields}]: the quote is text
+#           on that page; fields the row's numbers it gives (value, min,
+#           max). `bin/hwde part_rows --verify` checks them (#1100).
+# verified: true means the datasheet was re-read for the part's rows. A
+# finding only a part without it makes goes under not_judged, never as a
+# fault. `bin/hwde part_rows PART --pdf FILE` drafts rows from "connect a
+# 0.1-uF capacitor between VBST and SW" sentences as verified: false.
 #
 # Errata corpus: minuet v3 shipped the MCF8316D with no capacitor drawn for
 # FB_BK; the +3.3V rail it sits on had caps, all drawn for other sheets'
 # parts. Fill this table from datasheet_extract's `pin_requirements` field
 # when a part's extraction gives one.
+#
+# Datasheet application circuits (#1158, rank 6 of the miss taxonomy):
+# healthmonitor HM-Rev1 shipped the AD8232 with SW tied to IAOUT (no 4.7 uF
+# second high-pass capacitor) and REFIN fed by one 10 M to the supply, its
+# lower resistor and capacitor wired to the supply instead of GND.
 
 parts:
   - mpn: MCF8316D
@@ -47,3 +64,92 @@ parts:
          source: "SLLSFX9A Table 10-1: X7R, buck-output rated (characterised at 22 uF; minuet's errata fits 1 uF with the buck unused)"}
       - {id: LBK, pin: SW_BK, to: FB_BK, kinds: [L, R], when: connected,
          source: "SLLSFX9A Table 10-1 and 7.3.3.2: buck inductor, or a resistor in resistor mode (< 10 mA)"}
+
+  - mpn: AD8232
+    match: '^AD8232'
+    verified: true   # ADI AD8232 Rev. A read 2026-11-14 (pin table, Figures 47, 55, 62, 64)
+    aliases: {GND_1: GND, GND_2: GND, VS: +VS, "+VS": +VS}
+    requires:
+      - id: C2
+        pin: SW
+        to: IAOUT
+        kinds: [C]
+        when: connected
+        distinct: true
+        source: >-
+          AD8232 Rev. A Table 3 pin 6: SW connects to the output of the
+          second high-pass filter; Figure 55: C2 from IAOUT to SW. Figure 62
+          (one-pole) leaves SW open, which the rule allows.
+        cite:
+          - {doc: ad8232.pdf, sha256: 7c205ac952614a6f5694451dcbd8f5c3943509b6b4f12c0331e21a0f2ee3ac76, page: 6, table: 'Pin Function Descriptions', quote: 'SW Fast Restore Switch Terminal. Connect this terminal to the output of the second high-pass filter.', fields: []}
+          - {doc: ad8232.pdf, sha256: 7c205ac952614a6f5694451dcbd8f5c3943509b6b4f12c0331e21a0f2ee3ac76, page: 21, table: 'Two-Pole High-Pass Filter', quote: 'Note that the right side of C2 connects to the SW terminal.', fields: []}
+      - id: R_REFIN_TOP
+        pin: REFIN
+        to: +VS
+        kinds: [R]
+        when: undriven
+        source: >-
+          AD8232 Rev. A Figure 47 and Application Circuits: REFIN is set by
+          a divider (two 10 M) unless driven from a reference
+        cite:
+          - &ad_div {doc: ad8232.pdf, sha256: 7c205ac952614a6f5694451dcbd8f5c3943509b6b4f12c0331e21a0f2ee3ac76, page: 17, table: '', quote: 'The reference voltage level is set at the REFIN pin. It can be set with a voltage divider or by driving the REFIN pin from some other point in the circuit', fields: []}
+          - &ad_two {doc: ad8232.pdf, sha256: 7c205ac952614a6f5694451dcbd8f5c3943509b6b4f12c0331e21a0f2ee3ac76, page: 24, table: '', quote: 'The schematic also shows two 10 MΩ resistors to set the midscale reference voltage.', fields: []}
+      - id: R_REFIN_BOT
+        pin: REFIN
+        to: GND
+        kinds: [R]
+        when: undriven
+        source: >-
+          AD8232 Rev. A Figure 47 and Application Circuits: the divider's
+          lower resistor, REFIN to GND
+        cite: [*ad_div, *ad_two]
+      - id: C_REFIN
+        pin: REFIN
+        to: GND
+        kinds: [C]
+        when: undriven
+        severity: warning
+        source: >-
+          AD8232 Rev. A Figure 47: a capacitor in parallel with the lower
+          divider resistor filters the reference
+        cite:
+          - {doc: ad8232.pdf, sha256: 7c205ac952614a6f5694451dcbd8f5c3943509b6b4f12c0331e21a0f2ee3ac76, page: 17, table: '', quote: 'Furthermore, use a capacitor in parallel with the lower resistor on the divider for additional filtering', fields: []}
+
+  - mpn: TPS563201
+    match: '^TPS563201'
+    verified: true   # TI SLVSD90B read 2026-11-14
+    aliases: {BST: VBST, BOOT: VBST}
+    requires:
+      - {id: CBST, pin: VBST, to: SW, kinds: [C], value: 100n,
+         source: "TPS563201 pin table and 7.2.2.5: 0.1 uF ceramic from VBST to SW",
+         cite: [{doc: tps563201.pdf, sha256: c1b5f22fdc2fd8bd8ff5f2281dcbee5fb09e30617f3ee008a320a85c0d94b517, page: 16, table: 'Bootstrap Capacitor Selection', quote: 'A 0.1-µF ceramic capacitor must be connected between the VBST to SW pin for proper operation.', fields: [value]}]}
+
+  - mpn: TPS561201
+    match: '^TPS561201'
+    verified: true   # TI SLVSC95A read 2026-11-14
+    aliases: {BST: VBST, BOOT: VBST}
+    requires:
+      - {id: CBST, pin: VBST, to: SW, kinds: [C], value: 100n,
+         source: "TPS561201 pin table and 8.2.2.5: 0.1 uF ceramic from VBST to SW",
+         cite: [{doc: tps561201.pdf, sha256: 54e5a4f272c638b385ec0d66867891cdc2f94974269a2400e80ecb4279b94e2f, page: 3, table: '', quote: 'Connect 0.1-µF capacitor between VBST and SW pins.', fields: [value]},
+                {doc: tps561201.pdf, sha256: 54e5a4f272c638b385ec0d66867891cdc2f94974269a2400e80ecb4279b94e2f, page: 14, table: 'Bootstrap Capacitor Selection', quote: 'A 0.1-µF ceramic capacitor must be connected between the VBST to SW pin for proper operation.', fields: [value]}]}
+
+  - mpn: AP64350
+    match: '^AP64350'
+    verified: true   # Diodes DS41976 Rev. 5-2 read 2026-11-14
+    aliases: {BOOT: BST, VBST: BST}
+    requires:
+      - {id: CBST, pin: BST, to: SW, kinds: [C], value: 100n,
+         source: "DS41976 pin descriptions and Bootstrap Capacitor section: 100 nF from BST to SW",
+         cite: [{doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: '100nF capacitor is recommended from BST to SW to power the high-side driver.', fields: [value]},
+                {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 15, table: '', quote: 'To ensure proper operation, a ceramic capacitor must be connected between the BST and SW pins.', fields: []}]}
+
+  - mpn: TPS7A20
+    match: '^TPS7A20'
+    verified: true   # TI SBVS338H read 2026-11-14
+    aliases: {VIN: IN, VOUT: OUT}
+    requires:
+      - {id: COUT, pin: OUT, to: GND, kinds: [C], min: 0.47e-6, max: 200.0e-6,
+         source: "TPS7A20 pin table OUT and Recommended Operating Conditions note 3: 0.47 uF to 200 uF effective, required for stability",
+         cite: [{doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 3, table: '', quote: 'A low equivalent series resistance (ESR) capacitor is required from OUT to ground for stability.', fields: []},
+                {doc: tps7a20.pdf, sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53, page: 5, table: 'Recommended Operating Conditions', quote: 'Effective output capacitance of 0.47 μF minimum and 200 μF maximum is required for stability.', fields: [min, max]}]}

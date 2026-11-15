@@ -4,7 +4,7 @@
  "fixture": "carrier_verify",
  "board": "lumina-carrier",
  "metrics": {
-  "errors": 189,
+  "errors": 188,
   "warnings": 209,
   "by_check": {
    "check_return_path": 4,
@@ -25,8 +25,9 @@
    "check_connector_fit": 0,
    "check_courtyard": 105,
    "check_ddr_timing": 0,
-   "check_ep_paste": 13,
+   "check_ep_paste": 12,
    "check_fp_attr": 0,
+   "check_fp_geometry": 0,
    "check_fp_package": 0,
    "check_isolation": 0,
    "check_kelvin": 0,
@@ -64,7 +65,6 @@
    "diffpair_phase": 2,
    "diffpair_skew": 1,
    "ep_paste_low": 1,
-   "ep_paste_missing": 1,
    "gnd_stub_long": 1,
    "insufficient_transition_vias": 6,
    "model_path_absolute": 2,
@@ -88,7 +88,7 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 189.0,
+  "errors": 188.0,
   "warnings": 209.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
@@ -103,7 +103,7 @@
  },
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-14",
+  "created": "2026-11-15",
   "kicad_version": null
  }
 }

@@ -28,6 +28,10 @@ graphic counts for its own exposed pad; a board graphic for any it covers.
   paste_on_via       error: a via's hole lies under an exposed pad's paste
                      (its own aperture or a window over it), unless the via
                      is filled or capped (KiCad's via `filling`/`capping`).
+                     A paste-only window has no number of its own, so it
+                     is named by the exposed pad it lies on ("U1 pad 9's
+                     paste window", pads "U1:9"); one over no exposed pad
+                     is "U1 paste window", pads "U1:".
                      A via under any other pad's paste (via-in-pad on a
                      decoupler or an RF ground, which the golden boards
                      carry on purpose) is listed in the facts
@@ -37,8 +41,16 @@ graphic counts for its own exposed pad; a board graphic for any it covers.
 An exposed pad is a footprint's SMD copper pad numbered "EP", or one at
 least EP_AREA_RATIO times the median of the footprint's other pads (four or
 more of them) whose centre lies inside their hull: a QFN/DFN/SOIC-EP's
-belly, never a SOT-223 tab at the edge of the pads. Each one's coverage goes
-into the facts (`exposed_pads`) whether it passes or not.
+belly, never a SOT-223 tab at the edge of the pads. Only pads with copper
+on the footprint's own side (its `(layer "F.Cu")` or `"B.Cu"`) count, as
+exposed pads and as the other pads: a pad on the far side is never under
+the part. KiCad's stock *_ThermalVias footprints carry such a bottom copy
+of the belly for their vias to land on (hive-pcb-flow #1174). A footprint
+whose layer is missing or not F.Cu/B.Cu keeps both sides, and so does one
+with no SMD copper on its own side (pads left behind by a hand flip), so it
+is still checked. An exposed pad's paste is read on the footprint's side
+when its copper is there, else on its copper's side. Each one's coverage
+goes into the facts (`exposed_pads`) whether it passes or not.
 
 CLI: --pcb board.kicad_pcb [--out report.json]
      exit 0 pass / 1 violations / 2 error, per SPEC section 6.
@@ -87,12 +99,13 @@ class Ap:
     """A pad as the paste check sees it, in the board frame."""
 
     def __init__(self, ref, number, kind, shape, size, center, angle,
-                 rratio, copper, paste, margin, prims):
+                 rratio, copper, paste, margin, prims, side=None):
         self.ref, self.number, self.kind = ref, number, kind
         self.shape, self.size, self.center = shape, size, center
         self.angle, self.rratio = angle, rratio
         self.copper, self.paste = copper, paste    # sides: {"F", "B"}
         self.margin, self.prims = margin, prims
+        self.side = side    # the footprint's side, "F"/"B", None unknown
 
     def poly(self, grow=(0.0, 0.0)) -> Polygon:
         w, h = self.size[0] + 2 * grow[0], self.size[1] + 2 * grow[1]
@@ -180,6 +193,9 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
         fa = at[2] if len(at) > 2 else 0.0
         fpm = _margin(fp, ("solder_paste_margin", "solder_paste_ratio",
                            "solder_paste_margin_ratio"))
+        fl = _kid(fp, "layer")
+        fside = {"F.Cu": "F", "B.Cu": "B"}.get(
+            str(_tok(fl[1])) if fl is not None and len(fl) > 1 else "")
         for pad in _kids(fp, "pad"):
             if len(pad) < 4:
                 continue
@@ -209,7 +225,8 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
                            str(_tok(pad[3])), (sz[0], sz[-1]),
                            (fx + dx, fy + dy), rest[0] if rest else 0.0,
                            _nums(rr)[0] if rr is not None else 0.0,
-                           sides("Cu"), sides("Paste"), (m, r), prims))
+                           sides("Cu"), sides("Paste"), (m, r), prims,
+                           fside))
         for g in fp[1:]:
             if not (isinstance(g, list) and g) or \
                     str(_tok(g[0])) not in tuple("fp_" + k for k in _GFX):
@@ -241,6 +258,8 @@ def exposed_pads(pads: list[Ap]) -> list[Ap]:
             by_ref.setdefault(p.ref, []).append(p)
     out = []
     for ref, ps in by_ref.items():
+        # the part's own side; all of them when none is there
+        ps = [p for p in ps if p.side is None or p.side in p.copper] or ps
         for p in ps:
             if p.number.upper() == "EP":
                 out.append(p)
@@ -255,6 +274,27 @@ def exposed_pads(pads: list[Ap]) -> list[Ap]:
             if hull.geom_type == "Polygon" and hull.contains(Point(p.center)):
                 out.append(p)
     return out
+
+
+def _aperture_name(p, poly, ep_cu: dict, at) -> tuple[str, str, str]:
+    """(ref, pad, label) for an aperture over the via at `at`. A paste-only
+    pad (a QFN's window-pane aperture, `(pad "" smd ...)` on F.Paste alone)
+    has no number, so it takes the number of the exposed pad it lies on:
+    the one that holds the via, else the one it overlaps most."""
+    ref = p.ref or "board"
+    if p.number == "graphic":
+        return ref, "graphic", f"{ref} paste graphic"
+    if p.copper or p.number:
+        return ref, p.number, f"{ref} pad {p.number}"
+    cands = [(cu.contains(Point(at)), cu.intersection(poly).area, n)
+             for (r, n), cu in ep_cu.items()
+             if r == p.ref and cu.intersects(poly)]
+    if not cands:
+        return ref, "", f"{ref} paste window"
+    n = max(cands)[2]
+    if not n:
+        return ref, n, f"{ref} exposed pad's paste window"
+    return ref, n, f"{ref} pad {n}'s paste window"
 
 
 def check(pcb: Path) -> tuple[list[dict], dict]:
@@ -278,7 +318,8 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
     ep_list = exposed_pads(pads)
     ep_cu = {(ep.ref, ep.number): ep.copper_poly() for ep in ep_list}
     for ep in ep_list:
-        side = next(iter(sorted(ep.copper)))
+        side = ep.side if ep.side in ep.copper else \
+            next(iter(sorted(ep.copper)))
         cu = ep.copper_poly()
         mine = [poly for p, poly in apertures[side]
                 if (p.ref == ep.ref or p.ref is None)
@@ -330,20 +371,20 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
             hits += 1
             if v["plugged"]:
                 continue
-            on = sorted({(p.ref or "board", p.number) for p, _ in under})
+            on = sorted({_aperture_name(p, poly, ep_cu, v["at"])
+                         for p, poly in under})
+            pad_ids = list(dict.fromkeys(f"{r}:{n}" for r, n, _ in on))
             in_ep = any((p.ref, p.number) in ep_cu or (
                 not p.copper and any(p.ref in (r, None)
                                      and cu.intersects(poly)
                                      for (r, _), cu in ep_cu.items()))
                 for p, poly in under)
-            refs = sorted({r for r, _ in on})
+            refs = sorted({r for r, _, _ in on})
             if not in_ep:
                 small.append({"at": [checklib.rnd(c, 3) for c in v["at"]],
-                              "side": side,
-                              "pads": [f"{r}:{n}" for r, n in on]})
+                              "side": side, "pads": pad_ids})
                 continue
-            names = ", ".join(f"{r} paste graphic" if n == "graphic"
-                              else f"{r} pad {n}" for r, n in on)
+            names = ", ".join(label for _, _, label in on)
             viols.append(checklib.violation(
                 SCRIPT, "error", v["at"],
                 f"{side}.Paste", v["net"], refs,
@@ -351,8 +392,7 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
                 f"{names}: the solder runs down the barrel and the joint "
                 "voids. Move the paste windows off the via (window-pane "
                 "apertures between the vias), or fill and cap it",
-                SOURCE, kind="paste_on_via", side=side,
-                pads=[f"{r}:{n}" for r, n in on]))
+                SOURCE, kind="paste_on_via", side=side, pads=pad_ids))
     return viols, {"exposed_pads": eps, "vias_under_paste": hits,
                    "vias_in_paste": small}
 

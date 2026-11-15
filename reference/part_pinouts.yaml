@@ -1,0 +1,492 @@
+# Datasheet pin tables, for netlist_audit.py's symbol_pinmap rule (#1135):
+# a part with no stock KiCad symbol in the same package is judged against
+# its datasheet's pin table instead. A placed symbol whose pins disagree
+# with the table (VIN on pin 3 where the table says 2) is a symbol drawn
+# from the wrong package or the wrong pinout.
+#
+#   part       the part and package the table is for
+#   match      a regex tried against the part's value, symbol name and MPN
+#              (re.match, case-insensitive)
+#   footprint  a regex searched in the footprint name after its library
+#              (case-insensitive): the package the table is for. A part
+#              in another package, or with no footprint, gets no row.
+#   pins       {pad number: datasheet name}. Leave out what a footprint
+#              numbers its own way (an exposed pad the datasheet calls 0)
+#              and pins a range gives (36-53); names compare as
+#              pinmaplib.pin_names folds them (VOUT is OUT, CFG2/SCL is
+#              CFG2 and SCL). Only names both maps carry are compared.
+#   stock      instead of pins: Lib:Symbol, a stock symbol whose pins are
+#              the table (a module sold with a symbol in another name)
+#   source     the datasheet, its revision, the table
+#   cite       [{doc, sha256, page, table, quote, fields: [pins]}] for
+#              scripts/part_rows.py --verify: each pin's name must stand
+#              beside a run of numbers that holds its number in one of the
+#              row's quotes. part_rows.py PART --pdf DS drafts the rows.
+# verified: true means the cites passed --verify and a reader checked the
+# package column. A row not verified only records its parts as not judged.
+#
+# Seeded from the parts on the 26 boards and the corpus that have no stock
+# symbol in their package (#1135).
+
+parts:
+  - part: DRV8300 (24-pin VQFN, RGE)
+    match: DRV8300
+    footprint: QFN-24|RGE
+    pins: {'1': INLA, '2': INLB, '3': INLC, '4': GVDD, '5': MODE, '6': GND, '7': NC,
+      '8': NC, '9': GLC, '10': GLB, '11': GLA, '12': SHC, '13': GHC, '14': BSTC, '15': SHB,
+      '16': GHB, '17': BSTB, '18': SHA, '19': GHA, '20': BSTA, '21': DT, '22': INHA,
+      '23': INHB, '24': INHC}
+    source: TI DRV8300 datasheet, Table 6-1 Pin Functions, 24-pin RGE
+    cite:
+    - doc: drv8300.pdf
+      sha256: bb467652a531335d23ea67644db1db26ce53f149e3f889f8158a1c3ddac3e4db
+      page: 4
+      table: Table 6-1
+      quote: "GND 6\n5\n4\n3\n2\n1\nGLC\nGLB\nNC\nNC\nGLA\nSHC\nBSTC\nSHB\nDRV8300\n\
+        PowerPAD\nBSTA\nGHA\nINLA\nINLB\nINLC\nGVDD\nINHA\nINHB\nINHC\nDT\nGHC\nGHB\n\
+        SHA\nBSTB\nFigure 6-1. DRV8300D, DRV8300N RGE Package 24-Pin VQFN With Exposed\
+        \ Thermal Pad Top View \nTable 6-1. Pin Functions—24-Pin DRV8300 Devices\n\
+        PIN\nTYPE(1) DESCRIPTION\nNAME NO.\nBSTA 20 O Bootstrap output pin. Connect\
+        \ capacitor between BSTA and SHA\nBSTB 17 O Bootstrap output pin. Connect\
+        \ capacitor between BSTB and SHB\nBSTC 14 O Bootstrap output pin. Connect\
+        \ capacitor between BSTC and SHC\nDT 21 I Deadtime input pin. Connect resistor\
+        \ to ground for variable deadtime, fixed deadtime when left it \nfloating\n\
+        GHA 19 O High-side gate driver output. Connect to the gate of the high-side\
+        \ power MOSFET.\nGHB 16 O High-side gate driver output. Connect to the gate\
+        \ of the high-side power MOSFET.\nGHC 13 O High-side gate driver output. Connect\
+        \ to the gate of the high-side power MOSFET.\nGLA 11 O Low-side gate driver\
+        \ output. Connect to the gate of the low-side power MOSFET.\nGLB 10 O Low-side\
+        \ gate driver output. Connect to the gate of the low-side power MOSFET.\n\
+        GLC 9 O Low-side gate driver output. Connect to the gate of the low-side power\
+        \ MOSFET.\nINHA 22 I High-side gate driver control input. This pin controls\
+        \ the output of the high-side gate driver.\nINHB 23 I High-side gate driver\
+        \ control input. This pin controls the output of the high-side gate driver.\n\
+        INHC 24 I High-side gate driver control input. This pin controls the output\
+        \ of the high-side gate driver.\nINLA 1 I Low-side gate driver control input.\
+        \ This pin controls the output of the low-side gate driver.\nINLB 2 I Low-side\
+        \ gate driver control input. This pin controls the output of the low-side\
+        \ gate driver.\nINLC 3 I Low-side gate driver control input. This pin controls\
+        \ the output of the low-side gate driver.\nMODE 5 I\nMode Input controls polarity\
+        \ of GLx compared to INLx inputs.\nMode pin floating: GLx output polarity\
+        \ same(Non-Inverted) as INLx input\nMode pin to GVDD: GLx output polarity\
+        \ inverted compared to INLx input\nNC 7, 8 NC No internal connection. This\
+        \ pin can be left floating or connected to system ground.\nGND 6 PWR Device\
+        \ ground.\nSHA 18 I High-side source sense input. Connect to the high-side\
+        \ power MOSFET source.\nSHB 15 I High-side source sense input. Connect to\
+        \ the high-side power MOSFET source.\nSHC 12 I High-side source sense input.\
+        \ Connect to the high-side power MOSFET source.\nGVDD 4 PWR Gate driver power\
+        \ supply input. Connect a X5R or X7R, GVDD-rated ceramic and greater then\
+        \ or equal \nto 10-uF local capacitance between the GVDD and GND pins.\n(1)\
+        \ PWR = power, I = input, O = output, NC = no connection\nDRV8300\nSLVSFG5D\
+        \ – SEPTEMBER 2020 – REVISED MARCH 2022 www.ti.com\n4 Submit Document Feedback\
+        \ Copyright © 2022 Texas Instruments Incorporated"
+      fields: [pins]
+    verified: true
+  - part: DRV8300 (20-pin TSSOP, PW)
+    match: DRV8300
+    footprint: TSSOP-20|PW\b
+    pins: {'1': INHA, '2': INHB, '3': INHC, '4': INLA, '5': INLB, '6': INLC, '7': GVDD,
+      '8': GND, '9': GLC, '10': GLB, '11': GLA, '12': SHC, '13': GHC, '14': BSTC,
+      '15': SHB, '16': GHB, '17': BSTB, '18': SHA, '19': GHA, '20': BSTA}
+    source: TI DRV8300 datasheet, Pin Functions, 20-pin PW
+    cite:
+    - doc: drv8300.pdf
+      sha256: bb467652a531335d23ea67644db1db26ce53f149e3f889f8158a1c3ddac3e4db
+      page: 5
+      table: Table 6-2. Pin Functions—20-Pin DRV8300 Devices
+      quote: 'BSTA 20 O Bootstrap output pin. Connect capacitor between BSTA and SHA
+
+        BSTB 17 O Bootstrap output pin. Connect capacitor between BSTB and SHB
+
+        BSTC 14 O Bootstrap output pin. Connect capacitor between BSTC and SHC
+
+        GHA 19 O High-side gate driver output. Connect to the gate of the high-side
+        power MOSFET.
+
+        GHB 16 O High-side gate driver output. Connect to the gate of the high-side
+        power MOSFET.
+
+        GHC 13 O High-side gate driver output. Connect to the gate of the high-side
+        power MOSFET.
+
+        GLA 11 O Low-side gate driver output. Connect to the gate of the low-side
+        power MOSFET.
+
+        GLB 10 O Low-side gate driver output. Connect to the gate of the low-side
+        power MOSFET.
+
+        GLC 9 O Low-side gate driver output. Connect to the gate of the low-side power
+        MOSFET.
+
+        INHA 1 I High-side gate driver control input. This pin controls the output
+        of the high-side gate driver.
+
+        INHB 2 I High-side gate driver control input. This pin controls the output
+        of the high-side gate driver.
+
+        INHC 3 I High-side gate driver control input. This pin controls the output
+        of the high-side gate driver.
+
+        INLA 4 I Low-side gate driver control input. This pin controls the output
+        of the low-side gate driver.
+
+        INLB 5 I Low-side gate driver control input. This pin controls the output
+        of the low-side gate driver.
+
+        INLC 6 I Low-side gate driver control input. This pin controls the output
+        of the low-side gate driver.
+
+        GND 8 PWR Device ground.
+
+        SHA 18 I High-side source sense input. Connect to the high-side power MOSFET
+        source.
+
+        SHB 15 I High-side source sense input. Connect to the high-side power MOSFET
+        source.
+
+        SHC 12 I High-side source sense input. Connect to the high-side power MOSFET
+        source.
+
+        GVDD 7 PWR Gate driver power supply input. Connect a X5R or X7R, GVDD-rated
+        ceramic and greater then or equal'
+      fields: [pins]
+    verified: true
+  - part: TPS92515HV (MSOP-10, DGQ)
+    match: TPS92515
+    footprint: MSOP-10|DGQ
+    pins: {'1': COFF, '2': VCC, '3': GND, '4': BOOT, '5': SW, '6': DRN, '7': CSN,
+      '8': VIN, '9': PWM, '10': IADJ}
+    source: TI TPS92515/HV datasheet, Pin Functions
+    cite:
+    - doc: tps92515hv.pdf
+      sha256: 0c3aa5aea3e9e3de909dc0e257fed99080ad01ed269ddf46dcc224c24e00db3b
+      page: 3
+      table: Table 1. Pin Functions
+      quote: 'BOOT 4 I Connect a ceramic capacitor between BOOT and SW and a diode
+        from VCC to BOOT to
+
+        power the high-side FET drive circuitry.
+
+        COFF 1 I Connect a resistor from VOUT, and a capacitor to GND to set the OFF-time.
+
+        CSN 7 I Current sense negative input. Connect current sense resistor from
+        VIN to CSN for high-side
+
+        current sense control.
+
+        DRN 6 I Internal FET drain. Connect to CSN node
+
+        GND 3 G Ground
+
+        IADJ 10 I Output current adjust. Connect to an external divider, reference
+        or tie to VCC.
+
+        PWM 9 I
+
+        PWM dimming input. Connect to PWM control signal. Output current is pulse-width
+
+        modulated (PWM) dimmed from the maximum analog controlled level. Connect to
+        VCC if not
+
+        used.
+
+        SW 5 O Internal FET Source. Connect to output inductor
+
+        VCC 2 O 5-V Regulator Output. Use a decoupling capacitor from VCC to ground.
+        See section on VCC
+
+        capacitor selection.
+
+        VIN 8 I Connect to input voltage. VIN is also the current sense positive input.'
+      fields: [pins]
+    verified: true
+  - part: AP64350 (SO-8EP)
+    match: AP64350
+    footprint: SO-?8|SOIC-8
+    pins: {'1': BST, '2': VIN, '3': EN, '4': RT/CLK, '5': FB, '6': COMP, '7': GND,
+      '8': SW}
+    source: Diodes AP64350 datasheet, Pin Descriptions
+    cite:
+    - doc: ap64350.pdf
+      sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48
+      page: 3
+      table: ''
+      quote: "BST 1 High-Side Gate Drive Boost Input. BST supplies the drive for the\
+        \ high-side n-channel power MOSFET. A \n100nF capacitor is recommended from\
+        \ BST to SW to power the high-side driver. \nVIN 2 \nPower Input. VIN supplies\
+        \ the power to the IC as well as the step-down converter power MOSFETs. Drive\
+        \ \nVIN with a 3.8V to 40V power source. Bypass VIN to GND with a suitably\
+        \ large capacitor to eliminate \nnoise due to the switching of the IC. See\
+        \ Input Capacitor section for more details. \nEN 3 \nEnable Input. EN is a\
+        \ digital input that turns the regulator on or off. Drive EN high to turn\
+        \ on the regulator \nand low to turn it off. Connect to VIN or leave floating\
+        \ for automatic startup. The EN has a precision \nthreshold of 1.18V for programing\
+        \ the UVLO. See Enable section for more details. \nRT/CLK 4 \nResistor Timing\
+        \ and External Clock. This pin can be used to control the switching frequency\
+        \ by setting the \ninternal oscillator frequency or by synchronizing to an\
+        \ external clock. Connect a resistor from RT/CLK to \nGND to set the internal\
+        \ oscillator frequency. An external clock can be input directly to the RT/CLK\
+        \ pin and \nthe internal oscillator synchronizes to the external clock frequency\
+        \ using a PLL. If the external clock edges \nstop, the operating mode automatically\
+        \ returns to resistor frequency programming. See Programming \nSwitching Frequency\
+        \ section for more details. \nFB 5 Feedback sensing terminal for the output\
+        \ voltage. Connect this pin to the resistive divider of the output. \nSee\
+        \ Setting the Output Voltage section for more details. \nCOMP 6 Compensation.\
+        \ Connect an external RC network to the COMP pin to adjust the loop response.\
+        \ See \nExternal Loop Compensation Design section for more details. \nGND\
+        \ 7 Power Ground. \nSW 8 Power Switching Output. SW is the switching node\
+        \ that supplies power to the output. Connect the output"
+      fields: [pins]
+    verified: true
+  - part: AD8226 (SOIC-8)
+    match: AD8226
+    footprint: SOIC-8
+    pins: {'1': -IN, '2': RG, '3': RG, '4': +IN, '5': -VS, '6': REF, '7': VOUT, '8': +VS}
+    source: ADI AD8226 datasheet, Table 6 Pin Function Descriptions
+    cite:
+    - doc: ad8226.pdf
+      sha256: e99737516d6011609fa0edbbe3278e7274da006ccd20479ca815c7046171cf0a
+      page: 9
+      table: Table 6. Pin Function Descriptions
+      quote: 1 −IN Negative Input. 2, 3 RG Gain-Setting Pins. Place a gain resistor
+        between these two pins. 4 +IN Positive Input. 5 −VS Negative Supply. 6 REF
+        Reference. This pin must be driven by low impedance. 7 VOUT Output. 8 +VS
+        Positive Supply.
+      fields: [pins]
+    verified: true
+  - part: ADS8326 (8-pin, D/DGK)
+    match: ADS8326
+    footprint: SOP-8|SOIC-8|MSOP-8
+    pins: {'1': REF, '2': +IN, '3': -IN, '4': GND, '5': CS/SHDN, '6': DOUT, '7': DCLOCK,
+      '8': VDD}
+    source: TI ADS8326 datasheet, Pin Functions
+    cite:
+    - doc: ads8326.pdf
+      sha256: eb82600a4c45b93a8a89c4819f4037c7bd2faa7653084bde9600395a792ac57a
+      page: 7
+      table: ''
+      quote: REF 1 Analog input Reference input +IN 2 Analog input Noninverting input
+        –IN 3 Analog input Inverting analog input GND 4 Power-supply connection Ground
+        CS/SHDN 5 Digital input Chip select when low; Shutdown mode when high. DOUT
+        6 Digital output Serial output data word DCLOCK 7 Digital input Data clock
+        synchronizes the serial data transfer and determines conversion speed. VDD
+        8
+      fields: [pins]
+    verified: true
+  - part: OPA320 (SOT-23-5, DBV)
+    match: OPA320(?!S)
+    footprint: SOT-23-5
+    pins: {'1': VOUT, '2': V-, '3': +IN, '4': -IN, '5': V+}
+    source: 'TI OPA320 datasheet, Pin Functions: OPA320 and OPA320S (OPA320 column)'
+    cite:
+    - doc: opa320.pdf
+      sha256: 6ad9e31b95374c9bd582b821c528c91cb5813772e74e68f80cf81d0c10772b13
+      page: 4
+      table: 'Pin Functions: OPA320 and OPA320S'
+      quote: –IN 4 4 I Negative (inverting) input +IN 3 3 I Positive (noninverting)
+        input OUT, VOUT 1 1 O Output SHDN — 5 I Shutdown, active low V– 2 2 — Negative
+        (lowest) power supply V+ 5 6
+      fields: [pins]
+    verified: true
+  - part: TPA3118D2 (HTSSOP-32, DAP)
+    match: TPA3118D2
+    footprint: HTSSOP-32|DAP
+    pins: {'1': MODSEL, '2': SDZ, '3': FAULTZ, '4': RINP, '5': RINN, '6': PLIMIT,
+      '7': GVDD, '8': GAIN/SLV, '9': GND, '10': LINP, '11': LINN, '12': MUTE, '13': AM2,
+      '14': AM1, '15': AM0, '16': SYNC, '17': AVCC, '18': PVCC, '19': PVCC, '20': BSNL,
+      '21': OUTNL, '22': GND, '23': OUTPL, '24': BSPL, '25': GND, '26': BSNR, '27': OUTNR,
+      '28': GND, '29': OUTPR, '30': BSPR, '31': PVCC, '32': PVCC}
+    source: TI TPA3118D2 datasheet, Pin Functions
+    cite:
+    - doc: tpa3118d2.pdf
+      sha256: 4339471f438d786c444b4776925e75cf3a4ceafb8d6fad5de709d080670271a0
+      page: 4
+      table: ''
+      quote: '1 MODSEL I Mode selection logic input (LOW = BD mode, HIGH = 1 SPW mode).
+        TTL logic levels with compliance to
+
+        AVCC.
+
+        2 SDZ I Shutdown logic input for audio amp (LOW = outputs Hi-Z, HIGH = outputs
+        enabled). TTL logic levels with
+
+        compliance to AVCC.
+
+        3 FAULTZ DO General fault reporting including Over-temp, DC Detect. Open drain.
+
+        FAULTZ = High, normal operation
+
+        FAULTZ = Low, fault condition
+
+        4 RINP I Positive audio input for right channel. Biased at 3 V.
+
+        5 RINN I Negative audio input for right channel. Biased at 3 V.
+
+        6 PLIMIT I Power limit level adjust. Connect a resistor divider from GVDD
+        to GND to set power limit. Connect directly
+
+        to GVDD for no power limit.
+
+        7 GVDD PO Internally generated gate voltage supply. Not to be used as a supply
+        or connected to any component other
+
+        than a 1 µF X7R ceramic decoupling capacitor and the PLIMIT and GAIN/SLV resistor
+        dividers.
+
+        8 GAIN/SLV I Selects Gain and selects between Master and Slave mode depending
+        on pin voltage divider.
+
+        9 GND G Ground
+
+        10 LINP I Positive audio input for left channel. Biased at 3 V. Connect to
+        GND for PBTL mode.
+
+        11 LINN I Negative audio input for left channel. Biased at 3 V. Connect to
+        GND for PBTL mode.
+
+        12 MUTE I Mute signal for fast disable/enable of outputs (HIGH = outputs Hi-Z,
+        LOW = outputs enabled). TTL logic
+
+        levels with compliance to AVCC.
+
+        13 AM2 I AM Avoidance Frequency Selection
+
+        14 AM1 I AM Avoidance Frequency Selection
+
+        15 AM0 I AM Avoidance Frequency Selection
+
+        16 SYNC DIO Clock input/output for synchronizing multiple class-D devices.
+        Direction determined by GAIN/SLV terminal.
+
+        17 AVCC P Analog Supply
+
+        18 PVCC P Power supply
+
+        19 PVCC P Power supply
+
+        20 BSNL BST Boot strap for negative left channel output, connect to 220 nF
+        X5R, or better ceramic cap to OUTNL
+
+        21 OUTNL PO Negative left channel output
+
+        22 GND G Ground
+
+        23 OUTPL PO Positive left channel output
+
+        24 BSPL BST Boot strap for positive left channel output, connect to 220 nF
+        X5R, or better ceramic cap to OUTPL
+
+        25 GND G Ground
+
+        26 BSNR BST Boot strap for negative right channel output, connect to 220 nF
+        X5R, or better ceramic cap to OUTNR
+
+        27 OUTNR PO Negative right channel output
+
+        28 GND G Ground
+
+        29 OUTPR PO Positive right channel output
+
+        30 BSPR BST Boot strap for positive right channel output, connect to 220 nF
+        X5R or better ceramic cap to OUTPR
+
+        31 PVCC P Power supply
+
+        32 PVCC P Power supply'
+      fields: [pins]
+    verified: true
+  - part: CH224K (ESSOP-10)
+    match: CH224K
+    footprint: ESSOP-10
+    pins: {'1': VDD, '2': CFG2, '3': CFG3, '4': DP, '5': DM, '6': CC2, '7': CC1, '8': VBUS,
+      '9': CFG1, '10': PG}
+    source: 'WCH CH224 datasheet V2.1, 表 4-2 CH224K 引脚定义 (pin 0, the pad, left out:
+      footprints number it 11)'
+    cite:
+    - doc: ch224k.pdf
+      sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d
+      page: 3
+      table: 表 4-2
+      quote: 1 VDD P 工作电源输入，外接 1uF对地电容，串联电阻至 VBUS。 4 DP I/O USB 总线。 5 DM 7 CC1 I/O
+        Type-C CC 信号线。 6 CC2 9 CFG1 I 电源档位配置输入引脚。 2 CFG2 I 3 CFG3 I 8 VBUS I 电压检测输入，需要串联电阻至外部输入
+        VBUS。 10 PG OD
+      fields: [pins]
+    verified: true
+  - part: CH224A (ESSOP-10)
+    match: CH224A
+    footprint: ESSOP-10
+    pins: {'1': VHV, '2': CFG2/SCL, '3': CFG3/SDA, '4': DP, '5': DM, '6': CC2, '7': CC1,
+      '8': VBUS, '9': CFG1, '10': PG}
+    source: WCH CH224 datasheet V2.1, 表 4-1 CH224Q/CH224A 引脚定义 (pin 0, the pad, left
+      out)
+    cite:
+    - doc: ch224k.pdf
+      sha256: df4f8a9f305df715b1c3617e89505faaa2223a0e4053b44373c5deb565b63c0d
+      page: 3
+      table: 表 4-1
+      quote: 1 1 VHV P 工作电源输入，外接 1uF对地电容（注意耐压）。 4 4 DP I/O USB 总线。 5 5 DM 7 7 CC1
+        I/O Type-C CC 信号线。 6 6 CC2 9 9 CFG1 I 电源档位配置输入引脚 1。 2 2 CFG2/SCL I,PU 电源档位配置输入引脚
+        2或 I2C时钟输入引脚。 3 3 CFG3/SDA I/O,PU 电源档位配置输入引脚 3或 I2C数据双向引脚。 8 8 VBUS I 电压检测输入，需要短接至
+        VHV。 10 10 PG
+      fields: [pins]
+    verified: true
+  - part: NTMFS5C628NL (DFN5, SO-8FL)
+    match: NTMFS5C628
+    footprint: DFN-?5|SO-?8FL
+    pins: {'1': S, '2': S, '3': S, '4': G, '5': D}
+    source: onsemi NTMFS5C628NL datasheet, page 1 pin diagram (G 4, S 1-3, D 5)
+    cite:
+    - doc: ntmfs5c628nl.pdf
+      sha256: f77275fd63b73508653895e2234f396003d6a47d959c471e3101682724135dad
+      page: 1
+      table: ''
+      quote: G (4) S (1, 2, 3) N-CHANNEL MOSFET D (5)
+      fields: [pins]
+    verified: true
+  - part: INA240 (SOIC-8, D)
+    match: INA240
+    footprint: SOIC-8
+    pins: {'1': IN-, '2': GND, '3': REF2, '5': OUT, '6': VS, '7': REF1, '8': IN+}
+    source: TI INA240 datasheet, Pin Functions (SOIC column)
+    cite:
+    - doc: ina240.pdf
+      sha256: 0ed9568bacb908c3d8476ddc2dd1e76134995ed2af1d55590d950b9f1daa64e9
+      page: 3
+      table: ''
+      quote: GND 4 2 Analog Ground IN– 3 1 Analog input Connect to load side of shunt
+        resistor IN+ 2 8 Analog input Connect to supply side of shunt resistor NC
+        1 4 — Reserved. Connect to ground or leave floating OUT 8 5 Analog output
+        Output voltage REF1 7 7 Analog input Reference 1 voltage. Connect to 0 V to
+        VS; see the Adjusting the Output Midpoint With the Reference Pins section
+        for connection options REF2 6 3 Analog input Reference 2 voltage. Connect
+        to 0 V to VS; see the Adjusting the Output Midpoint With the Reference Pins
+        section for connection options VS 5 6
+      fields: [pins]
+    verified: true
+  - part: ESP32-C3-MINI-1 (module)
+    match: ESP32-C3-MINI-1
+    footprint: ESP32-C3-MINI
+    pins: {'1': GND, '2': GND, '3': 3V3, '5': IO2, '6': IO3, '8': EN, '11': GND, '12': IO0,
+      '13': IO1, '14': GND, '16': IO10, '18': IO4, '19': IO5, '20': IO6, '21': IO7,
+      '22': IO8, '23': IO9, '26': IO18, '27': IO19, '30': RXD0, '31': TXD0}
+    source: Espressif ESP32-C3-MINI-1 datasheet v2.2, Table 3-1 Pin Definitions (pins
+      36-53 GND and the NC pins left out)
+    cite:
+    - doc: esp32c3mini.pdf
+      sha256: b53790a43866afb431ecc121d1b73d514aea1bf4934906f2eab630310528b1e0
+      page: 11
+      table: Table 3-1
+      quote: 'GND 1, 2, 11, 14, 36-53 P Ground 3V3 3 P Power supply NC 4, 7, 9, 10,
+        15, 17, 24, 25, 28, 29, 32-35 — NC IO2 5 I/O/T GPIO2, ADC1_CH2, FSPIQ IO3
+        6 I/O/T GPIO3, ADC1_CH3 EN 8 I High: on, enables the chip. Low: off, the chip
+        powers off. Note: Do not leave the EN pin floating. IO0 12 I/O/T GPIO0, ADC1_CH0,
+        XTAL_32K_P IO1 13 I/O/T GPIO1, ADC1_CH1, XTAL_32K_N IO10 16 I/O/T GPIO10,
+        FSPICS0 IO4 18 I/O/T GPIO4, ADC1_CH4, FSPIHD, MTMS IO5 19 I/O/T GPIO5, ADC2_CH0,
+        FSPIWP, MTDI IO6 20 I/O/T GPIO6, FSPICLK, MTCK IO7 21 I/O/T GPIO7, FSPID,
+        MTDO IO8 22 I/O/T GPIO8 IO9 23 I/O/T GPIO9 IO18 26 I/O/T GPIO18, USB_D- IO19
+        27 I/O/T GPIO19, USB_D+ RXD0 30 I/O/T GPIO20, U0RXD TXD0 31'
+      fields: [pins]
+    verified: true
+  - {part: Raspberry Pi Pico (module), match: Pico$|RaspberryPi_Pico, footprint: Pico,
+    stock: 'MCU_Module:RaspberryPi_Pico', source: 'KiCad stock symbol MCU_Module:RaspberryPi_Pico
+      (Pico datasheet section 2.1 pinout)', verified: true}

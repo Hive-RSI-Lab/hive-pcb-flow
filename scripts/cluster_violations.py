@@ -115,6 +115,7 @@ FIXER_HINTS = {
     # S6 footprint verification
     "pad_count": "library", "pin1_missing": "library", "pad_pitch": "library",
     "pad_size": "library", "no_courtyard": "library",
+    "stroked_pad_primitive": "library",
     # S7 netlist audit
     "missing_net": "schematic", "diffpair_naming": "schematic",
     "diffpair_unpaired": "schematic", "power_no_consumers": "schematic",

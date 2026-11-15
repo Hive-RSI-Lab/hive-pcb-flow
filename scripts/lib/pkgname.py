@@ -11,7 +11,9 @@ the only defaults are the ones the family name fixes by JEDEC convention:
 - a plain SOIC/SOP/SO is 1.27 mm pitch, and 3.9 mm wide up to 16 pins (a
   208 mil or 300 mil body is written so: `SOP-8_208mil`, `SOIC-16W`);
 - a plain TSSOP is 0.65 mm pitch;
-- SOT-23 without a count has 3 pins, SC-70 / SOT-323 too.
+- SOT-23 without a count has 3 pins, SC-70 / SOT-323 too; SOT-563 and
+  SOT-666 have 6, SOT-553 5;
+- a PowerPAK 1212-8 is a 3.3x3.3 mm, 0.65 mm pitch no-lead body.
 
 compare(part, fp) -> the list of ways the two disagree, judged only on
 what both sides state, so an unknown on either side is never a mismatch.
@@ -43,6 +45,9 @@ _FAMILIES: list[tuple[str, str, str, int | None]] = [
     ("DO-35", r"DO-?35|DO-?204AH", "tht", 2),
     ("DO-15", r"DO-?15(?![0-9])|DO-?204AC", "tht", 2),
     ("DO-201", r"DO-?201", "tht", 2),
+    # PowerPAK 1212-8 is a 3.3x3.3 mm 0.65 mm-pitch no-lead body, not the
+    # 5x6 PowerPAK SO-8 (Vishay SiS412DN p1, p7)
+    ("PPAK1212", r"(?:POWER[-_]?)?PAK[-_]?1212", "smd", 8),
     # power 5x6 flat-lead packages are no SOIC whatever their name says
     ("POWER-SO8", r"SO-?8-?FL|POWERPAK|DFN-?5X6|TDSON|LFPAK|SON-?5X6",
      "smd", None),
@@ -51,6 +56,7 @@ _FAMILIES: list[tuple[str, str, str, int | None]] = [
     ("SOT-143", r"SOT-?143", "smd", 4),
     ("SOT-23", r"(?<![A-Z])T?SOT-?23(?:-?(\d))?(?![0-9])|SOT-?2([56])(?![0-9])"
      r"|SOT-?753|SOT-?457|SC-?74A?(?![0-9])|TSOP-?[56](?![0-9])", "smd", 3),
+    ("SOT-563", r"SOT-?(?:5[56]3|666|5X3)(?![0-9])", "smd", 6),
     ("SC-70", r"SC-?70(?:-?(\d))?|SOT-?3([2-6])3|SC-?88A?", "smd", 3),
     ("TO-252", r"TO-?252|DPAK(?!2)", "smd", None),
     ("TO-263", r"TO-?263|D2PAK", "smd", None),
@@ -127,6 +133,12 @@ def describe(name: str | None) -> dict:
         if fam == "MELF" and re.search(r"0204(?![0-9])", n):
             fam = "MINIMELF"  # MELF 0204 is the MiniMELF (SOD-80) body
         out["family"], out["mount"] = fam, mount
+        if fam == "PPAK1212":
+            out.update(family="NOLEAD", mount=mount, pins=pins, pitch=0.65,
+                       body=(3.3, 3.3))
+            break
+        if fam == "SOT-563" and "553" in m.group(0):
+            pins = 5
         groups = [g for g in m.groups() if g]
         if fam in ("SOT-23", "SC-70"):
             out["pins"] = _count(m.group(0)) or pins

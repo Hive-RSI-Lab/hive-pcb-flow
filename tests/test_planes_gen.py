@@ -521,6 +521,18 @@ def test_plan_validation_errors(tmp_path):
             planes_gen.build_plan(bg, con)
 
 
+def test_comment_keys_pass_and_typos_still_stop(tmp_path):
+    """#1097: constraints_lint passes `_` comment keys, so planes_gen must
+    too; a misspelled data key still stops the plan."""
+    bg = _bg(tmp_path)
+    plan, _ = planes_gen.build_plan(bg, {"planes": [
+        {"net": "GND", "layer": "B.Cu", "_why": "solid return under U1"}]})
+    assert [z["net"] for z in plan] == ["GND"]
+    with pytest.raises(CheckError, match="unknown keys"):
+        planes_gen.build_plan(bg, {"planes": [
+            {"net": "GND", "layer": "B.Cu", "prority": 1}]})
+
+
 def test_cli_missing_board_exits_2():
     assert planes_gen.main(["--pcb", "no/such/board.kicad_pcb"]) == 2
 

@@ -6,7 +6,13 @@
 # Square posts of unshrouded pin headers: 0.025 in (0.64 mm) at 2.54 mm
 # pitch, 0.5 mm at 2.00 mm, 0.4 mm at 1.27 mm (Samtec TSW/TMM/FTS, Wurth
 # 61300xxx, Amphenol 10129378 drawings). Sockets' tails vary by maker, so
-# they are left to their extraction.
+# they are left to their extraction. The 2.54 mm post: Samtec TSW, ".025"
+# (0.635 mm) square post" (https://www.samtec.com/products/tsw; catalog
+# https://suddendocs.samtec.com/catalog_english/tsw_th.pdf, ".025" SQ POST
+# HEADER").
+#
+# A row may carry `pitch_mm`: its name does not say the pitch, so it holds
+# only when the footprint's plated holes stand that far apart (#1123).
 leads:
   - match: '^(PinHeader_\d+x\d+_P2\.54mm|HDR-TH_\d+P-P2\.54-V-M)'
     pins: [{w_mm: 0.64, t_mm: 0.64}]
@@ -17,3 +23,11 @@ leads:
   - match: '^PinHeader_\d+x\d+_P1\.27mm'
     pins: [{w_mm: 0.4, t_mm: 0.4}]
     source: "0.4 mm square post (Samtec FTS, Wurth 62200xx1121)"
+  - match: '(?i)^(?!.*socket).*pin_?header'
+    pitch_mm: 2.54
+    pins: [{w_mm: 0.64, t_mm: 0.64}]
+    source: "a project's own 2.54 mm pin header: 0.025 in square post (Samtec TSW)"
+  - match: '(?i)^pro_?micro'
+    pitch_mm: 2.54
+    pins: [{w_mm: 0.64, t_mm: 0.64}]
+    source: "Pro Micro footprint: 2.54 mm pin headers, 0.025 in square post (Samtec TSW)"

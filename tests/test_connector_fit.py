@@ -7,6 +7,7 @@ then fixed."""
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import check_connector_fit as ccf  # noqa: E402
 import check_ep_paste as cep  # noqa: E402
 import datasheet_extract  # noqa: E402
 import verify_all  # noqa: E402
+from _boards import stock_footprints  # noqa: E402
 
 
 def _board(tmp_path, body, setup="") -> Path:
@@ -193,12 +195,171 @@ def test_window_pane_paste_clear_of_the_via_passes(tmp_path):
     assert ep["apertures"] == 4 and facts["vias_under_paste"] == 0
 
 
+def test_a_via_under_a_paste_window_names_the_exposed_pad(tmp_path):
+    # hive-pcb-flow #1150: a window is a paste-only pad with no number, so
+    # the error named "U1 pad " and its pads "U1:"
+    vs, _ = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"', True)
+                             + via(14.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert "the paste of U1 pad 9's paste window:" in vs[0]["msg"]
+    assert vs[0]["pads"] == ["U1:9"]
+
+
+def test_a_via_under_an_ep_and_its_window_lists_the_pad_once(tmp_path):
+    vs, _ = cep.check(_board(tmp_path, qfn(windows=True) + via(14.2, 9.2)))
+    assert _kinds(vs) == ["ep_paste_high", "paste_on_via"]
+    v = next(v for v in vs if v["kind"] == "paste_on_via")
+    assert "the paste of U1 pad 9, U1 pad 9's paste window:" in v["msg"]
+    assert v["pads"] == ["U1:9"]
+
+
+def _two_eps(body):
+    # pad 9 split into two exposed pads, 9 on the left and 10 on the right
+    eps = "".join(f'    (pad "{n}" smd rect (at {x} 0) (size 1.4 3)'
+                  ' (layers "F.Cu" "F.Mask"))\n'
+                  for n, x in (("9", -0.8), ("10", 0.8)))
+    one = ('    (pad "9" smd rect (at 0 0) (size 3 3)'
+           ' (layers "F.Cu" "F.Mask"))\n')
+    return body.replace(one, eps)
+
+
+def _with_window(body, x, size=0.6):
+    win = (f'    (pad "" smd rect (at {x} 0) (size {size} {size})'
+           ' (layers "F.Paste"))\n')
+    return body.replace("    (attr smd)\n", "    (attr smd)\n" + win)
+
+
+def test_a_window_takes_the_number_of_the_ep_it_lies_on(tmp_path):
+    # two exposed pads, each with its own windows; the via is under pad 10's
+    wins = "".join(f'    (pad "" smd rect (at {x} {y}) (size 1 1)'
+                   ' (layers "F.Paste"))\n'
+                   for x in (-0.8, 0.8) for y in (-0.8, 0.8))
+    body = _two_eps(qfn('"F.Cu" "F.Mask"')).replace(
+        "    (attr smd)\n", "    (attr smd)\n" + wins)
+    vs, _ = cep.check(_board(tmp_path, body + via(15.8, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert "the paste of U1 pad 10's paste window:" in vs[0]["msg"]
+    assert vs[0]["pads"] == ["U1:10"]
+
+
+def test_a_window_over_two_eps_takes_the_one_under_the_via(tmp_path):
+    # the window lies half on pad 9 and half on pad 10; the via is on 10
+    body = _with_window(_two_eps(qfn('"F.Cu" "F.Mask"')), 0, 1.2)
+    vs, _ = cep.check(_board(tmp_path, body + via(15.4, 10)))
+    v = next(v for v in vs if v["kind"] == "paste_on_via")
+    assert "the paste of U1 pad 10's paste window:" in v["msg"]
+    assert v["pads"] == ["U1:10"]
+
+
+def test_a_window_on_an_unnumbered_ep_names_the_exposed_pad(tmp_path):
+    # an exposed pad with no number is still found by its size and place
+    body = qfn('"F.Cu" "F.Mask"', True).replace('(pad "9" ', '(pad "" ')
+    vs, _ = cep.check(_board(tmp_path, body + via(14.2, 9.2)))
+    assert _kinds(vs) == ["paste_on_via"]
+    assert "the paste of U1 exposed pad's paste window:" in vs[0]["msg"]
+    assert vs[0]["pads"] == ["U1:"]
+
+
+def test_a_via_under_a_window_clear_of_the_ep_is_only_listed(tmp_path):
+    body = _with_window(qfn('"F.Cu" "F.Mask"', True), 3)
+    vs, facts = cep.check(_board(tmp_path, body + via(18, 10)))
+    assert vs == []
+    assert facts["vias_in_paste"] == [
+        {"at": [18.0, 10.0], "side": "F", "pads": ["U1:"]}]
+
+
+def test_a_window_clear_of_the_ep_keeps_a_plain_name(tmp_path):
+    # the via is under the exposed pad's own paste and a window beside it
+    body = _with_window(qfn(), 1.85)
+    vs, _ = cep.check(_board(tmp_path, body + via(16.52, 10)))
+    assert _kinds(vs) == ["ep_paste_high", "paste_on_via"]
+    v = next(v for v in vs if v["kind"] == "paste_on_via")
+    assert "the paste of U1 paste window, U1 pad 9:" in v["msg"]
+    assert v["pads"] == ["U1:", "U1:9"]
+
+
 def test_no_paste_on_the_ep_and_a_plugged_via(tmp_path):
     vs, _ = cep.check(_board(tmp_path, qfn('"F.Cu" "F.Mask"')))
     assert _kinds(vs) == ["ep_paste_missing"]
     vs, facts = cep.check(_board(tmp_path, qfn() + via(
         extra=" (capping yes) (filling yes)")))
     assert _kinds(vs) == ["ep_paste_high"] and facts["vias_under_paste"] == 1
+
+
+def _thermal_vias(bottom='"B.Cu"'):
+    """qfn() as KiCad's stock *_ThermalVias footprints draw it: the exposed
+    pad again on the bottom, the copper its thermal vias land on."""
+    copy = f'    (pad "9" smd rect (at 0 0) (size 3 3) (layers {bottom}))\n'
+    return qfn('"F.Cu" "F.Mask"', True).replace(
+        "    (attr smd)\n", "    (attr smd)\n" + copy)
+
+
+def _flip(body):
+    """The footprint on the back: every F. layer to B. and back (the
+    geometry needn't mirror for this)."""
+    return re.sub(r'"([FB])\.', lambda m: '"B.' if m[1] == "F" else '"F.',
+                  body)
+
+
+@pytest.mark.parametrize("bottom", ['"B.Cu"', '"B.Cu" "B.Mask"'])
+def test_copper_on_the_far_side_is_not_an_exposed_pad(tmp_path, bottom):
+    # hive-pcb-flow #1174: the bottom copy was a second exposed pad with no
+    # paste, an error on 417 of KiCad's 482 stock *_ThermalVias footprints
+    for body, side in ((_thermal_vias(bottom), "F"),
+                       (_flip(_thermal_vias(bottom)), "B")):
+        vs, facts = cep.check(_board(tmp_path, body))
+        assert vs == [], side
+        assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
+            [("9", side)]
+
+
+def test_stock_thermal_vias_qfn_passes_on_either_side(tmp_path):
+    lib = stock_footprints()
+    mod = lib and lib / "Package_DFN_QFN.pretty" / \
+        "QFN-16-1EP_3x3mm_P0.5mm_EP1.7x1.7mm_ThermalVias.kicad_mod"
+    if not (mod and mod.is_file()):
+        pytest.skip("needs KiCad's footprint library")
+    first, rest = mod.read_text(encoding="utf-8").split("\n", 1)
+    body = first + "\n  (at 15 10)\n" + rest.replace('"REF**"', '"U1"', 1)
+    for text, side in ((body, "F"), (_flip(body), "B")):
+        vs, facts = cep.check(_board(tmp_path, text + "\n"))
+        # only the far-side copy is #1174's: the footprint's own thru_hole
+        # via pads under its paste windows are not modelled (no board vias)
+        assert "ep_paste_missing" not in _kinds(vs), side
+        assert [(e["pad"], e["side"]) for e in facts["exposed_pads"]] == \
+            [("17", side)]
+
+
+@pytest.mark.parametrize("ep_layers,windows,cover", [
+    ('"F.Cu" "B.Cu" "F.Paste" "F.Mask"', False, 1.0),
+    ('"*.Cu" "F.Paste" "F.Mask"', False, 1.0),
+    ('"*.Cu" "F.Mask"', True, 0.64)])
+def test_a_two_sided_ep_takes_its_paste_from_the_parts_side(
+        tmp_path, ep_layers, windows, cover):
+    # copper on both sides: the paste is on the part's side, not whichever
+    # side sorts first
+    body = qfn(ep_layers, windows)
+    for text, side in ((body, "F"), (_flip(body), "B")):
+        vs, facts = cep.check(_board(tmp_path, text))
+        assert [(e["pad"], e["side"], e["coverage"])
+                for e in facts["exposed_pads"]] == [("9", side, cover)], side
+        assert "ep_paste_missing" not in _kinds(vs), side
+
+
+def _pads_to_far_side(body):
+    """Every pad's layers to the other side; the footprint's own layer
+    stays (pads a hand flip left behind)."""
+    return re.sub(r"\(layers [^)]*\)", lambda m: _flip(m[0]), body)
+
+
+def test_a_footprint_with_all_its_pads_on_the_far_side_is_still_checked(
+        tmp_path):
+    for text, layer in (
+            (_pads_to_far_side(qfn('"F.Cu" "F.Mask"')), "B.Paste"),
+            (_pads_to_far_side(_flip(qfn('"F.Cu" "F.Mask"'))), "F.Paste")):
+        vs, facts = cep.check(_board(tmp_path, text))
+        assert [(v["kind"], v["layer"]) for v in vs] == \
+            [("ep_paste_missing", layer)], layer
 
 
 def _gfx_windows(prefix="fp", layer="F.Paste", fill="yes", at=(0, 0)):
@@ -440,3 +601,28 @@ def test_solder_wire_unbounded_feed_not_judged(tmp_path, why):
     loose, facts = _loose(tmp_path, body)
     assert loose == []
     assert not any(p["ref"] == "J1" for p in facts["parts"])
+
+
+def test_project_header_and_pro_micro_held_to_the_post_at_their_pitch(tmp_path):
+    # zxdiag Z101 (zxbus:ZX_Bus_Pin_Header, 0.762 mm) and mdbt-micro J1
+    # (a Pro Micro footprint, 0.8 mm): names that do not say the pitch, held
+    # to a 0.64 mm square post because the holes stand 2.54 mm apart (#1123)
+    for fp in ("zxbus:ZX_Bus_Pin_Header", "MDBTMicro_library:ProMicro"):
+        vs, facts = ccf.check(_board(tmp_path, header(0.762, n=2, fpid=fp)),
+                              None)
+        assert _kinds(vs, "error") == ["tht_pin_tight"] * 4, fp
+        assert facts["parts"][0]["lead_source"] == "stock"
+
+
+def test_a_project_header_off_its_pitch_or_a_socket_is_not_judged(tmp_path):
+    def two_mm(drill, fpid):
+        pads = "".join(_tht(str(i + 1), 2.0 * i, 0, drill) for i in range(4))
+        return (f'  (footprint "{fpid}" (layer "F.Cu")\n    (at 10 5)\n'
+                f'    (property "Reference" "J3" (at 0 0 0))\n{pads})\n')
+    vs, facts = ccf.check(_board(tmp_path, two_mm(0.7, "my:Pin_Header_4")),
+                          None)
+    assert vs == [] and facts["parts"] == []
+    vs, _ = ccf.check(_board(tmp_path, header(0.7, n=2,
+                                              fpid="my:Pin_Header_Socket")),
+                      None)
+    assert vs == []

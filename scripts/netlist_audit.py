@@ -87,6 +87,12 @@ schematic-level structural problems BEFORE board work starts:
  - mcu_pwm_timer (warning): the PWM inputs of reference/mcu_pins.yaml
    loads (a DRV8874 in PWM mode) driven from one MCU whose pins can't all
    take distinct channels of a single timer (#1032, bedlift-5).
+ - mcu_pwm_pair (warning): a gate driver's high-side/low-side input pairs
+   (reference/mcu_pins.yaml loads with pwm_pairs: a DRV8300's INHx/INLx)
+   fed from one MCU on pins that can't give each pair one channel's CHx
+   and CHxN of a single timer: the timer's dead-time generator and break
+   input can't keep that leg's two switches apart, and the legs don't share
+   one counter (#1115).
  - mcu_input_only_drive (warning): a chip-select input (~CS, nCS, CS#)
    joined, directly or over 0 ohm, to an MCU pin mcu_pins.yaml lists as
    input-only (#1032, glasgow-10: flash select on the FX2's RDY0).
@@ -140,6 +146,17 @@ schematic-level structural problems BEFORE board work starts:
    source) points into the battery: with the FET off, that rail charges
    the cell through the diode (#1085; TI SLVA139, Microchip AN1149). A
    back-to-back pair's middle node is no rail and is skipped.
+ - power_switch_reversed (warning): a MOSFET off the battery nets whose
+   body diode conducts the way the switch should block: a gate-driven
+   (a transistor's drain, or an IC GPIO, on the gate) high-side switch
+   with a P-FET's drain or an N-FET's source on the sourced rail; a
+   gate-driven N-FET with its drain, not its source, on ground; a P-FET
+   with its gate tied to ground (reverse-polarity protection) and its
+   source, not its drain, on the input (#1085; TI SLVA139). A gate from
+   a controller IC's gate-drive pin (ideal-diode, hot-swap), a gate held
+   by a rail, both sides sourced or neither, negative rails, and a FET
+   whose value, symbol and description name no channel are not
+   judged and counted in power_switches_not_judged.
  - protector_orientation (warning): a single-cell protector with S-8261's
    pins (VDD, VSS, VM, DO, CO) whose VSS net (the cell's -) carries more
    other ICs' supply pins than the pack - net its VM resistor reaches:
@@ -160,8 +177,15 @@ schematic-level structural problems BEFORE board work starts:
    74-series function) in the same package family, and whose own symbol
    puts a pin name both carry (IN, OUT, GND, Q0, ...) on different pin
    numbers than every such stock symbol does: a pin map from another
-   package variant or part (#1086, miss class 5). Needs the stock symbol
-   dir (lib/env.kicad_symbol_dir); not judged without it.
+   package variant or part (#1086, miss class 5). A part with no stock
+   symbol in its package is compared with its datasheet pin table in
+   reference/part_pinouts.yaml (matched on name and footprint, at least 3
+   names in common; an unverified row's finding is not judged) (#1135).
+   A stock symbol's package is its default footprint, else its
+   ki_fp_filters: a PLCC-44 part is not compared with a DIP-40-numbered
+   stock symbol, and a footprint naming no package among stock symbols of
+   several packages is not judged (#1203). Needs the stock symbol dir
+   (lib/env.kicad_symbol_dir); not judged without it.
  - bus_order_flipped (warning): two units of one part with channel pins of
    one stem (1QA..1QD, 2QA..2QD) whose nets carry one varying number that
    rises along one unit and falls along the other: one unit's pins drawn
@@ -189,9 +213,62 @@ schematic-level structural problems BEFORE board work starts:
    series resistor (smart-lcc's J1 with +12V); floating: a status-named
    net (STATE, DET, INT...) read by an IC input with no pull, driver or
    clamp, on a cable that brings a rail above the reader's supply and is
-   not a host-bus edge (fc980c's KEY_STATE). Fact offboard_inputs_judged
+   not a host-bus edge (fc980c's KEY_STATE); an info note instead when
+   every reader's pin is rated below that rail (glasgow's ECP5 DETECT on a
+   +5V port): the line can only idle at the reader's own rail, a pull set
+   in gateware or firmware. Fact offboard_inputs_judged
    counts the (net, pin) pairs a verified row covered (class 3 of
    docs/miss-taxonomy.md).
+ - pin_role_net (error/warning/info): a part's pin whose role, by its
+   symbol's pin name, doesn't fit its net: a ground pin (GND, VSS) on a
+   positive rail is an error, a supply pin (VCC, VDD, VBUS, VIN) on ground
+   a warning, a VBAT pin on ground an info note (an unused RTC backup
+   domain). One finding per part; connectors, test points and jumpers
+   are not judged (flexgrid v4's USBLC6-2SC6 GND on VBUS).
+ - protector_cell_side (warning): a battery protector with a cell-side
+   pin (GND/VSS) on the board's ground and a load-side pin (BAT-, VM, P-,
+   EB-) on the cell's own terminal: the sides swapped (netscore's
+   FS312MH).
+ - debug_pin_wrong (error), debug_pins_reused (warning): an SWD line, by
+   its net's or header pin's name, reaching an MCU of reference/
+   mcu_pins.yaml's debug rows on a pin other than its SWDIO/SWCLK pin
+   (fc980c's SWDIO on the F401's PA15); an SWD pin wired to other parts
+   with no header, test point or SWD-named net within one resistor (and
+   on STM32G0/C0 PA14 is BOOT0 too). Class 6 of docs/miss-taxonomy.md;
+   facts pin_role_parts_checked, protector_cell_sides_checked,
+   debug_mcus_checked.
+ - rail_over / ldo_heat / gpio_over (error), gpio_total_over / vbus_over
+   (warning; vbus_over an error on a port with no CC pins): a load against
+   its source's limit, from reference/source_limits.yaml rows (cited,
+   verified by part_rows.py). rail_over: the loads a row names on a
+   regulator's output (through 0 ohm links; a downstream LDO passes its
+   own load up; a resistor + LED to ground whose value gives its Vf) ask
+   more than its iout_max (flexgrid's 200 mA TPS7A03 feeding an
+   ESP32-S3-WROOM-1 that wants a 500 mA supply). ldo_heat: (Vin - Vout)
+   x the continuous load (a row marked peak, a radio's burst, is not
+   heat) x its best package's theta_ja + 25 degC past tj_max. gpio_over:
+   an MCU pin driving or sinking an LED through a resistor past pin_max;
+   the pins together past total_max warn. vbus_over: a USB connector's
+   VBUS loads past 500 mA (900 mA with SuperSpeed pins) and no
+   power-delivery controller on the board. A rail with loads no row
+   covers, an LED with no Vf in its value, or volts the net names don't
+   give is not judged, never guessed. Class 11 of docs/miss-taxonomy.md;
+   fact source_limits_checked.
+ - polarity_mismatch (error; a warning for interrupts and for a reset or
+   power-good into an enable), polarity_net_name (warning),
+   idle_pull_asserted (error): a
+   control signal's active level across a connection (a reset output
+   asserting low into a reset input asserting high, directly, through a
+   0 ohm rename or a translator channel; a net named active-low on pins
+   that assert high; a reset held asserted by its only pull). Class 14
+   of the gaps list; lib/signal_domains.py; fact polarity_pins_checked.
+ - io_domain_overdrive (error), io_domain_underdrive (warning),
+   io_domain_pull_rail (error over, warning under): an output on one
+   rail into an input whose datasheet row (reference/io_tolerance.yaml,
+   pin_abs_max.yaml) takes less, a high below the receiver's VIH, an
+   open-drain pull above or below a receiver's limits; a receiver with
+   no row is not_judged. Class 15 of the gaps list; fact
+   io_domain_pairs_checked.
  - metadata_mismatch (error): a decoupling association that contradicts the
    netlist (cap/ic missing, IC pin not on the stated rail, cap not spanning
    rail+gnd); value drift cap-vs-netlist is a warning.
@@ -237,10 +314,12 @@ SOURCE = "audit.netlist"
 PIN_REQUIREMENTS = HERE.parent / "reference" / "pin_requirements.yaml"
 PIN_STATES = HERE.parent / "reference" / "pin_states.yaml"
 MCU_PINS = HERE.parent / "reference" / "mcu_pins.yaml"
+IO_SUPPLY = HERE.parent / "reference" / "io_supply.yaml"
 I2C_ADDRESSES = HERE.parent / "reference" / "i2c_addresses.yaml"
 BUS_LOAD = HERE.parent / "reference" / "bus_load.yaml"
 PIN_LEAKAGE = HERE.parent / "reference" / "pin_leakage.yaml"
 IO_LEVELS = HERE.parent / "reference" / "io_levels.yaml"
+PART_PINOUTS = HERE.parent / "reference" / "part_pinouts.yaml"
 
 # Strong differential suffix families (subset of check_diffpair.SUFFIX_PAIRS:
 # the bare +/- and P/N tokens are too ambiguous for unpaired-net warnings).
@@ -467,11 +546,19 @@ def _req_window(req: dict) -> tuple[float | None, float | None]:
             float(hi) if hi is not None else None)
 
 
+def _driven(nets: dict, names: set[str], ref: str) -> bool:
+    """A pin of a part other than ref and the two-pin passives (R, C, L)
+    is on one of these nets: something else sets its level."""
+    return any(m["ref"] != ref and _part_kind(m["ref"]) is None
+               for n in names for m in nets.get(n, []))
+
+
 def _pin_requirements(nets: dict, comps: dict,
                       comp_pins: dict[str, dict[str, str]],
                       specs: list[dict]):
-    """Yield (severity, net, ic, req, found, elsewhere, off_value) per
-    datasheet-required pin part that is missing or not drawn with its IC."""
+    """Yield (severity, net, ic, req, found, elsewhere, off_value, unread) per
+    datasheet-required pin part that is missing or not drawn with its IC;
+    found is None when a `distinct` pair of pins is tied into one net."""
     hierarchical = len({c.get("sheet") for c in comps.values()} - {None}) > 1
     for spec in specs:
         rx = re.compile(spec["match"], re.I)
@@ -495,33 +582,43 @@ def _pin_requirements(nets: dict, comps: dict,
                     continue  # this symbol has no such pin
                 a = {n for n in a if not n.startswith("unconnected-")}
                 b = {n for n in b if not n.startswith("unconnected-")}
-                if not a and req.get("when") == "connected":
+                if not a and req.get("when") in ("connected", "undriven"):
                     continue
+                if req.get("when") == "undriven" and _driven(nets, a, ref):
+                    continue  # another part drives the pin (REFIN fed a ref)
                 if a & b:
+                    if req.get("distinct"):
+                        # tied straight across: the part it needs is not there
+                        yield ("error", sorted(a & b)[0], ref, req, None, [],
+                               [], [])
                     continue  # the two pins are one net: nothing to span
                 lo, hi = _req_window(req)
-                found, off = [], []
+                found, off, unread = [], [], []
                 for other, pins in sorted(comp_pins.items()):
                     if other == ref or _part_kind(other) not in req["kinds"]:
                         continue
                     if not (any(n in a for n in pins.values())
                             and any(n in b for n in pins.values())):
                         continue
-                    val = engcalc.parse_value(comps.get(other, {}).get("value"))
-                    if (lo is not None or hi is not None) and (
-                            val is None or (lo is not None and val < lo * 0.999)
-                            or (hi is not None and val > hi * 1.001)):
+                    val = engcalc.part_value(comps.get(other, {}).get("value"),
+                                             _part_kind(other))
+                    if (lo is not None or hi is not None) and val is None:
+                        unread.append(other)  # no value to judge it by
+                        continue
+                    if (lo is not None and val < lo * 0.999) or (
+                            hi is not None and val > hi * 1.001):
                         off.append(other)
                         continue
                     found.append(other)
                 net = sorted(a)[0] if a else None
                 if not found:
-                    yield "error", net, ref, req, [], [], off
+                    yield (req.get("severity", "error"), net, ref, req, [],
+                           [], off, unread)
                     continue
                 sheet = comp.get("sheet")
                 if hierarchical and sheet and not any(
                         comps.get(f, {}).get("sheet") == sheet for f in found):
-                    yield "warning", net, ref, req, [], found, off
+                    yield "warning", net, ref, req, [], found, off, []
 
 
 # ------------------------------------------------------------ compare mode
@@ -710,6 +807,11 @@ def _load_yaml(path: Path, what: str) -> dict:
 def load_mcu_pins(path: Path = MCU_PINS) -> dict:
     """reference/mcu_pins.yaml (its header says the form)."""
     return _load_yaml(path, "mcu pins")
+
+
+def load_part_pinouts(path: Path = PART_PINOUTS) -> list[dict]:
+    """reference/part_pinouts.yaml's parts (its header says the form)."""
+    return _load_yaml(path, "part pinouts").get("parts") or []
 
 
 def load_i2c_addresses(path: Path = I2C_ADDRESSES) -> list[dict]:
@@ -918,6 +1020,105 @@ def _mcu_pwm_groups(nets: dict, comps: dict,
                 continue
             if _one_timer([(i[2], i[3]) for i in inputs]) is None:
                 found.append((row, mref, mrow, inputs))
+    return found, checked
+
+
+_PAIR_RE = re.compile(r"^(TIM\d+)_CH(\d)(N?)$")
+
+
+def _pair_slots(hi: list[str], lo: list[str]) -> set[tuple[str, int]]:
+    """{(TIMn, x)}: the timer channels whose CHx and CHxN outputs a
+    high-side pin with functions HI and a low-side pin with LO bring out,
+    either way round (CHxN's polarity is set in the timer)."""
+    def sides(funcs):
+        out: dict[tuple[str, int], set[str]] = {}
+        for f in funcs:
+            m = _PAIR_RE.match(f.upper())
+            if m:
+                out.setdefault((m.group(1), int(m.group(2))), set()).add(
+                    m.group(3))
+        return out
+    h, lo_ = sides(hi), sides(lo)
+    return {k for k in set(h) & set(lo_)
+            if ("" in h[k] and "N" in lo_[k]) or ("N" in h[k] and ""
+                                                   in lo_[k])}
+
+
+def _pairs_one_timer(slots: list[set[tuple[str, int]]]) -> str | None:
+    """A timer with a distinct channel pair for every leg, or None."""
+    timers = (set.intersection(*({t for t, _ in s} for s in slots))
+              if slots else set())
+    for tim in sorted(timers, key=lambda t: int(t[3:])):
+        opts = [{c for t, c in s if t == tim} for s in slots]
+        match: dict[int, int] = {}
+
+        def place(i, seen, opts=opts, match=match):
+            for ch in opts[i]:
+                if ch in seen:
+                    continue
+                seen.add(ch)
+                if ch not in match or place(match[ch], seen):
+                    match[ch] = i
+                    return True
+            return False
+        if all(place(i, set()) for i in range(len(opts))):
+            return tim
+    return None
+
+
+def _mcu_pwm_pairs(nets: dict, comps: dict,
+                   comp_pins: dict[str, dict[str, str]], rails: dict,
+                   table: dict) -> tuple[list[tuple], int]:
+    """([(row, load_ref, mcu_ref, mcu_row, legs)], parts checked): each
+    gate driver (a load row with pwm_pairs) whose high-side/low-side input
+    pairs, all fed from one MCU, can't each take one channel's CHx and CHxN
+    on a single timer. A leg is (hi_pin, lo_pin, hi_mcu_pin, lo_mcu_pin,
+    hi_funcs, lo_funcs). A pair with an input that reaches no MCU pin (tied
+    to a rail or ground, or driven by logic) is left out; a part with none
+    left is not checked."""
+    mcus = table.get("mcus") or []
+    found: list[tuple] = []
+    checked = 0
+
+    def mcu_pin(net, ref):
+        for reach in _zero_ohm_reach(net, nets, comps, comp_pins):
+            if _supply_net(reach, nets.get(reach, []), rails):
+                continue
+            for m in nets.get(reach, []):
+                mrow = (_mcu_row(comps.get(m["ref"], {}), mcus)
+                        if m["ref"] != ref else None)
+                if mrow and "timers" in mrow:
+                    return m["ref"], mrow, _pin_base(m.get("pinfunction"))
+        return None
+
+    for row in table.get("loads") or []:
+        if not row.get("pwm_pairs"):
+            continue
+        aliases = {_norm_pin(k): v.upper()
+                   for k, v in (row.get("aliases") or {}).items()}
+        for ref in sorted(comps):
+            if not _spec_matches(row, comps[ref]):
+                continue
+            funcs = {aliases.get(_norm_pin(f), _norm_pin(f)): pn
+                     for f, pn in _pin_funcs(ref, nets, comp_pins).items()}
+            per_mcu: dict[str, list] = {}
+            for hi, lo in row["pwm_pairs"]:
+                hi, lo = hi.upper(), lo.upper()
+                if hi not in funcs or lo not in funcs:
+                    continue
+                a = mcu_pin(funcs[hi][1], ref)
+                b = mcu_pin(funcs[lo][1], ref)
+                if not a or not b or a[0] != b[0]:
+                    continue
+                tims = a[1]["timers"] or {}
+                per_mcu.setdefault(a[0], [a[1], []])[1].append(
+                    (hi, lo, a[2], b[2], list(tims.get(a[2]) or []),
+                     list(tims.get(b[2]) or [])))
+            for mref, (mrow, legs) in sorted(per_mcu.items()):
+                checked += 1
+                slots = [_pair_slots(lg[4], lg[5]) for lg in legs]
+                if _pairs_one_timer(slots) is None:
+                    found.append((row, ref, mref, mrow, legs))
     return found, checked
 
 
@@ -1440,8 +1641,21 @@ def _pg_unused(nets: dict, comps: dict,
 
 # power-path orientation (#1085). Seeded from TI SLVA139 and ABLIC S-8261
 # Rev.5.5_00, not from any corpus board.
-_PMOS_RE = re.compile(r"PMOS|P[-_ ]?CH|PFET|P-?CHANNEL|Q_P(MOS)?_", re.I)
-_NMOS_RE = re.compile(r"NMOS|N[-_ ]?CH|NFET|N-?CHANNEL|Q_N(MOS)?_", re.I)
+_PMOS_RE = re.compile(r"PMOS|P[-_ ]?CH|P-?FET|P-MOSFET|P-?CHANNEL|Q_P(MOS)?_",
+                      re.I)
+_NMOS_RE = re.compile(r"NMOS|N[-_ ]?CH|N-?FET|N-MOSFET|N-?CHANNEL|Q_N(MOS)?_",
+                      re.I)
+# MOSFETs whose part number names no channel, from their datasheets'
+# titles: exact parts (an A / E / L suffix or a reel code may follow)
+# and the families whose naming carries it (Diodes Inc DMN / DMP,
+# Toshiba SSM3K / SSM6K N and SSM3J / SSM6J P, IR's IRF9 P). GaN parts
+# (EPC) have no body diode and stay unknown.
+_FET_MPN_CHANNEL = (
+    (re.compile(r"^(2N700[02]|BSS138|BSS123|AO340[024]|AO3416|AO4406"
+                r"|AON7264|CJ2310|NTMFS5C628N|DMN\d|SSM[36]K\d)"), "N"),
+    (re.compile(r"^(BSS84|AO340[179]|AO3415|AO440[79]|AO4435|AO4485"
+                r"|DMP\d|SSM[36]J\d|IRF9)"), "P"),
+)
 # a single-cell battery's positive net: BAT, VBAT, BATT, +BATT, BAT+,
 # VBAT_IN; not BAT- / BATN / BAT_NEG
 _BATTERY_NET_RE = re.compile(
@@ -1458,7 +1672,8 @@ _PROTECTOR_PINS = {"VDD", "VSS", "VM", "DO", "CO"}
 
 def _fet_channel(comp: dict) -> str | None:
     """'P' or 'N' from the part's value, symbol name or the symbol's
-    description ("P-Channel MOSFET"), else None."""
+    description ("P-Channel MOSFET"), or a part number whose datasheet
+    names it (_FET_MPN_CHANNEL), else None."""
     for text in (comp.get("value") or "",
                  (comp.get("libsource") or ("", ""))[1],
                  comp.get("libdesc") or ""):
@@ -1467,6 +1682,11 @@ def _fet_channel(comp: dict) -> str | None:
             return "P"
         if n and not p:
             return "N"
+    for text in (comp.get("value") or "",
+                 (comp.get("libsource") or ("", ""))[1]):
+        for rx, ch in _FET_MPN_CHANNEL:
+            if rx.match(text.strip().upper()):
+                return ch
     return None
 
 
@@ -1557,6 +1777,142 @@ def _power_path_fets(nets: dict, comps: dict,
     yield "checked", checked, "", ""
 
 
+# a controller pin that drives a FET gate (ideal-diode, hot-swap, load-
+# switch, eFuse and gate-driver ICs face their FETs either way round)
+_GATE_CTRL_RE = re.compile(r"GATE|^G\d*$|^GD|^[HL]G\d*$|^[HL]O\d*$|DRV|"
+                           r"^DG|^CG|^OUT[HL]?$")
+_NEG_NET_RE = re.compile(r"^-|NEG|VEE|^VSS|^V-")
+
+
+def _gate_drive(gate: str, nets: dict, comp_pins: dict[str, dict[str, str]],
+                own: str, rails: dict) -> str:
+    """How a FET's gate net is held, on the net or one resistor hop away
+    (a resistor to a rail or ground is a pull, not a drive): 'controller'
+    (an IC's gate-drive pin), 'driven' (another transistor's drain or
+    collector, or an IC GPIO pin), 'tied' (ground, directly or through a
+    resistor, with no IC or transistor on it), else 'other'."""
+    import signal_domains as sd  # noqa: PLC0415
+    kinds: set[str] = set()
+    seen = [gate]
+    if _is_ground_name(gate.lstrip("/")):
+        return "tied"
+    for m in nets.get(gate, []):
+        xp = comp_pins.get(m["ref"], {})
+        if m["ref"] == own or _part_kind(m["ref"]) != "R" or len(xp) != 2:
+            continue
+        far = next((n for p, n in xp.items() if p != m["pin"]), None)
+        if not far or far in seen:
+            continue
+        if _is_ground_name(far.lstrip("/")):
+            kinds.add("ground")
+        elif not _supply_net(far, nets.get(far, []), rails):
+            seen.append(far)
+    for net in seen:
+        for m in nets.get(net, []):
+            ref = m["ref"] or ""
+            if ref == own:
+                continue
+            func = _norm_pin(m.get("pinfunction"))
+            role = _transistor_role(func)
+            if ref.startswith("Q"):
+                kinds.add("driven" if role in ("D", "C") else "other")
+            elif ref.startswith(("U", "IC")):
+                if _GATE_CTRL_RE.search(func):
+                    kinds.add("controller")
+                elif sd._GPIO.match(func):
+                    kinds.add("driven")
+                else:
+                    kinds.add("other")
+    if "controller" in kinds:
+        return "controller"
+    if "other" in kinds:
+        return "other"
+    if "driven" in kinds:
+        return "driven"
+    return "tied" if kinds == {"ground"} else "other"
+
+
+def _power_switches(nets: dict, comps: dict,
+                    comp_pins: dict[str, dict[str, str]], rails: dict):
+    """Yield (ref, channel, case, supply net, other net) for each MOSFET
+    switch off the battery nets whose body diode conducts the way it
+    should block (N: source to drain, P: drain to source):
+    'high' a gate-driven high-side switch with the diode from its sourced
+    rail into the load; 'low' a gate-driven N-FET with its drain on ground
+    and its source on the load; 'reverse' a P-FET with its gate tied to
+    ground and its source, not its drain, on the input (no reverse
+    protection). The last item is ('checked', n, not_judged counts, '',
+    '')."""
+    batteries = _battery_nets(nets)
+    checked, nj = 0, {}
+
+    def skip(why):
+        nj[why] = nj.get(why, 0) + 1
+
+    for ref, pins in sorted(comp_pins.items()):
+        if not ref.startswith("Q") or comps.get(ref, {}).get("dnp"):
+            continue
+        roles: dict[str, set[str]] = {}
+        for net, members in nets.items():
+            for m in members:
+                if m["ref"] == ref:
+                    r = _transistor_role(_norm_pin(m.get("pinfunction")))
+                    if r:
+                        roles.setdefault(r, set()).add(net)
+        if any(len(roles.get(k, ())) != 1 for k in "GDS"):
+            continue
+        (g,), (d,), (s,) = roles["G"], roles["D"], roles["S"]
+        if {d, s} & batteries:
+            continue            # rule 22's
+        ch = _fet_channel(comps.get(ref, {}))
+        if not ch:
+            skip("channel not stated")
+            continue
+        if d == s or g in (d, s):
+            continue
+        drive = _gate_drive(g, nets, comp_pins, ref, rails)
+        if drive == "controller":
+            skip("gate from a controller")
+            continue
+        if drive not in ("driven", "tied"):
+            skip("gate tied to a rail or not traced")
+            continue
+        gnd = {n for n in (d, s) if _is_ground_name(n.lstrip("/"))}
+        if any(_NEG_NET_RE.search(re.split(r"/", n.upper())[-1])
+               for n in (d, s) if n not in gnd):
+            skip("negative rail")
+            continue
+        if gnd:
+            if drive == "tied" or ch == "P" or len(gnd) == 2:
+                skip("tied gate or P-FET on the low side")
+                continue
+            checked += 1
+            if d in gnd:
+                yield ref, ch, "low", d, s
+            continue
+        if not any(_supply_net(n, nets[n], rails) for n in (d, s)):
+            skip("no supply on either side")
+            continue
+        src = {n for n in (d, s) if _sourced_rail(n, nets, comp_pins, ref)}
+        if len(src) != 1:
+            skip("both sides sourced or neither")
+            continue
+        (sup,) = src
+        load = s if sup == d else d
+        if drive == "tied":
+            if ch != "P":
+                skip("tied gate or P-FET on the low side")
+                continue
+            checked += 1
+            if sup == s:
+                yield ref, ch, "reverse", sup, load
+            continue
+        checked += 1
+        if (ch == "P" and sup == d) or (ch == "N" and sup == s):
+            yield ref, ch, "high", sup, load
+    yield "checked", checked, nj, "", ""
+
+
 def _protector_orientation(nets: dict, comps: dict,
                            comp_pins: dict[str, dict[str, str]]):
     """Yield (ref, vss net, vm-side net, ics on vss, ics on vm side) for
@@ -1592,6 +1948,429 @@ def _protector_orientation(nets: dict, comps: dict,
         if on_vss and len(on_vss) > len(on_pack):
             yield ref, vss, pack, on_vss, on_pack
     yield "checked", checked, "", [], []
+
+
+# Class 6 of docs/miss-taxonomy.md: a pin whose role doesn't fit its net.
+# A pin's role is its symbol's pin name (the stock symbol's, when the
+# part is placed from KiCad's library): a ground pin, a supply pin, a
+# battery-backup pin.
+_ROLE_SKIP_RE = re.compile(r"^(J|P|CN|X|TP|JP|H|MH|SB|NT|SW|K)\d")
+_ROLE_SUPPLY_RE = re.compile(
+    r"^(VCC|VDD|VBUS|VIN|AVDD|DVDD|VDDA|VDDIO|IOVDD|VCCIO|VCCA|VCCB|VS)"
+    r"\d*$")
+_VBAT_PIN_RE = re.compile(r"^VBAT\d*$")
+_POS_NET_RE = re.compile(
+    r"^\+|^(VCC|VDD|VBUS|VIN|VSYS|VBAT|VBATT|V_?USB)(_|$)")
+
+
+def _pin_role(func: str | None) -> str | None:
+    """'ground', 'supply', 'vbat' or None, from a symbol's pin name."""
+    name = re.sub(r"[_{}]", "", _pin_base(func)) if func else ""
+    if not name:
+        return None
+    if _GROUND_RE.search(name):
+        return "ground"
+    if _VBAT_PIN_RE.match(name):
+        return "vbat"
+    if _ROLE_SUPPLY_RE.match(name):
+        return "supply"
+    return None
+
+
+def _net_polarity(net: str, rails: dict) -> str | None:
+    """'ground' or 'positive' when the net's name or volts say so."""
+    if net.startswith("unconnected-"):
+        return None
+    if _is_ground_name(net) or rails.get(net) == 0:
+        return "ground"
+    if (rails.get(net) or 0) > 0 or _POS_NET_RE.search(
+            net.lstrip("/").upper()):
+        return "positive"
+    return None
+
+
+def _pin_role_nets(nets: dict, comps: dict, rails: dict):
+    """Yield (ref, [(sev, pin, func, role, net)]) for each part with a
+    ground pin on a positive rail (error), a supply pin on ground
+    (warning) or a VBAT pin on ground (info: an RTC's backup pin is
+    grounded when unused). The last item is ('checked', n)."""
+    hits: dict[str, list] = {}
+    seen: set[str] = set()
+    for net, members in sorted(nets.items()):
+        pol = _net_polarity(net, rails)
+        for m in members:
+            ref = m["ref"]
+            if (_ROLE_SKIP_RE.match(ref or "")
+                    or (comps.get(ref) or {}).get("dnp")):
+                continue
+            role = _pin_role(m.get("pinfunction"))
+            if role is None:
+                continue
+            seen.add(ref)
+            sev = {("ground", "positive"): "error",
+                   ("supply", "ground"): "warning",
+                   ("vbat", "ground"): "info"}.get((role, pol))
+            if sev:
+                hits.setdefault(ref, []).append(
+                    (sev, m["pin"], m.get("pinfunction"), role, net))
+    for ref in sorted(hits):
+        yield ref, hits[ref]
+    yield "checked", len(seen)
+
+
+# A battery protector's pins: its cell side (GND/VSS on the cell's -) and
+# its load side (BAT-/VM/P-/EB-, toward the pack's - the load returns to).
+_PROT_CELL_PINS = {"GND", "VSS"}
+_PROT_LOAD_PINS = {"BAT-", "VM", "P-", "EB-", "PACK-"}
+_CELL_REF_RE = re.compile(r"^(BAT|BT)\d")
+
+
+def _battery_net(net: str, nets: dict, comps: dict) -> bool:
+    """NET is the cell's own terminal: a battery part sits on it, or its
+    name says BAT."""
+    if "BAT" in net.upper():
+        return True
+    for m in nets.get(net, []):
+        comp = comps.get(m["ref"]) or {}
+        lib = " ".join((comp.get("libsource") or ("", ""))).upper()
+        if _CELL_REF_RE.match(m["ref"] or "") or "BATTERY" in lib:
+            return True
+    return False
+
+
+def _protector_cell_side(nets: dict, comps: dict):
+    """Yield (ref, cell pin, cell net, load pin, load net) for each
+    protector whose cell-side pin is on the board's ground while its
+    load-side pin sits on the cell's own terminal: the two swapped, so the
+    FETs sit in no path and the protector cuts nothing. The last item is
+    ('checked', n, '', '', '')."""
+    funcs: dict[str, dict[str, tuple[str, str]]] = {}
+    for net, members in nets.items():
+        for m in members:
+            funcs.setdefault(m["ref"], {})[_norm_pin(
+                m.get("pinfunction"))] = (m["pin"], net)
+    checked = 0
+    for ref, fn in sorted(funcs.items()):
+        cell = sorted(_PROT_CELL_PINS & set(fn))
+        load = sorted(_PROT_LOAD_PINS & set(fn))
+        if not cell or not load or (comps.get(ref) or {}).get("dnp"):
+            continue
+        checked += 1
+        cnet, lnet = fn[cell[0]][1], fn[load[0]][1]
+        if (cnet != lnet and _is_ground_name(cnet)
+                and not _is_ground_name(lnet)
+                and _battery_net(lnet, nets, comps)):
+            yield ref, cell[0], cnet, load[0], lnet
+    yield "checked", checked, "", "", ""
+
+
+# An MCU's serial-wire debug pins (mcu_pins.yaml debug)
+_DEBUG_NET_RE = {"SWDIO": re.compile(r"SWDIO|SWDAT|SWD_IO|SWD_DIO"),
+                 "SWCLK": re.compile(r"SWCLK|SWCK|SWD_CLK")}
+_DEBUG_PORT_RE = re.compile(r"^(J|P|CN|X|TP)\d")
+
+
+def _debug_signal(net: str, nets: dict) -> str | None:
+    """The SWD signal NET carries by its name or a connector pin's name."""
+    names = [net.upper()] + [_norm_pin(m.get("pinfunction"))
+                             for m in nets.get(net, [])
+                             if _DEBUG_PORT_RE.match(m["ref"] or "")]
+    for sig, rx in _DEBUG_NET_RE.items():
+        if any(rx.search(n) for n in names):
+            return sig
+    return None
+
+
+def _pin_tokens(func: str | None) -> set[str]:
+    """Every name a pin goes by: PA13(SWDIO) is PA13 and SWDIO,
+    PA15/PA14-BOOT0 is PA15, PA14 and BOOT0, SYS_SWCLK is SWCLK too."""
+    return {t for t in re.split(r"[-/()_ ,]+", _norm_pin(func)) if t}
+
+
+def _debug_reach(net: str, nets: dict, comps: dict,
+                 comp_pins: dict[str, dict[str, str]]) -> list[str]:
+    """NET and the nets one 2-pin resistor away (a series resistor to the
+    debug header)."""
+    out = [net]
+    for m in nets.get(net, []):
+        pins = comp_pins.get(m["ref"], {})
+        if _part_kind(m["ref"]) == "R" and len(pins) == 2:
+            far = next((n for p, n in pins.items() if p != m["pin"]), None)
+            if far and far not in out and not far.startswith("unconn"):
+                out.append(far)
+    return out
+
+
+def _debug_pins(nets: dict, comps: dict,
+                comp_pins: dict[str, dict[str, str]], table: dict):
+    """Yield ('wrong', row, mcu, sig, pin, func, net) for an SWD line that
+    reaches the MCU on a pin other than the one its debug port has, and
+    ('reused', row, mcu, sig, pin, func, net) for an SWD pin wired to
+    other parts with no debug header, test point or SWD-named net within
+    one resistor: debugging is locked out once firmware takes the pin.
+    The last item is ('checked', n, ...)."""
+    rows = [r for r in (table.get("mcus") or []) if r.get("debug")]
+    checked = 0
+    for ref in sorted(comps):
+        row = _mcu_row(comps[ref], rows) if rows else None
+        if not row or comps[ref].get("dnp"):
+            continue
+        checked += 1
+        want = {s.upper(): p.upper() for s, p in row["debug"].items()}
+        pins = _pin_funcs(ref, nets, comp_pins)
+        by_name = {t: (pn, net, f) for f, (pn, net) in pins.items()
+                   for t in _pin_tokens(f)}
+        for f, (pn, net) in sorted(pins.items()):
+            sig = _debug_signal(net, nets)
+            if sig in want and not {want[sig], sig} & _pin_tokens(f):
+                yield "wrong", row, ref, sig, pn, f, net
+        for sig, mpin in sorted(want.items()):
+            at = by_name.get(mpin) or by_name.get(sig)
+            if not at or at[1].startswith("unconnected-"):
+                continue
+            reach = _debug_reach(at[1], nets, comps, comp_pins)
+            others = [m for n in reach for m in nets.get(n, [])
+                      if m["ref"] != ref]
+            if not others or any(
+                    _debug_signal(n, nets) for n in reach) or any(
+                    _DEBUG_PORT_RE.match(m["ref"] or "") for m in others):
+                continue
+            yield "reused", row, ref, sig, at[0], at[2], at[1]
+    yield "checked", checked, None, None, None, None, None
+
+
+# Design intent (class 8 of docs/miss-taxonomy.md, #1137).
+#
+# A named bus whose members a master has to read together: a part that
+# takes all of them but one, while that one still reaches the connector the
+# others come in on, has dropped it. Zilog UM0080 (Z80 CPU User Manual),
+# pin descriptions: MREQ "indicates that the address bus holds a valid
+# address for a memory read or memory write operation", IORQ "indicates
+# that the lower half of the address bus holds a valid I/O address for an
+# I/O read or write operation", RD and WR say which way; a part decoding
+# bus cycles from RD and WR needs both MREQ and IORQ to tell a memory cycle
+# from an I/O one. IEEE 1149.1 section 3: TCK, TMS, TDI and TDO are the
+# four required TAP signals. A byte-wide data port reads D0..D7. SPI is left
+# out: a write-only device has no MISO by design.
+_BUS_GROUPS = (
+    ("Z80 bus-cycle strobes", ("MREQ", "IORQ", "RD", "WR"),
+     "Zilog UM0080 pin descriptions: MREQ and IORQ tell a memory cycle "
+     "from an I/O one, RD and WR its direction"),
+    ("JTAG TAP", ("TCK", "TMS", "TDI", "TDO"),
+     "IEEE 1149.1 section 3: TCK, TMS, TDI and TDO are the required TAP "
+     "signals"),
+    ("data byte", tuple(f"D{i}" for i in range(8)),
+     "a byte-wide data port reads all of D0..D7"),
+)
+_BUS_MASTER_MIN_PINS = 20
+# a buffer, latch or gate passes the bus on; it doesn't read it
+_LOGIC_VALUE_RE = re.compile(r"74[A-Z]*\d{2,}|^CD4\d{3}|^4\d{3}[A-Z]?$",
+                             re.I)
+
+
+def _bus_name(name: str) -> str:
+    """A net or pin name with its path, ~{} and active-low marks gone."""
+    name = _norm_pin(name.rsplit("/", 1)[-1])
+    return re.sub(r"[#*{}~/ ]", "", name)
+
+
+def _bus_member(name: str, member: str) -> str | None:
+    """The prefix NAME carries before bus member MEMBER (ZXMREQ: 'ZX',
+    LCD_D3: 'LCD_'), or None when NAME isn't that member."""
+    m = re.fullmatch(rf"((?:[A-Z0-9]*?_)?(?:ZX|Z80_?|CPU_?)?)N?{member}"
+                     r"(?:_N|_B|N)?", _bus_name(name))
+    return m.group(1) if m else None
+
+
+def _bus_members_dropped(nets: dict, comps: dict,
+                         comp_pins: dict[str, dict[str, str]]):
+    """Yield (group, member, net, master, read, connectors, source) for a
+    bus member that reaches a connector the rest of its group comes in on,
+    while a part of 20 pins or more reads every other member (directly or
+    through one series resistor) but not this one. The last item is
+    ('checked', n, ...)."""
+    checked = 0
+    for gname, members, src in _BUS_GROUPS:
+        # (prefix) -> member -> net
+        found: dict[str, dict[str, str]] = {}
+        for net, ms in nets.items():
+            if net.startswith("unconnected-"):
+                continue
+            for mem in members:
+                pre = _bus_member(net, mem)
+                if pre is None:
+                    continue
+                found.setdefault(pre, {}).setdefault(mem, net)
+        for pre, have in sorted(found.items()):
+            if len(have) < len(members):
+                continue
+            checked += 1
+            reach = {mem: _debug_reach(net, nets, comps, comp_pins)
+                     for mem, net in have.items()}
+            conns = {mem: {m["ref"] for n in r for m in nets.get(n, [])
+                           if _OB_CONN_RE.match(m["ref"] or "")}
+                     for mem, r in reach.items()}
+            parts = {mem: {m["ref"] for n in r for m in nets.get(n, [])
+                           if (m["ref"] or "").startswith("U")}
+                     for mem, r in reach.items()}
+            for ref in sorted(set().union(*parts.values())):
+                if len(comp_pins.get(ref, {})) < _BUS_MASTER_MIN_PINS \
+                        or comps.get(ref, {}).get("dnp") \
+                        or _LOGIC_VALUE_RE.search(
+                            comps.get(ref, {}).get("value") or ""):
+                    continue
+                miss = [mem for mem in members if ref not in parts[mem]]
+                if len(miss) != 1:
+                    continue
+                mem = miss[0]
+                # another chip on the board reads it (pico-if1 v1.3: a
+                # 4075 takes MREQ for the ROM, the I/O Pico needs only IORQ)
+                if parts[mem]:
+                    continue
+                read = [m for m in members if m != mem]
+                shared = conns[mem] & set().union(
+                    *(conns[m] for m in read))
+                if not shared:
+                    continue
+                yield (gname, mem, have[mem], ref, read, sorted(shared),
+                       src)
+    yield "checked", checked, None, None, None, None, None
+
+
+# A UART line whose name says which way it runs (RX_FROM_AUX,
+# TX_TO_CONTROL_BOARD) reaching an MCU pin whose fixed UART function is the
+# other way (errata corpus: smart-lcc rev A put RX_FROM_AUX on the Nano
+# RP2040 Connect's D8, GPIO20, which is UART1 TX).
+_UART_NET_DIR = (("RX", re.compile(r"(^|[/_])RXD?_FROM(_|$)")),
+                 ("TX", re.compile(r"(^|[/_])TXD?_TO(_|$)")))
+
+
+def _uart_dir_row(ref: str, comp: dict, rows: list[dict],
+                  stated: dict[str, str]) -> dict | None:
+    """REF's mcu_pins.yaml row: what design_intent.modules says it is,
+    else its Value."""
+    if ref in stated:
+        return _mcu_row({"value": stated[ref]}, rows)
+    return _mcu_row(comp, rows)
+
+
+def _uart_directions(nets: dict, comps: dict,
+                     comp_pins: dict[str, dict[str, str]], table: dict,
+                     stated: dict[str, str]):
+    """Yield (ref, pin, func, function, net, way, row) for an MCU pin on a
+    net whose name gives its direction (`way`, from this board's side)
+    when the pin's UART function, by its own name (TX, RXD) or the row's
+    module_pins and the chip's uart table, is the opposite. A series
+    resistor in between is followed. The last item is ('checked', n, ...)."""
+    rows = table.get("mcus") or []
+    chips = {r["mpn"]: r for r in rows if r.get("uart")}
+    checked = 0
+    for ref in sorted(comps):
+        if comps[ref].get("dnp") or not ref.startswith(("U", "A", "M")):
+            continue
+        row = _uart_dir_row(ref, comps[ref], rows, stated)
+        chip = row if row and row.get("uart") else None
+        if row and row.get("module_of"):
+            chip = next((c for m, c in chips.items()
+                         if m.startswith(row["module_of"])), None)
+        mod = (row or {}).get("module_pins") or {}
+        seen = False
+        for func, (pn, net) in sorted(_pin_funcs(ref, nets,
+                                                 comp_pins).items()):
+            toks = _pin_tokens(func)
+            fn = None
+            if toks & {"TX", "TXD", "TXO"}:
+                fn = "TX"
+            elif toks & {"RX", "RXD", "RXI"}:
+                fn = "RX"
+            elif chip:
+                for t in toks:
+                    g = str(mod.get(t, t))
+                    u = (chip.get("uart") or {}).get(g)
+                    if u:
+                        fn = f"{g} {u}"
+                        break
+            if not fn:
+                continue
+            seen = True
+            for n in _debug_reach(net, nets, comps, comp_pins):
+                way = next((w for w, rx in _UART_NET_DIR
+                            if rx.search(n.upper())), None)
+                if way and not fn.endswith(way):
+                    yield ref, pn, func, fn, n, way, row
+                    break
+        checked += seen
+    yield "checked", checked, None, None, None, None, None
+
+
+# A bus transceiver ('245 family) enabled all the time, with one side on a
+# host connector's lines and DIR straight off a connector strobe: it drives
+# the host's bus on every cycle of that strobe, whoever is addressed
+# (errata corpus: pico-if1 v1.0 tied the 74LS245's OE to ground and put DIR
+# on the edge connector's raw /RD; v1.1 drives DIR from a decoded ROM read).
+# TI SN74LS245 (SDLS146) function table: OE low enables the outputs, DIR
+# low sends B to A and DIR high A to B, so whichever side faces the host is
+# driven for one level of DIR.
+_XCVR_RE = re.compile(r"74[A-Z]*(245|640|645)|74[A-Z]*8T245|LVC[H]?4245",
+                      re.I)
+_XCVR_DEFAULT = {"DIR": "1", "OE": "19"}
+
+
+def _host_bus_transceivers(nets: dict, comps: dict,
+                           comp_pins: dict[str, dict[str, str]],
+                           rails: dict):
+    """Yield (ref, oe_pin, oe_net, dir_pin, dir_net, side_nets, conns) for
+    each always-on '245 whose DIR comes straight from a connector while
+    four or more of one side's data pins sit on that connector's nets. The
+    last item is ('checked', n, ...)."""
+    checked = 0
+    for ref in sorted(comps):
+        comp = comps[ref]
+        if comp.get("dnp") or not _XCVR_RE.search(
+                f"{comp.get('value') or ''} "
+                f"{(comp.get('libsource') or ('', ''))[1]}"):
+            continue
+        funcs = _pin_funcs(ref, nets, comp_pins)
+        by = {}
+        for f, (pn, net) in funcs.items():
+            toks = _pin_tokens(f)
+            if "DIR" in toks or "T/R" in _norm_pin(f) or "->" in f:
+                by["DIR"] = (pn, net)
+            elif toks & {"OE", "G", "CE", "E"} or _norm_pin(f) in {
+                    "~OE", "OE#", "~G", "~CE"}:
+                by["OE"] = (pn, net)
+        pins = comp_pins.get(ref, {})
+        for k, pn in _XCVR_DEFAULT.items():
+            if k not in by and pn in pins and len(pins) == 20:
+                by[k] = (pn, pins[pn])
+        if set(by) != {"DIR", "OE"}:
+            continue
+        checked += 1
+        (oe_pin, oe_net), (dir_pin, dir_net) = by["OE"], by["DIR"]
+        if _net_polarity(oe_net, rails) != "ground":
+            continue
+        # DIR tied to a rail is a one-way buffer, not a strobe-driven one
+        if _net_polarity(dir_net, rails) is not None:
+            continue
+        dconn = {m["ref"] for m in nets.get(dir_net, [])
+                 if _OB_CONN_RE.match(m["ref"] or "")}
+        drivers = [m for m in nets.get(dir_net, [])
+                   if m["ref"] != ref and not _OB_CONN_RE.match(
+                       m["ref"] or "") and _part_kind(m["ref"]) is None
+                   and _base_type(m.get("pintype")) in _OB_DRIVE_TYPES
+                   # another transceiver's data pin passes the strobe on
+                   and not _XCVR_RE.search(
+                       comps.get(m["ref"], {}).get("value") or "")]
+        if not dconn or drivers:
+            continue
+        side = [net for f, (pn, net) in funcs.items()
+                if re.fullmatch(r"[AB]\d", _norm_pin(f) or "")
+                and any(m["ref"] in dconn for m in nets.get(net, []))]
+        if len(side) < 4:
+            continue
+        yield ref, oe_pin, oe_net, dir_pin, dir_net, sorted(side), \
+            sorted(dconn)
+    yield "checked", checked, None, None, None, None, None
 
 
 # An off-board input: a connector pin whose net is held only by a resistor
@@ -1783,6 +2562,7 @@ _OB_USB_RE = re.compile(r"(USB|\bD[+-]|\bDP\b|\bDM\b|\bCC\d?\b|VBUS|SHIELD)",
 _OB_STATUS_RE = re.compile(r"(STATE|STATUS|DET(ECT)?|INT|IRQ|ALERT|"
                            r"FAULT|READY|RDY|BUSY|FLAG)")
 _OB_WEAK_MARGIN = 0.5
+_OB_ASSUMED_VDD = 3.3
 _OB_SERIES_MIN = 100.0
 
 
@@ -1995,6 +2775,7 @@ def _offboard_inputs(nets: dict, comps: dict,
         if not direct and not via:
             continue
         clamps = _ob_clamps(net, nets, comps, comp_pins, rails, diodes)
+        pin_vmax = {}
         for m in members:
             ref = m["ref"] or ""
             if not ref.startswith("U") or ref not in comps:
@@ -2019,6 +2800,7 @@ def _offboard_inputs(nets: dict, comps: dict,
             vmin = None if row.get("vmin") is None else float(row["vmin"])
             if vmax is None and vmin is None:
                 continue
+            pin_vmax[(ref, m["pin"])] = vmax
             checked += 1
             pairs.append((net, ref, m["pin"]))
             base = {"net": net, "receiver": ref, "rpin": m["pin"],
@@ -2105,20 +2887,31 @@ def _offboard_inputs(nets: dict, comps: dict,
             # a host-bus edge (an Apple II or ZX slot) holds its own lines
             def supply(ref):
                 vs = [rails[n] for n, ms in nets.items() if n in rails
+                      and rails[n] > 0 and not _is_ground_name(n)
                       for y in ms if y["ref"] == ref
                       and _base_type(y.get("pintype")) in _POWER_TYPES]
                 return max(vs) if vs else None
             rvdd = [supply(x["ref"]) for x in readers]
             rvdd = max((v for v in rvdd if v is not None), default=None)
+            # a reader whose supply net carries no voltage (fc980c's
+            # STM32F401 on 'VDDA') is taken as 3.3 V logic
+            seen = rvdd if rvdd is not None else _OB_ASSUMED_VDD
             hot = sorted({n for c in direct
                           for n in comp_pins.get(c["ref"], {}).values()
-                          if rvdd is not None and rails.get(n, 0) > rvdd + 0.5})
+                          if rails.get(n, 0) > seen + 0.5})
             higher = bool(hot)
             edge = any("EDGE" in str(comps.get(c["ref"], {}).get(
                 "footprint") or "").upper() for c in direct)
+            # a reader rated below the cable's rail (glasgow's ECP5 bank on
+            # a +5V port) can't be pulled to it: the only pull that works is
+            # one at its own rail, which its gateware or firmware sets
+            top = max((rails[n] for n in hot), default=0.0)
+            lims = [pin_vmax.get((x["ref"], x["pin"])) for x in readers]
+            own = bool(lims) and all(v is not None and v < top for v in lims)
             if (readers and higher and not edge and not pulls
                     and not drivers and not clamps):
                 yield {"net": net, "kind": "float", "hot": hot, "rvdd": rvdd,
+                       "own_rail": own, "top": top,
                        "connectors": [f"{c['ref']}.{c['pin']}"
                                       for c in direct],
                        "readers": [f"{x['ref']}."
@@ -2652,15 +3445,40 @@ def _placed_pinmap(ref: str, comp: dict, parsed: dict
     return out
 
 
-def _symbol_pinmap_hits(parsed: dict, symdir) -> tuple[list, int]:
-    """[(ref, (lib, symbol), stock hit, diffs)] for each placed part whose
-    Value or MPN names a stock KiCad part, in the same package, whose pin
-    map disagrees with the placed symbol's; and how many parts were
-    compared. A part some same-package stock candidate agrees with is
-    quiet; one whose candidates are all another package is not judged."""
-    hits, checked = [], 0
-    if not symdir:
-        return hits, 0
+def _table_pinmap(row: dict, symdir) -> dict[str, str] | None:
+    """A part_pinouts.yaml row's pins {number: name}: its own `pins`, or
+    the pins of the stock symbol its `stock` names (a module whose
+    stock symbol follows the module's own pad numbers)."""
+    if row.get("pins"):
+        return {str(k): str(v) for k, v in row["pins"].items()}
+    lib, _, name = str(row.get("stock") or "").partition(":")
+    if not (symdir and name):
+        return None
+    for slib, sname, path in pinmaplib.stock_index(str(symdir))[
+            "exact"].get(name.upper(), []):
+        if slib == lib:
+            st = pinmaplib.stock_symbol(path)
+            return dict(st["pins"]) if st else None
+    return None
+
+
+def _symbol_pinmap_hits(parsed: dict, symdir, pinouts: list[dict] | None = None
+                        ) -> tuple[list, int, int]:
+    """[(ref, (lib, symbol), stock hit, diffs, table row)] for each placed
+    part whose Value or MPN names a stock KiCad part, in the same package,
+    whose pin map disagrees with the placed symbol's; how many parts were
+    compared; and how many of those were compared with a part_pinouts.yaml
+    row. A stock symbol's package is its default Footprint, else its
+    ki_fp_filters (pinmaplib.stock_package_match): a PLCC-44 part is not
+    compared with a DIP-40-numbered stock symbol, and one whose package
+    can't be told among several stock packages is not judged. A part
+    some same-package stock candidate agrees with is quiet.
+    One with no same-package stock symbol is compared with the first
+    pinouts row whose `match` takes its Value, MPN or symbol name and
+    whose `footprint` takes its footprint (a pad numbering is a
+    footprint's), when the two maps share at least 3 pin names; the hit's
+    table row is that row (None for a stock hit)."""
+    hits, checked, by_table = [], 0, 0
     comps = parsed["components"]
     for ref in sorted(comps):
         c = comps[ref]
@@ -2671,23 +3489,47 @@ def _symbol_pinmap_hits(parsed: dict, symdir) -> tuple[list, int]:
         if len(placed) < 3:
             continue
         value = (c.get("value") or "").strip()
-        names = [value, value.split()[0] if value else "", c.get("mpn") or ""]
+        names = [value, value.split()[0] if value else "", c.get("mpn") or "",
+                 sp[1]]
         cands = [h for h in pinmaplib.stock_candidates(names, symdir)
                  if (h[0], h[1]) != sp]
-        same_pkg = []
+        same_pkg, unsure = [], False
         for lib, name, path in cands:
             st = pinmaplib.stock_symbol(path)
-            if st and len(st["pins"]) >= 3 and pinmaplib.same_package(
-                    c.get("footprint"), st["footprint"]):
+            if not st or len(st["pins"]) < 3:
+                continue
+            fits = pinmaplib.stock_package_match(c.get("footprint"), st)
+            unsure |= fits is None
+            if fits:
                 same_pkg.append(((lib, name, st),
                                  pinmaplib.pinmap_diffs(placed, st["pins"])))
-        if not same_pkg:
+        # the board's package unknown and the stock symbols drawn for
+        # several: which one's numbering holds can't be told (not judged)
+        if pinmaplib.package_family(c.get("footprint")) is None and len(
+                {pinmaplib.package_family(h[0][2]["footprint"])
+                 for h in same_pkg} - {None}) > 1:
+            unsure = True
+        if same_pkg and unsure and all(d for _, d in same_pkg):
+            continue
+        if same_pkg:
+            checked += 1
+            if all(d for _, d in same_pkg):
+                (hit, diffs) = same_pkg[0]
+                hits.append((ref, sp, hit, diffs, None))
+            continue
+        row = pinmaplib.pinout_row(pinouts or [], names, c.get("footprint"))
+        pins = _table_pinmap(row, symdir) if row else None
+        if not pins or len(set(pinmaplib.by_name(placed))
+                           & set(pinmaplib.by_name(pins))) < 3:
             continue
         checked += 1
-        if all(d for _, d in same_pkg):
-            (hit, diffs) = same_pkg[0]
-            hits.append((ref, sp, hit, diffs))
-    return hits, checked
+        by_table += 1
+        diffs = pinmaplib.pinmap_diffs(placed, pins)
+        if diffs:
+            hits.append((ref, sp, ("part_pinouts", row["part"],
+                                   {"footprint": row.get("footprint"),
+                                    "pins": pins}), diffs, row))
+    return hits, checked, by_table
 
 
 def _mcu_i2c_swaps(nets: dict, comps: dict,
@@ -2730,6 +3572,523 @@ def _mcu_i2c_swaps(nets: dict, comps: dict,
     return out, checked
 
 
+SOURCE_LIMITS = HERE.parent / "reference" / "source_limits.yaml"
+# a part that takes no supply current worth counting, or passes the rail
+# through (passives, test points, jumpers, mounting holes, fiducials)
+_SL_PASSIVE_RE = re.compile(r"^(R|RN|C|L|FB|D|LED|TP|JP|SJ|H|MH|FID|SW|F|"
+                            r"Y|X|Q|NT)\d")
+_SL_LED_RE = re.compile(r"LED", re.I)
+_SL_VF_RE = re.compile(r"(?<![\d.])(\d(?:\.\d+)?)\s*V(?![A-Za-z0-9])")
+# a USB power-delivery or charger-detect controller: the port may give more
+# than the default current, so the VBUS budget is not judged
+_SL_PD_RE = re.compile(r"^(STUSB45|FUSB30|TPS2575|TPS6598|CYPD|HUSB23|CH22[14]|"
+                       r"IP272|AP3377|RT1715|TCPP0|PTN5110|BQ2589|BQ2560|"
+                       r"MAX7748|TUSB32)", re.I)
+_SL_SS_RE = re.compile(r"^(SSTX|SSRX|TX\d?[+-]|RX\d?[+-]|STDA_SS|SSTX[+-]|"
+                       r"SS_?[TR]X)", re.I)
+_SL_CC_RE = re.compile(r"^CC\d?$", re.I)
+
+
+def load_source_limits(path: Path = SOURCE_LIMITS) -> dict:
+    """reference/source_limits.yaml as {regulators, loads, gpio, usb}."""
+    import yaml  # noqa: PLC0415
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise checklib.CheckError(f"source limits {path}: {exc}") from exc
+    return {"regulators": doc.get("regulators") or [],
+            "loads": doc.get("loads") or [],
+            "gpio": doc.get("gpio") or [],
+            "usb": doc.get("usb") or {"usb2_a": 0.5, "usb3_a": 0.9}}
+
+
+def _sl_row(rows: list[dict], comp: dict) -> dict | None:
+    if comp.get("dnp"):
+        return None
+    return next((r for r in rows if _spec_matches(r, comp)), None)
+
+
+def _sl_led_vf(comp: dict) -> float | None:
+    """An LED's forward voltage, only when its value says it (2.65V)."""
+    m = _SL_VF_RE.search(comp.get("value") or "")
+    return float(m.group(1)) if m else None
+
+
+def _sl_is_led(ref: str, comp: dict) -> bool:
+    return bool(re.match(r"^(D|LED)\d", ref) and _SL_LED_RE.search(
+        (comp.get("value") or "") + " "
+        + (comp.get("libsource") or ("", ""))[1]))
+
+
+def _sl_led_chains(net: str, nets: dict, comps: dict,
+                   comp_pins: dict[str, dict[str, str]], rails: dict
+                   ) -> list[dict]:
+    """Resistor + LED chains from NET to a net of known volts: NET-R-LED-far
+    or NET-LED-R-far. Each: {r, led, ohms, vf (or None), far, far_v}."""
+    out = []
+    for m in nets.get(net, []):
+        a = m["ref"]
+        pins = comp_pins.get(a, {})
+        if len(pins) != 2 or comps.get(a, {}).get("dnp"):
+            continue
+        mid = next((n for p, n in pins.items() if p != m["pin"]), None)
+        if not mid or mid == net:
+            continue
+        for m2 in nets.get(mid, []):
+            b = m2["ref"]
+            if b == a or len(comp_pins.get(b, {})) != 2 \
+                    or comps.get(b, {}).get("dnp"):
+                continue
+            far = next((n for p, n in comp_pins[b].items()
+                        if p != m2["pin"]), None)
+            if far is None or far == mid or far not in rails:
+                continue
+            kinds = {_part_kind(a), _part_kind(b)}
+            led = a if _sl_is_led(a, comps[a]) else (
+                b if _sl_is_led(b, comps[b]) else None)
+            r = b if led == a else a
+            if led is None or _part_kind(r) != "R" or "R" not in kinds:
+                continue
+            ohms = engcalc.parse_value(comps[r].get("value"))
+            if not ohms:
+                continue
+            out.append({"r": r, "led": led, "ohms": float(ohms),
+                        "vf": _sl_led_vf(comps[led]), "far": far,
+                        "far_v": rails[far]})
+    return out
+
+
+def _sl_rail_load(net: str, nets: dict, comps: dict,
+                  comp_pins: dict[str, dict[str, str]], table: dict,
+                  rails: dict, skip: set[str], _depth: int = 0) -> dict:
+    """What hangs on rail NET (and the nets one 0 ohm resistor away): the
+    current its known loads draw (peak: every row; cont: rows not marked
+    peak, LED chains, downstream LDOs' own continuous load), the parts it
+    can't tell, and the rows the sum rests on."""
+    res = {"peak": 0.0, "cont": 0.0, "known": [], "unknown": [],
+           "rows": []}
+    reach = _zero_ohm_reach(net, nets, comps, comp_pins)
+    seen = set(skip)
+    v_rail = next((rails[n] for n in reach if n in rails), None)
+    for n in reach:
+        for m in nets.get(n, []):
+            ref = m["ref"]
+            comp = comps.get(ref, {})
+            if not ref or ref in seen or comp.get("dnp"):
+                continue
+            func = _norm_pin(m.get("pinfunction"))
+            reg = _sl_row(table["regulators"], comp)
+            if reg and re.search(reg["in"], func, re.I):
+                seen.add(ref)
+                outs = {nn for p, nn in comp_pins.get(ref, {}).items()
+                        if re.search(reg["out"], _norm_pin(
+                            _pin_func(nets, ref, p, nn)), re.I)}
+                if reg.get("kind") != "ldo" or not outs or _depth > 3:
+                    res["unknown"].append(f"{ref} ({comp.get('value')})")
+                    continue
+                sub = _sl_rail_load(sorted(outs)[0], nets, comps, comp_pins,
+                                    table, rails, seen | {ref}, _depth + 1)
+                seen |= {ref}
+                res["peak"] += sub["peak"]
+                res["cont"] += sub["cont"]
+                res["rows"] += [reg] + sub["rows"]
+                res["unknown"] += sub["unknown"]
+                if sub["peak"]:
+                    res["known"].append(
+                        f"{ref} ({comp.get('value')}) passing on "
+                        f"{sub['peak']:.3g} A")
+                continue
+            load = _sl_row(table["loads"], comp)
+            if load and re.search(load["supply"], func, re.I):
+                seen.add(ref)
+                i = float(load["i_supply"])
+                res["peak"] += i
+                if not load.get("peak"):
+                    res["cont"] += i
+                res["rows"].append(load)
+                res["known"].append(f"{ref} ({comp.get('value')}) "
+                                    f"{i * 1000:g} mA")
+                continue
+            if _base_type(m.get("pintype")) == "power_out" or reg:
+                continue
+            if _SL_PASSIVE_RE.match(ref):
+                continue
+            if _CONNECTOR_RE.match(ref) or _base_type(
+                    m.get("pintype")) == "power_in":
+                seen.add(ref)
+                res["unknown"].append(f"{ref} ({comp.get('value')})")
+        if v_rail is None:
+            continue
+        for ch in _sl_led_chains(n, nets, comps, comp_pins, rails):
+            if ch["r"] in seen or ch["led"] in seen or ch["far_v"] != 0:
+                continue
+            seen |= {ch["r"], ch["led"]}
+            if ch["vf"] is None:
+                res["unknown"].append(f"{ch['led']} (an LED with no Vf "
+                                      f"in its value)")
+                continue
+            i = max(0.0, (v_rail - ch["vf"]) / ch["ohms"])
+            res["peak"] += i
+            res["cont"] += i
+            res["known"].append(f"{ch['led']} via {ch['r']} "
+                                f"{i * 1000:.3g} mA")
+    return res
+
+
+def _pin_func(nets: dict, ref: str, pin: str, net: str) -> str:
+    return next((m.get("pinfunction") or "" for m in nets.get(net, [])
+                 if m["ref"] == ref and m["pin"] == pin), "")
+
+
+def _sl_judged(rows: list[dict]) -> bool:
+    return all(r.get("verified") is True for r in rows)
+
+
+def _sl_src(rows: list[dict]) -> str:
+    seen = []
+    for r in rows:
+        s = " ".join(str(r.get("source", r.get("mpn"))).split())
+        if s not in seen:
+            seen.append(s)
+    return "; ".join(seen)
+
+
+def _source_limits(nets: dict, comps: dict,
+                   comp_pins: dict[str, dict[str, str]], table: dict,
+                   rails: dict):
+    """Rule 32's findings: (kind, sev, net, refs, msg, rows, extra) and
+    ("not_judged", msg) notes, then ("checked", n)."""
+    from check_ratings import reg_out_volts  # noqa: PLC0415
+    checked = 0
+    # rail_over / ldo_heat
+    for ref in sorted(comps):
+        comp = comps[ref]
+        reg = _sl_row(table["regulators"], comp)
+        if not reg:
+            continue
+        pins = comp_pins.get(ref, {})
+        outs = sorted({n for p, n in pins.items() if re.search(
+            reg["out"], _norm_pin(_pin_func(nets, ref, p, n)), re.I)})
+        ins = sorted({n for p, n in pins.items() if re.search(
+            reg["in"], _norm_pin(_pin_func(nets, ref, p, n)), re.I)})
+        if not outs or outs[0].startswith("unconnected-"):
+            continue
+        checked += 1
+        out = outs[0]
+        ld = _sl_rail_load(out, nets, comps, comp_pins, table, rails, {ref})
+        lim = float(reg["iout_max"])
+        rows = [reg] + ld["rows"]
+        val = comp.get("value")
+        unk = (f"; it can't tell {len(ld['unknown'])} more "
+               f"({', '.join(ld['unknown'][:4])}"
+               f"{', ...' if len(ld['unknown']) > 4 else ''})"
+               if ld["unknown"] else "")
+        if ld["peak"] > lim + 1e-9:
+            yield ("rail_over", "error", out, [ref], (
+                f"{ref} ({val}) is rated for {lim * 1000:g} mA out, but "
+                f"the loads on '{out}' it can name ask "
+                f"{ld['peak'] * 1000:.3g} mA: {', '.join(ld['known'])}"
+                f"{unk}. Fit a regulator rated for the sum, or split the "
+                f"rail [{_sl_src(rows)}]"),
+                rows, {"limit_a": lim, "load_a": round(ld["peak"], 4)})
+        elif ld["unknown"]:
+            yield ("not_judged",
+                   f"rail_over on {out}: {ref} ({val}) is rated "
+                   f"{lim * 1000:g} mA; the loads with a datasheet row ask "
+                   f"{ld['peak'] * 1000:.3g} mA, and "
+                   f"{len(ld['unknown'])} load(s) have no current row "
+                   f"({', '.join(ld['unknown'][:4])})")
+        vout = rails.get(out, reg_out_volts(str(val or "")))
+        vin = next((rails[n] for n in ins if n in rails), None)
+        if not ld["cont"]:
+            continue
+        if vin is None or vout is None:
+            yield ("not_judged",
+                   f"ldo_heat on {out}: {ref} ({val}) passes "
+                   f"{ld['cont'] * 1000:.3g} mA continuous, but its "
+                   f"{'input' if vin is None else 'output'} volts can't "
+                   f"be read from the net names")
+            continue
+        p = max(0.0, vin - vout) * ld["cont"]
+        tj = 25 + p * float(reg["theta_ja"])
+        if tj > float(reg["tj_max"]):
+            yield ("ldo_heat", "error", out, [ref], (
+                f"{ref} ({val}) drops {vin:g} V to {vout:g} V at "
+                f"{ld['cont'] * 1000:.3g} mA continuous "
+                f"({', '.join(ld['known'])}): {p:.3g} W, which at its "
+                f"best package's {float(reg['theta_ja']):g} °C/W puts the "
+                f"junction at {tj:.0f} °C from 25 °C ambient, past its "
+                f"{float(reg['tj_max']):g} °C. Drop the input volts, use a "
+                f"switcher, or cut the load [{_sl_src(rows)}]"),
+                rows, {"power_w": round(p, 3), "tj_c": round(tj, 1)})
+    # gpio_over
+    for ref in sorted(comps):
+        comp = comps[ref]
+        row = _sl_row(table["gpio"], comp)
+        if not row:
+            continue
+        pins = comp_pins.get(ref, {})
+        vio = next((rails[n] for p, n in pins.items() if n in rails
+                    and rails[n] > 0 and re.search(
+                        row["supply"], _norm_pin(_pin_func(nets, ref, p, n)),
+                        re.I)), None)
+        if vio is None:
+            continue
+        checked += 1
+        src_sum = sink_sum = 0.0
+        hits, vague = [], []
+        for p, n in sorted(pins.items()):
+            func = _norm_pin(_pin_func(nets, ref, p, n))
+            if not re.search(row["pins"], func, re.I):
+                continue
+            for ch in _sl_led_chains(n, nets, comps, comp_pins, rails):
+                sink = ch["far_v"] > 0
+                drive = ch["far_v"] if sink else vio
+                hi = drive / ch["ohms"]
+                i = (None if ch["vf"] is None
+                     else max(0.0, (drive - ch["vf"]) / ch["ohms"]))
+                if i is None:
+                    vague.append((func, ch, hi))
+                    i_low = 0.0
+                else:
+                    i_low = i
+                if sink:
+                    sink_sum += i_low
+                else:
+                    src_sum += i_low
+                pmax = row.get("pin_max")
+                if pmax is None:
+                    continue
+                if i is not None and i > float(pmax) + 1e-9:
+                    hits.append((func, n, ch, i))
+                elif i is None and hi > float(pmax) + 1e-9:
+                    yield ("not_judged",
+                           f"gpio_over on {n}: {ref} {func} drives "
+                           f"{ch['led']} through {ch['r']} "
+                           f"({ch['ohms']:g} ohm), up to "
+                           f"{hi * 1000:.3g} mA against "
+                           f"{float(pmax) * 1000:g} mA, but the LED's Vf "
+                           f"isn't in its value")
+        src = " ".join(row["source"].split())
+        for func, n, ch, i in hits:
+            yield ("gpio_over", "error", n, [ref, ch["r"], ch["led"]], (
+                f"{ref} ({comp.get('value')}) {func} drives {ch['led']} "
+                f"through {ch['r']} ({ch['ohms']:g} ohm) at "
+                f"{i * 1000:.3g} mA, past the {row['pin_max'] * 1000:g} mA "
+                f"one pin may carry. Raise {ch['r']} or drive the LED "
+                f"through a transistor [{src}]"),
+                [row], {"pin": func, "current_a": round(i, 4)})
+        tmax = row.get("total_max")
+        for what, s in (("source", src_sum), ("sink", sink_sum)):
+            if tmax is not None and s > float(tmax) + 1e-9:
+                yield ("gpio_total_over", "warning", None, [ref], (
+                    f"{ref} ({comp.get('value')})'s pins {what} "
+                    f"{s * 1000:.3g} mA into LEDs together, past the "
+                    f"{float(tmax) * 1000:g} mA the part allows in all. "
+                    f"Fine only if they are never all on at once; "
+                    f"otherwise raise the resistors [{src}]"),
+                    [row], {"current_a": round(s, 4)})
+    # vbus_over
+    if any(_SL_PD_RE.match(c.get("value") or "")
+           for c in comps.values() if not c.get("dnp")):
+        yield ("checked", checked)
+        return
+    usb = table.get("usb") or {}
+    for ref in sorted(comps):
+        comp = comps[ref]
+        if not _CONNECTOR_RE.match(ref) or comp.get("dnp") or not re.search(
+                "USB", (comp.get("value") or "") + " "
+                + (comp.get("libsource") or ("", ""))[1], re.I):
+            continue
+        pins = comp_pins.get(ref, {})
+        funcs = {p: _norm_pin(_pin_func(nets, ref, p, n))
+                 for p, n in pins.items()}
+        vb = sorted({pins[p] for p, f in funcs.items()
+                     if re.match(r"^VBUS", f, re.I)
+                     and not pins[p].startswith("unconnected-")})
+        if not vb:
+            continue
+        checked += 1
+        ss = any(_SL_SS_RE.match(f) for f in funcs.values())
+        typec = any(_SL_CC_RE.match(f) for f in funcs.values())
+        lim = float(usb.get("usb3_a" if ss else "usb2_a",
+                            0.9 if ss else 0.5))
+        ld = _sl_rail_load(vb[0], nets, comps, comp_pins, table, rails,
+                           {ref})
+        if ld["peak"] > lim + 1e-9:
+            more = (" A Type-C source may offer 1.5 A or 3 A on CC without "
+                    "PD, so this holds only on a default-current port"
+                    if typec else "")
+            yield ("vbus_over", "warning" if typec else "error", vb[0],
+                   [ref], (
+                       f"'{vb[0]}' from {ref} feeds loads that ask "
+                       f"{ld['peak'] * 1000:.3g} mA "
+                       f"({', '.join(ld['known'])}), past the "
+                       f"{lim * 1000:g} mA a USB {'3' if ss else '2'} port "
+                       f"gives with no power-delivery controller on the "
+                       f"board.{more} [USB 2.0 7.2.1, USB 3.2 11.4.1; "
+                       f"{_sl_src(ld['rows'])}]"),
+                   ld["rows"], {"limit_a": lim,
+                                "load_a": round(ld["peak"], 4)})
+    yield ("checked", checked)
+
+
+def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
+                  io_table, abs_table, pl_specs, io_tolerance):
+    """Report lib/signal_domains.py's findings; (polarity pins, I/O pairs)
+    checked."""
+    import signal_domains as sd  # noqa: PLC0415
+    tol = sd.load_io_tolerance() if io_tolerance is None else io_tolerance
+    try:
+        import yaml  # noqa: PLC0415
+        io_sup = (yaml.safe_load(IO_SUPPLY.read_text(encoding="utf-8"))
+                  or {}).get("parts") or []
+    except (OSError, ImportError):
+        io_sup = []
+    h = {"norm_pin": _norm_pin, "part_kind": _part_kind,
+         "parse_value": engcalc.parse_value, "is_ground": _is_ground_name,
+         "base_type": _base_type, "spec_matches": _spec_matches,
+         "abs_row": _abs_row, "leak_row": _leak_row}
+
+    def desc(p):
+        return f"{p['ref']} {p['func']} (pin {p['pin']}, asserts {p['level']})"
+
+    pol = 0
+    for hit in sd.polarity(nets, comps, comp_pins, rails, h):
+        if "checked" in hit:
+            pol = hit["checked"]
+            continue
+        if hit["rule"] == "polarity_mismatch":
+            ps = hit["lows"] + hit["highs"]
+            refs = sorted({p["ref"] for p in ps})
+            via = (f", joined through {', '.join(hit['joins'])}"
+                   if hit["joins"] else "")
+            net = hit["nets"][0]
+            if hit["cross"]:
+                o = hit["lows"][0]
+                v("warning", "polarity_mismatch", net, refs,
+                  f"{desc(o)} drives {'; '.join(desc(p) for p in hit['highs'])}"
+                  f" on '{'/'.join(hit['nets'])}'{via}: the output's 'run' "
+                  f"level is the input's 'stop' level, so the part is held "
+                  f"off while the source says all is well, and runs while "
+                  f"it is held in reset or fault. Check both datasheets' "
+                  f"pin tables; an inverter or the other-polarity part "
+                  f"fixes it", nets=hit["nets"], kind_of=hit["kind"])
+                continue
+            sev = "warning" if hit["kind"] == "irq" else "error"
+            extra = (" Some interrupt outputs are programmable; check the "
+                     "firmware sets the level the input expects."
+                     if hit["kind"] == "irq" else "")
+            v(sev, "polarity_mismatch", net, refs,
+              f"{hit['kind']} pins of opposite active level meet on "
+              f"'{'/'.join(hit['nets'])}'{via}: "
+              f"{'; '.join(desc(p) for p in hit['lows'])} against "
+              f"{'; '.join(desc(p) for p in hit['highs'])}. When one side "
+              f"asserts the other is released, so the line holds a part in "
+              f"its asserted state at idle.{extra} Their names say the "
+              f"levels; check the datasheets' pin tables",
+              nets=hit["nets"], kind_of=hit["kind"])
+        elif hit["rule"] == "polarity_net_name":
+            ps = hit["pins"]
+            v("warning", "polarity_net_name", hit["net"],
+              sorted({p["ref"] for p in ps}),
+              f"'{hit['net']}' is named as a {hit['kind']} asserting "
+              f"{hit['level']}, but every {hit['kind']} pin on it asserts "
+              f"the other way: {'; '.join(desc(p) for p in ps)}. Either "
+              f"the name or the part is wrong; firmware or the next "
+              f"designer reading the name will get the level backwards",
+              kind_of=hit["kind"])
+        elif hit["rule"] == "idle_pull_asserted":
+            m = hit["pin"]
+            pulls = ", ".join(f"{r} to {n}" for r, n in hit["pulls"])
+            od = (f" (the open-drain {', '.join(x['ref'] for x in hit['ods'])}"
+                  f" can only pull it low too)" if hit["ods"] else "")
+            v("error", "idle_pull_asserted", hit["net"], [m["ref"]],
+              f"{m['ref']} {m.get('pinfunction')} (pin {m['pin']}) is a "
+              f"{hit['kind']} input asserting {hit['level']}, and nothing "
+              f"on '{hit['net']}' drives it: its only pull ({pulls}) holds "
+              f"it {hit['level']}{od}, so it stays asserted for good. Pull "
+              f"it to the other side", kind_of=hit["kind"])
+    tables = {"io_levels": io_table, "pin_abs_max": abs_table,
+              "pin_leakage": pl_specs, "io_tolerance": tol,
+              "io_supply": io_sup}
+    vt_tables = {"io_levels": io_table,
+                 "pin_abs_max": _verified_only(abs_table),
+                 "pin_leakage": _verified_only(pl_specs),
+                 "io_tolerance": _verified_only(tol), "io_supply": io_sup}
+    ok = {(x["rule"], x.get("driver"), x["receiver"], x.get("net"))
+          for x in sd.domains(nets, comps, comp_pins, rails, h, vt_tables)
+          if "checked" not in x}
+    dom = 0
+    for hit in sd.domains(nets, comps, comp_pins, rails, h, tables):
+        if "checked" in hit:
+            dom = hit["checked"]
+            continue
+        src = ""
+        if hit.get("row"):
+            src = " [" + " ".join(str(hit["row"].get(
+                "source") or hit["row"].get("mpn") or "").split()) + "]"
+        if hit["rule"] == "io_domain_pull_rail":
+            r = hit["receiver"]
+            rv = f" on its {hit['vr']:g} V rail" if hit["vr"] else ""
+            if hit["how"] == "unrated":
+                not_judged.append(
+                    f"io_domain_pull_rail on {hit['net']}: {hit['pull']} "
+                    f"pulls it to {hit['rail']} ({hit['vp']:g} V), above "
+                    f"{r} ({comps[r].get('value')}){rv}; no datasheet row "
+                    f"says whether {hit['rfunc']} is {hit['vp']:g} V "
+                    f"tolerant")
+                continue
+            over = hit["how"] == "over"
+            key = (hit["rule"], None, r, hit["net"])
+            vt(key in ok, "error" if over else "warning",
+               "io_domain_pull_rail", hit["net"], [hit["pull"], r],
+               f"open-drain line '{hit['net']}' is pulled by {hit['pull']} "
+               f"to {hit['rail']} ({hit['vp']:g} V), "
+               + (f"above the {hit['limit']:.2f} V {r} "
+                  f"({comps[r].get('value')}) {hit['rfunc']}{rv} takes"
+                  if over else
+                  f"below the {hit['limit']:.2f} V VIH of {r} "
+                  f"({comps[r].get('value')}) {hit['rfunc']}{rv}, so it "
+                  f"may never read high")
+               + f". Pull it to the receiver's rail, or use a translator"
+               f"{src}", pull_rail=hit["rail"], receiver=r)
+            continue
+        d, r = hit["driver"], hit["receiver"]
+        nets_s = ", ".join(f"'{n}'" for n in hit["nets"][:6]) + (
+            f" and {len(hit['nets']) - 6} more" if len(hit["nets"]) > 6
+            else "")
+        pins_s = ", ".join(f"{a}->{b}" for a, b in hit["pins"][:6])
+        ser = (f" (through {', '.join(hit['series'])})" if hit["series"]
+               else "")
+        rv = f" on a {hit['vr']:g} V rail" if hit["vr"] else ""
+        head = (f"{d} ({comps[d].get('value')}) drives {r} "
+                f"({comps[r].get('value')}){rv} at {hit['vd']:g} V "
+                f"({hit['dwhy']}) on {nets_s}{ser} [{pins_s}]")
+        if hit["rule"] == "unrated":
+            not_judged.append(
+                f"io_domain_overdrive: {head}; no datasheet row says "
+                f"whether {r}'s inputs are {hit['vd']:g} V tolerant")
+            continue
+        key = (hit["rule"], d, r, None)
+        if hit["rule"] == "io_domain_overdrive":
+            vt(key in ok, "error", "io_domain_overdrive", hit["nets"][0],
+               [d, r],
+               f"{head}: above the {hit['limit']:.2f} V its inputs take. "
+               f"The input's clamp diodes carry the difference into its "
+               f"rail. A level translator, a part tolerant of "
+               f"{hit['vd']:g} V, or both parts on one rail fixes it{src}",
+               nets=hit["nets"], driver_v=hit["vd"], limit_v=hit["limit"])
+        else:
+            vt(key in ok, "warning", "io_domain_underdrive", hit["nets"][0],
+               [d, r],
+               f"{head}: its high is below the {hit['limit']:.2f} V VIH "
+               f"{r} needs, so a high may read low or as noise. An input "
+               f"of the HCT/AHCT kind, or a translator, fixes it{src}",
+               nets=hit["nets"], driver_v=hit["vd"], vih_v=hit["limit"])
+    return pol, dom
+
+
 def audit(parsed: dict, constraints: dict,
           decoupling: dict | None,
           pin_requirements: list[dict] | None = None,
@@ -2741,10 +4100,15 @@ def audit(parsed: dict, constraints: dict,
           io_levels: dict | None = None,
           bus_load: dict | None = None,
           stock_symbols: Path | str | None = None,
-          pin_abs_max: dict | None = None
+          pin_abs_max: dict | None = None,
+          part_pinouts: list[dict] | None = None,
+          source_limits: dict | None = None,
+          io_tolerance: list[dict] | None = None
           ) -> tuple[list[dict], dict]:
     """stock_symbols: KiCad's stock symbol dir for the pin-map rule;
-    None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off."""
+    None looks it up (lib/env.kicad_symbol_dir), "" turns the rule off.
+    part_pinouts: the datasheet pin tables the rule falls back on
+    (reference/part_pinouts.yaml when None)."""
     nets = parsed["nets"]
     comps = parsed["components"]
     violations: list[dict] = []
@@ -3061,21 +4425,41 @@ def audit(parsed: dict, constraints: dict,
     # caps were all drawn on other sheets for other parts)
     specs = (load_pin_requirements() if pin_requirements is None
              else pin_requirements)
-    for sev, net, ic, req, found, elsewhere, off in _pin_requirements(
+    # A row of a part without verified: true (a part_rows.py draft) gives
+    # not_judged only (#1100).
+    pr_ok = {(h[2], h[3]["id"], h[3]["pin"], h[3]["to"]) for h in
+             _pin_requirements(nets, comps, comp_pins,
+                               _verified_only(specs))}
+    for sev, net, ic, req, found, elsewhere, off, unread in _pin_requirements(
             nets, comps, comp_pins, specs):
+        judged = (ic, req["id"], req["pin"], req["to"]) in pr_ok
         want = req.get("value") or "/".join(req["kinds"])
         what = (f"{ic} ({comps[ic].get('value')}) needs {req['id']} "
                 f"({want}) from {req['pin']} to {req['to']} "
-                f"[{req.get('source', 'datasheet')}]")
-        if sev == "error":
+                f"[{' '.join(str(req.get('source', 'datasheet')).split())}]")
+        if found is None:  # a `distinct` pair tied into one net
+            vt(judged, "error", "pin_part_missing", net, [ic],
+               f"{what}: {req['pin']} is tied straight to {req['to']} on "
+               f"'{net}', so there is no {req['id']} between them",
+               part=req["id"], pin=req["pin"], to=req["to"], tied=True,
+               off_value=[])
+        elif unread and not elsewhere:
+            # a part spans the pins but its value can't be read: not judged,
+            # never reported off-value (#1160 false finding: "0805,C0.1")
+            names = ", ".join(f"{u} ({comps[u].get('value')!r})"
+                              for u in unread)
+            not_judged.append(
+                f"pin_part_missing ({sev}) on {net or ic}: {what}: "
+                f"{names} spans those pins, but its value can't be read")
+        elif not elsewhere:
             extra = (f"; off-value parts across it: {', '.join(off)}"
                      if off else "")
-            v("error", "pin_part_missing", net, [ic],
+            vt(judged, sev, "pin_part_missing", net, [ic],
               f"{what}: no part spans those pins{extra}",
               part=req["id"], pin=req["pin"], to=req["to"],
               off_value=off)
         else:
-            v("warning", "pin_part_missing", net, [ic],
+            vt(judged, "warning", "pin_part_missing", net, [ic],
               f"{what}: only {', '.join(elsewhere)} span them, drawn on "
               f"other sheets than {ic}'s {comps[ic].get('sheet')} - the "
               f"rail's parts serve other ICs and none was drawn for this "
@@ -3256,6 +4640,32 @@ def audit(parsed: dict, constraints: dict,
           mcu=mref, part=row["mpn"],
           inputs=[{"ref": lr, "pin": lp, "mcu_pin": mp, "timers": fs}
                   for lr, lp, mp, fs in inputs])
+    pair_found, pair_checked = _mcu_pwm_pairs(nets, comps, comp_pins,
+                                              ps_rails, mp_table)
+    pair_ok = {(h[1], h[2]) for h in _mcu_pwm_pairs(
+        nets, comps, comp_pins, ps_rails, _verified_only(mp_table))[0]}
+    for row, lref, mref, mrow, legs in pair_found:
+        pins = "; ".join(
+            f"{hi}/{lo} on {hp}/{lp} "
+            f"({'/'.join(hf) if hf else 'no timer'} | "
+            f"{'/'.join(lf) if lf else 'no timer'})"
+            for hi, lo, hp, lp, hf, lf in legs)
+        vt((lref, mref) in pair_ok,
+           row.get("severity", "warning"), "mcu_pwm_pair", None,
+           [lref, mref],
+           f"{lref} ({comps[lref].get('value')}) takes its high-side/"
+           f"low-side inputs from {mref} ({comps[mref].get('value')}) "
+           f"pins that no single timer gives each leg one channel's CHx "
+           f"and CHxN: {pins}. "
+           f"{' '.join(row['why'].split())} "
+           f"[{' '.join(row['source'].split()).split(',')[0]}; "
+           f"{' '.join(mrow['source'].split()).split('(')[0].strip()}]"
+           + ("" if row.get("verified") and mrow.get("verified")
+              else " (not yet re-read)"),
+           mcu=mref, part=row["mpn"],
+           legs=[{"high": hi, "low": lo, "mcu_high": hp, "mcu_low": lp,
+                  "timers_high": hf, "timers_low": lf}
+                 for hi, lo, hp, lp, hf, lf in legs])
     io_checked = 0
     for row in mp_table.get("mcus") or []:
         if row.get("input_only"):
@@ -3475,6 +4885,39 @@ def audit(parsed: dict, constraints: dict,
           f"the diode, uncontrolled. Turn the FET around so the diode points "
           f"out of the battery [TI SLVA139; Microchip AN1149 Figs 5-6]",
           from_net=other)
+    # a load switch or reverse-polarity FET off the battery nets (#1085;
+    # TI SLVA139 Fig 3: a P-FET's drain on the input, its gate to ground;
+    # a high-side P-FET's source on the supply, a low-side N-FET's on
+    # ground, or the body diode carries the load with the FET off)
+    sw_checked, sw_nj = 0, {}
+    for ref, ch, case, sup, other in _power_switches(nets, comps, comp_pins,
+                                                     pl_rails):
+        if ref == "checked":
+            sw_checked, sw_nj = ch, case
+            continue
+        d_s = "source to drain" if ch == "N" else "drain to source"
+        val = comps.get(ref, {}).get("value")
+        if case == "low":
+            msg = (f"{ref} ({val}, N-channel) switches the low side with its "
+                   f"drain on ground '{sup}' and its source on '{other}': its "
+                   f"body diode ({d_s}) carries the load's current to ground "
+                   f"with the FET off. Put the source on ground and the "
+                   f"drain on the load")
+        elif case == "reverse":
+            msg = (f"{ref} ({val}, P-channel, gate to ground) has its source "
+                   f"on the input '{sup}' and its drain on '{other}': with "
+                   f"the input reversed its body diode ({d_s}) passes the "
+                   f"reversed voltage to the load. The drain goes on the "
+                   f"input, the source on the load [TI SLVA139 Fig 3]")
+        else:
+            msg = (f"{ref} ({val}, {ch}-channel) switches '{other}' from "
+                   f"'{sup}' with its body diode ({d_s}) pointing from "
+                   f"'{sup}' into the load: with the FET off, the load "
+                   f"still runs through the diode. Turn the FET around so "
+                   f"the {'source' if ch == 'P' else 'drain'} is on '{sup}'"
+                   f" [TI SLVA139]")
+        v("warning", "power_switch_reversed", sup, [ref], msg,
+          from_net=other, case=case)
     prot_checked = 0
     for ref, vss, pack, on_vss, on_pack in _protector_orientation(
             nets, comps, comp_pins):
@@ -3546,20 +4989,32 @@ def audit(parsed: dict, constraints: dict,
     if symdir is None:
         from lib import env  # noqa: PLC0415
         symdir = env.kicad_symbol_dir()
-    pm_hits, pm_checked = _symbol_pinmap_hits(parsed, symdir)
-    for ref, (lib, part), (slib, sname, st), diffs in pm_hits:
+    pp_rows = load_part_pinouts() if part_pinouts is None else part_pinouts
+    pm_hits, pm_checked, pm_by_table = _symbol_pinmap_hits(
+        parsed, symdir, pp_rows) if symdir else ([], 0, 0)
+    for ref, (lib, part), (slib, sname, st), diffs, row in pm_hits:
+        theirs = "the stock symbol" if row is None else "the datasheet"
         said = "; ".join(f"{n} on {'/'.join(a)} here, {'/'.join(b)} in "
-                         f"the stock symbol" for n, a, b in diffs[:6])
-        v("warning", "symbol_pinmap", None, [ref],
-          f"{ref} ('{comps[ref].get('value')}', "
-          f"{comps[ref].get('footprint')}) is drawn with {lib}:{part}, "
-          f"whose pins disagree with KiCad's stock {slib}:{sname} "
-          f"({st['footprint'] or 'no default footprint'}): {said}. A pin "
-          f"map from another package variant or another part puts these "
-          f"signals on the wrong pads; check them against the datasheet's "
-          f"pin table for this package",
-          symbol=f"{lib}:{part}", stock=f"{slib}:{sname}",
-          pins=[{"name": n, "placed": a, "stock": b} for n, a, b in diffs])
+                         f"{theirs}" for n, a, b in diffs[:6])
+        if row is None:
+            vs = (f"KiCad's stock {slib}:{sname} "
+                  f"({st['footprint'] or 'no default footprint'})")
+            extra = {"stock": f"{slib}:{sname}"}
+        else:
+            vs = (f"the {sname} pin table "
+                  f"({row.get('source') or 'reference/part_pinouts.yaml'})")
+            extra = {"pinout": sname}
+        vt(row is None or row.get("verified") is True,
+           "warning", "symbol_pinmap", None, [ref],
+           f"{ref} ('{comps[ref].get('value')}', "
+           f"{comps[ref].get('footprint')}) is drawn with {lib}:{part}, "
+           f"whose pins disagree with {vs}: {said}. A pin "
+           f"map from another package variant or another part puts these "
+           f"signals on the wrong pads; check them against the datasheet's "
+           f"pin table for this package",
+           symbol=f"{lib}:{part}",
+           pins=[{"name": n, "placed": a, "stock": b} for n, a, b in diffs],
+           **extra)
 
     # 26. sibling channels of one part whose nets count opposite ways: one
     # unit's pins drawn in reverse (errata corpus: gcm v5.0's SN74LV393A,
@@ -3625,6 +5080,18 @@ def audit(parsed: dict, constraints: dict,
         if "checked" in hit:
             continue
         kind = hit["kind"]
+        if kind == "float" and hit.get("own_rail"):
+            v("info", "offboard_input_floating", hit["net"],
+              sorted({c.split(".")[0] for c in hit["connectors"]}
+                     | {r.split(".")[0] for r in hit["readers"]}),
+              f"'{hit['net']}' comes in at {', '.join(hit['connectors'])} "
+              f"and goes to {', '.join(hit['readers'])} with no pull on "
+              f"this board; its cable brings {', '.join(hit['hot'])}, but "
+              f"the reader's pins are rated below {hit['top']:g} V, so the "
+              f"line can only idle at the reader's own rail: pull set in "
+              f"gateware or firmware, not on the board",
+              connectors=hit["connectors"], pull="configurable")
+            continue
         if kind == "float":
             v("warning", "offboard_input_floating", hit["net"],
               sorted({c.split(".")[0] for c in hit["connectors"]}
@@ -3632,8 +5099,11 @@ def audit(parsed: dict, constraints: dict,
               f"'{hit['net']}' comes in at {', '.join(hit['connectors'])} "
               f"and goes to {', '.join(hit['readers'])} with no pull "
               f"resistor, no driver and no clamp on this board, on a cable "
-              f"that also brings {', '.join(hit['hot'])} (the reader runs "
-              f"at {hit['rvdd']:g} V): a status line whose far end is open "
+              f"that also brings {', '.join(hit['hot'])} ("
+              + (f"the reader runs at {hit['rvdd']:g} V" if hit["rvdd"]
+                 is not None else "the reader's supply net carries no "
+                 "voltage; taken as 3.3 V")
+              + "): a status line whose far end is open "
               f"collector at its own level, or unplugged, leaves the input "
               f"floating, and a pull inside the reader isn't at that level. "
               f"Pull it to the level it idles at "
@@ -3697,6 +5167,181 @@ def audit(parsed: dict, constraints: dict,
            level_v=round(hit["level"], 3), held_v=round(hit["after"], 3),
            vmin=hit["vmin"], vmax=hit["vmax"], absent_rail=hit["absent"])
 
+    # 29. a pin whose role doesn't fit its net (class 6 of
+    # docs/miss-taxonomy.md; errata corpus: flexgrid v4's USBLC6-2SC6 had
+    # its GND pin on VBUS and VBUS on ground, rev B swapped them back)
+    role_checked = 0
+    for ref, found in _pin_role_nets(nets, comps, pl_rails):
+        if ref == "checked":
+            role_checked = found
+            continue
+        sev = next(s for s in ("error", "warning", "info")
+                   if any(h[0] == s for h in found))
+        said = "; ".join(f"{func} (pin {pn}, a {role} pin) on '{net}'"
+                         for _, pn, func, role, net in found[:6])
+        if sev == "info":
+            msg = (f"{ref} ({comps[ref].get('value')}) has its battery "
+                   f"backup pin grounded: {said}. Fine when the backup "
+                   f"domain is unused (most RTC datasheets say tie VBAT to "
+                   f"ground then); check that is meant")
+        else:
+            msg = (f"{ref} ({comps[ref].get('value')}) has a pin whose "
+                   f"role doesn't fit its net: {said}. A ground pin on a "
+                   f"supply rail or a supply pin on ground shorts the rail "
+                   f"through the part or leaves it unpowered; check the "
+                   f"symbol's pin map and the wiring against the datasheet")
+        v(sev, "pin_role_net", found[0][4], [ref], msg,
+          pins=[{"pin": pn, "function": func, "role": role, "net": net}
+                for _, pn, func, role, net in found])
+
+    # 30. a battery protector with its cell side and load side swapped
+    # (errata corpus: netscore's FS312MH had GND on the board's ground and
+    # BAT- on the cell's -; its rev B put GND on the cell)
+    cell_checked = 0
+    for ref, cpin, cnet, lpin, lnet in _protector_cell_side(nets, comps):
+        if ref == "checked":
+            cell_checked = cpin
+            continue
+        v("warning", "protector_cell_side", lnet, [ref],
+          f"{ref} ({comps[ref].get('value')}) has its cell-side pin "
+          f"{cpin} on the board ground '{cnet}' and its load-side pin "
+          f"{lpin} on the cell's own terminal '{lnet}': the two are "
+          f"swapped, so the protector's FETs carry no current and it "
+          f"cuts nothing. {cpin} goes to the cell's -, {lpin} to the "
+          f"ground the load returns to [ABLIC S-8261 Rev.5.5_00 Figure "
+          f"10, the same split]",
+          cell_net=cnet, load_net=lnet)
+
+    # 31. an MCU's serial-wire debug pins (mcu_pins.yaml debug; errata
+    # corpus: fc980c rev1 wired its SWDIO header pin to the F401's PA15,
+    # not PA13)
+    dbg_checked = 0
+    dbg_ok = {(h[2], h[3], h[0]) for h in _debug_pins(
+        nets, comps, comp_pins, _verified_only(mp_table))}
+    for kind, row, ref, sig, pn, func, net in _debug_pins(
+            nets, comps, comp_pins, mp_table):
+        if kind == "checked":
+            dbg_checked = row
+            continue
+        src = " ".join(row["source"].split())
+        want = row["debug"][sig]
+        shared = (row.get("shared") or {}).get(want)
+        if kind == "wrong":
+            vt((ref, sig, kind) in dbg_ok, "error", "debug_pin_wrong",
+               net, [ref],
+               f"'{net}' carries {sig} but reaches {ref} "
+               f"({comps[ref].get('value')}) on {func} (pin {pn}); "
+               f"{row['mpn']} has {sig} only on {want}, so the debugger "
+               f"cannot reach the core [{src}]",
+               mcu=ref, signal=sig, want_pin=want, part=row["mpn"])
+            continue
+        note = (f" On this part {want} is also {shared} at reset, so a "
+                f"load that pulls it can change how it boots."
+                if shared else "")
+        vt((ref, sig, kind) in dbg_ok, "warning", "debug_pins_reused",
+           net, [ref],
+           f"{ref} ({comps[ref].get('value')}) uses its {sig} pin {func} "
+           f"(pin {pn}) on '{net}' for other parts, with no debug header, "
+           f"test point or SWD-named net on it: once firmware takes the "
+           f"pin as GPIO the debugger can't attach, and recovering the "
+           f"chip needs a connect-under-reset or the boot loader.{note} "
+           f"Bring {sig} to a header or pad [{src}]",
+           mcu=ref, signal=sig, part=row["mpn"])
+
+    # 32. a load against its source's limit (reference/source_limits.yaml;
+    # class 11 of docs/miss-taxonomy.md; errata corpus: flexgrid's 200 mA
+    # TPS7A03 feeding an ESP32-S3 module that wants 500 mA)
+    sl_table = (load_source_limits() if source_limits is None
+                else source_limits)
+    sl_checked = 0
+    for hit in _source_limits(nets, comps, comp_pins, sl_table, pl_rails):
+        if hit[0] == "checked":
+            sl_checked = hit[1]
+        elif hit[0] == "not_judged":
+            not_judged.append(hit[1])
+        else:
+            kind, sev, net, refs, msg, rows, extra = hit
+            vt(_sl_judged(rows), sev, kind, net, refs, msg, **extra)
+
+    # 33. a control signal's active level across a connection, and an I/O
+    # pin's supply domain against its net's level (lib/signal_domains.py,
+    # classes 14 and 15 of the gaps list; built from datasheets and
+    # planted faults)
+    pol_pins, dom_pairs = _signal_rules(
+        v, vt, not_judged, nets, comps, comp_pins, pl_rails, io_table,
+        abs_table, pl_specs, io_tolerance)
+
+    # 34-36. wiring against design intent (class 8 of
+    # docs/miss-taxonomy.md, #1137). design_intent states what no design
+    # file says: a module drawn with another's symbol, a bus member left
+    # unread on purpose.
+    intent = constraints.get("design_intent") or {}
+    stated = {e["ref"]: e["is"] for e in intent.get("modules") or []
+              if isinstance(e, dict) and e.get("ref") and e.get("is")}
+    unread = {e["net"] for e in intent.get("bus_unread") or []
+              if isinstance(e, dict) and e.get("net")}
+
+    # 34. a named bus with one member that reaches the connector but not
+    # the part reading the rest (errata corpus: zxdiag v1.1's Pico read
+    # MREQ, RD and WR off the ZX edge but not IORQ; v1.2 added GPIO20)
+    bus_checked = 0
+    for gname, mem, net, ref, read, conns, src in _bus_members_dropped(
+            nets, comps, comp_pins):
+        if gname == "checked":
+            bus_checked = mem
+            continue
+        if net in unread:
+            continue
+        v("warning", "bus_member_dropped", net, [ref] + conns,
+          f"{ref} ({comps[ref].get('value')}) reads {', '.join(read)} of "
+          f"the {gname} but not {mem}: '{net}' reaches "
+          f"{', '.join(conns)} with the others and stops there. Without "
+          f"{mem} the part can't tell the cycles apart; wire it to a free "
+          f"pin, or say why not in constraints design_intent.bus_unread "
+          f"[{src}]",
+          group=gname, member=mem, master=ref, connectors=conns)
+
+    # 35. a UART line named for its direction on a pin that runs the other
+    # way (errata corpus: smart-lcc rev A, RX_FROM_AUX on the Nano RP2040
+    # Connect's D8, which is UART1 TX)
+    uart_checked = 0
+    for ref, pn, func, fn, net, way, row in _uart_directions(
+            nets, comps, comp_pins, mp_table, stated):
+        if ref == "checked":
+            uart_checked = pn
+            continue
+        part = (row or {}).get("mpn") or comps[ref].get("value")
+        src = (f" [{' '.join(row['source'].split())}]"
+               if row and row.get("source") else "")
+        said = (f", as constraints design_intent.modules says"
+                if ref in stated else "")
+        v("warning", "uart_direction", net, [ref],
+          f"'{net}' is named as this board's {way}, but it reaches {ref} "
+          f"({part}{said}) on {func} (pin {pn}), which is {fn}: TX must "
+          f"meet the far end's RX. Swap the two lines or rename the net"
+          f"{src}",
+          pin=pn, function=fn, way=way, part=part)
+
+    # 36. an always-on bus transceiver whose DIR is a raw connector strobe
+    # (errata corpus: pico-if1 v1.0's 74LS245, OE grounded and DIR on /RD)
+    xcvr_checked = 0
+    for ref, oe_pin, oe_net, dir_pin, dir_net, side, conns in \
+            _host_bus_transceivers(nets, comps, comp_pins, pl_rails):
+        if ref == "checked":
+            xcvr_checked = oe_pin
+            continue
+        v("warning", "transceiver_drives_host_bus", dir_net,
+          [ref] + conns,
+          f"{ref} ({comps[ref].get('value')}) has OE (pin {oe_pin}) tied "
+          f"to '{oe_net}', so it is always on, and DIR (pin {dir_pin}) on "
+          f"'{dir_net}' straight from {', '.join(conns)}: every cycle of "
+          f"that strobe it drives {len(side)} host lines "
+          f"({', '.join(side[:4])}...) whoever is addressed, fighting the "
+          f"part the host meant to read. Gate OE (or DIR) with this "
+          f"board's own address decode [TI SN74LS245 (SDLS146) function "
+          f"table: OE low enables, DIR sets the way]",
+          oe_net=oe_net, dir_net=dir_net)
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -3714,6 +5359,7 @@ def audit(parsed: dict, constraints: dict,
         "min_gain_loops_checked": loops_checked,
         "pin_state_parts_checked": pin_states_checked,
         "mcu_pwm_groups_checked": pwm_checked,
+        "mcu_pwm_pairs_checked": pair_checked,
         "mcu_input_only_parts_checked": io_checked,
         "i2c_buses_checked": len(buses),
         "i2c_devices_placed": sum(len(d) for d in buses.values()),
@@ -3723,14 +5369,26 @@ def audit(parsed: dict, constraints: dict,
         "io_drive_pins_checked": iolv_checked,
         "power_good_pins_checked": pg_checked,
         "power_path_fets_checked": pp_checked,
+        "power_switches_checked": sw_checked,
+        "power_switches_not_judged": sw_nj,
         "battery_protectors_checked": prot_checked,
         "unverified_findings": len(not_judged),
         "offboard_inputs_checked": ob_checked,
         "symbol_sizes_checked": sz_checked,
         "symbol_pinmaps_checked": pm_checked,
+        "symbol_pinmaps_by_table": pm_by_table,
         "channel_parts_checked": ch_checked,
         "mcu_i2c_parts_checked": i2c_checked,
         "offboard_inputs_judged": obi_judged,
+        "pin_role_parts_checked": role_checked,
+        "protector_cell_sides_checked": cell_checked,
+        "debug_mcus_checked": dbg_checked,
+        "source_limits_checked": sl_checked,
+        "polarity_pins_checked": pol_pins,
+        "io_domain_pairs_checked": dom_pairs,
+        "bus_groups_checked": bus_checked,
+        "uart_parts_checked": uart_checked,
+        "transceivers_checked": xcvr_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged

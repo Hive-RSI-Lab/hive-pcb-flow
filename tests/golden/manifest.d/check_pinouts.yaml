@@ -58,6 +58,28 @@ mutants:
     expect:
       kind: wired_or_push_pull
       ref: U94
+  bus-strobe-push-pull:
+    board: usbbuck4
+    script: mutations/bus_strobe_push_pull.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: a 74HC08 gate U94 drives a Z80's WR strobe beside the
+      CPU with no 3-state buffer or OE between them (class 9, from Zilog's
+      UM0080 and TI's SN74HC08 datasheet)
+    expect:
+      kind: bus_driver_contention
+      ref: U94
+  i2c-single-master-shared:
+    board: usbbuck4
+    script: mutations/i2c_single_master_shared.py
+    check: check_pinouts
+    defect: >-
+      NETLIST fault: a TUSB8041 hub U93 in I2C master mode (SMBUSz
+      unconnected) shares SDA and SCL with an MCU as well as its EEPROM
+      (class 9, from TI's TUSB8041 datasheet); ERC sees nothing
+    expect:
+      kind: i2c_single_master
+      ref: U93
   pulsed-load-no-bulk:
     board: usbbuck4
     script: mutations/pulsed_load_no_bulk.py

@@ -622,7 +622,18 @@ HTSSOP-32 stays `smd`. Parts marked `board_only`, `exclude_from_bom` or
   equal to the footprint name, is not judged. `--live` asks JLC for codes
   it has no record of, and looks up an MPN (or a D/Q/U Value) when every
   JLC row of that exact model agrees on one package; that's a warning, for
-  sweeps, not the gate. `facts.judged` counts the parts it judged.
+  sweeps, not the gate. With no record, or one that names no package, the
+  package is read from the MPN's ordering code (`reference/mpn_packages.yaml`:
+  TI, ST, Microchip, onsemi, Nexperia, Vishay and Infineon tables, each row
+  cited to a datasheet page). An MPN that matches no entry in full is not
+  judged, never guessed (#1202). Each C or R on a chip footprint is also
+  held to its case (`passive_case_limit`, a warning):
+  `reference/case_limits.yaml` holds the Yageo and KEMET lineup charts
+  (largest C per case, dielectric and voltage; resistor power per case).
+  It flags a capacitor above 2.5x its case's largest, or a resistor above
+  2x its case's rating. A Y5V, electrolytic, tantalum or film part, or a
+  resistor with no stated power, is not judged. `facts.judged` counts the
+  parts it judged, `facts.case_limits_judged` the passives.
   Miss class 1 in [miss-taxonomy.md](miss-taxonomy.md). Planted fault
   `lcsc-0402-on-0603`: blinky2's C3 (C_0603) given C1525, an 0402 part.
 

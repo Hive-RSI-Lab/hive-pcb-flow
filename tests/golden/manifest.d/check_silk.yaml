@@ -12,3 +12,18 @@ mutants:
       kind: pin_labels_missing
       ref: J2
       pos: [142.9344, 110.5]   # J2's pad centroid
+
+  # Seeded fault for check_silk two-column legends (miss class 10).
+  silk-legend-unmirrored:
+    board: blinky2
+    script: mutations/silk_legend_unmirrored.py
+    check: check_silk
+    defect: >-
+      J9, a Raspberry Pi header on B.Cu laid out right for the Pi below,
+      carries a B.SilkS legend "5V 3V3 / 5V SDA / GND SCL" written in the
+      top side's column order: read from below, the left column is +3V3,
+      not 5V, so a cable made to the silk goes on swapped (miss class 10)
+    expect:
+      kind: pin_label_wrong
+      ref: J9
+      pos: [98.4, 132.6]   # the legend's position

@@ -24,6 +24,7 @@ sys.path.insert(0, str(SCRIPTS / "lib"))
 import check_net_tie  # noqa: E402
 import env  # noqa: E402
 import krt_launch  # noqa: E402
+from _boards import stock_footprints  # noqa: E402
 
 LAUNCH = SCRIPTS / "lib" / "krt_launch.py"
 GOLD = ROOT / "tests" / "golden" / "blinky2" / "blinky2.kicad_pcb"
@@ -300,19 +301,6 @@ def test_real_krt_mover_keeps_net_tie_bridges(tmp_path):
     assert check_net_tie.check(kept / "b.kicad_pcb")[0] == []
 
 
-def _stock_dir():
-    """KiCad's stock footprint library, or None."""
-    for key, val in sorted(os.environ.items()):
-        if re.fullmatch(r"KICAD\d*_FOOTPRINT_DIR", key) and Path(val).is_dir():
-            return Path(val)
-    try:
-        cli = env.find_kicad_cli()
-    except env.EnvError:
-        return None
-    fp = cli and Path(cli).parents[1] / "share" / "kicad" / "footprints"
-    return fp if fp and fp.is_dir() else None
-
-
 def _embed(lib, mod_text, back):
     """A board holding one library footprint as JP1, on the back if `back`
     (layers swapped; the geometry needn't mirror for this)."""
@@ -332,7 +320,7 @@ def test_stock_net_tie_footprints_pass_and_keep_their_copper(tmp_path):
     """Every net-tie footprint KiCad ships passes as shipped and comes out of
     the launched KRT mover unchanged; the ones the bare mover opens are
     caught on their own side, the bridge named on its silk."""
-    fp = _stock_dir()
+    fp = stock_footprints()
     if fp is None:
         pytest.skip("needs KiCad's footprint library")
     mods = sorted(p for p in fp.glob("*.pretty/*.kicad_mod")

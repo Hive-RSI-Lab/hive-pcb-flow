@@ -19,7 +19,7 @@ import verify_all  # noqa: E402
 
 # ------------------------------------------------------------- the antenna
 
-def _module(at: str, value: str = "ESP32-WROOM-32E") -> str:
+def _module(at: str, value: str = "ESP32-WROVER-E") -> str:
     """An 18 x 26 mm module: pads down both long sides from local y -6 to
     +12, so the pad-free end is local -y: 13 - 6.45 = 6.55 mm, less the 1 mm
     PAD_MARGIN_MM by the end pads, 5.55 mm. A pad's
@@ -137,6 +137,171 @@ def test_external_antenna_and_constraints_override(tmp_path):
                     encoding="utf-8")
     _, kinds = _antenna(pcb, cons)
     assert "antenna_copper" in kinds
+
+
+
+def _part(ref: str, at: str, layer: str = "B.Cu") -> str:
+    """A 2 x 5 mm part whose one pad sits 3.5 mm from its courtyard's -y end,
+    so the courtyard reaches under an antenna its pad doesn't."""
+    side = layer[0]
+    return f"""  (footprint "t:Tall" (at {at}) (layer "{layer}")
+    (property "Reference" "{ref}" (at 0 0 0) (layer "{side}.SilkS"))
+    (property "Value" "Cap" (at 0 0 0) (layer "{side}.Fab"))
+    (fp_rect (start -1 -4) (end 1 1) (stroke (width 0.05)) (fill no)
+      (layer "{side}.CrtYd"))
+    (pad "1" smd rect (at 0 0.5) (size 0.5 0.5) (layers "{layer}")
+      (net "GND")))
+"""
+
+
+def test_planted_part_under_the_antenna_on_the_back_fails(tmp_path):
+    """#1188: a part's body under the antenna, its pad not: no copper in the
+    area, but a body in the near field. The guessed antenna ends at board
+    y 2.55; C9's courtyard (less 0.25 mm) starts at 2.25."""
+    payload, kinds = _antenna(_pcb(tmp_path, _module("30 10")
+                                   + _part("C9", "30 6.0")))
+    assert kinds == {"antenna_part"}, json.dumps(payload["violations"])
+    (v,) = payload["violations"]
+    assert v["severity"] == "error" and v["refs"] == ["C9", "U1"]
+    assert v["side"] == "back" and abs(v["area_mm2"] - 1.5 * 0.3) < 0.02
+
+
+def test_part_moved_clear_of_the_antenna_passes(tmp_path):
+    payload, _ = _antenna(_pcb(tmp_path, _module("30 10")
+                               + _part("C9", "30 7.0")))
+    assert payload["status"] == "pass", json.dumps(payload["violations"])
+
+
+def test_an_outline_footprint_around_the_module_is_not_a_part_under_it(
+        tmp_path):
+    """#1188: mdbt-micro-50q's J1 is the board's own ProMicro pin-out as a
+    footprint, its courtyard round the whole module: an outline, not a part
+    under the antenna. Grown to just short of the module it is one."""
+    def outline(y0):
+        return f"""  (footprint "t:ProMicro" (at 30 10) (layer "B.Cu")
+    (property "Reference" "J1" (at 0 0 0) (layer "B.SilkS"))
+    (property "Value" "ProMicro" (at 0 0 0) (layer "B.Fab"))
+    (fp_rect (start -10 {y0}) (end 10 14) (stroke (width 0.05)) (fill no)
+      (layer "B.CrtYd"))
+    (pad "1" smd rect (at 0 12) (size 0.5 0.5) (layers "B.Cu")
+      (net "GND")))
+"""
+    payload, _ = _antenna(_pcb(tmp_path, _module("30 10") + outline(-14)))
+    assert payload["status"] == "pass", json.dumps(payload["violations"])
+    payload, kinds = _antenna(_pcb(tmp_path, _module("30 10") + outline(-10)))
+    assert kinds == {"antenna_part"}, json.dumps(payload["violations"])
+
+
+def test_an_outline_the_module_pokes_past_is_not_a_part_under_it(tmp_path):
+    """#1188: on both mdbt-micro-50q revs J1's courtyard is on the module's
+    side and holds its centre, but U2's courtyard pokes past J1's edge, so
+    it does not hold the whole module. No real part sits round a module's
+    centre on its own side; an outline does."""
+    outline = """  (footprint "t:ProMicro" (at 30 10) (layer "F.Cu")
+    (property "Reference" "J1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "ProMicro" (at 0 0 0) (layer "F.Fab"))
+    (fp_rect (start -12 -15) (end 8 15) (stroke (width 0.05)) (fill no)
+      (layer "F.CrtYd"))
+    (pad "1" smd rect (at -11 14) (size 0.5 0.5) (layers "F.Cu")
+      (net "GND")))
+"""
+    payload, _ = _antenna(_pcb(tmp_path, _module("30 10") + outline))
+    assert payload["status"] == "pass", json.dumps(payload["violations"])
+
+
+def test_datasheet_antenna_area_replaces_the_guess(tmp_path):
+    """#1188: a WROOM-32E row carries its datasheet's 18 x 6.19 mm antenna
+    area (§11.1 Fig. 13) on the 25.5 mm outline, so the 26 mm courtyard's
+    0.25 mm margin is not antenna: local y -12.75..-6.56 at (30, 10)."""
+    payload, _ = _antenna(_pcb(tmp_path, _module("30 10", "ESP32-WROOM-32E")))
+    mod = payload["checked"][0]["modules"][0]
+    assert mod["antenna_from"] == "datasheet" and mod["depth_mm"] == 6.19
+    assert mod["antenna_bbox"] == [21.0, -2.75, 39.0, 3.44]
+    assert "url" in check_antenna.antenna_kind(
+        "ESP32-WROOM-32E-N4", "", check_antenna.load_modules())[1]["keepout"]
+
+
+def test_a_courtyard_wider_than_the_outline_widens_the_area(tmp_path):
+    """#1188: oasis's WROOM-02 courtyard is 19.5 mm across an 18 mm module.
+    Copper inside the courtyard beside the antenna is still in the clearance
+    round it, so the area spans the courtyard's width: a 19.5 mm courtyard on
+    the WROOM-32E's 18 mm outline gives x 20.25..39.75."""
+    body = _module("30 10", "ESP32-WROOM-32E").replace(
+        "(start -9 -13) (end 9 13)", "(start -9.75 -13) (end 9.75 13)")
+    payload, _ = _antenna(_pcb(tmp_path, body))
+    mod = payload["checked"][0]["modules"][0]
+    assert mod["antenna_from"] == "datasheet"
+    assert mod["antenna_bbox"] == [20.25, -2.75, 39.75, 3.44]
+
+
+def test_a_part_beside_the_antenna_in_the_courtyard_margin_passes(tmp_path):
+    """#1188: the courtyard's margin beside the antenna widens the copper
+    area only. flexgrid's H1 and H4 mounting holes sit in that margin, outside
+    the datasheet's 18 mm, where the module datasheet asks no part clear: a
+    part at x 39.65..41.15 passes, and moved in to x 38.75 it is under the
+    datasheet area."""
+    body = _module("30 10", "ESP32-WROOM-32E").replace(
+        "(start -9 -13) (end 9 13)", "(start -9.75 -13) (end 9.75 13)")
+    payload, kinds = _antenna(_pcb(tmp_path, body + _part("C9", "40.4 2")))
+    # its pad beside the antenna is antenna_side_clearance's, not a body
+    assert kinds == {"antenna_side_clearance"}, \
+        json.dumps(payload["violations"])
+    payload, kinds = _antenna(_pcb(tmp_path, body + _part("C9", "39.5 2")))
+    assert "antenna_part" in kinds, json.dumps(payload["violations"])
+
+
+def test_a_wroom_1_value_on_a_1u_sized_footprint_keeps_the_guess(tmp_path):
+    """#1188: netscore's U1 is a WROOM-1 value on a WROOM-1U footprint
+    (courtyard 19.6 x 20.5). The datasheet's 25.5 mm outline doesn't fit a
+    courtyard 22 mm long, so the area falls back to the pad-free end."""
+    body = _module("30 10", "ESP32-S3-WROOM-1").replace(
+        "(start -9 -13) (end 9 13)", "(start -9 -11) (end 9 11)")
+    payload, _ = _antenna(_pcb(tmp_path, body))
+    mod = payload["checked"][0]["modules"][0]
+    assert mod["antenna_from"] == "footprint (outline mismatch)"
+    assert mod["depth_mm"] == 3.55
+
+
+def _rm2(at: str) -> str:
+    """A 14.5 x 16.5 mm module, pins 1..10 down local x -6.5 from y -7.5,
+    11..20 along the bottom, 21..30 up x +6.5: pin 1 and 21's end is -y."""
+    pads = []
+    for i in range(10):
+        pads.append(f'(pad "{i + 1}" smd rect (at -6.5 {-7.5 + 1.5 * i}) '
+                    '(size 1 0.8) (layers "F.Cu") (net "GND"))')
+        pads.append(f'(pad "{i + 11}" smd rect (at {-5.4 + 1.2 * i} 7.5) '
+                    '(size 0.8 1) (layers "F.Cu") (net "GND"))')
+        pads.append(f'(pad "{30 - i}" smd rect (at 6.5 {-7.5 + 1.5 * i}) '
+                    '(size 1 0.8) (layers "F.Cu") (net "GND"))')
+    return f"""  (footprint "t:RM2" (at {at}) (layer "F.Cu")
+    (property "Reference" "U2" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "RM2" (at 0 0 0) (layer "F.Fab"))
+    (fp_rect (start -7.25 -8.25) (end 7.25 8.25) (stroke (width 0.05))
+      (fill no) (layer "F.CrtYd"))
+    {' '.join(pads)})
+"""
+
+
+def test_planted_track_in_the_rm2_keepout_past_the_module_fails(tmp_path):
+    """#1188: RM2 datasheet §2.4 Fig. 6 keeps 13.5 mm beyond the pin-1 end
+    and 10.5 mm each side free of metal. At (30, 30) that is board x
+    12.25..47.75, y 8.25..26.75: a track at x 15 is outside the module but
+    inside its keep-out."""
+    trk = ('  (segment (start 15 10) (end 15 14) (width 0.2) (layer "F.Cu") '
+           '(net "/SPI_CLK"))\n')
+    payload, kinds = _antenna(_pcb(tmp_path, _rm2("30 30") + trk))
+    assert kinds == {"antenna_copper"}, json.dumps(payload["violations"])
+    mod = payload["checked"][0]["modules"][0]
+    assert mod["keepout_bbox"] == [12.25, 8.25, 47.75, 26.75]
+
+
+def test_track_outside_the_rm2_keepout_passes(tmp_path):
+    """Its twin: the track at x 10, and the keep-out's own 13.5 mm run past
+    the module, so no inboard warning (edge_mm: null)."""
+    trk = ('  (segment (start 10 10) (end 10 14) (width 0.2) (layer "F.Cu") '
+           '(net "/SPI_CLK"))\n')
+    payload, _ = _antenna(_pcb(tmp_path, _rm2("30 30") + trk))
+    assert payload["status"] == "pass", json.dumps(payload["violations"])
 
 
 # --------------------------------------------------------------- the straps

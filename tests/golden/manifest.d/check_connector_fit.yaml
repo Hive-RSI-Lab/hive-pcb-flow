@@ -25,3 +25,15 @@ mutants:
       kind: tht_hole_loose
       ref: J1
       pos: [102.8, 103.5]   # J1's origin
+  tht-pin-header-tight:
+    board: blinky2
+    script: mutations/tht_pin_header_tight.py
+    check: check_connector_fit
+    defect: >-
+      J1 is a project-library Pin_Header_1x02 drilled 0.75 mm, so the
+      0.64 mm square post (0.91 mm across its corners) does not go in
+      (zxdiag v1.0 Z101 and mdbt-micro-50q J1, issue #1123)
+    expect:
+      kind: tht_pin_tight
+      ref: J1
+      pos: [102.8, 103.5]   # J1 pin 1

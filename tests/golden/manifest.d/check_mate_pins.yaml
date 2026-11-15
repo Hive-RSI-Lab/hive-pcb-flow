@@ -41,3 +41,31 @@ mutants:
       kind: mate_unkeyed_rail_swap
       ref: J1
       pos: [102.8, 103.5]   # J1 pin 1 (+5V)
+
+  mate-gender-mismatch:
+    board: blinky2
+    script: mutations/mate_gender_mismatch.py
+    check: check_mate_pins
+    modes: [MECH-05]
+    defect: >-
+      SIDECAR fault: J1 is a 1x02 pin socket and constraints.json states it
+      mates with a 2.54 mm pin socket, so both sides are female (gcm-v50-4,
+      gp8b-v50-1, issue #1124)
+    expect:
+      kind: mate_gender_mismatch
+      ref: J1
+      pos: [104.075, 103.5]  # J1's centre
+
+  mate-row-spacing:
+    board: blinky2
+    script: mutations/mate_row_spacing.py
+    check: check_mate_pins
+    modes: [MECH-05]
+    defect: >-
+      PLACEMENT fault: a Raspberry Pi Pico carrier U9 is a DIP-40 socket
+      footprint, rows 15.24 mm apart, where the Pico's rows are 17.78 mm
+      (zxdiag v1.0 Z101's rows for its edge socket, issue #1124)
+    expect:
+      kind: mate_row_spacing
+      ref: U9
+      pos: [126.63, 152.62]  # U9's centre

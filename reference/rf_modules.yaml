@@ -6,13 +6,61 @@
 # EasyEDA's WIFI-SMD_ESP32-WROVER-IE8MB footprint, whose name says u.FL.
 # external: a regex for the variants of the same family with a connector
 #   (u.FL / IPEX) instead of the PCB antenna; those are skipped.
-# The antenna end is not typed here: check_antenna takes it from the
-# footprint, as the module body (courtyard) beyond the pad field on the end
-# with the longest pad-free run. source: the vendor document the keep-out
-# numbers in check_antenna (EDGE_MM, SIDE_MM) come from.
+# keepout (#1188): the module datasheet's antenna area, when it draws one.
+#   outline_mm: [width across the antenna end, length] of the module outline
+#   antenna_mm: the area's depth in from the module's antenna-end edge, across
+#     the full outline width
+#   beyond_mm / side_mm: how far the datasheet's keep-out runs past that edge
+#     and past each side (0 when it stops at the module)
+#   end: which end of the outline's length the antenna is on: pin1 (the end by
+#     pad 1), opposite_pin1, or pad_free (the end with the longer pad-free run)
+#   source / url: the datasheet section and figure
+# A row without keepout: check_antenna takes the antenna from the footprint,
+# as the module body (courtyard) beyond the pad field on the end with the
+# longest pad-free run.
+# edge_mm / side_clear_mm: the antenna end's most inset from the board edge
+#   and the copper-free run beside the antenna; they default to check_antenna's
+#   EDGE_MM / SIDE_MM (Espressif's), null skips the warning (a datasheet whose
+#   keep-out already covers it, or that gives no number).
+# source: the vendor document the keep-out numbers come from.
+# Rows are tried in order, the first match wins: a module's own row goes
+# before its family's.
 # A board declares a part this file doesn't know, or overrides it, in
 # constraints.json: {"antennas": {"U3": "pcb" | "external"}}.
 modules:
+  - family: Espressif ESP32-WROOM-32E (PCB antenna)
+    match: 'ESP32[-_]?WROOM[-_]?32E(?![A-Z])'
+    keepout:
+      outline_mm: [18.0, 25.5]
+      antenna_mm: 6.19
+      beyond_mm: 0
+      side_mm: 0
+      end: pad_free
+      source: ESP32-WROOM-32E & WROOM-32UE datasheet v2.1 §11.1 Recommended PCB Land Pattern, Fig. 13 "Antenna Area" 18 x 6.19 mm at the module's top edge
+      url: https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32e_esp32-wroom-32ue_datasheet_en.pdf
+    source: ESP32 Hardware Design Guidelines, Positioning a Module on a Base Board (antenna end at most 1 mm in from the board edge, board cut away beside it), https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32/pcb-layout-design.html
+  - family: Espressif ESP32-S3-WROOM-1 (PCB antenna)
+    match: 'ESP32[-_]?S3[-_]?WROOM[-_]?1(?![0-9U])'
+    keepout:
+      outline_mm: [18.0, 25.5]
+      antenna_mm: 6.0
+      beyond_mm: 0
+      side_mm: 0
+      end: pad_free
+      source: ESP32-S3-WROOM-1 & WROOM-1U datasheet v1.8 §11.1 Recommended PCB Land Pattern, Fig. 11-1 "Antenna Area" 18 x 6 mm
+      url: https://www.espressif.com/sites/default/files/documentation/esp32-s3-wroom-1_wroom-1u_datasheet_en.pdf
+    source: ESP32 Hardware Design Guidelines, Positioning a Module on a Base Board, https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32/pcb-layout-design.html
+  - family: Espressif ESP32-C3-WROOM-02 (PCB antenna)
+    match: 'ESP32[-_]?C3[-_]?WROOM[-_]?02(?![0-9U])'
+    keepout:
+      outline_mm: [18.0, 20.0]
+      antenna_mm: 6.0
+      beyond_mm: 0
+      side_mm: 0
+      end: pad_free
+      source: ESP32-C3-WROOM-02 datasheet v1.7 §11.1 Recommended PCB Land Pattern, Fig. 11-1 "Antenna Area" 18 x 6 mm
+      url: https://www.espressif.com/sites/default/files/documentation/esp32-c3-wroom-02_datasheet_en.pdf
+    source: ESP32 Hardware Design Guidelines, Positioning a Module on a Base Board, https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32/pcb-layout-design.html
   - family: Espressif ESP32 / -S2 / -S3 / -C3 / -C5 / -C6 / -H2 modules
     match: 'ESP32[-_]?(S2|S3|C2|C3|C5|C6|H2)?[-_]?(WROOM|WROVER|MINI|SOLO)'
     external: '(WROOM-32U|WROOM-32UE|WROOM-32D?U|WROVER-I[BE]?|WROOM-(1|2|02)U|MINI-1U|SOLO-1U)(?![A-Z])'
@@ -21,3 +69,41 @@ modules:
     match: 'ESP-?(12[EFS]?|WROOM-02)'
     external: 'ESP-?07'
     source: Espressif ESP8266 Hardware Design Guidelines §1.6 (PCB antenna)
+  - family: Raytac MDBT50Q (nRF52840; -P PCB / chip antenna, -U is u.FL)
+    match: 'MDBT50Q'
+    external: 'MDBT50Q-?U'
+    keepout:
+      outline_mm: [10.5, 15.5]
+      antenna_mm: 3.8
+      beyond_mm: 0
+      side_mm: 0
+      end: pad_free
+      source: 'Raytac MDBT50Q-1MV2/-P1MV2 Approval Sheet Ver. L §2.1 PCB Size 10.5 x 15.5 mm, §2.3 RF Layout Suggestion (aka Keep-Out Area) p.11: "No Ground Pad" strip 3.8 mm from the antenna-end edge, "in EACH LAYER", "Place the module towards the edge of PCB"'
+      url: https://www.raytac.com/download/index.php?index_id=43
+    side_clear_mm: null
+    source: Raytac MDBT50Q Approval Sheet Ver. L §2.3
+  - family: Raspberry Pi RM2 (CYW43439 radio module)
+    match: '(^|[^A-Z0-9])RM2([^A-Z0-9]|$)'
+    keepout:
+      outline_mm: [14.5, 16.5]
+      antenna_mm: 5.0
+      beyond_mm: 13.5
+      side_mm: 10.5
+      end: pin1
+      source: 'RM2 datasheet Release 7 §2.4 Fig. 6: "RF KEEP OUT" box 35.5 x 18.5 mm, its top edge 30.0 mm from the module bottom (module 14.5 x 16.5 mm, antenna above pins 1 and 21): 5.0 mm on the module, 13.5 mm beyond, 10.5 mm each side; "must remain free of any metal"'
+      url: https://datasheets.raspberrypi.com/rm2/rm2-datasheet.pdf
+    edge_mm: null
+    side_clear_mm: null
+    source: RM2 datasheet Release 7 §2.4
+  - family: Raspberry Pi Pico W (CYW43439, PCB antenna)
+    match: 'Pico[-_ ]?W(?![A-Z0-9])'
+    keepout:
+      outline_mm: [21.0, 51.0]
+      antenna_mm: 9.0
+      beyond_mm: 0
+      side_mm: 0
+      end: opposite_pin1
+      source: 'Pico W datasheet Release 7 §2.2.1: "a cutout for the antenna (14 mm x 9 mm). If anything is placed close to the antenna (in any dimension) the effectiveness of the antenna is reduced"; the cutout is not placed across the 21 mm width, so the area is the full width, 9 mm deep, at the end away from pin 1 and the USB connector'
+      url: https://datasheets.raspberrypi.com/picow/pico-w-datasheet.pdf
+    side_clear_mm: null
+    source: 'Pico W datasheet Release 7 §2.2.1: "should be placed on the edge of a board"'

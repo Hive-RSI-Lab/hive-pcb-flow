@@ -27,6 +27,16 @@ document that fixes the pinout):
        no standard of its own): a GND pin off ground, a SUPPLY pin on ground
        or a signal pin on a ground or supply rail (bed-lift v0.2: the hall
        supply and GND swapped on pins 2 and 3).
+     power (#1190): a power-entry connector's + contact on ground, or its -
+       contact on a positive rail (a named rail, or a VIN/VBAT/VBUS/VCC
+       name): the supply reversed. An XT30 on a stock AMASS_XT30 footprint
+       is judged by its marked polarity; a barrel jack on a stock
+       Connector_BarrelJack footprint only when its polarity is stated
+       (constraints.json "pinouts" barrel-centre-positive/-negative, or a
+       Value such as "centre positive"). A barrel jack with no stated
+       polarity, an XT30 or barrel jack on a footprint whose pad numbering
+       no source fixes, and a JST-PH 2-pin on a battery net (no maker
+       pinout found; state one) are listed in `connectors` with not_judged.
  - pinout_supply_volts: the supply the board feeds on the connector's power
    pins sits at other volts than the mate needs (bed-lift v0.2: the hall
    sensors' VHALL is U4's output, U4 on +3.3V, where they want 5 V). A
@@ -48,6 +58,13 @@ document that fixes the pinout):
    of bulk_uf_min or more on its named supply nets, or with --pcb none
    within bulk_mm of its pad (identidem v7.5: J7, a ToF LiDAR on /3.3V
    with none).
+ - bus_driver_contention (scripts/mate_needs.py): two outputs on one net,
+   one always on (a push-pull gate, or a 3-state part with OE tied on),
+   such as a Z80 bus strobe also driven by a 74HC gate. Output kinds come
+   from the datasheets, listed in reference/mate_needs.yaml bus_drivers.
+ - i2c_single_master (scripts/mate_needs.py): a master that cannot
+   arbitrate (TUSB8041 in master mode) sharing its I2C bus with an IC that
+   is not its EEPROM, with no mux or isolator between them.
 
     check_pinouts.py --pcb B.kicad_pcb [--netlist B.net] [--constraints C]
     check_pinouts.py --sch B.kicad_sch [--constraints C]
@@ -84,6 +101,14 @@ ROLE_WORDS = {
 }
 # header rows: the words (of an IC pin function, else a net name) that
 # carry each signal role; a role not listed here is its own word.
+# power rows: a net is a positive rail by its volts, a leading +, or one of
+# these words in its name
+POWER_WORDS = {"VIN", "VBAT", "BAT", "BATT", "VBATT", "LIPO", "VBUS", "VCC",
+               "VDD", "VSYS", "VPWR", "PWR", "VDC", "DCIN", "VMOT", "VM"}
+BATTERY_WORDS = {"BAT", "VBAT", "BATT", "VBATT", "LIPO"}
+BARREL_RE = re.compile(r"barrel|dc[_ -]?jack|PJ-0\d\d|DCJ\d", re.I)
+XT30_RE = re.compile(r"XT30", re.I)
+JST_PH2_RE = re.compile(r"[SB]2B-PH", re.I)
 SIGNAL_WORDS = {
     "SWDIO": {"SWDIO", "TMS", "SWD_IO"},
     "SWCLK": {"SWCLK", "TCK", "SWD_CLK"},
@@ -316,6 +341,77 @@ def _words(text: str) -> set[str]:
     return set(re.split(r"[^A-Z0-9]+", text.upper())) - {""}
 
 
+def _positive(net: str) -> bool:
+    """A positive supply rail, by its name: volts above 0, a leading +, or
+    a POWER_WORDS word. An unnamed net is not one."""
+    if net.startswith("Net-(") or net.startswith("unconnected-"):
+        return False
+    v = _volts_from_name(net)
+    if v is not None:
+        return v > 0
+    name = net.rsplit("/", 1)[-1]
+    return name.startswith("+") or bool(_words(name) & POWER_WORDS)
+
+
+def judge_power(board: Board, ref: str, pins: dict, name: str, row: dict):
+    """Violations of a power-entry connector against a power row: its +
+    (SUPPLY) contact on ground, or its - (GND) contact on a positive rail.
+    Other nets (unnamed, or behind a protection diode) are not judged."""
+    out = []
+    for p, spec in row["pinout"].items():
+        role, _ = _role(spec)
+        if p not in pins or role not in ("GND", "SUPPLY"):
+            continue
+        net = pins[p]
+        bad = None
+        if role == "SUPPLY" and board.is_ground(net):
+            bad = f"is + in {name} but sits on ground ({net})"
+        elif role == "GND" and _positive(net):
+            bad = f"is - in {name} but carries the rail {net}"
+        if bad:
+            out.append(_viol("pinout_mismatch", ref, net,
+                             f"{ref} pin {p} {bad}: the supply comes in "
+                             f"reversed ({_cite(row)})",
+                             pin=p, standard=name, expected=role))
+    return out
+
+
+def find_power(board: Board, ref: str, pins: dict, rows: dict):
+    """(violations, judged entry or None) for a power-entry connector not
+    named in constraints (module doc)."""
+    comp = board.comps.get(ref, {})
+    fp, value = comp.get("footprint") or "", comp.get("value") or ""
+    for name, row in rows.items():
+        if not re.search(row["footprint"], fp, re.I):
+            continue
+        if row.get("auto"):
+            return (judge_power(board, ref, pins, name, row),
+                    {"ref": ref, "standard": name, "by": "footprint"})
+        if row.get("value") and re.search(row["value"], value, re.I):
+            return (judge_power(board, ref, pins, name, row),
+                    {"ref": ref, "standard": name, "by": "value"})
+    text = f"{fp} {value}"
+    if BARREL_RE.search(text):
+        stock = any(re.search(r["footprint"], fp, re.I) for r in rows.values()
+                    if not r.get("auto"))
+        why = ("no polarity stated (constraints.json pinouts "
+               "barrel-centre-positive/-negative, or a Value such as "
+               "\"centre positive\")" if stock else
+               "footprint is not a stock Connector_BarrelJack one: no "
+               "source fixes which pad is the centre pin")
+        return [], {"ref": ref, "standard": "barrel_jack", "not_judged": why}
+    if XT30_RE.search(text):
+        return [], {"ref": ref, "standard": "xt30", "not_judged":
+                    "footprint is not a stock AMASS_XT30 one: no source "
+                    "fixes which pad is +"}
+    if JST_PH2_RE.search(fp) and any(
+            _words(n.rsplit("/", 1)[-1]) & BATTERY_WORDS for n in pins.values()):
+        return [], {"ref": ref, "standard": "jst_ph_battery", "not_judged":
+                    "no maker pinout found for which JST-PH pad is +; "
+                    "state one in constraints.json pinouts"}
+    return [], None
+
+
 def _signal_roles(board: Board, net: str, roles: set[str]) -> set[str]:
     """The roles among `roles` a net carries: from the function of the IC
     pins on it (or one series resistor beyond), else from its name."""
@@ -470,6 +566,12 @@ def check(parsed: dict, constraints: dict, table: dict | None = None,
     v, j = mate_needs.judge_wired_or(board, mates)
     viols += v
     judged += [dict(x, standard="wired_or") for x in j]
+    v, j = mate_needs.judge_bus_drivers(board, mates)
+    viols += v
+    judged += [dict(x, standard="bus_drivers") for x in j]
+    v, j = mate_needs.judge_i2c_master(board, mates)
+    viols += v
+    judged += [dict(x, standard="i2c_single_master") for x in j]
     v, j = mate_needs.judge_pulsed(board, mates, pcb)
     viols += v
     judged += [dict(x, standard="pulsed_load") for x in j]
@@ -485,6 +587,7 @@ def check(parsed: dict, constraints: dict, table: dict | None = None,
         stated[ref] = std
     jacks = {k: r for k, r in table.items() if r.get("kind") == "audio_jack"}
     headers = {k: r for k, r in table.items() if r.get("kind") == "header"}
+    powers = {k: r for k, r in table.items() if r.get("kind") == "power"}
     for ref in sorted(board.pins):
         pins = board.pins[ref]
         if ref in stated:
@@ -498,7 +601,14 @@ def check(parsed: dict, constraints: dict, table: dict | None = None,
                 viols += judge_jack(board, ref, pins, {name: row})[0]
             elif row["kind"] == "header":
                 viols += judge_header(board, ref, pins, name, row)
+            elif row["kind"] == "power":
+                viols += judge_power(board, ref, pins, name, row)
             judged.append({"ref": ref, "standard": name, "stated": True})
+            continue
+        v, got = find_power(board, ref, pins, powers)
+        if got:
+            viols += v
+            judged.append(got)
             continue
         if is_jack(board, ref, pins):
             v, fits = judge_jack(board, ref, pins, jacks)
@@ -567,10 +677,11 @@ def run(argv=None):
     viols, judged = check(parse_netlist(netlist), constraints, pcb=args.pcb)
     return checklib.report(
         SCRIPT, board, viols, connectors=judged,
-        nothing_to_judge=None if judged else
-        "no connector the pinout table knows (JTAG or SWD header, "
+        nothing_to_judge=None if any("not_judged" not in j for j in judged)
+        else "no connector the pinout table knows (JTAG or SWD header, "
         "Tag-Connect, Pmod, Qwiic, Arduino or Raspberry Pi header, 3.5 mm "
-        "jack, or one named in constraints.json pinouts)"), args.out
+        "jack, XT30, barrel jack of stated polarity, or one named in "
+        "constraints.json pinouts)"), args.out
 
 
 def main(argv=None) -> int:

@@ -212,13 +212,14 @@ def _entries(constraints: dict | None) -> list[dict]:
     if raw is None:
         return []
     if isinstance(raw, dict):
-        raw = [dict(v, load=k) for k, v in raw.items()]
+        raw = [dict(v, load=k) for k, v in raw.items()
+               if not str(k).startswith("_")]
     if not isinstance(raw, list) or not all(isinstance(e, dict)
                                             for e in raw):
         raise checklib.CheckError("constraints rf_match must be a list of "
                                   "objects")
     for e in raw:
-        bad = set(e) - KEYS
+        bad = checklib.data_keys(e) - KEYS
         if bad:
             raise checklib.CheckError(f"rf_match: unknown keys "
                                       f"{sorted(bad)}")

@@ -231,7 +231,10 @@ Consumers per key (script -> phase):
   // check_pinouts (#1027): an off-board connector with no standard of its
   // own (a harness to a part's leads) held to a "stated" row of
   // reference/connector_pinouts.yaml. Standard headers (JTAG, audio jacks)
-  // are found without this.
+  // are found without this. Power entry (#1190): an XT30 is judged on its
+  // own; a barrel jack only when its polarity is stated here
+  // (barrel-centre-positive | barrel-centre-negative) or in its value; a
+  // JST-PH battery lead is listed not_judged (no settled standard).
   "pinouts": [{"ref": "J8", "standard": "bedlift-lift-actuator"}],
 
   // check_body_clash (P8, #608): parts whose 3D bodies overlap on purpose (a
@@ -247,7 +250,34 @@ Consumers per key (script -> phase):
     // check_mounting (#1088): a board over 2500 mm^2 (or 80 mm long) with no
     // mounting hole says how it is held instead. by: clip | adhesive |
     // stack | rail | edge_card | castellated | cable | none; why is required.
-    "mounting": {"by": "rail", "why": "slides into the case by its side tabs"}},
+    "mounting": {"by": "rail", "why": "slides into the case by its side tabs"},
+    // check_model_fit (#1191, #980): a raised part's mounting height as
+    // built, against its placed 3D model. datum body_underside (the body's
+    // underside above the board top) | lead_protrusion (lead tips past the
+    // board bottom); tol_mm default 0.3; source (the drawing or build note)
+    // required; model, optional, a file-name substring picking one of the
+    // part's models (default the first shown). Off by more than tol_mm:
+    // model_mount_height, error. Unlisted parts are not judged.
+    "mount_heights": {"U1": {"height_mm": 16.0, "datum": "body_underside",
+                             "tol_mm": 0.3, "source": "README: 16 mm printed standoff"}},
+    // check_body_clash (#1187): how high a plug-in module or daughterboard
+    // stands, its underside above the board, in mm. Modules found on
+    // PinSocket_*_P2.54mm_Vertical strips are lifted without this (socket
+    // height + its own pin header's base, reference/socket_heights.yaml).
+    // A Module:/dev-board footprint on no socket and no entry here is listed
+    // in standoff_unstated and judged as drawn. height_mm 0: soldered flat.
+    "module_standoff": [{"refs": ["U1"], "height_mm": 11.0,
+                         "why": "Pico on 8.5 mm female headers"}]},
+
+  // netlist_audit rules 34-35 (#1137): design intent no design file holds.
+  // modules: a part drawn with another part's symbol, by what it really is
+  // (an mcu_pins.yaml row's Value), so its pin functions are looked up
+  // right. bus_unread: a named-bus member (Z80 MREQ/IORQ/RD/WR, JTAG, a
+  // data byte) the board's master leaves unread on purpose. why is required.
+  "design_intent": {
+    "modules": [{"ref": "U1", "is": "Arduino Nano RP2040 Connect",
+                 "why": "README: the board takes a Nano RP2040 Connect"}],
+    "bus_unread": [{"net": "ZXIORQ", "why": "the board only watches memory cycles"}]},
 
   // check_surge (P8, #492): IEC 61000-4-5 surge / 61000-4-4 EFT on cable
   // ports. Only declared ports are judged. kind picks the assumed level from
@@ -641,8 +671,10 @@ Consumers per key (script -> phase):
   "esd": {"connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
           "clamps": ["D1"], "level_kv": 8, "victim_abs_max_v": {"/USB*": 6}},
 
-  // check_mate_pins (MECH-05): a connector and its mate. ref and mate_ref
-  // are required; mate_pcb: the mate's board, relative to this file (absent:
+  // check_mate_pins (MECH-05): a connector and its mate. ref and one of
+  // mate_ref or mate_standard are required; mate_standard: a mate with no
+  // board, by its name in connector_pinmap.yaml mate_standards (gender and
+  // row spacing are checked against it, #1124); mate_pcb: the mate's board, relative to this file (absent:
   // this board); mount stack (default) | flip | cable, as in
   // reference/connector_pinmap.yaml; rotation: the mate board's turn,
   // degrees CCW in the top view (0); net_map {net here: the mate's name}.
@@ -655,7 +687,8 @@ Consumers per key (script -> phase):
                     "rotation": 0, "net_map": {"+3V3": "VDD"}},
                    {"ref": "J3", "mate_ref": "J1", "mount": "cable",
                     "cable": {"kind": "ffc", "type": "A", "length_mm": 100,
-                              "pitch_mm": 0.5}}],
+                              "pitch_mm": 0.5}},
+                   {"ref": "Z1", "mate_standard": "zx-spectrum-edge"}],
 
   // route_teardrops adds them, dfm_check judges them. required: true |
   // false | null (null: true on a board with a FLEX_* area); a missing

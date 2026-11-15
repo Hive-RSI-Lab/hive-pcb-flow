@@ -1,0 +1,14 @@
+# Seeded fault for check_fp_geometry (footprint geometry against the drawing).
+mutants:
+  fp-pin-order-crystal:
+    board: blinky2
+    script: mutations/fp_pin_order_crystal.py
+    check: check_fp_geometry
+    defect: >-
+      LIBRARY fault: Y1's 3225 crystal footprint has pads 1 and 2 swapped,
+      so the land is the part's mirror image while its pad count, sizes and
+      name still match KiCad's stock footprint
+    expect:
+      kind: fp_pin_order_vs_stock
+      ref: Y1
+      pos: [114, 128]   # Y1's origin

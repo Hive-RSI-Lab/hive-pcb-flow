@@ -2853,11 +2853,26 @@
    ],
    "pos": [
     109.501,
-    163.796
+    163.621
    ],
    "kind": "antenna_copper",
    "verdict": "real",
-   "reason": "measured against Espressif's antenna layout rules for the WROOM-02"
+   "reason": "measured against Espressif's antenna layout rules for the WROOM-02 (#1188: position moved with the datasheet's 18 x 6 mm antenna area on the 20 mm module, 0.25 mm in from the 20.5 mm courtyard)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_antenna",
+   "net": "Net-(D3-K)",
+   "refs": [
+    "U1"
+   ],
+   "pos": [
+    109.598,
+    162.652
+   ],
+   "kind": "antenna_copper",
+   "verdict": "real",
+   "reason": "measured against the WROOM-02 datasheet's 18 x 6 mm antenna area (#1188): a 0.1 mm2 B.Cu piece of the D3 cathode net 6 mm in from the module's antenna end, inside the courtyard beside the antenna"
   },
   {
    "gate": "verify",
@@ -2961,11 +2976,11 @@
    ],
    "pos": [
     100.0,
-    168.75
+    168.5
    ],
    "kind": "antenna_inboard",
    "verdict": "real",
-   "reason": "measured against Espressif's antenna layout rules for the WROOM-02"
+   "reason": "measured against Espressif's antenna layout rules for the WROOM-02 (#1188: position moved with the datasheet's 18 x 6 mm antenna area on the 20 mm module, 0.25 mm in from the 20.5 mm courtyard)"
   },
   {
    "gate": "verify",
@@ -2976,11 +2991,11 @@
    ],
    "pos": [
     100.0,
-    165.8
+    165.5
    ],
    "kind": "antenna_side_clearance",
    "verdict": "real",
-   "reason": "measured against Espressif's antenna layout rules for the WROOM-02"
+   "reason": "measured against Espressif's antenna layout rules for the WROOM-02 (#1188: position moved with the datasheet's 18 x 6 mm antenna area on the 20 mm module, 0.25 mm in from the 20.5 mm courtyard)"
   },
   {
    "gate": "verify",

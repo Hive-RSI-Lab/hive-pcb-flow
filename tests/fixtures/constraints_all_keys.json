@@ -133,7 +133,8 @@
                "ends": {"J2": {"contact": "top", "entry": "tabs",
                                "source": "datasheet"}},
                "name": "flex", "part": "FFC-GENERIC-10", "length_mm": 100,
-               "pitch_mm": 0.5}}
+               "pitch_mm": 0.5}},
+    {"ref": "Z1", "mate_standard": "zx-spectrum-edge"}
   ],
   "placement": {
     "fixed": ["J1"],
@@ -181,7 +182,12 @@
     "allow_body_overlap": [{"refs": ["J1", "U1"], "why": "nested by design",
                             "up_to_mm": 0.5}],
     "allow_off_board": [{"refs": ["J1"], "why": "overhangs the edge"}],
-    "mounting": {"by": "clip", "why": "snaps into the case's clips"}
+    "mounting": {"by": "clip", "why": "snaps into the case's clips"},
+    "mount_heights": {"U1": {"height_mm": 16.0, "datum": "body_underside",
+                             "tol_mm": 0.3, "source": "README: 16 mm standoff",
+                             "model": "standoff"}},
+    "module_standoff": [{"refs": ["U1"], "height_mm": 11.0,
+                         "why": "on female headers"}]
   },
   "pinouts": [{"ref": "J4", "standard": "audio-trs"}],
   "testpoints": {
@@ -276,6 +282,21 @@
       {"name": "ADDR", "kind": "addr", "clock": "CK", "nets": ["/A0"]},
       {"name": "DQS0", "kind": "dqs", "clock": "CK",
        "nets": ["/DQS0_P", "/DQS0_N"]}
+    ]
+  },
+  "design_intent": {
+    "modules": [
+      {
+        "ref": "U1",
+        "is": "Arduino Nano RP2040 Connect",
+        "why": "the BOM names the RP2040 Connect"
+      }
+    ],
+    "bus_unread": [
+      {
+        "net": "/ZXIORQ",
+        "why": "a memory-only device"
+      }
     ]
   }
 }

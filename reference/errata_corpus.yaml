@@ -656,8 +656,23 @@ boards:
     source_quote: "Aux RX and TX should be flipped"
     fault_class: SCH (signal direction)
     blind: missed
-    verdict: missed
+    verdict: caught_with_constraints
+    caught_by: "#1137"
+    catch:
+      script: netlist_audit
+      kind: uart_direction
+      net: RX_FROM_AUX
+      constraints:
+        rev_a: {design_intent: {modules: [{ref: U1, is: Arduino Nano RP2040 Connect, why: "the README and firmware target the Nano RP2040 Connect; the symbol's ABX00027 is a Nano 33 IoT"}]}}
+        rev_b: {design_intent: {modules: [{ref: U1, is: Arduino Nano RP2040 Connect, why: "the README and firmware target the Nano RP2040 Connect; the symbol's ABX00027 is a Nano 33 IoT"}]}}
     follow_up: "off-board and standard connector pinouts, with the mate stated (#1027)"
+    note: >-
+      Not an independent catch: rule 35 was written after this defect was
+      read. U1's Value is ABX00027, which is a Nano 33 IoT, so the catch
+      states the module it really is. Then the Nano RP2040 Connect's D8 and
+      D9 (GPIO20, UART1 TX; GPIO21, UART1 RX, ArduinoCore-mbed variant.cpp)
+      sit on RX_FROM_AUX and TX_TO_AUX on rev A, and the other way round on
+      rev B, which is quiet.
   - id: smart-lcc-2
     summary: no zener/diode protection on the RX and TX ports
     source_quote: "Add Zeners to RX, and diodes to TX (primary and auxilliary) to protect those ports from burning out accidentally"
@@ -694,8 +709,14 @@ boards:
     source_quote: "SWDIO has been routed to the wrong pin on the MCU (PA15 instead of PA13)"
     fault_class: SCH (pin function vs datasheet)
     blind: missed
-    verdict: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: debug_pin_wrong, net: SWDIO}
     follow_up: "SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070)"
+    note: >-
+      Caught by netlist_audit rule 31 (class 6), written knowing this
+      defect: a net named SWDIO reaches the STM32F401 on PA15, and
+      reference/mcu_pins.yaml (from ST's open pin data) puts SWDIO only on
+      PA13. A training catch, not an independent one; quiet on rev2.
   - id: fc980c-2
     summary: KEY_STATE open-collector line has no 5V pull-up
     source_quote: "the KEY_STATE pin is missing a 5V pull-up resistor"
@@ -724,8 +745,15 @@ boards:
     source_quote: "Missing off /IORQ was a mistake."
     fault_class: SCH (missing connection)
     blind: missed
-    verdict: missed
+    verdict: caught
+    caught_by: "#1137"
+    catch: {script: netlist_audit, kind: bus_member_dropped, net: ZXIORQ}
     follow_up: "a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137)"
+    note: >-
+      Not an independent catch: rule 34 was written after this defect was
+      read. U101 reads MREQ, RD and WR while ZXIORQ goes only to the edge
+      connector Z101 and the J201 breakout; v1.2 wires it to the Pico and
+      is quiet. zxdiag-v10's v1.1 (the same commit) carries the finding too.
   - id: zxdiag-v11-2
     summary: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V
     source_quote: "Due to the standard 1N4148 diodes I used for clamping the -5V input to the Pico, I have the possibility of -0.7V going into the ADC. The minimum allowed by the Pico is -0.5V."
@@ -753,7 +781,6 @@ boards:
       the divider with the system-under-test +5V gone and finds -5 V at the
       Pico pin. zxdiag-v10 (v1.0 and v1.1, still holdout) carries the same
       divider unfixed; rule 24 flags it there too, on both revisions.
-holdout:
 - id: netscore-main
   url: https://github.com/arcticlula/Netscore
   commit: 4426f309aab51d447e32f062f66db48317256ff4
@@ -769,7 +796,9 @@ holdout:
   note: >-
     v3.1 fixes both in the schematic only; its PCB is v3.0's. The C9
     footprint polarity ("pad 1 (the footprint's +) is on GND") is on v3.1
-    too, so it is not judged.
+    too, so it is not judged. Swept blind as a holdout board (round 1),
+    then moved here: rule 30 (class 6) was written knowing netscore-2, so
+    its catch is a training catch. The blind and swept fields are kept.
   defects:
   - id: netscore-1
     summary: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT
@@ -788,8 +817,53 @@ holdout:
     source_quote: "BMS1 (FS312MH) GND and BAT- swapped — datasheet §6/§8: pin 1 GND is the cell negative and pin 3 BAT- is \"negative of charger or load\""
     fault_class: SCH (pin function vs datasheet)
     blind: missed
-    verdict: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: protector_cell_side, net: -BATT, refs: [BMS1]}
     follow_up: "protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors"
+    note: >-
+      Caught by netlist_audit rule 30 (class 6), written knowing this
+      defect, so not independent: BMS1's cell-side pin GND is on the board
+      ground and its load-side BAT- on the cell's -BATT. Quiet on v3.1.
+- id: flexgrid-v4
+  url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
+  commit: d3529287a8998dba79bdf6f593d1d67532386edc
+  licence: CERN-OHL-S-2.0
+  rev_a: {name: V4 as ordered, commit: 2dc7881049a434334ef6d609ab18f7a98c45d129, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  rev_b: {name: V4-2, commit: a5997da259c307a4a0a97f9a49eea153a3eb2127, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
+  source: KiCad/OM-FlexGrid V4/README.md
+  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
+  note: >-
+    Swept blind as a holdout board (round 2), then moved here: rule 29
+    (class 6) was written knowing flexgrid-v4-1, so its catch is a training
+    catch. The blind and swept fields are kept as the record.
+  defects:
+  - id: flexgrid-v4-1
+    summary: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC
+    source_quote: "The V4 KiCad schematic wired the USBLC6 with pin 2 on VBUS and pin 5 on GND. The actual chip pinout is the other way around (pin 2 = GND, pin 5 = VCC)."
+    fault_class: SCH (pin function vs datasheet)
+    blind: missed
+    verdict: caught
+    catch: {script: netlist_audit, kind: pin_role_net, net: GND, refs: [U5]}
+    follow_up: "pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts"
+    note: >-
+      Caught by netlist_audit rule 29 (class 6), written knowing this
+      defect, so not independent: KiCad's stock USBLC6-2SC6 symbol names
+      pin 5 VBUS and pin 2 GND, and rev A wires VBUS to GND and GND to
+      VBUS. Quiet on V4-2.
+  - id: flexgrid-v4-2
+    summary: 29 vias inside SMD pads that wick solder in reflow
+    source_quote: "The June layout had 29 vias sitting inside SMD pads (ESP32 module pads, mux, LDO, charger, buttons, microSD socket, several resistors). An unplugged via inside a pad wicks solder away from the joint during reflow."
+    fault_class: DFM (via in pad)
+    blind: missed
+    verdict: caught
+    caught_by: "#1088"
+    catch: {script: check_wicking, kind: wick_via_in_pad, refs: [U1, U2, U3, U4, U5, IC1, J9, Q3]}
+    note: >-
+      Not an independent catch: check_wicking's via-in-pad rule (#475) is
+      older than this round, but it joined the corpus runners (#1088) after
+      this defect was read. 29 open vias in SMD pads on V4 as ordered (the
+      erratum's 29), across 18 parts, and none on V4-2.
+holdout:
 - id: netscore-big
   url: https://github.com/arcticlula/Netscore
   commit: 4426f309aab51d447e32f062f66db48317256ff4
@@ -889,6 +963,10 @@ holdout:
       check_mounting (#1088) flags rev_a, a 100x50 mm board with no
       mounting hole, and rev_b adds MH2-MH6. Real, but the errata does not
       name it, so it is not a defect here.
+      check_silk's two-column legend rule (#1172) stays quiet here,
+      rightly by the files: rev_a's ISP legend matches the copper as
+      placed, since J1 pin 2 is on an unnamed net, not 3V3, so the
+      mislabel the erratum fixes is not in the published board.
 - id: ice1usb-r01
   url: https://github.com/osmocom/osmo-e1-hardware
   commit: 85acea8b6d656add7c098d51f816f4ac34084fa2
@@ -898,10 +976,13 @@ holdout:
   source: hardware/icE1usb/ecn.md
   swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
   note: >-
-    check_mounting (#1088) flags both revisions (86x53 mm, no hole): false
-    in practice, the board slides into its case by its side tabs, so it is
-    held without holes. A rail-held board says so with
-    mechanical.mounting {by: rail, why} in constraints.json.
+    check_mounting (#1088) flagged both revisions (86x53 mm, no hole), a
+    false finding: the board slides into its case by four 4 x 1 mm tabs at
+    the ends of its long edges. check_mounting now reads mirrored edge tabs
+    as a rail mount (mounts_by rail, from edge tabs) and is quiet on all
+    four revisions; the rule was built from this board alone (no other
+    corpus or hwde board has such tabs). A rail-held board without tabs
+    still says so with mechanical.mounting {by: rail, why}.
   defects:
   - id: ice1usb-r01-1
     summary: SPI flash footprint is the wide SO8; the part is the narrow one
@@ -917,6 +998,12 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "a stated jumper map for configuration headers, so their wiring can be checked"
+    note: >-
+      Read for #1137 and left missed: the NT/TE choice here is the order of
+      the RJ45 pairs that J4 and J5 carry through F1-F8 to U7 and U12, which
+      changes between revisions, not a jumper with a stated default. Only
+      the E1 NT and TE pinouts would judge it, and no design file holds
+      them.
 - id: ice1usb-r10
   url: https://github.com/osmocom/osmo-e1-hardware
   commit: 85acea8b6d656add7c098d51f816f4ac34084fa2
@@ -926,10 +1013,13 @@ holdout:
   source: hardware/icE1usb/ecn.md
   swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
   note: >-
-    check_mounting (#1088) flags both revisions (86x53 mm, no hole): false
-    in practice, the board slides into its case by its side tabs, so it is
-    held without holes. A rail-held board says so with
-    mechanical.mounting {by: rail, why} in constraints.json.
+    check_mounting (#1088) flagged both revisions (86x53 mm, no hole), a
+    false finding: the board slides into its case by four 4 x 1 mm tabs at
+    the ends of its long edges. check_mounting now reads mirrored edge tabs
+    as a rail mount (mounts_by rail, from edge tabs) and is quiet on all
+    four revisions; the rule was built from this board alone (no other
+    corpus or hwde board has such tabs). A rail-held board without tabs
+    still says so with mechanical.mounting {by: rail, why}.
   defects:
   - id: ice1usb-r10-1
     summary: GPS I2C shares the extension port's lines and the GPS module drives them as a master; r1.1 adds jumpers
@@ -938,6 +1028,14 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "I2C masters per bus: a module that drives I2C as a master (from its datasheet) sharing lines with an off-board port"
+    note: >-
+      check_pinouts i2c_single_master (#1170) judges a part its datasheet
+      calls a master that cannot arbitrate (TUSB8041 in master mode). It
+      stays quiet here, rightly: the GPS is a u-blox MAX-M8W, whose DDC
+      (I2C) port the maker documents as a slave. The erratum's "acts as a
+      master" is the clone module's own behaviour, which no datasheet
+      states and no design file holds. Not independent either way: the
+      rule was written after this defect was read.
 - id: zxdiag-v10
   url: https://github.com/derekfountain/zx-spectrum-diagnostics
   commit: a6d874e92e14834dd6f81a66c2ae44a377eacba6
@@ -952,15 +1050,36 @@ holdout:
     source_quote: "Wrong footprint for the Spectrum edge connector. I used zxbus:ZX_Bus_Pin_Header, which is two rows of pin headers about 2.5mm apart. They should be 5mm apart."
     fault_class: LIB (wrong footprint geometry)
     blind: missed
-    verdict: missed
-    follow_up: "an edge connector's row spacing against the mating connector's"
+    verdict: caught_with_constraints
+    caught_by: "#1124"
+    catch:
+      script: check_mate_pins
+      kind: mate_row_spacing
+      refs: [Z101]
+      constraints:
+        rev_a: {mating_pairs: [{ref: Z101, mate_standard: zx-spectrum-edge}]}
+        rev_b: {mating_pairs: [{ref: Z101, mate_standard: zx-spectrum-edge}]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1124), though the row spacings come from the Sullins
+      ABC card-edge socket datasheet, not from this board. v1.0's Z101 has
+      its rows 2.54 mm apart; v1.1's Spectrum_Edge_Connector 5.08 mm, which
+      the edge socket takes. Only the stated mate says which is right.
   - id: zxdiag-v10-2
     summary: Edge connector header holes too small for the pins
     source_quote: "Further, the holes are too small."
     fault_class: PCB (drill size)
     blind: missed
-    verdict: missed
-    follow_up: "check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint"
+    verdict: caught
+    caught_by: "#1123"
+    catch: {script: check_connector_fit, kind: tht_pin_tight, refs: [Z101]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1123). v1.0 is a KiCad 6 board, whose footprints
+      placelib read no reference from until intake's kicad-cli upgrade was
+      applied here; Z101 is a project-library pin header (2.54 mm holes
+      apart) drilled 0.76 mm for a 0.64 mm square post (Samtec TSW), 0.91 mm
+      across its corners. v1.1's edge connector has no such holes.
 - id: pico-if1-v10
   url: https://github.com/derekfountain/zx-spectrum-pico-interface-one
   commit: 7d1be0cb53fe19f4c43f2c90e31ed24b3ee89d19
@@ -986,8 +1105,16 @@ holdout:
     source_quote: "The direction for the data bus level shifter needs to be ROM_READ_INV, not /RD."
     fault_class: SCH (wrong net)
     blind: missed
-    verdict: missed
+    verdict: caught
+    caught_by: "#1137"
+    catch: {script: netlist_audit, kind: transceiver_drives_host_bus, net: ZXRD}
     follow_up: "a level shifter's DIR pin checked against a stated direction (read strobe) net"
+    note: >-
+      Not an independent catch: rule 36 was written after this defect was
+      read. U4 (74LS245) has OE on GND and DIR on the edge connector's raw
+      ZXRD, so it drives the Spectrum's data bus on every read, whoever is
+      addressed. v1.1 drives DIR from ROM_READ_INV, which the 4075 decodes
+      on this board, and is quiet.
   - id: pico-if1-v10-3
     summary: GND via for U4 pin 19 (/OE) sits under the chip where it can't be reached
     source_quote: "Move the GND via from pin 19 on U4, it's under the chip and I can't get to it. This is /OE."
@@ -1051,6 +1178,12 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "bus contention: two drivers enabled by one bus strobe (U12 and U40 on BWRITE1)"
+    note: >-
+      check_pinouts bus_driver_contention (#1171) stays quiet here, rightly:
+      in V5.0's netlist U12 and U40 both take BWRITE1 as an input (a latch
+      clock), so no net has two outputs on it. The conflict is in what
+      the firmware writes on that strobe, which no design file holds. Not
+      independent: the rule was written after this defect was read.
   - id: gcm-v50-2
     summary: A symbol's pins flipped and out of order, causing a clock problem
     source_quote: "Fix a symbol issue where pins was flipped and not ordered causing a clock problem"
@@ -1076,8 +1209,20 @@ holdout:
     source_quote: "J12 have been correctly replaced with a male connector"
     fault_class: PCB (connector gender)
     blind: missed
-    verdict: missed
-    follow_up: "connector gender against a stated mating side"
+    verdict: caught_with_constraints
+    caught_by: "#1124"
+    catch:
+      script: check_mate_pins
+      kind: mate_gender_mismatch
+      refs: [J12]
+      constraints:
+        rev_a: {mating_pairs: [{ref: J12, mate_standard: pin-socket-2.54}]}
+        rev_b: {mating_pairs: [{ref: J12, mate_standard: pin-socket-2.54}]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1124). V5.0's J12 is a PinSocket_2x21 where it mates
+      with a socket; V5.1's is a PinHeader. Only the stated mate says which
+      gender is right. A KiCad 5 board, read through intake's upgrade.
 - id: gp8b-v50
   url: https://github.com/JonathSpirit/GP8B
   commit: 6335b5a59bfc2553559fee35edc3b826b83e146f
@@ -1092,8 +1237,20 @@ holdout:
     source_quote: "J1 wasn't a male connector"
     fault_class: PCB (connector gender)
     blind: missed
-    verdict: missed
-    follow_up: "connector gender against a stated mating side"
+    verdict: caught_with_constraints
+    caught_by: "#1124"
+    catch:
+      script: check_mate_pins
+      kind: mate_gender_mismatch
+      refs: [J1]
+      constraints:
+        rev_a: {mating_pairs: [{ref: J1, mate_standard: pin-socket-2.54}]}
+        rev_b: {mating_pairs: [{ref: J1, mate_standard: pin-socket-2.54}]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1124). V5.0's J1 is a PinSocket_1x06 where it mates
+      with a socket; V5.1's is a PinHeader. A KiCad 5 board, read through
+      intake's upgrade.
   - id: gp8b-v50-2
     summary: ADDSCR_CLK not sending the right pulses to the motherboard
     source_quote: "ADDSCR_CLK was not sending the right pulses to the motherboard"
@@ -1101,6 +1258,10 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "the erratum does not name the fault; read the v5.0 to v5.1 ADDSCR_CLK change to find a rule"
+    note: >-
+      Read for #1137 and left missed: what was wrong with ADDSCR_CLK is the
+      pulses the motherboard sees, a timing fact, not which pins the net
+      reaches, so no wiring rule against a stated fact can judge it.
 - id: mdbt-micro-50q
   url: https://github.com/siderakb/mdbt-micro
   commit: 7821d9046258f650ddf8d9424e21c6a3fc065c32
@@ -1115,37 +1276,16 @@ holdout:
     source_quote: "Fixed the ProMicro board 2.54mm pin headers hole size from 0.7mm to 1mm."
     fault_class: DFM (hole size)
     blind: missed
-    verdict: missed
-    follow_up: "check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why"
-- id: flexgrid-v4
-  url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
-  commit: d3529287a8998dba79bdf6f593d1d67532386edc
-  licence: CERN-OHL-S-2.0
-  rev_a: {name: V4 as ordered, commit: 2dc7881049a434334ef6d609ab18f7a98c45d129, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
-  rev_b: {name: V4-2, commit: a5997da259c307a4a0a97f9a49eea153a3eb2127, sch: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_sch, pcb: KiCad/OM-FlexGrid V4/OM-FlexGrid-Rigid-PCB/OM-FlexGrid-Rigid-PCB.kicad_pcb}
-  source: KiCad/OM-FlexGrid V4/README.md
-  swept: {flow: 4540a94bce114d14c6f3fb003841f20e42009b91, date: 2026-11-14, round: 2}
-  defects:
-  - id: flexgrid-v4-1
-    summary: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC
-    source_quote: "The V4 KiCad schematic wired the USBLC6 with pin 2 on VBUS and pin 5 on GND. The actual chip pinout is the other way around (pin 2 = GND, pin 5 = VCC)."
-    fault_class: SCH (pin function vs datasheet)
-    blind: missed
-    verdict: missed
-    follow_up: "pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts"
-  - id: flexgrid-v4-2
-    summary: 29 vias inside SMD pads that wick solder in reflow
-    source_quote: "The June layout had 29 vias sitting inside SMD pads (ESP32 module pads, mux, LDO, charger, buttons, microSD socket, several resistors). An unplugged via inside a pad wicks solder away from the joint during reflow."
-    fault_class: DFM (via in pad)
-    blind: missed
     verdict: caught
-    caught_by: "#1088"
-    catch: {script: check_wicking, kind: wick_via_in_pad, refs: [U1, U2, U3, U4, U5, IC1, J9, Q3]}
+    caught_by: "#1123"
+    catch: {script: check_connector_fit, kind: tht_pin_tight, refs: [J1]}
     note: >-
-      Not an independent catch: check_wicking's via-in-pad rule (#475) is
-      older than this round, but it joined the corpus runners (#1088) after
-      this defect was read. 29 open vias in SMD pads on V4 as ordered (the
-      erratum's 29), across 18 parts, and none on V4-2.
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1123). J1 is the project's Pro Micro footprint, which
+      no stock lead row knew; it now takes a 2.54 mm header's 0.64 mm square
+      post (Samtec TSW) when its holes stand 2.54 mm apart. v1.1 drills
+      0.80 mm (the erratum says 0.7), too small for the post's 0.91 mm
+      corners; v1.2's 1.00 mm holes fit, with an IPC-2222 warning only.
 - id: flexgrid-v3
   url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
   commit: d3529287a8998dba79bdf6f593d1d67532386edc
@@ -1189,12 +1329,27 @@ holdout:
     source_quote: "One 4.7 uF capacitor is missing between IOUT and SW"
     fault_class: SCH (missing component)
     blind: missed
-    verdict: missed
-    follow_up: "a part's required external parts from its datasheet (AD8232's IOUT to SW capacitor)"
+    verdict: caught
+    caught_by: "#1158"
+    catch: {script: netlist_audit, kind: pin_part_missing, net: Net-(IC3-IAOUT), refs: [IC3]}
+    note: >-
+      Not an independent catch: the rows were written after this defect was
+      read, from the AD8232 datasheet (Rev. A, Table 3 pin 6 and Figure 55),
+      not from this board. HM-Rev1 ties SW straight to IAOUT, which the
+      rule's `distinct` check reports as an error; HM-Rev2's C28 between
+      them is quiet.
   - id: healthmonitor-2
     summary: AD8232 resistor and capacitor between REFIN and GND wired wrongly
     source_quote: "One resistor and one capacitor are wired incorrectly between REFIN and GND"
     fault_class: SCH (wrong connectivity)
     blind: missed
-    verdict: missed
-    follow_up: "a reference pin's network against the datasheet's typical circuit (AD8232 REFIN)"
+    verdict: caught
+    caught_by: "#1158"
+    catch: {script: netlist_audit, kind: pin_part_missing, net: Net-(IC3-REFIN), refs: [IC3]}
+    note: >-
+      Not an independent catch: the rows were written after this defect was
+      read, from the AD8232 datasheet (Rev. A, Figure 47 and Application
+      Circuits). HM-Rev1 has only the upper 10 M from REFIN to +VS: the
+      missing lower resistor is an error and the missing filter capacitor a
+      warning. HM-Rev2's 10 M / 10 M / 100 n divider is quiet. A REFIN
+      driven by another part is not judged (`when: undriven`).

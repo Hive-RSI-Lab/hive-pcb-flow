@@ -8,6 +8,8 @@
 #   pcb-flow check            check_env: every tool the pipeline needs
 #   pcb-flow test [args]      the scripts' unit tests and the workaround probes,
 #                         no KiCad runs of whole boards (the per-PR test)
+#   pcb-flow lint [args]      ruff on scripts, bin and tests with ruff.toml's rules
+#                         (CI runs it before the suite)
 #   pcb-flow test-slow [args] the tests test leaves out as slow (tests/conftest.py
 #                         SLOW): live toolchain, whole fixture boards
 #   pcb-flow test-em [args]   the long full-wave solves, `em` (tests/conftest.py EM),
@@ -104,7 +106,7 @@ if [ "${1:-}" = publish ]; then
 	rm -rf "$new"
 	trap 'rm -rf "$new"' EXIT
 	mkdir -p "$new"
-	(cd "$here" && tar cf - bin docs agents scripts reference requirements.lock module.json LICENSE NOTICE README.md) | (cd "$new" && tar xf -)
+	(cd "$here" && tar cf - bin docs agents scripts reference requirements.lock ruff.toml module.json LICENSE NOTICE README.md) | (cd "$new" && tar xf -)
 	"$uv" python install -q --install-dir "$new/python" --no-bin 3.14 >&2
 	find "$new/python" -maxdepth 1 -type l -exec rm {} + # absolute links to $new
 	py=$(ls -d "$new"/python/cpython-3.14.*/bin/python3.14 | sort -V | tail -n 1)
@@ -286,6 +288,8 @@ test | test-slow | test-em | test-smoke)
 	# slowest tests. test-slow runs the `slow` ones it leaves out, test-em the
 	# long full-wave solves (`em`, also `slow`), test-smoke the `smoke` ones:
 	# whole flows on a live KiCad, which CI runs on every PR and daily.
+	# A published copy that can't see its module has no tests/ to run.
+	[ -d "$here/tests" ] || { echo "pcb-flow $1: $here has no tests/ (a published copy carries none): run it from the installed module, or give the copy its module in \$HIVE_MODULES" >&2; exit 2; }
 	marks="not smoke and not net and not slow"
 	[ "$1" = test-slow ] && marks="slow and not em and not smoke and not net"
 	[ "$1" = test-em ] && marks="em and not smoke and not net"
@@ -310,6 +314,18 @@ test | test-slow | test-em | test-smoke)
 		exit $rc' sh "$scratch" \
 		"$py" -m pytest -m "$marks" --basetemp="$scratch/pytest" \
 		--durations=15 "$@"
+	;;
+lint)
+	# ruff is pinned in requirements.lock; a published copy built before the pin
+	# has none until the next publish.
+	shift
+	"$py" -c 'import ruff' 2>/dev/null || { echo "pcb-flow lint: ruff is not in $py's packages (a copy published before #1149: publish again)" >&2; exit 1; }
+	cd "$here"
+	# A published copy carries no tests/ (publish doesn't ship them): lint the
+	# code it does carry rather than fail on the missing folder.
+	dirs="scripts bin"
+	[ -d tests ] && dirs="$dirs tests"
+	exec "$py" -m ruff check "$@" $dirs
 	;;
 check-all)
 	shift

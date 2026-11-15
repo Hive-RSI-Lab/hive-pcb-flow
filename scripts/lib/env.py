@@ -81,8 +81,27 @@ _VERSION_TIMEOUT = 120
 # wx-backed pcbnew paths refuse to run without an X display ("Unable to access
 # the X Display"). The container starts an Xvfb on :99 (docker/project-init);
 # hand it to every child process when the caller has no display of its own.
+# Only a live server: a socket file left by an Xvfb that died answers nothing,
+# and a DISPLAY that points at it makes Java and wx fail where no DISPLAY
+# lets them run headless or under bin/xvfb-private (#1166).
+
+
+def _x_live(sock: str) -> bool:
+    import socket
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(1.0)
+    try:
+        s.connect(sock)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 if (sys.platform.startswith("linux") and not os.environ.get("DISPLAY")
-        and Path("/tmp/.X11-unix/X99").exists()):
+        and Path("/tmp/.X11-unix/X99").exists()
+        and _x_live("/tmp/.X11-unix/X99")):
     os.environ["DISPLAY"] = ":99"
 
 

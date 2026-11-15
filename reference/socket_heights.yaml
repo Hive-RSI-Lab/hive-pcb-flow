@@ -1,0 +1,36 @@
+# Socket and header heights for check_body_clash (#1187): how high a socketed
+# DIP or a module plugged into 2.54 mm female headers really sits. KiCad draws
+# both as if they sat on the board.
+#
+# female_header_mm: a stock straight 2.54 mm female header's insulator height
+#   above the board. A module's pin header bottoms on it.
+# male_header_base_mm: the plastic base of the module's own straight 2.54 mm
+#   pin header, between the female header's top and the module's underside.
+# dip_socket_seat_mm: where a DIP IC rests in a 0.300"/0.600" socket, above
+#   the board (the socket's above-board height).
+# dip_socket_width_300_mm: that socket's insulator width (C dim) at 0.300" row
+#   spacing. Used to draw a socket body when the footprint has no socket model.
+#   A 0.600" socket is that much wider again (600 - 300 mil = 7.62 mm).
+female_header_mm:
+  value: 8.50
+  tol: 0.25
+  part: 'Sullins PPPC/PPTC/NPPC xxxLFBN-RC, straight, 1 or 2 row'
+  source: 'Sullins drawing 10492 rev E "HEADER FEMALE, 2.54mm CC, ST", sheet 1, side view ".335±.010 8.50±0.25"; Sullins catalog p.114 LFB straight "A = .335" [8.50]"'
+  url: https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2601/P%28N%29PxCxxxLFBN-RC%2010492-E.pdf
+male_header_base_mm:
+  value: 2.54
+  part: 'Samtec TSW straight, -S row'
+  source: 'Samtec TSW sheet F-208 p.1 "Straight Pin Versions" side view, insulator "(2,54) .100"; p.2 lead style -05 A .130 + C .105 + .100 = B .335 cross-checks it'
+  url: https://www.farnell.com/datasheets/82167.pdf
+dip_socket_seat_mm:
+  value: 4.19
+  tol: 0.13
+  part: 'Mill-Max 110-44-314-41-001000, machined DIP socket, 0.300" rows'
+  source: 'Mill-Max 110-44-314-41-001000 datasheet p.1 Key Dimensions "Above Board Height: .165" (4,191mm)"; p.3 notes "Insulator height: +/-.005 (.13mm)". A stamped dual-wipe socket sits lower; this is the taller common kind.'
+  url: https://www.mill-max.com/products/datasheet/110-44-314-41-001000
+dip_socket_width_300_mm:
+  value: 10.16
+  tol: 0.13
+  part: 'Mill-Max 110-44-314-41-001000'
+  source: 'Mill-Max 110-44-314-41-001000 datasheet p.1 Key Dimensions "C Dim: .400" (10,160mm)" (insulator width)'
+  url: https://www.mill-max.com/products/datasheet/110-44-314-41-001000

@@ -1,0 +1,2088 @@
+# mpn_packages.yaml - a part's package read from its MPN's ordering code, for
+# check_fp_package.py (read through scripts/lib/mpn_decode.py). When the LCSC
+# record has no package, or there is no record, the maker's ordering code
+# still names the package: TI's package designator (SN74HC595D = SOIC-16
+# narrow, ...PW = TSSOP), ST's pin-count and package letters (STM32F103C8T6 =
+# LQFP-48), Microchip's package code (-SN 3.90 mm SOIC, -SM 5.28 mm SOIC),
+# and the onsemi, Nexperia, Vishay and Infineon order numbers.
+#
+#   match   regex matched in full on the upper-cased MPN, spaces removed;
+#           its named groups pick rows from `groups`
+#   groups  {group: {code: row}}: a code with no row leaves the part not
+#           judged, never guessed
+#   row     a fixed row for every MPN the entry matches
+#   combos  rows that hold only when several groups agree (`when`), and,
+#           with `part`, only for MPNs that regex matches
+#   row     package, family (a lib/pkgname family), mount, pin_count, pitch,
+#           width (mm) or width_in (inches), body [a, b] mm, cite
+#
+# Every row is read from the maker's own datasheet page (cite: doc, sha256,
+# page, the quote, the fields it fixes) and `scripts/part_rows.py --verify
+# reference/mpn_packages.yaml --pdf ...` finds each quote on its page. Add a
+# row only with its PDF in hand.
+makers:
+- name: Texas Instruments
+  verified: true
+  match: ^(?:SN74|SN65|SN75|TPS|TLV|TPD|TLC|TXS|TXB|TCA|OPA|INA|ADS|BQ|DRV|ISO|HDC|CC)[A-Z0-9]*?\d[A-Z]{0,2}?(?P<code>DGV|RGY|DBV|DCK|DRL|DYA|DPW|DRY|DSF|DQN|DQE|DQA|RVZ|DSG|DMQ|RPA|RSM|RHB|RHA|RTA|DAP|DGK|DGN|DCT|DCU|DDF|DW|DB|PW|NS|PS|D|N|P)(?:[RT]|[23])?(?:G4|E4)?(?:Q1)?$
+  groups:
+    code:
+      D:
+        package: SOIC
+        family: SO
+        pitch: 1.27
+        width: 3.9
+        cite:
+        - doc: TI SCLS041J sn74hc595.pdf
+          sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+          page: 1
+          quote: SN74HC595D SOIC (16) 9.90 mm × 3.90 mm
+          fields:
+          - width
+        mount: smd
+      DW:
+        package: SOIC wide
+        family: SO
+        pitch: 1.27
+        width: 7.5
+        cite:
+        - doc: TI SCLS041J sn74hc595.pdf
+          sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+          page: 1
+          quote: SN74HC595DW SOIC (16) 10.30 mm × 7.50 mm
+          fields:
+          - width
+        mount: smd
+      DB:
+        package: SSOP
+        family: SO
+        pitch: 0.65
+        width: 5.3
+        cite:
+        - doc: TI SCLS041J sn74hc595.pdf
+          sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+          page: 1
+          quote: SN74HC595DB SSOP (16) 6.20 mm × 5.30 mm
+          fields:
+          - width
+        mount: smd
+      PW:
+        package: TSSOP
+        family: SO
+        pitch: 0.65
+        width: 4.4
+        cite:
+        - doc: TI SCLS041J sn74hc595.pdf
+          sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+          page: 1
+          quote: SN74HC595PW TSSOP (16) 5.00 mm × 4.40 mm
+          fields:
+          - width
+        mount: smd
+      N:
+        package: PDIP
+        family: DIP
+        mount: tht
+        cite:
+        - doc: TI SCLS041J sn74hc595.pdf
+          sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+          page: 1
+          quote: SN74HC595N PDIP (16) 19.31 mm × 6.35 mm
+          fields: []
+      P:
+        package: PDIP
+        family: DIP
+        mount: tht
+        cite:
+        - doc: TI lm358.pdf
+          sha256: 8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2
+          page: 34
+          quote: LM258AP Active Production PDIP (P) | 8
+          fields: []
+      NS:
+        package: SOP (5.3 mm)
+        family: SO
+        pitch: 1.27
+        cite:
+        - doc: TI SCAS218 sn74lvc245a.pdf
+          sha256: ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3
+          page: 13
+          quote: SN74LVC245ANS.B Active Production SOP (NS) | 20
+          fields: []
+        mount: smd
+      DGV:
+        package: TVSOP
+        family: SO
+        width: 4.4
+        cite:
+        - doc: TI SCAS218 sn74lvc245a.pdf
+          sha256: ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3
+          page: 1
+          quote: TVSOP (20) 5.00 mm × 4.40 mm
+          fields:
+          - width
+        - doc: TI SCAS218 sn74lvc245a.pdf
+          sha256: ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3
+          page: 13
+          quote: SN74LVC245ADGVR Active Production TVSOP (DGV) | 20
+          fields: []
+        mount: smd
+      RGY:
+        package: VQFN
+        family: NOLEAD
+        body:
+        - 4.5
+        - 3.5
+        cite:
+        - doc: TI SCAS218 sn74lvc245a.pdf
+          sha256: ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3
+          page: 1
+          quote: VQFN (20) 4.50 mm × 3.50 mm
+          fields:
+          - body
+        - doc: TI SCAS218 sn74lvc245a.pdf
+          sha256: ad3e705aef834214404d6e1e38cb00f95fdb6f0d9807a784a6f58c4d060f13a3
+          page: 14
+          quote: SN74LVC245ARGYR Active Production VQFN (RGY) | 20
+          fields: []
+        mount: smd
+      DBV:
+        package: SOT-23
+        family: SOT-23
+        cite:
+        - doc: TI SCES296 sn74lvc1g07.pdf
+          sha256: 0471dcddef6983c851c474963ea86075f98c26a2995b7337218aecfedf1ee9c4
+          page: 1
+          quote: DBV (SOT-23, 5) 2.9mm × 2.8mm
+          fields: []
+        - doc: TI SCES296 sn74lvc1g07.pdf
+          sha256: 0471dcddef6983c851c474963ea86075f98c26a2995b7337218aecfedf1ee9c4
+          page: 14
+          quote: SN74LVC1G07DBVR Active Production SOT-23 (DBV) | 5
+          fields: []
+        mount: smd
+      DCK:
+        package: SC70
+        family: SC-70
+        cite:
+        - doc: TI SLLSEJ1 tpd2e2u06.pdf
+          sha256: a133b86ea3d3c3d34667339b92d3b5e98d541d10e9775d63e7cdfa153794f4ed
+          page: 13
+          quote: TPD2E2U06DCKR Active Production SC70 (DCK) | 3
+          fields: []
+        mount: smd
+      DRL:
+        package: SOT-5X3 (SOT-563/553)
+        family: SOT-563
+        cite:
+        - doc: TI SLLSEJ1 tpd2e2u06.pdf
+          sha256: a133b86ea3d3c3d34667339b92d3b5e98d541d10e9775d63e7cdfa153794f4ed
+          page: 1
+          quote: TPD2E2U06DRL SOT (5) 1.60 mm × 1.20 mm
+          fields: []
+        - doc: TI SLLSEJ1 tpd2e2u06.pdf
+          sha256: a133b86ea3d3c3d34667339b92d3b5e98d541d10e9775d63e7cdfa153794f4ed
+          page: 13
+          quote: TPD2E2U06DRLR Active Production SOT-5X3 (DRL) | 5
+          fields: []
+        mount: smd
+      DYA:
+        package: SOT-5X3 2-pin (SOD-523)
+        family: SOD-523
+        cite:
+        - doc: TI SLVSBR4 tpd4e05u06.pdf
+          sha256: 7ecaaaed8736319ae8ce7c2b545dd0e1f9f55cf433b3f034c9b788bcb2efe872
+          page: 37
+          quote: TPD1E05U06DYAR Active Production SOT-5X3 (DYA) | 2
+          fields: []
+        mount: smd
+      DPW:
+        package: X2SON
+        family: NOLEAD
+        body:
+        - 0.8
+        - 0.8
+        cite:
+        - doc: TI SCES296 sn74lvc1g07.pdf
+          sha256: 0471dcddef6983c851c474963ea86075f98c26a2995b7337218aecfedf1ee9c4
+          page: 1
+          quote: DPW (X2SON, 5) 0.8mm × 0.8mm
+          fields:
+          - body
+        mount: smd
+      DRY:
+        package: USON
+        family: NOLEAD
+        body:
+        - 1.45
+        - 1.0
+        cite:
+        - doc: TI SCES296 sn74lvc1g07.pdf
+          sha256: 0471dcddef6983c851c474963ea86075f98c26a2995b7337218aecfedf1ee9c4
+          page: 1
+          quote: DRY (USON, 6) 1.45mm × 1.0mm
+          fields:
+          - body
+        mount: smd
+      DSF:
+        package: X2SON
+        family: NOLEAD
+        body:
+        - 1.0
+        - 1.0
+        cite:
+        - doc: TI SCES296 sn74lvc1g07.pdf
+          sha256: 0471dcddef6983c851c474963ea86075f98c26a2995b7337218aecfedf1ee9c4
+          page: 1
+          quote: DSF (X2SON, 6) 1.0mm × 1.0mm
+          fields:
+          - body
+        mount: smd
+      DQN:
+        package: X2SON
+        family: NOLEAD
+        body:
+        - 1.0
+        - 1.0
+        cite:
+        - doc: TI tps7a20.pdf
+          sha256: 3b7c1495906b88f48223f21a9bba1aad2f1d90a673fc3394aa6b5b5ece52ff53
+          page: 1
+          quote: DQN (X2SON, 4) 1mm × 1mm
+          fields:
+          - body
+        mount: smd
+      DQE:
+        package: X2SON
+        family: NOLEAD
+        body:
+        - 1.4
+        - 1.0
+        cite:
+        - doc: TI pca9306.pdf
+          sha256: 1cd97c734729f2bfca26ccaa93521c04c373568e4ebe6d892267dba2571e21e6
+          page: 1
+          quote: X2SON (8) 1.4 mm x 1 mm
+          fields:
+          - body
+        - doc: TI pca9306.pdf
+          sha256: 1cd97c734729f2bfca26ccaa93521c04c373568e4ebe6d892267dba2571e21e6
+          page: 24
+          quote: PCA9306DQER Active Production X2SON (DQE) | 8
+          fields: []
+        mount: smd
+      DQA:
+        package: USON
+        family: NOLEAD
+        cite:
+        - doc: TI SLVSBR4 tpd4e05u06.pdf
+          sha256: 7ecaaaed8736319ae8ce7c2b545dd0e1f9f55cf433b3f034c9b788bcb2efe872
+          page: 37
+          quote: TPD4E05U06DQAR Active Production USON (DQA) | 10
+          fields: []
+        mount: smd
+      RVZ:
+        package: USON
+        family: NOLEAD
+        cite:
+        - doc: TI SLVSBR4 tpd4e05u06.pdf
+          sha256: 7ecaaaed8736319ae8ce7c2b545dd0e1f9f55cf433b3f034c9b788bcb2efe872
+          page: 37
+          quote: TPD6E05U06RVZR Active Production USON (RVZ) | 14
+          fields: []
+        mount: smd
+      DSG:
+        package: WSON
+        family: NOLEAD
+        body:
+        - 2.0
+        - 2.0
+        cite:
+        - doc: TI SLVSCH4 tps22965.pdf
+          sha256: 3300eef743d7871f96c752227ae8f958006a902123ce2df351cf0772ec95a7e1
+          page: 1
+          quote: TPS22965N WSON (8) 2.00 mm × 2.00 mm
+          fields:
+          - body
+        - doc: TI SLVSCH4 tps22965.pdf
+          sha256: 3300eef743d7871f96c752227ae8f958006a902123ce2df351cf0772ec95a7e1
+          page: 24
+          quote: TPS22965DSGR Active Production WSON (DSG) | 8
+          fields: []
+        mount: smd
+      DMQ:
+        package: VSON-HR
+        family: NOLEAD
+        body:
+        - 1.5
+        - 1.5
+        cite:
+        - doc: TI tlv62595.pdf
+          sha256: 7358282471ea620792003d5e85ddf39b0a3b412f7b2699f7451919b7d354760a
+          page: 1
+          quote: TLV62595 DMQ (VSON-HR, 6) 1.50 mm × 1.50 mm
+          fields:
+          - body
+        mount: smd
+      RPA:
+        package: VQFN-HR
+        family: NOLEAD
+        body:
+        - 3.0
+        - 3.0
+        cite:
+        - doc: TI tps56637.pdf
+          sha256: 18edaff6769b0d5c3d0cdef66df1232538cd357bbaac214df138969f9b0d6745
+          page: 1
+          quote: TPS56637 VQFN-HR (10) 3.00 mm × 3.00 mm
+          fields:
+          - body
+        - doc: TI tps56637.pdf
+          sha256: 18edaff6769b0d5c3d0cdef66df1232538cd357bbaac214df138969f9b0d6745
+          page: 27
+          quote: TPS56637RPAR Active Production VQFN-HR (RPA) | 10
+          fields: []
+        mount: smd
+      RSM:
+        package: VQFN
+        family: NOLEAD
+        body:
+        - 4.0
+        - 4.0
+        cite:
+        - doc: TI tps65219.pdf
+          sha256: e61370fa78067a4dd4cf01e5e6292e87b3988af81a019cc04c60e00d2193fe4e
+          page: 1
+          quote: TPS65219 RSM(32-pin QFN) 4.00mm × 4.00mm
+          fields:
+          - body
+        mount: smd
+      RHB:
+        package: VQFN
+        family: NOLEAD
+        body:
+        - 5.0
+        - 5.0
+        cite:
+        - doc: TI tps65219.pdf
+          sha256: e61370fa78067a4dd4cf01e5e6292e87b3988af81a019cc04c60e00d2193fe4e
+          page: 1
+          quote: TPS65219 RHB(32-pin QFN) 5.00mm × 5.00mm
+          fields:
+          - body
+        mount: smd
+      RHA:
+        package: VQFN
+        family: NOLEAD
+        body:
+        - 6.0
+        - 6.0
+        cite:
+        - doc: TI tlc5951.pdf
+          sha256: db31bcc562d16d5793093ab27e93a39198a5f3de6e24cf02f7948508f97303a8
+          page: 1
+          quote: VQFN (40) 6.00 × 6.00 mm
+          fields:
+          - body
+        - doc: TI tlc5951.pdf
+          sha256: db31bcc562d16d5793093ab27e93a39198a5f3de6e24cf02f7948508f97303a8
+          page: 39
+          quote: TLC5951RHAR Active Production VQFN (RHA) | 40
+          fields: []
+        mount: smd
+      RTA:
+        package: WQFN
+        family: NOLEAD
+        body:
+        - 6.0
+        - 6.0
+        cite:
+        - doc: TI tlc5951.pdf
+          sha256: db31bcc562d16d5793093ab27e93a39198a5f3de6e24cf02f7948508f97303a8
+          page: 1
+          quote: WQFN (40) 6.00 × 6.00 mm
+          fields:
+          - body
+        - doc: TI tlc5951.pdf
+          sha256: db31bcc562d16d5793093ab27e93a39198a5f3de6e24cf02f7948508f97303a8
+          page: 39
+          quote: TLC5951RTAR Active Production WQFN (RTA) | 40
+          fields: []
+        mount: smd
+      DAP:
+        package: HTSSOP
+        family: SO
+        width: 6.2
+        cite:
+        - doc: TI tlc5951.pdf
+          sha256: db31bcc562d16d5793093ab27e93a39198a5f3de6e24cf02f7948508f97303a8
+          page: 1
+          quote: HTSSOP (38) 12.50 mm × 6.20 mm
+          fields:
+          - width
+        - doc: TI tlc5951.pdf
+          sha256: db31bcc562d16d5793093ab27e93a39198a5f3de6e24cf02f7948508f97303a8
+          page: 39
+          quote: TLC5951DAP Active Production HTSSOP (DAP) | 38
+          fields: []
+        mount: smd
+      DGK:
+        package: VSSOP
+        family: SO
+        width: 3.0
+        cite:
+        - doc: TI SLVSAU6 tps2051c.pdf
+          sha256: d8f4ee1ec0718b7fbfac402174bc1c3f4d5ce1623f57d208f4703df9a66760e5
+          page: 1
+          quote: VSSOP (8) 3.00mm × 3.00mm
+          fields:
+          - width
+        - doc: TI SLVSAU6 tps2051c.pdf
+          sha256: d8f4ee1ec0718b7fbfac402174bc1c3f4d5ce1623f57d208f4703df9a66760e5
+          page: 27
+          quote: TPS2000CDGK Active Production VSSOP (DGK) | 8
+          fields: []
+        mount: smd
+      DGN:
+        package: HVSSOP (MSOP-PowerPAD)
+        family: SO
+        width: 3.0
+        cite:
+        - doc: TI SLVSAU6 tps2051c.pdf
+          sha256: d8f4ee1ec0718b7fbfac402174bc1c3f4d5ce1623f57d208f4703df9a66760e5
+          page: 1
+          quote: MSOP-PowerPAD (8) 3.00mm × 3.00mm
+          fields:
+          - width
+        - doc: TI SLVSAU6 tps2051c.pdf
+          sha256: d8f4ee1ec0718b7fbfac402174bc1c3f4d5ce1623f57d208f4703df9a66760e5
+          page: 27
+          quote: TPS2000CDGN Active Production HVSSOP (DGN) | 8
+          fields: []
+        mount: smd
+      DCT:
+        package: SSOP
+        family: SO
+        cite:
+        - doc: TI pca9306.pdf
+          sha256: 1cd97c734729f2bfca26ccaa93521c04c373568e4ebe6d892267dba2571e21e6
+          page: 24
+          quote: PCA9306DCTR Active Production SSOP (DCT) | 8
+          fields: []
+        mount: smd
+      DCU:
+        package: VSSOP
+        family: SO
+        cite:
+        - doc: TI pca9306.pdf
+          sha256: 1cd97c734729f2bfca26ccaa93521c04c373568e4ebe6d892267dba2571e21e6
+          page: 24
+          quote: PCA9306DCUR Active Production VSSOP (DCU) | 8
+          fields: []
+        mount: smd
+      DDF:
+        package: SOT-23-THIN 8
+        family: SOT-23
+        pin_count: 8
+        cite:
+        - doc: TI lm358.pdf
+          sha256: 8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2
+          page: 35
+          quote: LM2904BAIDDFR Active Production SOT-23-THIN (DDF) | 8
+          fields:
+          - pin_count
+        mount: smd
+      PS:
+        package: SO (PS)
+        family: SO
+        mount: smd
+        cite:
+        - doc: TI lm358.pdf
+          sha256: 8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2
+          page: 37
+          quote: LM2904PSR Active Production SO (PS) | 8
+          fields: []
+- name: Texas Instruments LM358/LM258/LM2904
+  verified: true
+  match: ^(?:LM358|LM258|LM2904)(?:A|B|V)?(?:A|V)?I?Q?(?P<code>DDF|DGK|PS|PW|D|P)(?:R|T)?(?:E4|G4)?$
+  groups:
+    code:
+      DDF:
+        package: SOT-23-THIN 8
+        family: SOT-23
+        pin_count: 8
+        cite:
+        - doc: TI lm358.pdf
+          sha256: 8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2
+          page: 35
+          quote: LM2904BAIDDFR Active Production SOT-23-THIN (DDF) | 8
+          fields:
+          - pin_count
+        mount: smd
+      DGK:
+        package: VSSOP
+        family: SO
+        width: 3.0
+        cite:
+        - doc: TI SLVSAU6 tps2051c.pdf
+          sha256: d8f4ee1ec0718b7fbfac402174bc1c3f4d5ce1623f57d208f4703df9a66760e5
+          page: 1
+          quote: VSSOP (8) 3.00mm × 3.00mm
+          fields:
+          - width
+        - doc: TI SLVSAU6 tps2051c.pdf
+          sha256: d8f4ee1ec0718b7fbfac402174bc1c3f4d5ce1623f57d208f4703df9a66760e5
+          page: 27
+          quote: TPS2000CDGK Active Production VSSOP (DGK) | 8
+          fields: []
+        mount: smd
+      PS:
+        package: SO (PS)
+        family: SO
+        mount: smd
+        cite:
+        - doc: TI lm358.pdf
+          sha256: 8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2
+          page: 37
+          quote: LM2904PSR Active Production SO (PS) | 8
+          fields: []
+      PW:
+        package: TSSOP
+        family: SO
+        pitch: 0.65
+        width: 4.4
+        cite:
+        - doc: TI SCLS041J sn74hc595.pdf
+          sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+          page: 1
+          quote: SN74HC595PW TSSOP (16) 5.00 mm × 4.40 mm
+          fields:
+          - width
+        mount: smd
+      D:
+        package: SOIC
+        family: SO
+        pitch: 1.27
+        width: 3.9
+        cite:
+        - doc: TI SCLS041J sn74hc595.pdf
+          sha256: 5a6a5aeecc79a2d4bf4e15aae681e0f99cb13b54d6524be253a6844c898eeb0d
+          page: 1
+          quote: SN74HC595D SOIC (16) 9.90 mm × 3.90 mm
+          fields:
+          - width
+        mount: smd
+      P:
+        package: PDIP
+        family: DIP
+        mount: tht
+        cite:
+        - doc: TI lm358.pdf
+          sha256: 8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2
+          page: 34
+          quote: LM258AP Active Production PDIP (P) | 8
+          fields: []
+- name: ST STM32F103x8/xB
+  verified: true
+  match: ^STM32F103(?P<pins>[TCRV])[8B](?P<pkg>[HITU])[67](?:[A-Z0-9]{0,4})?$
+  groups:
+    pins:
+      T:
+        pin_count: 36
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: T = 36 pins
+          fields:
+          - pin_count
+      C:
+        pin_count: 48
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: C = 48 pins
+          fields:
+          - pin_count
+      R:
+        pin_count: 64
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: R = 64 pins
+          fields:
+          - pin_count
+      V:
+        pin_count: 100
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: V = 100 pins
+          fields:
+          - pin_count
+    pkg:
+      H:
+        package: BGA
+        family: BGA
+        mount: smd
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: H = BGA
+          fields: []
+      I:
+        package: UFBGA
+        family: BGA
+        mount: smd
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: I = UFBGA
+          fields: []
+      T:
+        package: LQFP
+        family: QFP
+        mount: smd
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: T = LQFP
+          fields: []
+      U:
+        package: VFQFPN or UFQFPN
+        family: NOLEAD
+        mount: smd
+        cite:
+        - doc: ST DS5319 stm32f103c8.pdf
+          sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+          page: 104
+          quote: U = VFQFPN or UFQFPN
+          fields: []
+  combos:
+  - when:
+      pins: C
+      pkg: T
+    body:
+    - 7
+    - 7
+    pitch: 0.5
+    cite:
+    - doc: ST DS5319 stm32f103c8.pdf
+      sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+      page: 101
+      quote: LQFP48 - 7 x 7 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+  - when:
+      pins: R
+      pkg: T
+    body:
+    - 10
+    - 10
+    pitch: 0.5
+    cite:
+    - doc: ST DS5319 stm32f103c8.pdf
+      sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+      page: 101
+      quote: LQFP64 - 10 × 10 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+  - when:
+      pins: V
+      pkg: T
+    body:
+    - 14
+    - 14
+    pitch: 0.5
+    cite:
+    - doc: ST DS5319 stm32f103c8.pdf
+      sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+      page: 101
+      quote: LQFP100 - 14 × 14 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+  - when:
+      pins: C
+      pkg: U
+    body:
+    - 7
+    - 7
+    pitch: 0.5
+    cite:
+    - doc: ST DS5319 stm32f103c8.pdf
+      sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+      page: 101
+      quote: UFQFPN 48 - 7 × 7 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+  - when:
+      pins: T
+      pkg: U
+    body:
+    - 6
+    - 6
+    pitch: 0.5
+    cite:
+    - doc: ST DS5319 stm32f103c8.pdf
+      sha256: daf9ebe5299018a3cfa37f660ce9517b49010167d57d892c1e2164e65d98461f
+      page: 101
+      quote: VFQFPN 36 - 6 × 6 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+- name: ST STM32F405xx/407xx
+  verified: true
+  match: ^STM32F40[57](?P<pins>[ROVZI])[EG](?P<pkg>[THY])[67](?:[A-Z0-9]{0,4})?$
+  groups:
+    pins:
+      R:
+        pin_count: 64
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: R = 64 pins
+          fields:
+          - pin_count
+      O:
+        pin_count: 90
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: O = 90 pins
+          fields:
+          - pin_count
+      V:
+        pin_count: 100
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: V = 100 pins
+          fields:
+          - pin_count
+      Z:
+        pin_count: 144
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: Z = 144 pins
+          fields:
+          - pin_count
+      I:
+        pin_count: 176
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: I = 176 pins
+          fields:
+          - pin_count
+    pkg:
+      T:
+        package: LQFP
+        family: QFP
+        mount: smd
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: T = LQFP
+          fields: []
+      H:
+        package: UFBGA
+        family: BGA
+        mount: smd
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: H = UFBGA
+          fields: []
+      Y:
+        package: WLCSP
+        family: BGA
+        mount: smd
+        cite:
+        - doc: ST DS8626 stm32f407vg.pdf
+          sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+          page: 185
+          quote: Y = WLCSP
+          fields: []
+  combos:
+  - when:
+      pins: R
+      pkg: T
+    body:
+    - 10
+    - 10
+    pitch: 0.5
+    cite:
+    - doc: ST DS8626 stm32f407vg.pdf
+      sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+      page: 184
+      quote: LQFP64 - 10 × 10 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+  - when:
+      pins: V
+      pkg: T
+    body:
+    - 14
+    - 14
+    pitch: 0.5
+    cite:
+    - doc: ST DS8626 stm32f407vg.pdf
+      sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+      page: 184
+      quote: LQFP100 - 14 × 14 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+  - when:
+      pins: Z
+      pkg: T
+    body:
+    - 20
+    - 20
+    pitch: 0.5
+    cite:
+    - doc: ST DS8626 stm32f407vg.pdf
+      sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+      page: 184
+      quote: LQFP144 - 20 × 20 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+  - when:
+      pins: I
+      pkg: T
+    body:
+    - 24
+    - 24
+    pitch: 0.5
+    cite:
+    - doc: ST DS8626 stm32f407vg.pdf
+      sha256: 1356a8eec66c7d484090f6f3548f29bb32805165ed645386aa0a32f8fec84646
+      page: 184
+      quote: LQFP176 - 24 × 24 mm / 0.5 mm pitch
+      fields:
+      - body
+      - pitch
+- name: ST STM32G431x6/x8/xB
+  verified: true
+  match: ^STM32G431(?P<pins>[KCRMV])[68B](?P<pkg>[ITUY])[63](?:[A-Z0-9]{0,4})?$
+  groups:
+    pins:
+      K:
+        pin_count: 32
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: K = 32 pins
+          fields:
+          - pin_count
+      C:
+        pin_count: 48
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: C = 48/49 pins
+          fields:
+          - pin_count
+      R:
+        pin_count: 64
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: R = 64 pins
+          fields:
+          - pin_count
+      M:
+        pin_count: 80
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: M = 80 pins
+          fields:
+          - pin_count
+      V:
+        pin_count: 100
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: V = 100 pins
+          fields:
+          - pin_count
+    pkg:
+      I:
+        package: UFBGA
+        family: BGA
+        mount: smd
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: I = UFBGA
+          fields: []
+      T:
+        package: LQFP
+        family: QFP
+        mount: smd
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: T = LQFP
+          fields: []
+      U:
+        package: UFQFPN
+        family: NOLEAD
+        mount: smd
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: U = UFQFPN
+          fields: []
+      Y:
+        package: WLCSP
+        family: BGA
+        mount: smd
+        cite:
+        - doc: ST DS12589 stm32g431cb.pdf
+          sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+          page: 194
+          quote: Y = WLCSP
+          fields: []
+  combos:
+  - when:
+      pins: K
+      pkg: T
+    body:
+    - 7
+    - 7
+    cite:
+    - doc: ST DS12589 stm32g431cb.pdf
+      sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+      page: 190
+      quote: LQFP32 - 7 × 7 mm
+      fields:
+      - body
+  - when:
+      pins: C
+      pkg: T
+    body:
+    - 7
+    - 7
+    cite:
+    - doc: ST DS12589 stm32g431cb.pdf
+      sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+      page: 190
+      quote: LQFP48 - 7 × 7 mm
+      fields:
+      - body
+  - when:
+      pins: R
+      pkg: T
+    body:
+    - 10
+    - 10
+    cite:
+    - doc: ST DS12589 stm32g431cb.pdf
+      sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+      page: 190
+      quote: LQFP64 - 10 × 10 mm
+      fields:
+      - body
+  - when:
+      pins: M
+      pkg: T
+    body:
+    - 12
+    - 12
+    cite:
+    - doc: ST DS12589 stm32g431cb.pdf
+      sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+      page: 190
+      quote: LQFP80 - 12 × 12 mm
+      fields:
+      - body
+  - when:
+      pins: V
+      pkg: T
+    body:
+    - 14
+    - 14
+    cite:
+    - doc: ST DS12589 stm32g431cb.pdf
+      sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+      page: 190
+      quote: LQFP100 - 14 × 14 mm
+      fields:
+      - body
+  - when:
+      pins: C
+      pkg: U
+    body:
+    - 7
+    - 7
+    cite:
+    - doc: ST DS12589 stm32g431cb.pdf
+      sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+      page: 190
+      quote: UFQFPN48 - 7 × 7 mm
+      fields:
+      - body
+  - when:
+      pins: K
+      pkg: U
+    body:
+    - 5
+    - 5
+    cite:
+    - doc: ST DS12589 stm32g431cb.pdf
+      sha256: c2e903e3de4b05c0b5d77e5bfda037ce65e8652c41f7a4fe092f6893c870f6e9
+      page: 190
+      quote: UFQFPN32 - 5 × 5 mm
+      fields:
+      - body
+- name: Microchip ATmega48A/PA/88A/PA/168A/PA/328/P
+  verified: true
+  match: ^ATMEGA(?:(?:48|88|168)P?A|328P?)-(?P<code>MMHR|MMNR|AUR|MMH|MUR|ANR|MMN|MNR|AU|MU|PU|AN|MN|PN)$
+  groups:
+    code:
+      AU:
+        package: 32A TQFP
+        family: QFP
+        mount: smd
+        pin_count: 32
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AU ATmega88PA-AUR(5) ATmega88PA-MMH(4) ATmega88PA-MMHR(4)(5) ATmega88PA-MU
+            ATmega88PA-MUR(5) ATmega88PA-PU 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32A 32-lead, (1.0 mm) Plastic Thin Quad Flat Package (TQFP)
+          fields:
+          - pin_count
+      AUR:
+        package: 32A TQFP
+        family: QFP
+        mount: smd
+        pin_count: 32
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AU ATmega88PA-AUR(5) ATmega88PA-MMH(4) ATmega88PA-MMHR(4)(5) ATmega88PA-MU
+            ATmega88PA-MUR(5) ATmega88PA-PU 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32A 32-lead, (1.0 mm) Plastic Thin Quad Flat Package (TQFP)
+          fields:
+          - pin_count
+      MMH:
+        package: 28M1 VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 28
+        body:
+        - 4
+        - 4
+        pitch: 0.45
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AU ATmega88PA-AUR(5) ATmega88PA-MMH(4) ATmega88PA-MMHR(4)(5) ATmega88PA-MU
+            ATmega88PA-MUR(5) ATmega88PA-PU 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 28M1 28-pad, 4 x 4 x 1.0 body, Lead Pitch 0.45 mm Very Thin Plastic Quad Flat No-Lead
+            (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      MMHR:
+        package: 28M1 VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 28
+        body:
+        - 4
+        - 4
+        pitch: 0.45
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AU ATmega88PA-AUR(5) ATmega88PA-MMH(4) ATmega88PA-MMHR(4)(5) ATmega88PA-MU
+            ATmega88PA-MUR(5) ATmega88PA-PU 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 28M1 28-pad, 4 x 4 x 1.0 body, Lead Pitch 0.45 mm Very Thin Plastic Quad Flat No-Lead
+            (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      MU:
+        package: 32M1-A VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 32
+        body:
+        - 5
+        - 5
+        pitch: 0.5
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AU ATmega88PA-AUR(5) ATmega88PA-MMH(4) ATmega88PA-MMHR(4)(5) ATmega88PA-MU
+            ATmega88PA-MUR(5) ATmega88PA-PU 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32M1-A 32-pad, 5 x 5 x 1.0 body, Lead Pitch 0.50 mm Thin Plastic Quad Flat No-Lead (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      MUR:
+        package: 32M1-A VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 32
+        body:
+        - 5
+        - 5
+        pitch: 0.5
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AU ATmega88PA-AUR(5) ATmega88PA-MMH(4) ATmega88PA-MMHR(4)(5) ATmega88PA-MU
+            ATmega88PA-MUR(5) ATmega88PA-PU 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32M1-A 32-pad, 5 x 5 x 1.0 body, Lead Pitch 0.50 mm Thin Plastic Quad Flat No-Lead (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      PU:
+        package: 28P3 SPDIP
+        family: DIP
+        mount: tht
+        pin_count: 28
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AU ATmega88PA-AUR(5) ATmega88PA-MMH(4) ATmega88PA-MMHR(4)(5) ATmega88PA-MU
+            ATmega88PA-MUR(5) ATmega88PA-PU 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 28P3 28-lead, 0.300” Wide, Skinny Plastic Dual Inline Package (SPDIP)
+          fields:
+          - pin_count
+      AN:
+        package: 32A TQFP
+        family: QFP
+        mount: smd
+        pin_count: 32
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AN ATmega88PA-ANR(5) ATmega88PA-MMN(4) ATmega88PA-MMNR(4)(5) ATmega88PA-MN
+            ATmega88PA-MNR(5) ATmega88PA-PN 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32A 32-lead, (1.0 mm) Plastic Thin Quad Flat Package (TQFP)
+          fields:
+          - pin_count
+      ANR:
+        package: 32A TQFP
+        family: QFP
+        mount: smd
+        pin_count: 32
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AN ATmega88PA-ANR(5) ATmega88PA-MMN(4) ATmega88PA-MMNR(4)(5) ATmega88PA-MN
+            ATmega88PA-MNR(5) ATmega88PA-PN 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32A 32-lead, (1.0 mm) Plastic Thin Quad Flat Package (TQFP)
+          fields:
+          - pin_count
+      MMN:
+        package: 28M1 VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 28
+        body:
+        - 4
+        - 4
+        pitch: 0.45
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AN ATmega88PA-ANR(5) ATmega88PA-MMN(4) ATmega88PA-MMNR(4)(5) ATmega88PA-MN
+            ATmega88PA-MNR(5) ATmega88PA-PN 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 28M1 28-pad, 4 x 4 x 1.0 body, Lead Pitch 0.45 mm Very Thin Plastic Quad Flat No-Lead
+            (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      MMNR:
+        package: 28M1 VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 28
+        body:
+        - 4
+        - 4
+        pitch: 0.45
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AN ATmega88PA-ANR(5) ATmega88PA-MMN(4) ATmega88PA-MMNR(4)(5) ATmega88PA-MN
+            ATmega88PA-MNR(5) ATmega88PA-PN 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 28M1 28-pad, 4 x 4 x 1.0 body, Lead Pitch 0.45 mm Very Thin Plastic Quad Flat No-Lead
+            (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      MN:
+        package: 32M1-A VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 32
+        body:
+        - 5
+        - 5
+        pitch: 0.5
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AN ATmega88PA-ANR(5) ATmega88PA-MMN(4) ATmega88PA-MMNR(4)(5) ATmega88PA-MN
+            ATmega88PA-MNR(5) ATmega88PA-PN 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32M1-A 32-pad, 5 x 5 x 1.0 body, Lead Pitch 0.50 mm Thin Plastic Quad Flat No-Lead (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      MNR:
+        package: 32M1-A VQFN
+        family: NOLEAD
+        mount: smd
+        pin_count: 32
+        body:
+        - 5
+        - 5
+        pitch: 0.5
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AN ATmega88PA-ANR(5) ATmega88PA-MMN(4) ATmega88PA-MMNR(4)(5) ATmega88PA-MN
+            ATmega88PA-MNR(5) ATmega88PA-PN 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 32M1-A 32-pad, 5 x 5 x 1.0 body, Lead Pitch 0.50 mm Thin Plastic Quad Flat No-Lead (VQFN)
+          fields:
+          - pin_count
+          - body
+          - pitch
+      PN:
+        package: 28P3 SPDIP
+        family: DIP
+        mount: tht
+        pin_count: 28
+        cite:
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: ATmega88PA-AN ATmega88PA-ANR(5) ATmega88PA-MMN(4) ATmega88PA-MMNR(4)(5) ATmega88PA-MN
+            ATmega88PA-MNR(5) ATmega88PA-PN 32A 32A 28M1 28M1 32M1-A 32M1-A 28P3
+          fields: []
+        - doc: Microchip DS40002061 atmega88.pdf
+          sha256: b9b9d83cda56a95d999ea8d54fe5a540748ae9020e5e7ae19b913d384ba9320e
+          page: 631
+          quote: 28P3 28-lead, 0.300” Wide, Skinny Plastic Dual Inline Package (SPDIP)
+          fields:
+          - pin_count
+- name: Microchip/Atmel ATtiny25/45/85
+  verified: true
+  match: ^ATTINY(?:25|45|85)V?-(?:10|20)(?P<code>SUR|SHR|MUR|PU|SU|SH|MU|XU)$
+  groups:
+    code:
+      PU:
+        package: 8P3 PDIP
+        family: DIP
+        mount: tht
+        pin_count: 8
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8P3 ATtiny85-20PU
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8P3 8-lead, 0.300" Wide, Plastic Dual Inline Package (PDIP)
+          fields:
+          - pin_count
+      SU:
+        package: 8S2 EIAJ SOIC (0.208 in)
+        family: SO
+        mount: smd
+        pin_count: 8
+        width_in: 0.208
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 ATtiny85-20SU ATtiny85-20SUR ATtiny85-20SH ATtiny85-20SHR
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 8-lead, 0.208" Wide, Plastic Gull -Wing Small Outline (EIAJ SOIC)
+          fields:
+          - pin_count
+          - width_in
+      SUR:
+        package: 8S2 EIAJ SOIC (0.208 in)
+        family: SO
+        mount: smd
+        pin_count: 8
+        width_in: 0.208
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 ATtiny85-20SU ATtiny85-20SUR ATtiny85-20SH ATtiny85-20SHR
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 8-lead, 0.208" Wide, Plastic Gull -Wing Small Outline (EIAJ SOIC)
+          fields:
+          - pin_count
+          - width_in
+      SH:
+        package: 8S2 EIAJ SOIC (0.208 in)
+        family: SO
+        mount: smd
+        pin_count: 8
+        width_in: 0.208
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 ATtiny85-20SU ATtiny85-20SUR ATtiny85-20SH ATtiny85-20SHR
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 8-lead, 0.208" Wide, Plastic Gull -Wing Small Outline (EIAJ SOIC)
+          fields:
+          - pin_count
+          - width_in
+      SHR:
+        package: 8S2 EIAJ SOIC (0.208 in)
+        family: SO
+        mount: smd
+        pin_count: 8
+        width_in: 0.208
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 ATtiny85-20SU ATtiny85-20SUR ATtiny85-20SH ATtiny85-20SHR
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 8S2 8-lead, 0.208" Wide, Plastic Gull -Wing Small Outline (EIAJ SOIC)
+          fields:
+          - pin_count
+          - width_in
+      MU:
+        package: 20M1 QFN/MLF
+        family: NOLEAD
+        mount: smd
+        pin_count: 20
+        body:
+        - 4
+        - 4
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 20M1 ATtiny85-20MU ATtiny85-20MUR
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 20M1 20-pad, 4 x 4 x 0.8 mm Body, Quad Flat No-Lead/Micro Lead Frame Package (QFN/MLF)
+          fields:
+          - pin_count
+          - body
+      MUR:
+        package: 20M1 QFN/MLF
+        family: NOLEAD
+        mount: smd
+        pin_count: 20
+        body:
+        - 4
+        - 4
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 20M1 ATtiny85-20MU ATtiny85-20MUR
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 206
+          quote: 20M1 20-pad, 4 x 4 x 0.8 mm Body, Quad Flat No-Lead/Micro Lead Frame Package (QFN/MLF)
+          fields:
+          - pin_count
+          - body
+      XU:
+        package: 8X TSSOP
+        family: SO
+        mount: smd
+        pin_count: 8
+        width: 4.4
+        cite:
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 205
+          quote: 8X ATtiny45-20XU
+          fields: []
+        - doc: Microchip/Atmel 2586 attiny85.pdf
+          sha256: 0e3fa6a7d608de9b4403cf9fc12867a529cc891ab6a83f9be9ed0db595480837
+          page: 205
+          quote: 8X 8-lead, 4.4 mm Wide, Plastic Thin Shrink Small Outline Package (TSSOP)
+          fields:
+          - pin_count
+          - width
+- name: Microchip MCP1700
+  verified: true
+  match: ^MCP1700T?-\d{3}2E/(?P<pkg>TT|MB|TO|MAY)$
+  groups:
+    pkg:
+      TT:
+        package: SOT-23
+        family: SOT-23
+        mount: smd
+        pin_count: 3
+        cite:
+        - doc: Microchip DS20001826 mcp1700.pdf
+          sha256: 808bac85cf4d3fea97938d2d4ea5f3384d26e1f0dd8e3191ad2d5dae3ed18ee4
+          page: 28
+          quote: TT = Plastic Small Outline Transistor (SOT-23), 3-lead
+          fields:
+          - pin_count
+      MB:
+        package: SOT-89
+        family: SOT-89
+        mount: smd
+        pin_count: 3
+        cite:
+        - doc: Microchip DS20001826 mcp1700.pdf
+          sha256: 808bac85cf4d3fea97938d2d4ea5f3384d26e1f0dd8e3191ad2d5dae3ed18ee4
+          page: 28
+          quote: MB = Plastic Small Outline Transistor (SOT-89), 3-lead
+          fields:
+          - pin_count
+      TO:
+        package: TO-92
+        family: TO-92
+        mount: tht
+        pin_count: 3
+        cite:
+        - doc: Microchip DS20001826 mcp1700.pdf
+          sha256: 808bac85cf4d3fea97938d2d4ea5f3384d26e1f0dd8e3191ad2d5dae3ed18ee4
+          page: 28
+          quote: TO = Plastic Small Outline Transistor (TO-92), 3-lead
+          fields:
+          - pin_count
+      MAY:
+        package: 2x2 DFN-6
+        family: NOLEAD
+        mount: smd
+        pin_count: 6
+        body:
+        - 2
+        - 2
+        cite:
+        - doc: Microchip DS20001826 mcp1700.pdf
+          sha256: 808bac85cf4d3fea97938d2d4ea5f3384d26e1f0dd8e3191ad2d5dae3ed18ee4
+          page: 28
+          quote: MAY = Plastic Small Outline Transistor (DFN), 6-lead
+          fields:
+          - pin_count
+        - doc: Microchip DS20001826 mcp1700.pdf
+          sha256: 808bac85cf4d3fea97938d2d4ea5f3384d26e1f0dd8e3191ad2d5dae3ed18ee4
+          page: 28
+          quote: '2x2 DFN-6 Package:'
+          fields:
+          - body
+- name: onsemi BAV70
+  verified: true
+  match: ^S?BAV70LT[13]G$
+  row:
+    package: SOT-23
+    family: SOT-23
+    mount: smd
+    cite:
+    - doc: onsemi BAV70LT1 bav70.pdf
+      sha256: ebf063db9dd6c0caba609d94fb33bbbddaeab2b5ab61802fb183717c0b5f3e04
+      page: 3
+      quote: BAV70LT1G
+      fields: []
+    - doc: onsemi BAV70LT1 bav70.pdf
+      sha256: ebf063db9dd6c0caba609d94fb33bbbddaeab2b5ab61802fb183717c0b5f3e04
+      page: 1
+      quote: SOT-23 (TO-236)
+      fields: []
+    - doc: onsemi BAV70LT1 bav70.pdf
+      sha256: ebf063db9dd6c0caba609d94fb33bbbddaeab2b5ab61802fb183717c0b5f3e04
+      page: 5
+      quote: SOT−23 (TO−236) 2.90x1.30x1.00 1.90P
+      fields: []
+- name: onsemi MMBT3904L
+  verified: true
+  match: ^S?MMBT3904LT[13]G$
+  row:
+    package: SOT-23
+    family: SOT-23
+    mount: smd
+    cite:
+    - doc: onsemi MMBT3904LT1 mmbt3904.pdf
+      sha256: 6538804fe2b69e8c90f75c3e19444d88a1eba3899e2dc4efed091508d4f21a46
+      page: 7
+      quote: 1AM SOT-23
+      fields: []
+- name: onsemi MMBT3904W
+  verified: true
+  match: ^S?MMBT3904WT[13]G$
+  row:
+    package: SOT-323 (SC-70)
+    family: SC-70
+    mount: smd
+    cite:
+    - doc: onsemi MMBT3904WT1 mmbt3904w.pdf
+      sha256: 4d5b727a9f9ba4f953f21a475ad44398ce9664a954f15bd724b28653fdff08e3
+      page: 1
+      quote: SOT−323/SC−70 package
+      fields: []
+- name: onsemi MMSZ52xxB
+  verified: true
+  match: ^S?Z?MMSZ52\d\dB[C]?T[13]G$
+  row:
+    package: SOD-123
+    family: SOD-123
+    mount: smd
+    cite:
+    - doc: onsemi MMSZ5221BT1 mmsz.pdf
+      sha256: 2fd0c32fdf527cb56121e95a38e143f234d5fef95812ece22e1c14ee475442e8
+      page: 1
+      quote: MMSZ52xxBT1G, SZMMSZ52xxBT1G SOD−123
+      fields: []
+- name: onsemi RB520S30
+  verified: true
+  match: ^RB520S30T[15]G$
+  row:
+    package: SOD-523
+    family: SOD-523
+    mount: smd
+    cite:
+    - doc: onsemi RB520S30T1 rb520.pdf
+      sha256: 9a07e8078c9d1423d88b70ddc63acd4959645e564199ba200c53657591f1197a
+      page: 1
+      quote: RB520S30T1G SOD −523
+      fields: []
+- name: onsemi NCP1117
+  verified: true
+  match: ^NCV?P1117(?P<pkg>ST|DT)[A-Z0-9]*?T[345]G$
+  groups:
+    pkg:
+      ST:
+        package: SOT-223
+        family: SOT-223
+        mount: smd
+        cite:
+        - doc: onsemi NCP1117 ncp1117.pdf
+          sha256: 7ecc606e7954c0a9e48df67b40bc34c739232fa6e2a37f6b075629a85cdecf98
+          page: 12
+          quote: NCP1117STAT3G Adjustable SOT−223
+          fields: []
+        - doc: onsemi NCP1117 ncp1117.pdf
+          sha256: 7ecc606e7954c0a9e48df67b40bc34c739232fa6e2a37f6b075629a85cdecf98
+          page: 2
+          quote: Case 318H (SOT−223)
+          fields: []
+      DT:
+        package: DPAK (TO-252)
+        family: TO-252
+        mount: smd
+        cite:
+        - doc: onsemi NCP1117 ncp1117.pdf
+          sha256: 7ecc606e7954c0a9e48df67b40bc34c739232fa6e2a37f6b075629a85cdecf98
+          page: 2
+          quote: Case 369A (DPAK)
+          fields: []
+- name: onsemi LM358/LM258/LM2904
+  verified: true
+  match: ^(?:LM358|LM258|LM2904|NCV2904)(?:A|E|V)?(?P<code>DM|D|N)(?:R2)?G$
+  groups:
+    code:
+      DM:
+        package: Micro8
+        family: SO
+        mount: smd
+        pin_count: 8
+        cite:
+        - doc: onsemi LM358 on_lm358.pdf
+          sha256: c87595c1f48ea079b5e04c54c115fd74ffbfa491347f381c0fd0bf47ce4e8e62
+          page: 10
+          quote: LM358DMR2G Micro8
+          fields: []
+      N:
+        package: PDIP-8
+        family: DIP
+        mount: tht
+        pin_count: 8
+        cite:
+        - doc: onsemi LM358 on_lm358.pdf
+          sha256: c87595c1f48ea079b5e04c54c115fd74ffbfa491347f381c0fd0bf47ce4e8e62
+          page: 10
+          quote: LM358NG PDIP−8
+          fields:
+          - pin_count
+      D:
+        package: SOIC-8
+        family: SO
+        mount: smd
+        pin_count: 8
+        cite:
+        - doc: onsemi LM358 on_lm358.pdf
+          sha256: c87595c1f48ea079b5e04c54c115fd74ffbfa491347f381c0fd0bf47ce4e8e62
+          page: 10
+          quote: LM358DR2G 2500 / Tape & Reel
+          fields: []
+        - doc: onsemi LM358 on_lm358.pdf
+          sha256: c87595c1f48ea079b5e04c54c115fd74ffbfa491347f381c0fd0bf47ce4e8e62
+          page: 10
+          quote: SOIC−8
+          fields:
+          - pin_count
+- name: Nexperia/NXP 74-series logic
+  verified: true
+  note: SO pitch 1.27 and TSSOP/SSOP pitch 0.65 come by JEDEC convention, not from the cited row; widths
+    and bodies that vary with pin count are given only per part in combos. A 1G/2G/3G little-logic part
+    with an SO, SSOP, TSSOP or DIP letter is not one Nexperia sells (74AHCT1G125DB is TI's DBV cut short),
+    so it is not decoded.
+  match: ^74(?:AHCT?|HCT?|LVCH?|ALVC|AUP|LV|AHC)(?![123]G\d+(?:PW|DB|D|N)(?:-Q100)?(?:,\d{3})?$)(?:1G|2G|3G)?\d+(?P<code>PW|DB|BQ|BZ|GW|GV|GM|GN|GS|GX|GZ|D|N)(?:-Q100)?(?:,\d{3})?$
+  groups:
+    code:
+      D:
+        package: SO
+        family: SO
+        mount: smd
+        pitch: 1.27
+        cite:
+        - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+          sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+          page: 2
+          quote: 74HC595D 74HCT595D -40 °C to +125 °C SO16 plastic small outline package; 16 leads;
+          fields: []
+      PW:
+        package: TSSOP
+        family: SO
+        mount: smd
+        pitch: 0.65
+        cite:
+        - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+          sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+          page: 2
+          quote: 74HC595PW 74HCT595PW -40 °C to +125 °C TSSOP16 plastic thin shrink small outline package;
+            16 leads;
+          fields: []
+      DB:
+        package: SSOP
+        family: SO
+        mount: smd
+        pitch: 0.65
+        cite:
+        - doc: Nexperia 74HC_HCT595 rev 10 74HC_HCT595_v10_wayback.pdf
+          sha256: b8219e19ef214740722c5a0e4265be69217bb6199331fde42dcaf7efceb51f33
+          page: 2
+          quote: SSOP16
+          fields: []
+      N:
+        package: DIP
+        family: DIP
+        mount: tht
+        cite:
+        - doc: NXP 74HC_HCT595 2015 74HC_HCT595_2015_wayback.pdf
+          sha256: c42496e306439a8e5e22ef8b41dfb1f3ff78543c3efd15520d1dc4f77c5e89c2
+          page: 2
+          quote: DIP16 plastic dual in-line package; 16 leads (300 mil)
+          fields: []
+      BQ:
+        package: DHVQFN
+        family: NOLEAD
+        mount: smd
+        cite:
+        - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+          sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+          page: 2
+          quote: DHVQFN16 plastic dual in-line compatible thermal enhanced
+          fields: []
+      BZ:
+        package: DHXQFN
+        family: NOLEAD
+        mount: smd
+        cite:
+        - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+          sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+          page: 2
+          quote: 74HC595BZ -40 °C to +125 °C DHXQFN16
+          fields: []
+      GW:
+        package: TSSOP5 (SOT353)
+        family: SC-70
+        mount: smd
+        pin_count: 5
+        cite:
+        - doc: Nexperia 74LVC1G125 74LVC1G125.pdf
+          sha256: 593f608f01488d3f8a206b08e10026ee33536dfd8356593abc04eed68c46dcdc
+          page: 2
+          quote: 74LVC1G125GW -40 °C to +125 °C TSSOP5 plastic thin shrink small outline package; 5 leads;
+          fields:
+          - pin_count
+      GV:
+        package: SC-74A (SOT753)
+        family: SOT-23
+        mount: smd
+        pin_count: 5
+        cite:
+        - doc: Nexperia 74LVC1G125 74LVC1G125.pdf
+          sha256: 593f608f01488d3f8a206b08e10026ee33536dfd8356593abc04eed68c46dcdc
+          page: 2
+          quote: 74LVC1G125GV -40 °C to +125 °C SC-74A plastic surface-mounted package; 5 leads SOT753
+          fields:
+          - pin_count
+      GM:
+        package: XSON6 (SOT886)
+        family: NOLEAD
+        mount: smd
+        pin_count: 6
+        body:
+        - 1.45
+        - 1.0
+        cite:
+        - doc: Nexperia 74LVC1G125 74LVC1G125.pdf
+          sha256: 593f608f01488d3f8a206b08e10026ee33536dfd8356593abc04eed68c46dcdc
+          page: 2
+          quote: 74LVC1G125GM -40 °C to +125 °C XSON6 plastic extremely thin small outline package; no
+            leads; 6 terminals; body 1 × 1.45 × 0.5 mm
+          fields:
+          - pin_count
+          - body
+      GN:
+        package: XSON6 (SOT1115)
+        family: NOLEAD
+        mount: smd
+        pin_count: 6
+        body:
+        - 1.0
+        - 0.9
+        cite:
+        - doc: Nexperia 74LVC1G125 74LVC1G125.pdf
+          sha256: 593f608f01488d3f8a206b08e10026ee33536dfd8356593abc04eed68c46dcdc
+          page: 2
+          quote: 6 terminals; body 0.9 × 1.0 × 0.35 mm
+          fields:
+          - pin_count
+          - body
+      GS:
+        package: XSON6 (SOT1202)
+        family: NOLEAD
+        mount: smd
+        pin_count: 6
+        body:
+        - 1.0
+        - 1.0
+        cite:
+        - doc: Nexperia 74LVC1G125 74LVC1G125.pdf
+          sha256: 593f608f01488d3f8a206b08e10026ee33536dfd8356593abc04eed68c46dcdc
+          page: 2
+          quote: 6 terminals; body 1.0 × 1.0 × 0.35 mm
+          fields:
+          - pin_count
+          - body
+      GX:
+        package: X2SON5 (SOT1226)
+        family: NOLEAD
+        mount: smd
+        pin_count: 5
+        body:
+        - 0.8
+        - 0.8
+        cite:
+        - doc: Nexperia 74LVC1G125 74LVC1G125.pdf
+          sha256: 593f608f01488d3f8a206b08e10026ee33536dfd8356593abc04eed68c46dcdc
+          page: 2
+          quote: no leads; 5 terminals; body 0.8 × 0.8 × 0.32 mm
+          fields:
+          - pin_count
+          - body
+      GZ:
+        package: XSON5 (SOT8065)
+        family: NOLEAD
+        mount: smd
+        pin_count: 5
+        body:
+        - 1.1
+        - 0.85
+        cite:
+        - doc: Nexperia 74LVC1G125 74LVC1G125.pdf
+          sha256: 593f608f01488d3f8a206b08e10026ee33536dfd8356593abc04eed68c46dcdc
+          page: 2
+          quote: no leads; 5 terminals; body 1.1 × 0.85 × 0.5 mm
+          fields:
+          - pin_count
+          - body
+  combos:
+  - when:
+      code: D
+    part: ^74HCT?595D
+    width: 3.9
+    pin_count: 16
+    cite:
+    - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+      sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+      page: 2
+      quote: SO16 plastic small outline package; 16 leads; body width 3.9 mm
+      fields:
+      - width
+      - pin_count
+  - when:
+      code: PW
+    part: ^74HCT?595PW
+    width: 4.4
+    pin_count: 16
+    cite:
+    - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+      sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+      page: 2
+      quote: TSSOP16 plastic thin shrink small outline package; 16 leads; body width 4.4 mm
+      fields:
+      - width
+      - pin_count
+  - when:
+      code: DB
+    part: ^74HCT?595DB
+    width: 5.3
+    pin_count: 16
+    cite:
+    - doc: Nexperia 74HC_HCT595 rev 10 74HC_HCT595_v10_wayback.pdf
+      sha256: b8219e19ef214740722c5a0e4265be69217bb6199331fde42dcaf7efceb51f33
+      page: 2
+      quote: body width 5.3 mm
+      fields:
+      - width
+  - when:
+      code: N
+    part: ^74HCT?595N
+    pin_count: 16
+    cite:
+    - doc: NXP 74HC_HCT595 2015 74HC_HCT595_2015_wayback.pdf
+      sha256: c42496e306439a8e5e22ef8b41dfb1f3ff78543c3efd15520d1dc4f77c5e89c2
+      page: 2
+      quote: DIP16 plastic dual in-line package; 16 leads (300 mil)
+      fields:
+      - pin_count
+  - when:
+      code: BQ
+    part: ^74HCT?595BQ
+    pin_count: 16
+    body:
+    - 3.5
+    - 2.5
+    cite:
+    - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+      sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+      page: 2
+      quote: no leads; 16 terminals; body 2.5 × 3.5 × 0.85 mm
+      fields:
+      - pin_count
+      - body
+  - when:
+      code: BZ
+    part: ^74HCT?595BZ
+    pin_count: 16
+    pitch: 0.4
+    body:
+    - 2.4
+    - 2.0
+    cite:
+    - doc: Nexperia 74HC_HCT595 74HC_HCT595.pdf
+      sha256: fa24207e780cd8c4cdb9018d67eb83e53ee75578fc126bda6f59f0d84ceb211a
+      page: 2
+      quote: no leads; 16 terminals; 0.4 mm pitch; body 2 mm × 2.4 mm
+      fields:
+      - pin_count
+      - pitch
+      - body
+- name: Nexperia BC847
+  verified: true
+  match: ^BC847[ABC]?(?:,2[13]5)?$
+  row:
+    package: SOT23 (TO-236AB)
+    family: SOT-23
+    pin_count: 3
+    mount: smd
+    cite:
+    - doc: Nexperia BC847 series BC847_SER.pdf
+      sha256: 43634945eddee9221b9bfb8d4f9c0c684b70e5d3526de3340cf327db6a7ef0be
+      page: 2
+      quote: TO-236AB plastic surface-mounted package; 3 leads SOT23
+      fields:
+      - pin_count
+- name: Vishay SiR870ADP
+  verified: true
+  match: ^SIR870ADP(?:-T1-[GR]E3)?$
+  row:
+    package: PowerPAK SO-8
+    family: POWER-SO8
+    mount: smd
+    cite:
+    - doc: Vishay SiR870ADP sir870adp.pdf
+      sha256: 39f79a709d623b1c8a175b5560f073c4db1a7f09e58476d740de9be3d4b23cb3
+      page: 1
+      quote: SiR870ADP-T1-GE3
+      fields: []
+    - doc: Vishay SiR870ADP sir870adp.pdf
+      sha256: 39f79a709d623b1c8a175b5560f073c4db1a7f09e58476d740de9be3d4b23cb3
+      page: 1
+      quote: Package PowerPAK SO-8
+      fields: []
+- name: Vishay SiS412DN
+  verified: true
+  match: ^SIS412DN(?:-T1-GE3)?$
+  row:
+    package: PowerPAK 1212-8
+    family: NOLEAD
+    pin_count: 8
+    pitch: 0.65
+    body:
+    - 3.3
+    - 3.3
+    mount: smd
+    cite:
+    - doc: Vishay SiS412DN sis412dn_new.pdf
+      sha256: 243b817ad9d181e1bfdb63a462f187431f8e885c36861caeaa0f90a6ecc22c47
+      page: 1
+      quote: SiS412DN-T1-GE3
+      fields: []
+    - doc: Vishay SiS412DN sis412dn_new.pdf
+      sha256: 243b817ad9d181e1bfdb63a462f187431f8e885c36861caeaa0f90a6ecc22c47
+      page: 1
+      quote: Package PowerPAK 1212-8
+      fields:
+      - pin_count
+    - doc: Vishay SiS412DN sis412dn_new.pdf
+      sha256: 243b817ad9d181e1bfdb63a462f187431f8e885c36861caeaa0f90a6ecc22c47
+      page: 7
+      quote: e 0.65 BSC
+      fields:
+      - pitch
+    - doc: Vishay SiS412DN sis412dn_new.pdf
+      sha256: 243b817ad9d181e1bfdb63a462f187431f8e885c36861caeaa0f90a6ecc22c47
+      page: 7
+      quote: D 3.20 3.30 3.40
+      fields:
+      - body
+- name: Infineon BSC010N04LS
+  verified: true
+  match: ^BSC010N04LS(?:ATMA1)?$
+  row:
+    package: PG-TDSON-8
+    family: POWER-SO8
+    mount: smd
+    cite:
+    - doc: Infineon BSC010N04LS infineon-bsc010n04ls-datasheet-en.pdf
+      sha256: 35dd1de78f490a5a4ef476395d08723d865f552f5b64b906421e17b1397589ad
+      page: 1
+      quote: BSC010N04LS PG‑TDSON‑8 010N04LS
+      fields: []

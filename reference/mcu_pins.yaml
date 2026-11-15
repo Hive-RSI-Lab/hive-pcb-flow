@@ -14,6 +14,16 @@
 #               function brings out; a pin named GP4 or GPIO26_ADC0 is
 #               looked up by its GPIOn
 #   source      where the table comes from: the document, its revision, the table
+#   debug       the serial-wire debug signals and the one pin each is on
+#               (SWDIO: PA13); an SWD-named net or header pin on any other
+#               pin is debug_pin_wrong, an SWD pin wired to other parts with
+#               no header or pad is debug_pins_reused (netlist_audit rule 31)
+#   shared      a pin's other role at reset (PA14: BOOT0 on STM32G0/C0)
+#   uart        GPIO: the UART block and line (UART1_TX) its alternate
+#               function brings out; a net named RX_FROM_x or TX_TO_x on a
+#               pin that runs the other way is uart_direction (rule 35)
+#   module_of   a module row: the chip row (by mpn prefix) whose tables
+#               apply, through module_pins (header pin name -> chip GPIO)
 #
 # loads: parts whose inputs need an MCU function.
 #   pwm_group   the inputs that take PWM; every such input of every load of
@@ -22,6 +32,10 @@
 #               frequency and aligned edges
 #   when        the rule holds only with this pin in one of these states
 #               (pin_states.yaml's state words)
+#   pwm_pairs   [high, low] input pairs of a gate driver; each pair, fed
+#               from one MCU, must come from one channel's CHx and CHxN
+#               (either way round) and all pairs from distinct channels
+#               of a single timer (#1115)
 #   aliases     other names a symbol uses for those pins
 #
 # chip_select: a memory or peripheral chip-select input (~CS, nCS, CS#,
@@ -33,6 +47,10 @@
 # the FX2's input-only RDY0). glasgow-8 and bedlift-3 are firmware choices
 # no datasheet fixes (every STM32G0 GPIO takes an EXTI line; the DRV8434S
 # accepts steps over SPI), so the corpus marks them not_static.
+#
+# The DRV8300 pairs row (#1115) is seeded from PCB-0018's bldc board, which
+# feeds INHx/INLx from the G431's TIM1 CH1-3/CH1N-3N; its tests plant a
+# leg moved off its channel's complement.
 
 mcus:
   - mpn: STM32C031
@@ -42,6 +60,8 @@ mcus:
       STMicroelectronics STM32_open_pin_data (the STM32CubeMX pin database
       behind the DS13836 alternate-function tables), commit 7d1f1514ed55,
       mcu/STM32C031K(4-6)Tx.xml
+    debug: {SWDIO: PA13, SWCLK: PA14}   # DEBUG_SWDIO, DEBUG_SWCLK
+    shared: {PA14: BOOT0}               # pin PA14-BOOT0
     timers:
       PA0: [TIM16_CH1, TIM1_CH1]
       PA1: [TIM17_CH1, TIM1_CH2]
@@ -77,6 +97,8 @@ mcus:
     source: >-
       STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
       mcu/STM32C051C8Tx.xml
+    debug: {SWDIO: PA13, SWCLK: PA14}   # DEBUG_SWDIO, DEBUG_SWCLK
+    shared: {PA14: BOOT0}               # pin PA14-BOOT0
     timers:
       PA0: [TIM16_CH1, TIM1_CH1, TIM2_CH1]
       PA1: [TIM17_CH1, TIM1_CH2, TIM2_CH2]
@@ -116,6 +138,78 @@ mcus:
       PD3: [TIM1_CH2N]
       PF0: [TIM14_CH1]
       PF2: [TIM1_CH4]
+
+  # Debug-only rows: the STM32 lines whose SWD pins the corpus's boards use.
+  # Every package file read puts SWDIO on PA13 and SWCLK on PA14.
+  - mpn: STM32F401
+    match: '^STM32F401'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32F401C(B-C)Ux.xml (PA13 SYS_JTMS-SWDIO, PA14
+      SYS_JTCK-SWCLK; BOOT0 its own pin)
+    debug: {SWDIO: PA13, SWCLK: PA14}
+
+  - mpn: STM32F030
+    match: '^STM32F030'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32F030F4Px.xml (PA13 SYS_SWDIO, PA14 SYS_SWCLK; BOOT0 its
+      own pin)
+    debug: {SWDIO: PA13, SWCLK: PA14}
+
+  - mpn: STM32G030 / STM32G031
+    match: '^STM32G03[01]'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32G030F6Px.xml, STM32G030K(6-8)Tx.xml, STM32G031F(4-6-8)Px.xml,
+      STM32G031K(4-6-8)Tx.xml (PA13 SYS_SWDIO, pin PA14-BOOT0 SYS_SWCLK)
+    debug: {SWDIO: PA13, SWCLK: PA14}
+    shared: {PA14: BOOT0}
+
+  - mpn: STM32G431 (LQFP-48)
+    match: '^STM32G431C'
+    verified: true   # read 2026-11-14 from the XML at that commit
+    source: >-
+      STMicroelectronics STM32_open_pin_data, commit 7d1f1514ed55,
+      mcu/STM32G431C(6-8-B)Tx.xml; CHxN with dead time per ST's
+      stm32g4xx-hal-driver (commit a6001282dfac) stm32g4xx_hal_tim_ex.c
+      ("Complementary outputs with programmable dead-time")
+    timers:
+      PA0: [TIM2_CH1]
+      PA1: [TIM15_CH1N, TIM2_CH2]
+      PA2: [TIM15_CH1, TIM2_CH3]
+      PA3: [TIM15_CH2, TIM2_CH4]
+      PA4: [TIM3_CH2]
+      PA5: [TIM2_CH1]
+      PA6: [TIM16_CH1, TIM3_CH1]
+      PA7: [TIM17_CH1, TIM1_CH1N, TIM3_CH2, TIM8_CH1N]
+      PA8: [TIM1_CH1]
+      PA9: [TIM1_CH2, TIM2_CH3]
+      PA10: [TIM1_CH3, TIM2_CH4]
+      PA11: [TIM1_CH1N, TIM1_CH4, TIM4_CH1]
+      PA12: [TIM16_CH1, TIM1_CH2N, TIM4_CH2]
+      PA13: [TIM16_CH1N, TIM4_CH3]
+      PA14: [TIM8_CH2]
+      PA15: [TIM2_CH1, TIM8_CH1]
+      PB0: [TIM1_CH2N, TIM3_CH3, TIM8_CH2N]
+      PB1: [TIM1_CH3N, TIM3_CH4, TIM8_CH3N]
+      PB3: [TIM2_CH2, TIM8_CH1N]
+      PB4: [TIM16_CH1, TIM3_CH1, TIM8_CH2N]
+      PB5: [TIM17_CH1, TIM3_CH2, TIM8_CH3N]
+      PB6: [TIM16_CH1N, TIM4_CH1, TIM8_CH1]
+      PB7: [TIM17_CH1N, TIM3_CH4, TIM4_CH2]
+      PB8: [TIM16_CH1, TIM4_CH3, TIM8_CH2]
+      PB9: [TIM17_CH1, TIM1_CH3N, TIM4_CH4, TIM8_CH3]
+      PB10: [TIM2_CH3]
+      PB11: [TIM2_CH4]
+      PB13: [TIM1_CH1N]
+      PB14: [TIM15_CH1, TIM1_CH2N]
+      PB15: [TIM15_CH1N, TIM15_CH2, TIM1_CH3N]
+      PC13: [TIM1_CH1N, TIM8_CH4N]
+      PF0: [TIM1_CH3N]
 
   - mpn: CY7C68013A / CY7C68014A (FX2LP)
     match: '^CY7C6801[3-6]A'
@@ -168,6 +262,56 @@ mcus:
       GPIO27: I2C1_SCL
       GPIO28: I2C0_SDA
       GPIO29: I2C0_SCL
+    # uart: function 2 (GPIOn_CTRL_FUNCSEL_VALUE_UARTm_TX/RX in the same
+    # io_bank0.h, read at pico-sdk 2.1.1 2026-11-14); GPIOs 2-3 mod 4 are
+    # CTS/RTS, not listed
+    uart:
+      GPIO0: UART0_TX
+      GPIO1: UART0_RX
+      GPIO4: UART1_TX
+      GPIO5: UART1_RX
+      GPIO8: UART1_TX
+      GPIO9: UART1_RX
+      GPIO12: UART0_TX
+      GPIO13: UART0_RX
+      GPIO16: UART0_TX
+      GPIO17: UART0_RX
+      GPIO20: UART1_TX
+      GPIO21: UART1_RX
+      GPIO24: UART1_TX
+      GPIO25: UART1_RX
+      GPIO28: UART0_TX
+      GPIO29: UART0_RX
+
+  - mpn: Arduino Nano RP2040 Connect (ABX00053)
+    match: '^(ABX00053|Arduino[ _]?Nano[ _]?RP2040([ _]?Connect)?)$'
+    verified: true   # variant.cpp at that commit read 2026-11-14
+    source: >-
+      arduino/ArduinoCore-mbed b4ad4e7218a691989acf6c4479112eae183a5a50,
+      variants/NANO_RP2040_CONNECT/variant.cpp, g_APinDescription: the
+      RP2040 GPIO behind each header pin (D8 is p20, D9 is p21)
+    module_of: RP2040
+    module_pins:
+      D0: GPIO1
+      D1: GPIO0
+      RX: GPIO1
+      TX: GPIO0
+      D2: GPIO25
+      D3: GPIO15
+      D4: GPIO16
+      D5: GPIO17
+      D6: GPIO18
+      D7: GPIO19
+      D8: GPIO20
+      D9: GPIO21
+      D10: GPIO5
+      D11: GPIO7
+      D12: GPIO4
+      D13: GPIO6
+      A0: GPIO26
+      A1: GPIO27
+      A2: GPIO28
+      A3: GPIO29
 
 loads:
   - mpn: DRV8874
@@ -186,3 +330,21 @@ loads:
       TI DRV8874 SLVSF66A, section 5 pin table (PMODE: "H-bridge control
       input mode"), 7.3.2 Table 2 PMODE Functions ("PMODE = Logic High:
       PWM") and 7.3.2.2 Table 4 PWM Control Mode (IN1/IN2 truth table)
+
+  - mpn: DRV8300
+    match: '^DRV8300'
+    verified: true   # TI SLVSFG5D (revised March 2022) read 2026-11-14
+    pwm_pairs: [[INHA, INLA], [INHB, INLB], [INHC, INLC]]
+    severity: warning
+    why: >-
+      the DRV8300's high-side and low-side inputs operate independently
+      (it only turns both gates off when both inputs are high, and adds a
+      200-2000 ns dead time), so each half-bridge's two inputs want one
+      timer channel's complementary CHx/CHxN outputs, where the MCU's
+      dead-time generator and break input keep the two switches apart,
+      and all three legs want one counter
+    source: >-
+      TI DRV8300 SLVSFG5D, Table 6-1 pin functions (INHx high-side, INLx
+      low-side gate driver inputs) and 8.3.1.1.2 Deadtime and
+      Cross-Conduction Prevention ("high-side and low-side inputs operate
+      independently")

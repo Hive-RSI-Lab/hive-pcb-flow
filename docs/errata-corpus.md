@@ -15,11 +15,13 @@ only for the round's first reading: each round is swept once.
 
 ## Count
 
-- Training: 42 of 51 caught (42 caught, 5 missed, 4 not_static).
-- Holdout round 1, blind: 1 of 6 caught (1 caught, 5 missed).
-- Holdout round 1, with the rules written since: 3 of 6 caught (3 caught, 3 missed).
-- Holdout round 2, blind: 1 of 23 caught (1 caught, 22 missed).
-- Holdout round 2, with the rules written since: 5 of 23 caught (5 caught, 18 missed).
+- Training: 49 of 55 caught (49 caught, 2 missed, 4 not_static).
+- Holdout round 1, blind: 1 of 4 caught (1 caught, 3 missed).
+- Holdout round 1, with the rules written since: 2 of 4 caught (2 caught, 2 missed).
+- Holdout round 2, blind: 1 of 21 caught (1 caught, 20 missed).
+- Holdout round 2, with the rules written since: 12 of 21 caught (12 caught, 9 missed).
+- Holdout round 3, blind: 1 of 29 caught (1 caught, 28 missed).
+- Holdout round 3, with the rules written since: 1 of 29 caught (1 caught, 28 missed).
 
 ## A new holdout round
 
@@ -35,10 +37,12 @@ round, pinned and swept before those rules are:
    revision fixes a defect the designer's own errata quote, both revisions
    pinned to a commit, and no repository an earlier round or the training
    set holds.
-2. Each goes under `holdout:` with `swept: {flow: SHA, date, round: N}`,
-   SHA being main as it stands, and its defects with the designer's quote,
+2. Each goes in the round's own sealed file, `holdout/round-N.yaml`
+   (a `holdout:` list), with `swept: {flow: SHA, date, round: N}`, SHA
+   being main as it stands, and its defects with the designer's quote,
    before anyone reads the findings. `errata_corpus.py sweep ID...` runs
-   every check on both revisions.
+   every check on both revisions; `load` merges the sealed files, so
+   `run` and `table` see them too.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board
@@ -48,7 +52,20 @@ round, pinned and swept before those rules are:
    blind. Round N is known once read: the next round of rules gets round
    N+1.
 5. Add the round's misses to `docs/miss-taxonomy.md`, one class per check,
-   and re-rank it: the next rules go to the top classes.
+   and re-rank it: the next rules go to the top classes. While the round is
+   sealed, its member lines go in `holdout/round-N-members.md`, and the
+   taxonomy says only how many members each class has from it.
+
+**Keeping a sealed round blind.** Until a round is unsealed, its defects
+live only in the repo's top `holdout/` folder: `holdout/round-N.yaml`,
+`holdout/round-N-members.md` and `holdout/round-N-errata.md` (written by
+`table`). It is outside `reference/` and `docs/`, so a grep there for a part
+or a check doesn't reach them. Rule builders open none of these, nor the round's
+boards or errata upstream, and their briefs quote only the taxonomy's
+Ranked table. Only the round's scorers read them. `tests/test_holdout_sealed.py`
+fails if a sealed defect id appears in any other tracked file. Unsealing a
+round (when a newer round replaces it as the blind test) moves its boards
+into `reference/errata_corpus.yaml` and its members into the taxonomy.
 
 ## Training set
 
@@ -193,7 +210,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| smart-lcc-1: auxiliary UART RX and TX crossed the wrong way | SCH (signal direction) | missed | off-board and standard connector pinouts, with the mate stated (#1027) |
+| smart-lcc-1: auxiliary UART RX and TX crossed the wrong way | SCH (signal direction) | caught_with_constraints (not run here), since #1137 (`netlist_audit` uart_direction, with constraints) | off-board and standard connector pinouts, with the mate stated (#1027) |
 | smart-lcc-2: no zener/diode protection on the RX and TX ports | SCH (port protection) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_unprotected) | check_esd counting a bare zener to ground as a port clamp, seeded from a training board |
 
 ### fc980c: rev1 -> rev2
@@ -202,7 +219,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| fc980c-1: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13 | SCH (pin function vs datasheet) | missed | SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070) |
+| fc980c-1: SWD header's SWDIO routed to PA15 instead of the STM32's SWDIO pin PA13 | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` debug_pin_wrong) | SWD header rows, and the MCU's own SWDIO/SWCLK pins (#1070) |
 | fc980c-2: KEY_STATE open-collector line has no 5V pull-up | SCH (missing pull-up) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_floating) | an off-board control input left floating needs a stiff pull (#1079) |
 
 ### zxdiag-v11: v1.1 -> v1.2
@@ -211,20 +228,29 @@ round, pinned and swept before those rules are:
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | missed | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137) |
+| zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | caught (not run here), since #1137 (`netlist_audit` bus_member_dropped) | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137) |
 | zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_clamp) | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
 | zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_rail_absent) | a measurement divider whose reference comes from an off-board rail |
 
-## Holdout round 1
-
 ### netscore-main: main-board v3.0 -> main-board v3.1
 
-[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
+[https://github.com/arcticlula/Netscore](https://github.com/arcticlula/Netscore) at `4426f309aab5`, MIT; errata `hardware/docs/versions.md`.
 
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| netscore-1: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT | SCH (part orientation) | missed | caught on rev A, gone on rev B, since #1085 (`netlist_audit` power_path_body_diode) | Not an independent catch: the rule was written after this defect was read, though seeded from datasheets (TI SLVA139, Microchip AN1149), not from this board. The warning is on v3.0 and gone on v3.1. |
-| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | missed | missed | protector pins named GND and BAT- (FS312-style): #1085 reads only VDD/VSS/VM/DO/CO protectors |
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| netscore-1: Q3 power-mux FET source and drain swapped, body diode VCC to +BATT | SCH (part orientation) | caught on rev A, gone on rev B, since #1085 (`netlist_audit` power_path_body_diode) | Not an independent catch: the rule was written after this defect was read, though seeded from datasheets (TI SLVA139, Microchip AN1149), not from this board. The warning is on v3.0 and gone on v3.1. |
+| netscore-2: BMS1 FS312MH GND (cell negative) and BAT- (load negative) swapped | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` protector_cell_side) | Caught by protector_cell_side (class 6), which reads FS312-style GND/BAT- pin names; #1085's protector_orientation reads only VDD/VSS/VM/DO/CO protectors, and the two rules together cover both pin styles. Not an independent catch: written after this defect was read. |
+
+### flexgrid-v4: V4 as ordered -> V4-2
+
+[https://github.com/Open-Muscle/OpenMuscle-FlexGrid](https://github.com/Open-Muscle/OpenMuscle-FlexGrid) at `d3529287a899`, CERN-OHL-S-2.0; errata `KiCad/OM-FlexGrid V4/README.md`.
+
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` pin_role_net) | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
+| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | caught on rev A, gone on rev B, since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
+
+## Holdout round 1
 
 ### netscore-big: display-board-big v2.0 -> display-board-big v3.0
 
@@ -276,8 +302,8 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| zxdiag-v10-1: Edge connector footprint has its rows about 2.5 mm apart instead of 5 mm | LIB (wrong footprint geometry) | missed | missed | an edge connector's row spacing against the mating connector's |
-| zxdiag-v10-2: Edge connector header holes too small for the pins | PCB (drill size) | missed | missed | check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint |
+| zxdiag-v10-1: Edge connector footprint has its rows about 2.5 mm apart instead of 5 mm | LIB (wrong footprint geometry) | missed | caught on rev A, gone on rev B, since #1124 (`check_mate_pins` mate_row_spacing, with constraints) | Not an independent catch: the rule was written after this holdout defect was read (#1124), though the row spacings come from the Sullins ABC card-edge socket datasheet, not from this board. v1.0's Z101 has its rows 2.54 mm apart; v1.1's Spectrum_Edge_Connector 5.08 mm, which the edge socket takes. Only the stated mate says which is right. |
+| zxdiag-v10-2: Edge connector header holes too small for the pins | PCB (drill size) | missed | caught on rev A, gone on rev B, since #1123 (`check_connector_fit` tht_pin_tight) | Not an independent catch: the rule was written after this holdout defect was read (#1123). v1.0 is a KiCad 6 board, whose footprints placelib read no reference from until intake's kicad-cli upgrade was applied here; Z101 is a project-library pin header (2.54 mm holes apart) drilled 0.76 mm for a 0.64 mm square post (Samtec TSW), 0.91 mm across its corners. v1.1's edge connector has no such holes. |
 
 ### pico-if1-v10: v1.0 -> v1.1
 
@@ -286,7 +312,7 @@ round, pinned and swept before those rules are:
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | pico-if1-v10-1: Transistor Q1 footprint rotated 90 degrees | PCB (part rotation) | caught | caught on rev A, gone on rev B (`netlist_audit` sot23_pinout) | The erratum calls it a rotation; the flow names the same part's fault as pin order (an E-B-C symbol on a B-E-C SOT-23), and the finding is gone on rev B. Counted caught on the part and the fault. |
-| pico-if1-v10-2: Data bus level shifter direction on /RD instead of ROM_READ_INV | SCH (wrong net) | missed | missed | a level shifter's DIR pin checked against a stated direction (read strobe) net |
+| pico-if1-v10-2: Data bus level shifter direction on /RD instead of ROM_READ_INV | SCH (wrong net) | missed | caught (not run here), since #1137 (`netlist_audit` transceiver_drives_host_bus) | a level shifter's DIR pin checked against a stated direction (read strobe) net |
 | pico-if1-v10-3: GND via for U4 pin 19 (/OE) sits under the chip where it can't be reached | PCB (via placement) | missed | missed | a via under a part's body tying one of its own pins, on a hand-built board |
 
 ### pico-if1-v13: v1.3 -> v1.4
@@ -307,7 +333,7 @@ round, pinned and swept before those rules are:
 | gcm-v50-1: U12 on the BWRITE1 bus, in conflict with U40; V5.1 moves it to BWRITE2 | SCH (bus conflict) | missed | missed | bus contention: two drivers enabled by one bus strobe (U12 and U40 on BWRITE1) |
 | gcm-v50-2: A symbol's pins flipped and out of order, causing a clock problem | LIB (symbol pinout) | missed | caught on rev A, gone on rev B, since #1134 (`netlist_audit` bus_order_flipped) | Not an independent catch: the rule was written after this defect was read. On V5.0 one unit of each SN74LV393A divider chain counts its QA..QD outputs onto the clock nets the other way round from its twin unit. The warning is gone on V5.1. |
 | gcm-v50-3: J7 on the wrong footprint | LIB (wrong footprint) | missed | missed | the footprint against the part's MPN package |
-| gcm-v50-4: J12 the wrong gender; V5.1 uses a male connector | PCB (connector gender) | missed | missed | connector gender against a stated mating side |
+| gcm-v50-4: J12 the wrong gender; V5.1 uses a male connector | PCB (connector gender) | missed | caught on rev A, gone on rev B, since #1124 (`check_mate_pins` mate_gender_mismatch, with constraints) | Not an independent catch: the rule was written after this holdout defect was read (#1124). V5.0's J12 is a PinSocket_2x21 where it mates with a socket; V5.1's is a PinHeader. Only the stated mate says which gender is right. A KiCad 5 board, read through intake's upgrade. |
 
 ### gp8b-v50: V5.0 -> V5.1
 
@@ -315,7 +341,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| gp8b-v50-1: J1 not a male connector | PCB (connector gender) | missed | missed | connector gender against a stated mating side |
+| gp8b-v50-1: J1 not a male connector | PCB (connector gender) | missed | caught on rev A, gone on rev B, since #1124 (`check_mate_pins` mate_gender_mismatch, with constraints) | Not an independent catch: the rule was written after this holdout defect was read (#1124). V5.0's J1 is a PinSocket_1x06 where it mates with a socket; V5.1's is a PinHeader. A KiCad 5 board, read through intake's upgrade. |
 | gp8b-v50-2: ADDSCR_CLK not sending the right pulses to the motherboard | SCH (wrong net) | missed | missed | the erratum does not name the fault; read the v5.0 to v5.1 ADDSCR_CLK change to find a rule |
 
 ### mdbt-micro-50q: 50q-v1.1 -> 50q-v1.2
@@ -324,16 +350,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| mdbt-micro-50q-1: Pro Micro 2.54 mm header holes 0.7 mm, too small; 1 mm in v1.2 | DFM (hole size) | missed | missed | check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why |
-
-### flexgrid-v4: V4 as ordered -> V4-2
-
-[https://github.com/Open-Muscle/OpenMuscle-FlexGrid](https://github.com/Open-Muscle/OpenMuscle-FlexGrid) at `d3529287a899`, CERN-OHL-S-2.0; errata `KiCad/OM-FlexGrid V4/README.md`. Holdout round 2, swept blind with pcb-flow `4540a94bce11` on 2026-11-14.
-
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | missed | missed | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
-| flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | missed | caught (not run here), since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
+| mdbt-micro-50q-1: Pro Micro 2.54 mm header holes 0.7 mm, too small; 1 mm in v1.2 | DFM (hole size) | missed | caught on rev A, gone on rev B, since #1123 (`check_connector_fit` tht_pin_tight) | Not an independent catch: the rule was written after this holdout defect was read (#1123). J1 is the project's Pro Micro footprint, which no stock lead row knew; it now takes a 2.54 mm header's 0.64 mm square post (Samtec TSW) when its holes stand 2.54 mm apart. v1.1 drills 0.80 mm (the erratum says 0.7), too small for the post's 0.91 mm corners; v1.2's 1.00 mm holes fit, with an IPC-2222 warning only. |
 
 ### flexgrid-v3: V3 -> V4
 
@@ -350,5 +367,9 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| healthmonitor-1: AD8232 missing its 4.7 uF capacitor between IOUT and SW | SCH (missing component) | missed | missed | a part's required external parts from its datasheet (AD8232's IOUT to SW capacitor) |
-| healthmonitor-2: AD8232 resistor and capacitor between REFIN and GND wired wrongly | SCH (wrong connectivity) | missed | missed | a reference pin's network against the datasheet's typical circuit (AD8232 REFIN) |
+| healthmonitor-1: AD8232 missing its 4.7 uF capacitor between IOUT and SW | SCH (missing component) | missed | caught on rev A, gone on rev B, since #1158 (`netlist_audit` pin_part_missing) | Not an independent catch: the rows were written after this defect was read, from the AD8232 datasheet (Rev. A, Table 3 pin 6 and Figure 55), not from this board. HM-Rev1 ties SW straight to IAOUT, which the rule's `distinct` check reports as an error; HM-Rev2's C28 between them is quiet. |
+| healthmonitor-2: AD8232 resistor and capacitor between REFIN and GND wired wrongly | SCH (wrong connectivity) | missed | caught on rev A, gone on rev B, since #1158 (`netlist_audit` pin_part_missing) | Not an independent catch: the rows were written after this defect was read, from the AD8232 datasheet (Rev. A, Figure 47 and Application Circuits). HM-Rev1 has only the upper 10 M from REFIN to +VS: the missing lower resistor is an error and the missing filter capacitor a warning. HM-Rev2's 10 M / 10 M / 100 n divider is quiet. A REFIN driven by another part is not judged (`when: undriven`). |
+
+## Holdout round 3
+
+Sealed: its boards and defects are in `holdout/round-3-errata.md`, for the round's scorers only. Rule builders don't open it, or the round's boards and errata; see "A new holdout round".

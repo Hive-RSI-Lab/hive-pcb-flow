@@ -198,10 +198,12 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
         "optional": {"dt_c": "num"},
     },
     # check_mate_pins (+ cablelib): a connector and its mate, on this board
-    # or on mate_pcb
+    # or on mate_pcb, or a mate with no board (mate_standard, #1124); one of
+    # mate_ref / mate_standard is needed, and check_mate_pins says so
     "mating_pairs": {
-        "required": {"ref": "str", "mate_ref": "str"},
-        "optional": {"mount": "mount", "mate_pcb": "str", "rotation": "num",
+        "required": {"ref": "str"},
+        "optional": {"mate_ref": "str", "mate_standard": "str",
+                     "mount": "mount", "mate_pcb": "str", "rotation": "num",
                      "net_map": "str_map", "cable": "cable"},
     },
 }
@@ -320,7 +322,8 @@ TOP_NUMBERS = {"ambient_c", "ambient_min_c",
 SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
     "placement", "coating", "antennas", "pcb_antennas", "si", "cable_pf",
     "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
-    "isolation", "mechanical", "transformers", "pinouts"}
+    "isolation", "mechanical", "transformers", "pinouts",
+    "design_intent"}
 PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
@@ -662,6 +665,22 @@ class _FileLint:
                     self.add("error", "bad_type",
                              f"{path}: mechanical.allow_off_board must be a "
                              "list of {refs: [A, ...], why: text}", path)
+                so = val.get("module_standoff", []) \
+                    if isinstance(val, dict) else None
+                if not isinstance(so, list) or not all(
+                        isinstance(e, dict) and isinstance(e.get("why"), str)
+                        and e["why"].strip()
+                        and isinstance(e.get("refs"), list) and e["refs"]
+                        and isinstance(e.get("height_mm"), (int, float))
+                        and not isinstance(e["height_mm"], bool)
+                        and e["height_mm"] >= 0
+                        for e in so):
+                    # check_body_clash (#1187): how high a plug-in module
+                    # stands off the board
+                    self.add("error", "bad_type",
+                             f"{path}: mechanical.module_standoff must be a "
+                             "list of {refs: [A, ...], height_mm: number >= 0,"
+                             " why: text}", path)
                 mnt = val.get("mounting") if isinstance(val, dict) else None
                 if mnt is not None and not (
                         isinstance(mnt, dict)
@@ -674,6 +693,53 @@ class _FileLint:
                              f"{path}: mechanical.mounting must be {{by: one "
                              f"of {', '.join(MOUNTS_BY)}, why: "
                              "text}", path)
+                mh = val.get("mount_heights") \
+                    if isinstance(val, dict) else None
+                if mh is not None and not (isinstance(mh, dict) and all(
+                        isinstance(e, dict)
+                        and isinstance(e.get("height_mm"), (int, float))
+                        and not isinstance(e["height_mm"], bool)
+                        and e.get("datum", "body_underside") in (
+                            "body_underside", "lead_protrusion")
+                        and (e.get("tol_mm") is None
+                             or (isinstance(e["tol_mm"], (int, float))
+                                 and not isinstance(e["tol_mm"], bool)
+                                 and e["tol_mm"] >= 0))
+                        and isinstance(e.get("source"), str)
+                        and e["source"].strip()
+                        and isinstance(e.get("model", ""), str)
+                        for e in mh.values())):
+                    # check_model_fit (#1191, #980): a raised part's stated
+                    # mounting height
+                    self.add("error", "bad_type",
+                             f"{path}: mechanical.mount_heights must be "
+                             "{ref: {height_mm: number, datum?: "
+                             "body_underside|lead_protrusion, tol_mm?: "
+                             "number >= 0, source: text, model?: text}}",
+                             path)
+            elif key == "design_intent":
+                # netlist_audit rules 34-35 (#1137): what no design file
+                # says - a module drawn with another's symbol, a bus member
+                # left unread on purpose
+                def _rows(name, field):
+                    rows = val.get(name, []) if isinstance(val, dict) \
+                        else None
+                    return isinstance(rows, list) and all(
+                        isinstance(e, dict)
+                        and isinstance(e.get(field), str) and e[field]
+                        and isinstance(e.get("why"), str)
+                        and e["why"].strip()
+                        and (name != "modules" or (
+                            isinstance(e.get("is"), str) and e["is"]))
+                        for e in rows)
+                if not isinstance(val, dict) or set(val) - {
+                        "modules", "bus_unread"} or not (
+                        _rows("modules", "ref")
+                        and _rows("bus_unread", "net")):
+                    self.add("error", "bad_type",
+                             f"{path}: design_intent must be {{modules: "
+                             "[{ref: U1, is: <part>, why: text}], "
+                             "bus_unread: [{net: N, why: text}]}", path)
             elif key == "pinouts":
                 # check_pinouts (#1027): an off-board connector held to a row
                 # of reference/connector_pinouts.yaml

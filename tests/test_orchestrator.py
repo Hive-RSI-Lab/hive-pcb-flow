@@ -234,6 +234,7 @@ PIPELINE_KINDS = [
     "silk_thin", "pdn_undecoupled", "pdn_no_bulk",
     # S6 fp_verify
     "pad_count", "pin1_missing", "pad_pitch", "pad_size", "no_courtyard",
+    "stroked_pad_primitive",
     # S7 netlist_audit
     "missing_net", "diffpair_naming", "diffpair_unpaired",
     "power_no_consumers", "power_undeclared", "dangling_net", "netlist_diff",

@@ -411,3 +411,153 @@ def test_cli_takes_parts(tmp_path):
     assert got["drawn_edges"] == {"U5": 7.0}
     assert cbc.main(["--pcb", str(pcb), "--parts", str(tmp_path / "nowhere"),
                      "--out", str(out)]) == 2
+
+
+# ------------------------------------------- raised parts (#1187)
+
+def _tht(pins) -> str:
+    return "".join(f'(pad "{i + 1}" thru_hole circle (at {x} {y}) (size 1.7 1.7)'
+                   ' (drill 1.0) (layers "*.Cu"))' for i, (x, y) in enumerate(pins))
+
+
+ROW = [(0, i * IN) for i in range(5)]                  # a 1x05 at 2.54
+NANO = [(x, y) for x in (0, 6 * IN) for _, y in ROW]   # two rows 15.24 apart
+SOCKET = [(-1.27, -4 * IN - 1.27, 0, 1.27, 1.27, 8.5)]   # model y is up
+# a module's PCB as KiCad draws it, on the board
+BOARD_PCB = [(-1.27, -4 * IN - 1.27, 0, 6 * IN + 1.27, 1.27, 1.6)]
+
+
+def _plugged(tmp_path, under, module=True):
+    """U1 on two PinSocket_1x05 strips J1 (x 40) and J2 (x 55.24); C1 stands
+    between them under the module."""
+    sock = _wrl(tmp_path / "sock.wrl", SOCKET)
+    mod = _wrl(tmp_path / "nano.wrl", BOARD_PCB) if module else None
+    cap = _wrl(tmp_path / "cap.wrl", under)
+    sname = "Connector_PinSocket_2.54mm:PinSocket_1x05_P2.54mm_Vertical"
+    return _board(
+        tmp_path,
+        _fp("J1", 40, 50, sock, pad=False, name=sname, extra=_tht(ROW)),
+        _fp("J2", 40 + 6 * IN, 50, sock, pad=False, name=sname, extra=_tht(ROW)),
+        _fp("U1", 40, 50, mod, pad=False, name="Module:Arduino_Nano",
+            extra=_tht(NANO)),
+        _fp("C1", 40 + 3 * IN, 50 + 2 * IN, cap))
+
+
+def test_planted_tall_part_under_a_module_on_sockets_fails(tmp_path):
+    # a 12 mm can under a module whose PCB stands 8.5 + 2.54 mm up
+    pcb = _plugged(tmp_path, [(-3, -3, 0, 3, 3, 12)])
+    kinds, viols, facts = _kinds(pcb)
+    v = next(x for x in viols if x["kind"] == "body_under_module")
+    assert v["severity"] == "error" and set(v["refs"]) == {"U1", "C1"}
+    assert v["overlap"]["z"][0] == pytest.approx(11.04, abs=0.25)
+    assert facts["raised"]["U1"]["standoff_mm"] == pytest.approx(11.04, abs=0.01)
+    assert facts["raised"]["U1"]["sockets"] == ["J1", "J2"]
+    assert "body_clash" not in kinds          # the module and its sockets
+
+
+def test_low_part_under_a_module_on_sockets_passes(tmp_path):
+    # 5 mm fits under the 11 mm gap; drawn at the board, it would have hit
+    pcb = _plugged(tmp_path, [(-3, -3, 0, 3, 3, 5)])
+    kinds, _, facts = _kinds(pcb)
+    assert "body_under_module" not in kinds and "body_clash" not in kinds
+    assert facts["raised"]["U1"]["lift_mm"] == pytest.approx(11.04, abs=0.45)
+
+
+def test_a_module_with_no_model_on_sockets_is_its_underside(tmp_path):
+    pcb = _plugged(tmp_path, [(-3, -3, 0, 3, 3, 12)], module=False)
+    kinds, _, facts = _kinds(pcb)
+    assert "body_under_module" in kinds
+    assert "U1" not in facts["not_judged"]
+    assert facts["raised"]["U1"]["drawn"].startswith("its courtyard")
+    low = _plugged(tmp_path, [(-3, -3, 0, 3, 3, 5)], module=False)
+    assert "body_under_module" not in _kinds(low)[0]
+
+
+def test_a_stated_standoff_lifts_a_module_with_no_sockets(tmp_path):
+    mod = _wrl(tmp_path / "nano.wrl", BOARD_PCB)
+    cap = _wrl(tmp_path / "cap.wrl", [(-3, -3, 0, 3, 3, 5)])
+    pcb = _board(tmp_path,
+                 _fp("U1", 40, 50, mod, pad=False, name="Module:Arduino_Nano",
+                     extra=_tht(NANO)),
+                 _fp("C1", 40 + 3 * IN, 50 + 2 * IN, cap))
+    kinds, _, facts = _kinds(pcb)
+    assert "body_clash" in kinds               # drawn flat, as the design says
+    assert facts["standoff_unstated"] == ["U1"]
+    cons = {"mechanical": {"module_standoff": [
+        {"refs": ["U1"], "height_mm": 8.0, "why": "on 8 mm spacers"}]}}
+    kinds, _, facts = _kinds(pcb, cons)
+    assert "body_clash" not in kinds and "body_under_module" not in kinds
+    assert facts["raised"]["U1"]["standoff_mm"] == 8.0
+    flat = {"mechanical": {"module_standoff": [
+        {"refs": ["U1"], "height_mm": 0, "why": "soldered flat"}]}}
+    kinds, _, facts = _kinds(pcb, flat)
+    assert "body_clash" in kinds and "standoff_unstated" not in facts
+    import checklib
+    with pytest.raises(checklib.CheckError, match="module_standoff"):
+        cbc.check(pcb, {"mechanical": {"module_standoff": [
+            {"refs": ["U1"], "height_mm": 8.0}]}})
+
+
+def test_a_plug_in_module_with_no_model_and_no_height_is_not_judged(tmp_path):
+    pcb = _board(tmp_path, _fp("U1", 40, 50, None, pad=False,
+                               name="Module:Arduino_Nano", extra=_tht(NANO)))
+    _, _, facts = _kinds(pcb)
+    assert "U1" in facts["not_judged"] and "raised" not in facts
+
+
+DIP8 = [(x, y * IN) for x in (0, 3 * IN) for y in range(4)]
+CHIP = [(0.6, -8.6, 0.5, 7.0, 1.0, 3.8)]     # a bare DIP-8 body, on the board
+DIP_NAME = "Package_DIP:DIP-8_W7.62mm_Socket"
+
+
+def test_planted_overhang_meets_a_socketed_chip_fails(tmp_path):
+    # a ledge at 5-7 mm over the chip: clear of the bare chip KiCad draws,
+    # into the chip as it sits in its 4.19 mm socket
+    chip = _wrl(tmp_path / "DIP-8_W7.62mm.wrl", CHIP)
+    ledge = _wrl(tmp_path / "ledge.wrl", [(-3, -3, 0, 3, 3, 7), (-12, -3, 5, -3, 3, 7)])
+    pcb = _board(tmp_path, _fp("U1", 40, 50, chip, pad=False, name=DIP_NAME,
+                               extra=_tht(DIP8)),
+                 _fp("J1", 40 + 3 * IN + 8, 50 + 1.5 * IN, ledge))
+    kinds, viols, facts = _kinds(pcb)
+    assert "body_clash" in kinds
+    assert facts["raised_dips"]["U1"]["lift_mm"] == pytest.approx(4.19 - 0.5, abs=0.45)
+    assert facts["raised_dips"]["U1"]["socket"].startswith("drawn")
+
+
+def test_overhang_clear_of_a_socketed_chip_passes(tmp_path):
+    chip = _wrl(tmp_path / "DIP-8_W7.62mm.wrl", CHIP)
+    ledge = _wrl(tmp_path / "ledge.wrl", [(-3, -3, 0, 3, 3, 10), (-12, -3, 8.5, -3, 3, 10)])
+    pcb = _board(tmp_path, _fp("U1", 40, 50, chip, pad=False, name=DIP_NAME,
+                               extra=_tht(DIP8)),
+                 _fp("J1", 40 + 3 * IN + 8, 50 + 1.5 * IN, ledge))
+    assert "body_clash" not in _kinds(pcb)[0]
+
+
+def test_a_socket_model_alone_is_not_judged_for_its_chip(tmp_path):
+    sock = _wrl(tmp_path / "DIP-8_W7.62mm_Socket.wrl",
+                [(-1.27, -3 * IN - 1.27, 0, 3 * IN + 1.27, 1.27, 4.2)])
+    pcb = _board(tmp_path, _fp("U1", 40, 50, sock, pad=False, name=DIP_NAME,
+                               extra=_tht(DIP8)))
+    _, _, facts = _kinds(pcb)
+    assert "U1" in facts["not_judged"] and "chip" in facts["not_judged_why"]["U1"]
+    assert facts["bodies"] == 1                 # the socket itself is judged
+
+
+def test_footprints_sharing_ref_star_star_are_each_their_own_body(tmp_path):
+    """bedlift rev_b: four logos all REF** were each measured against one
+    REF** courtyard, 20 to 87 mm away. Each keeps its body, keyed REF**#n,
+    and none is held to a courtyard it can't be told is its own."""
+    post = _wrl(tmp_path / "post.wrl", POST)
+    pcb = _board(tmp_path, _fp("REF**", 20, 20, post, cy=4),
+                 _fp("REF**", 80, 80, post, cy=4))
+    kinds, _, facts = _kinds(pcb)
+    assert "body_past_courtyard" not in kinds and facts["bodies"] == 2
+
+
+def test_planted_two_ref_star_star_bodies_overlapping_still_clash(tmp_path):
+    post = _wrl(tmp_path / "post.wrl", POST)
+    pcb = _board(tmp_path, _fp("REF**", 50, 50, post, cy=4),
+                 _fp("REF**", 53, 50, post, cy=4))
+    kinds, viols, _ = _kinds(pcb)
+    v = next(x for x in viols if x["kind"] == "body_clash")
+    assert v["refs"] == ["REF**#1", "REF**#2"]

@@ -1,0 +1,1645 @@
+# case_limits.yaml - the largest part a chip case holds, for
+# check_fp_package.py's passive_case_limit rule (read through
+# scripts/lib/case_limits.py).
+#
+#   capacitors  one row per (case, dielectric, voltage columns): `value` is
+#               the largest capacitance that maker's lineup chart offers in
+#               that case at those rated voltages. The quote is the chart's
+#               row (its label is the capacitance; the cells are thickness
+#               codes), so the voltage columns were read from the cells'
+#               x-positions on the page, not from the quote.
+#   resistors   one row per case: `power` is the rated power at 70 C, the
+#               larger option where the maker offers two (Yageo's "2 x
+#               standard power" reels). The quote writes it as a fraction,
+#               so it is checked by eye, not by --verify.
+#
+# Two makers only: Yageo and KEMET MLCC charts, and Yageo RC_L resistors
+# (whose 2x option is at or above Panasonic ERJ's rating in every case).
+# Murata, TDK and Samsung may list larger parts in some cells, so the rule
+# takes the larger maker per cell and flags only a part well above it.
+# `scripts/part_rows.py --verify reference/case_limits.yaml --pdf ...` finds
+# each quote on its page. Add a row only with its PDF in hand.
+capacitors:
+- case: '0201'
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  - 16
+  value: 100n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 100 nF BA BA BA CA CA CA CA CA
+    fields:
+    - value
+- case: '0201'
+  dielectric: X7R
+  v:
+  - 25
+  value: 10n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 10 nF BA BA BA BA CA CA CA CA CA CA
+    fields:
+    - value
+- case: '0201'
+  dielectric: X7R
+  v:
+  - 50
+  value: 1.0n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 1.0 nF BA BA BA BA BA CA CA CA CA CA CA
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 6.3
+  value: 2.2u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 2.2 µF CD
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 10
+  value: 1u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 1 µF CA CA
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 16
+  - 25
+  value: 220n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 220 nF CA CA CA CA
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 50
+  value: 100n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 100 nF BA BA BA CA CA CA CA CA
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 100
+  value: 10n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 4
+    quote: 10 nF BA BA BA BA CA CA CA CA CA CA
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  value: 0.47u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 0.47 µF 474 J K M BB¹ BB¹ CF
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 16
+  - 25
+  value: 0.22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 0.22 µF 224 J K M BB 1 BB1 BB1 BB1
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 50
+  value: 22000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 4
+    quote: 22000 pF 223 J K M BB BB BB BB BB
+    fields:
+    - value
+- case: '0402'
+  dielectric: X7R
+  v:
+  - 100
+  value: 10000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 4
+    quote: 10000 pF 103 J K M BB BB BB BB BB BB
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  - 16
+  - 25
+  value: 2.2u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 5
+    quote: 2.2 µF DA DA DC DC
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 50
+  value: 1u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 5
+    quote: 1 µF DA DA DA DA DB
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 100
+  value: 100n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 5
+    quote: 100 nF DA DA DA DA DA DA
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 6.3
+  value: 4.7u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 4.7 µF 475 J K M CK 1 DH
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 10
+  value: 2.2u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 2.2 µF 225 J K M CG¹ CG¹ DH
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 16
+  - 25
+  value: 1u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 1 µF 105 J K M CG CG CG CJ¹ DH
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 50
+  value: 0.22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 0.22 µF 224 J K M BB 1 BB1 BB1 BB1 CF CF CF CF CJ
+    fields:
+    - value
+- case: '0603'
+  dielectric: X7R
+  v:
+  - 100
+  value: 0.1u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 0.1 µF 104 J K M BB BB BB BB¹ CJ CJ CJ CJ CJ CJ
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  - 16
+  value: 10u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 6
+    quote: 10 µF EB EB EB
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 25
+  value: 4.7u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 6
+    quote: 4.7 µF EB EB EB EB
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 50
+  value: 2.2u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 6
+    quote: 2.2 µF EB EB EB EB EB
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 100
+  value: 1u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 6
+    quote: 1 µF EB EB EB EB EB EB
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 10 µF 106 J K M DH¹ DH¹ EH EH EH EH
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 16
+  - 25
+  value: 4.7u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 4.7 µF 475 J K M CK 1 DH DH DH DH
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 35
+  - 50
+  value: 2.2u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 2.2 µF 225 J K M CG¹ CG¹ DH DH DH DH¹ DH¹ DH¹
+    fields:
+    - value
+- case: 0805
+  dielectric: X7R
+  v:
+  - 100
+  value: 0.27u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 0.27 µF 274 J K M CF CF CF DP DP DP DP DP DP DG
+    fields:
+    - value
+- case: '1206'
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  - 16
+  value: 22u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 7
+    quote: 22 µF FC FC FD
+    fields:
+    - value
+- case: '1206'
+  dielectric: X7R
+  v:
+  - 25
+  - 50
+  value: 10u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 7
+    quote: 10 µF FC FC FC FC FD
+    fields:
+    - value
+- case: '1206'
+  dielectric: X7R
+  v:
+  - 100
+  value: 4.7u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 7
+    quote: 4.7 µF FC FC FC FC FC FD
+    fields:
+    - value
+- case: '1206'
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  value: 22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 22 µF 226 J K M EH¹ EH¹
+    fields:
+    - value
+- case: '1206'
+  dielectric: X7R
+  v:
+  - 16
+  - 25
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 10 µF 106 J K M DH¹ DH¹ EH EH EH EH
+    fields:
+    - value
+- case: '1206'
+  dielectric: X7R
+  v:
+  - 35
+  - 50
+  value: 4.7u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 4.7 µF 475 J K M CK 1 DH DH DH DH EH EH EH EH EH¹ EH¹
+    fields:
+    - value
+- case: '1206'
+  dielectric: X7R
+  v:
+  - 100
+  value: 1u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 5
+    quote: 1 µF 105 J K M CG CG CG CJ¹ DH DH DH DH DH¹ DH¹ EP EP EP EP EH EH EH
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  value: 47u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 8
+    quote: 47 µF GC GC
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 16
+  - 25
+  value: 22u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 8
+    quote: 22 µF GC GC GC GC
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 50
+  value: 10u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 8
+    quote: 10 µF GB GB GB GB GD
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 100
+  value: 4.7u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X7R_6.3V-to-250V (V.29)
+    sha256: c0cecd6c43bc22efe714f99be02b8ffcf5613a8b21ebc74cb1063509d7833cb0
+    page: 8
+    quote: 4.7 µF GB GB GB GB GD GD
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 6.3
+  - 10
+  value: 47u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 7
+    quote: 47 µF 476 FS¹ FS¹
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 16
+  - 25
+  value: 22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 7
+    quote: 22 µF 226 FS FS FS¹ FS¹
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 50
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 7
+    quote: 10 µF 106 J K M FT¹ FT¹ FT¹ GA¹ FS¹ GK
+    fields:
+    - value
+- case: '1210'
+  dielectric: X7R
+  v:
+  - 100
+  value: 2.2u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1002 X7R SMD
+    sha256: d8e6ca6631862e31a19b90b6cfe13f1b20153c2efd6c8e30f1a5d5ba147aa908
+    page: 7
+    quote: 2.2 µF 225 J K M FJ FJ FJ FJ FY FY¹ GO GO GO¹
+    fields:
+    - value
+- case: '0201'
+  dielectric: X5R
+  v:
+  - 4
+  value: 4.7u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 4.7 µF BD CC CC CC CC
+    fields:
+    - value
+- case: '0201'
+  dielectric: X5R
+  v:
+  - 6.3
+  - 10
+  value: 2.2u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 2.2 µF BC BC BC CA CA CA CD CD
+    fields:
+    - value
+- case: '0201'
+  dielectric: X5R
+  v:
+  - 16
+  value: 470n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 470 nF BA BA BC BC CA CA CB CB CB
+    fields:
+    - value
+- case: '0201'
+  dielectric: X5R
+  v:
+  - 25
+  value: 220n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 220 nF BA BA BA BA BA CA CA CA CA CA
+    fields:
+    - value
+- case: '0201'
+  dielectric: X5R
+  v:
+  - 50
+  value: 1.0n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 4
+    quote: 1.0 nF BA BA BA BA BA
+    fields:
+    - value
+- case: '0201'
+  dielectric: X5R
+  v:
+  - 4
+  - 6.3
+  value: 0.10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 0.10 µF 104 K M AB AB BB
+    fields:
+    - value
+- case: '0201'
+  dielectric: X5R
+  v:
+  - 10
+  - 16
+  value: 10000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 10,000 pF 103 K M AB AB AB AB BB
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 4
+  - 6.3
+  value: 22u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 22 µF CD CD
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 10
+  value: 10u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 10 µF CD CD CD
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 16
+  value: 4.7u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 4.7 µF BD CC CC CC CC
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 25
+  value: 2.2u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 2.2 µF BC BC BC CA CA CA CD CD
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 50
+  value: 1.0u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 5
+    quote: 1.0 µF BB BB BB BC CA CA CA CA CD
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 4
+  - 6.3
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 10 µF 106 BF¹ BF¹ CG¹
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 10
+  value: 2.2u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 2.2 µF 225 K M BB BB BB¹ CG
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 16
+  value: 1.0u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 1.0 µF 105 K M BB BB BB BB CG
+    fields:
+    - value
+- case: '0402'
+  dielectric: X5R
+  v:
+  - 25
+  value: 0.10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 0.10 µF 104 K M AB AB BB BB BB BB BB CG
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 4
+  - 6.3
+  value: 47u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 6
+    quote: 47 µF DC DC EB EB
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 10
+  value: 22u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 6
+    quote: 22 µF DC DC EB EB EB EB
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 16
+  - 25
+  value: 10u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 6
+    quote: 10 µF DB DC DC DC
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 50
+  value: 2.2u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 6
+    quote: 2.2 µF DA DA DA DB DC
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 4
+  - 6.3
+  value: 22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 22 µF 226 CF¹ CF¹ DG DG DH¹
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 10
+  - 16
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 10 µF 106 BF¹ BF¹ CG¹ CG¹ CF¹ CK
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 25
+  value: 1.0u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 1.0 µF 105 K M BB BB BB BB CG CG CG CG CJ
+    fields:
+    - value
+- case: '0603'
+  dielectric: X5R
+  v:
+  - 50
+  - 100
+  value: 10000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 10,000 pF 103 K M AB AB AB AB BB BB BB BB CG CG CG CG CG CG CG
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 6.3
+  - 10
+  value: 47u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 6
+    quote: 47 µF DC DC EB EB
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 16
+  - 25
+  value: 22u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 6
+    quote: 22 µF DC DC EB EB EB EB
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 50
+  value: 4.7u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 6
+    quote: 4.7 µF DA DA DB DB
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 4
+  - 6.3
+  value: 47u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 47 µF 476 DH¹ DH¹
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 10
+  value: 22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 22 µF 226 CF¹ CF¹ DG DG DH¹
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 16
+  - 25
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 10 µF 106 BF¹ BF¹ CG¹ CG¹ CF¹ CK DU DU DU DU DH
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 50
+  value: 1.0u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 1.0 µF 105 K M BB BB BB BB CG CG CG CG CJ DH DH DH DH DG DH
+    fields:
+    - value
+- case: 0805
+  dielectric: X5R
+  v:
+  - 100
+  value: 0.10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 5
+    quote: 0.10 µF 104 K M AB AB BB BB BB BB BB CG CG CG CG CG DG
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 6.3
+  value: 100u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 100 µF FD GD GD GD
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 10
+  - 16
+  value: 47u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 47 µF FC FC FD GC GC GC
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 25
+  value: 22u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 22 µF FC FC FC FD GC GC GC GD
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 50
+  value: 10u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 10 µF FC FC FC FC FD GB GB GB GB GD
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 6.3
+  value: 100u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 100 µF 107 K M EH¹ FS¹ FS¹ FS¹
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 10
+  value: 47u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 47 µF 476 K M EH¹ EH¹ FS¹ FS¹ FS¹
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 16
+  value: 22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 22 µF 226 K M EH EH¹ EH¹ FS FS FS FS
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 25
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 10 µF 106 K M EH EH EH EH FT FT FT FT FS FS GK
+    fields:
+    - value
+- case: '1206'
+  dielectric: X5R
+  v:
+  - 50
+  value: 4.7u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 4.7 µF 475 K M EH EH EH EH EH FT FT FT FT
+    fields:
+    - value
+- case: '1210'
+  dielectric: X5R
+  v:
+  - 6.3
+  value: 220u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 220 µF GD
+    fields:
+    - value
+- case: '1210'
+  dielectric: X5R
+  v:
+  - 10
+  - 16
+  value: 100u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 100 µF FD GD GD GD
+    fields:
+    - value
+- case: '1210'
+  dielectric: X5R
+  v:
+  - 25
+  value: 22u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 22 µF FC FC FC FD GC GC GC GD
+    fields:
+    - value
+- case: '1210'
+  dielectric: X5R
+  v:
+  - 50
+  value: 10u
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GPHC_X5R_4V-to-50V (V.32)
+    sha256: 582ca3b22551f00e1646926dbf8f657d60571d7c53c63b193e37a1fd85a9934d
+    page: 7
+    quote: 10 µF FC FC FC FC FD GB GB GB GB GD
+    fields:
+    - value
+- case: '1210'
+  dielectric: X5R
+  v:
+  - 6.3
+  - 10
+  - 16
+  value: 100u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 100 µF 107 K M EH¹ FS¹ FS¹ FS¹
+    fields:
+    - value
+- case: '1210'
+  dielectric: X5R
+  v:
+  - 25
+  value: 22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 22 µF 226 K M EH EH¹ EH¹ FS FS FS FS
+    fields:
+    - value
+- case: '1210'
+  dielectric: X5R
+  v:
+  - 35
+  - 50
+  value: 10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1006 X5R SMD
+    sha256: 9847c2d168995a12120b7d3c0c9b94a0f85d4ca669bc47618949ca87ec103b76
+    page: 6
+    quote: 10 µF 106 K M EH EH EH EH FT FT FT FT FS FS GK
+    fields:
+    - value
+- case: '0201'
+  dielectric: C0G
+  v:
+  - 25
+  - 50
+  - 100
+  value: 100p
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GP_NP0_16V-to-250V (V.22)
+    sha256: fab457c0c995f44e07c258ed96f7fef55aff3112de8edf3905d2e2a8abbb63c8
+    page: 4
+    quote: 100 pF 0.3±0.03 0.3±0.03 0.3±0.03
+    fields:
+    - value
+- case: '0201'
+  dielectric: C0G
+  v:
+  - 10
+  - 16
+  - 25
+  value: 100p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 5
+    quote: 100 pF 101 F G J K M AB² AB² AB²
+    fields:
+    - value
+- case: '0402'
+  dielectric: C0G
+  v:
+  - 16
+  - 25
+  - 50
+  - 100
+  value: 1.0n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GP_NP0_16V-to-250V (V.22)
+    sha256: fab457c0c995f44e07c258ed96f7fef55aff3112de8edf3905d2e2a8abbb63c8
+    page: 6
+    quote: 1.0 nF 0.5± 0.05 0.5± 0.05 0.5± 0.05 0.5± 0.05
+    fields:
+    - value
+- case: '0402'
+  dielectric: C0G
+  v:
+  - 10
+  - 16
+  - 25
+  value: 2200p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 2,200 pF 222 F G J K M BB BB BB
+    fields:
+    - value
+- case: '0402'
+  dielectric: C0G
+  v:
+  - 50
+  value: 1500p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 1,500 pF 152 F G J K M BB BB BB BB
+    fields:
+    - value
+- case: '0402'
+  dielectric: C0G
+  v:
+  - 100
+  value: 1000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 1,000 pF 102 F G J K M BB BB BB BB BB
+    fields:
+    - value
+- case: '0603'
+  dielectric: C0G
+  v:
+  - 25
+  - 50
+  - 100
+  value: 10n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GP_NP0_16V-to-250V (V.22)
+    sha256: fab457c0c995f44e07c258ed96f7fef55aff3112de8edf3905d2e2a8abbb63c8
+    page: 7
+    quote: 10 nF 0.8± 0.1 0.8± 0.1 0.8± 0.1
+    fields:
+    - value
+- case: '0603'
+  dielectric: C0G
+  v:
+  - 10
+  - 16
+  - 25
+  value: 15000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 15,000 pF 153 F G J K M CF CF CF
+    fields:
+    - value
+- case: '0603'
+  dielectric: C0G
+  v:
+  - 50
+  value: 6800p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 6,800 pF 682 F G J K M CF CF CF CF
+    fields:
+    - value
+- case: '0603'
+  dielectric: C0G
+  v:
+  - 100
+  value: 4700p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 4,700 pF 472 F G J K M CF CF CF CF CF
+    fields:
+    - value
+- case: 0805
+  dielectric: C0G
+  v:
+  - 25
+  - 50
+  - 100
+  value: 10n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GP_NP0_16V-to-250V (V.22)
+    sha256: fab457c0c995f44e07c258ed96f7fef55aff3112de8edf3905d2e2a8abbb63c8
+    page: 10
+    quote: 10 nF 1.25± 0.2 1.25± 0.2 1.25± 0.2
+    fields:
+    - value
+- case: 0805
+  dielectric: C0G
+  v:
+  - 10
+  - 16
+  - 25
+  value: 47000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 47,000 pF 473 F G J K M DG DG DG
+    fields:
+    - value
+- case: 0805
+  dielectric: C0G
+  v:
+  - 50
+  value: 22000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 22,000 pF 223 F G J K M DP DP DP DF
+    fields:
+    - value
+- case: 0805
+  dielectric: C0G
+  v:
+  - 100
+  value: 15000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 15,000 pF 153 F G J K M CF CF CF DN DN DN DP DG
+    fields:
+    - value
+- case: '1206'
+  dielectric: C0G
+  v:
+  - 25
+  - 50
+  - 100
+  value: 100n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GP_NP0_16V-to-250V (V.22)
+    sha256: fab457c0c995f44e07c258ed96f7fef55aff3112de8edf3905d2e2a8abbb63c8
+    page: 10
+    quote: 100 nF 1.60± 0.2 1.60± 0.2 1.60± 0.2
+    fields:
+    - value
+- case: '1206'
+  dielectric: C0G
+  v:
+  - 10
+  - 16
+  - 25
+  value: 0.10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 0.10 µF 104 F G J K M EH EH EH
+    fields:
+    - value
+- case: '1206'
+  dielectric: C0G
+  v:
+  - 50
+  value: 82000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 82,000 pF 823 F G J K M EH EH EH EH
+    fields:
+    - value
+- case: '1206'
+  dielectric: C0G
+  v:
+  - 100
+  value: 47000p
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 6
+    quote: 47,000 pF 473 F G J K M DG DG DG EC EC EC EE EH
+    fields:
+    - value
+- case: '1210'
+  dielectric: C0G
+  v:
+  - 25
+  - 50
+  value: 47n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GP_NP0_16V-to-250V (V.22)
+    sha256: fab457c0c995f44e07c258ed96f7fef55aff3112de8edf3905d2e2a8abbb63c8
+    page: 11
+    quote: 47 nF 1.60± 0.2 1.60± 0.2
+    fields:
+    - value
+- case: '1210'
+  dielectric: C0G
+  v:
+  - 100
+  value: 22n
+  maker: Yageo
+  cite:
+  - doc: Yageo UPY-GP_NP0_16V-to-250V (V.22)
+    sha256: fab457c0c995f44e07c258ed96f7fef55aff3112de8edf3905d2e2a8abbb63c8
+    page: 11
+    quote: 22 nF 1.60± 0.2 1.60± 0.2 1.60± 0.2
+    fields:
+    - value
+- case: '1210'
+  dielectric: C0G
+  v:
+  - 10
+  - 16
+  - 25
+  value: 0.22u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 8
+    quote: 0.22 µF 224 F G J K M FK FK FK GK
+    fields:
+    - value
+- case: '1210'
+  dielectric: C0G
+  v:
+  - 50
+  value: 0.15u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 8
+    quote: 0.15 µF 154 F G J K M FH FH FH FM GD GN
+    fields:
+    - value
+- case: '1210'
+  dielectric: C0G
+  v:
+  - 100
+  value: 0.10u
+  maker: KEMET
+  cite:
+  - doc: KEMET C1003 C0G SMD
+    sha256: 02d179914aeb9585eb2229ba8e18ef9d6b01c77c056de2af295d6950a2a5cc0d
+    page: 8
+    quote: 0.10 µF 104 F G J K M FE FE FE FG FM
+    fields:
+    - value
+resistors:
+- case: '0201'
+  power: 0.05
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC0201=1/20W
+    fields: []
+- case: '0402'
+  power: 0.125
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC0402=1/16W, 1/8W
+    fields: []
+- case: '0603'
+  power: 0.2
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC0603=1/10W, 1/5W
+    fields: []
+- case: 0805
+  power: 0.25
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC0805=1/8W, 1/4W
+    fields: []
+- case: '1206'
+  power: 0.5
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC1206=1/4W, 1/2W
+    fields: []
+- case: '1210'
+  power: 0.5
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC1210=1/2W
+    fields: []
+- case: '2010'
+  power: 0.75
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC2010=3/4W
+    fields: []
+- case: '2512'
+  power: 2.0
+  maker: Yageo RC_L
+  cite:
+  - doc: Yageo PYu-RC_Group_51_RoHS_L (V.14)
+    sha256: 7b6f0ae72708ca4b38126f84b5407a3e970a94cb60bc1a0afdaeb25a23d839bb
+    page: 7
+    quote: RC2512=1W, 2W
+    fields: []
+

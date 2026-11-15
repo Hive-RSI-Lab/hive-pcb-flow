@@ -16,6 +16,9 @@
 #            footprints are both known and not listed as mates is reported
 #            (mate_family_mismatch), as is a pair whose pad patterns do not
 #            overlay.
+#   gender - male (pins) or female (sockets); with row_pitch_mm (how far
+#            apart a 2-row part's rows are) it is what a stated mate (a pair
+#            with mate_standard, below) is judged against.
 #
 # How a declared pair is lined up (mount, in constraints.json mating_pairs):
 #   stack - the mate board sits over or under this one the same way up (a
@@ -38,26 +41,38 @@ families:
   - name: pin-header-2.54
     match: '^(PinHeader_\d+x\d+_P2\.54mm|HDR-TH_\d+P-P2\.54-V-M)'
     keyed: false
+    gender: male
+    row_pitch_mm: 2.54
     mates: [pin-socket-2.54, pin-header-2.54]
   - name: pin-socket-2.54
     match: '^(PinSocket_\d+x\d+_P2\.54mm|HDR-TH_\d+P-P2\.54-V-F)'
     keyed: false
+    gender: female
+    row_pitch_mm: 2.54
     mates: [pin-header-2.54]
   - name: pin-header-2.00
     match: '^PinHeader_\d+x\d+_P2\.00mm'
     keyed: false
+    gender: male
+    row_pitch_mm: 2.00
     mates: [pin-socket-2.00, pin-header-2.00]
   - name: pin-socket-2.00
     match: '^PinSocket_\d+x\d+_P2\.00mm'
     keyed: false
+    gender: female
+    row_pitch_mm: 2.00
     mates: [pin-header-2.00]
   - name: pin-header-1.27
     match: '^PinHeader_\d+x\d+_P1\.27mm'
     keyed: false
+    gender: male
+    row_pitch_mm: 1.27
     mates: [pin-socket-1.27, pin-header-1.27]
   - name: pin-socket-1.27
     match: '^PinSocket_\d+x\d+_P1\.27mm'
     keyed: false
+    gender: female
+    row_pitch_mm: 1.27
     mates: [pin-header-1.27]
   # shrouded and polarised families: the housing only takes the plug one way
   - name: idc-box-header
@@ -76,6 +91,34 @@ families:
     match: '^(Hirose_DF\d+|Samtec_|Panasonic_AXK|Hirose_BM\d+)'
     keyed: true
     mates: [board-to-board]
+
+# Mates stated without a mate board (#1124): a mating_pairs entry
+# {"ref": "Z101", "mate_standard": "zx-spectrum-edge"} names the part its
+# connector takes - a row here, or a family above (a 1x06 header on a lead
+# that ends in a socket: "pin-socket-2.54").
+#   mate_gender_mismatch - the connector and its stated mate have the same
+#                          gender (a socket on a socket) and the mate is not
+#                          one of the connector's family's mates
+#   mate_row_spacing     - a 2-row connector whose rows are not row_pitch_mm
+#                          apart (any one of a list), within overlay_tol_mm
+# pitch_mm, when set, must match the connector's pin pitch too
+# (mate_family_mismatch). Fill rows from the maker's drawing; say where.
+mate_standards:
+  - name: zx-spectrum-edge
+    title: ZX Spectrum expansion edge (28-way card-edge fingers, 0.1 in)
+    gender: male
+    pitch_mm: 2.54
+    # the socket's narrow (RT) or wide (RX) dip-solder rows
+    row_pitch_mm: [3.56, 5.08]
+    source: 'Sullins ABC series .100 in card edge datasheet: RT .140 in x .200 in, RX .200 in x .185 in dip solder'
+    url: 'https://mfgdatasheets.nlight.net/25-05846%20Sullins%20ABC18DRTH.pdf'
+  - name: raspberry-pi-pico
+    title: Raspberry Pi Pico on 0.1 in pin headers (2 x 20)
+    gender: male
+    pitch_mm: 2.54
+    row_pitch_mm: 17.78
+    source: 'Pico datasheet: one 0.1 in pitch wider than a standard 40-pin DIP (0.6 in rows), so 0.7 in'
+    url: 'https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf'
 
 # Standard headers whose mate is known without a mate board (MECH-05, one
 # board): a connector on this board's B.Cu faces down onto a mate lying below

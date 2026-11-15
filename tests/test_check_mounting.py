@@ -1,6 +1,6 @@
 """check_mounting: a big board with no mounting hole (#1088). Known answers
 on small planted-fault boards: the fault and its quiet twins (holes,
-declared, castellated, edge card, small board)."""
+declared, castellated, edge card, rail tabs, small board)."""
 from __future__ import annotations
 
 import json
@@ -123,6 +123,51 @@ def test_edge_card_fingers_pass(tmp_path):
             + fingers + ")\n")
     kinds, seen = _check(_board(tmp_path, 100, 60, card))
     assert kinds == [] and seen["mounts_by"]["by"] == "edge_card"
+
+
+def _tabbed(tmp_path, top, bottom, w=86.0, h=53.0, depth=1.0, name="t"):
+    """A w x h board whose long edges sit back by `depth` except at the
+    tabs: `top`/`bottom` are (x0, x1) runs that reach the outline's edge."""
+    def edge(y_out, y_in, tabs, rev):
+        pts = [(0.0, y_in)]
+        for x0, x1 in tabs:
+            pts += [(x0, y_in), (x0, y_out), (x1, y_out), (x1, y_in)]
+        pts.append((w, y_in))
+        return pts[::-1] if rev else pts
+    pts = edge(0.0, depth, top, False) + edge(h, h - depth, bottom, True)
+    segs = "".join(
+        f'(gr_line (start {a[0]} {a[1]}) (end {b[0]} {b[1]}) '
+        '(stroke (width 0.1) (type solid)) (layer "Edge.Cuts"))\n'
+        for a, b in zip(pts, pts[1:] + pts[:1]))
+    pcb = tmp_path / f"{name}.kicad_pcb"
+    pcb.write_text(
+        '(kicad_pcb (version 20241229) (generator "pcbnew")\n'
+        f'(general (thickness 1.6)) (paper "A4")\n{LAYERS}\n(setup)\n'
+        '(net 0 "") (net 1 "N1") (net 2 "GND")\n' + segs
+        + _part(40, 26) + ")\n", encoding="utf-8")
+    return pcb
+
+
+CORNER_TABS = [(2.0, 6.0), (80.0, 84.0)]   # icE1usb's: 4 x 1 mm at each end
+
+
+def test_mirrored_edge_tabs_mount_by_rail(tmp_path):
+    kinds, seen = _check(_tabbed(tmp_path, CORNER_TABS, CORNER_TABS))
+    assert kinds == []
+    assert seen["mounts_by"]["by"] == "rail" and seen["mounts_by"]["tabs"] == 4
+
+
+@pytest.mark.parametrize("top,bottom,depth", [
+    (CORNER_TABS, [], 1.0),                        # tabs on one edge only
+    (CORNER_TABS, [(5.0, 9.0), (77.0, 81.0)], 1.0),  # not mirrored
+    ([(2.0, 6.0)], [(2.0, 6.0)], 1.0),             # one tab per edge
+    ([(2.0, 30.0), (56.0, 84.0)],) * 2 + (1.0,),   # wide feet, not tabs
+    (CORNER_TABS, CORNER_TABS, 5.0),               # 5 mm deep: lugs, not tabs
+])
+def test_tabs_that_are_not_a_rail_still_warn(tmp_path, top, bottom, depth):
+    # the quiet twins: the rail board with one thing about its tabs changed
+    assert _check(_tabbed(tmp_path, top, bottom, depth=depth))[0] \
+        == ["no_mounting_holes"]
 
 
 def test_mounts_by_list_matches_the_lint():

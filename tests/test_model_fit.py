@@ -340,3 +340,64 @@ def test_lib_pull_fits_the_pulled_footprints_only(tmp_path):
     assert rep["changed"] == 1
     assert [f["footprint"] for f in rep["fixed"]] == ["SOT-23"]
     assert _xf(other)[0] == (1.0, 0.0, 0.0)
+
+
+# ------------------------------------------- stated mounting height (#1191)
+
+# the 1x3 header's body raised on its pins to 5 mm (a standoff part, minuet
+# U1's shape): underside at z 5, lead tips 3 mm below the board top
+RAISED = HDR[:3] + [(-1.27, -6.35, 5.0, 1.27, 1.27, 8.0)]
+
+
+def _heights(tmp_path, **entry):
+    import json
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"mechanical": {"mount_heights": {"J1": entry}}}))
+    return str(f)
+
+
+def test_a_model_off_its_stated_mount_height_is_found(tmp_path):
+    pcb = _board(tmp_path, _wrl(tmp_path / "r.wrl", RAISED))
+    payload, _ = cmf.run(["--pcb", str(pcb), "--constraints", _heights(
+        tmp_path, height_mm=6.0, datum="body_underside", tol_mm=0.3,
+        source="drawing: 6 mm spacer")])
+    (v,) = payload["violations"]
+    assert (v["kind"], v["severity"], v["refs"]) == \
+        ("model_mount_height", "error", ["J1"])
+    assert v["measured_mm"] == pytest.approx(5.0, abs=0.01)
+    assert v["height_mm"] == 6.0 and v["datum"] == "body_underside"
+    payload, _ = cmf.run(["--pcb", str(pcb), "--constraints", _heights(
+        tmp_path, height_mm=0.8, datum="lead_protrusion", tol_mm=0.2,
+        source="drawing")])
+    (v,) = payload["violations"]
+    assert v["kind"] == "model_mount_height"
+    assert v["measured_mm"] == pytest.approx(1.4, abs=0.01)
+
+
+def test_a_model_at_its_stated_mount_height_or_unstated_is_quiet(tmp_path):
+    pcb = _board(tmp_path, _wrl(tmp_path / "r.wrl", RAISED))
+    payload, _ = cmf.run(["--pcb", str(pcb)])
+    assert payload["status"] == "pass" and "mount_heights_ok" not in payload
+    for datum, h in (("body_underside", 5.2), ("lead_protrusion", 1.4)):
+        payload, _ = cmf.run(["--pcb", str(pcb), "--constraints", _heights(
+            tmp_path, height_mm=h, datum=datum, tol_mm=0.3, source="drawing")])
+        assert payload["status"] == "pass", payload["violations"]
+        assert payload["mount_heights_ok"] == ["J1"]
+    # no model on the board for it, or a model with no flat underside: listed
+    payload, _ = cmf.run(["--pcb", str(_board(tmp_path, tmp_path / "gone.wrl")),
+                          "--constraints", _heights(
+                              tmp_path, height_mm=5, source="drawing")])
+    assert payload["status"] == "pass" and "J1" in payload[
+        "mount_heights_not_judged"]
+    # a body with no flat underside above the seating band (a sloped one)
+    tri = [[(0, 0, 0.0), (4, 0, 3.0), (0, 4, 3.0)],
+           [(4, 0, 3.0), (4, 4, 6.0), (0, 4, 3.0)]]
+    assert cmf.body_underside(tri) is None
+
+
+def test_a_malformed_mount_height_is_an_error(tmp_path):
+    for bad in ({"height_mm": "tall", "source": "d"},
+                {"height_mm": 5, "datum": "top", "source": "d"},
+                {"height_mm": 5}):
+        with pytest.raises(cmf.checklib.CheckError):
+            cmf.mount_heights({"mechanical": {"mount_heights": {"J1": bad}}})

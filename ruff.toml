@@ -1,0 +1,22 @@
+# `pcb-flow lint` and CI's lint step. The selection starts at the rules the code
+# already passes (#1149), so CI is green on old code; widen it one rule at a time,
+# fixing that rule's hits in the same PR.
+#
+# Not selected yet, with today's hit counts on scripts, bin and tests:
+#   F401 unused import 43, F541 f-string without placeholders 16,
+#   F841 unused local 14, E731 lambda assignment 24, BLE001 blind except 72,
+#   S310 url open 12, PLC0415 import inside a function 1122 (mostly deliberate:
+#   lazy imports keep a check's start fast).
+target-version = "py314"
+line-length = 120
+
+[lint]
+select = [
+    "F",     # pyflakes: undefined names, redefinitions, bad format strings
+    "E402",  # import below code (the BLAS thread pins carry a noqa)
+    "E9",    # syntax and io errors
+    "E71",   # comparisons to None/True and `not in`
+    "W6",    # deprecated escapes
+    "PLE",   # pylint errors
+]
+ignore = ["F401", "F541", "F841"]

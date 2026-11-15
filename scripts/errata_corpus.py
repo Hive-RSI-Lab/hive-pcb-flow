@@ -38,8 +38,9 @@ record of its LCSC/JLC number or of the exact part its MPN names), check_thermal
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
 copy of it. A catch for another script is reported as not run. A board
-older than KiCad 6 (`module` footprints, which geom doesn't read) is first
-brought to the current format by `kicad-cli pcb upgrade` on a copy in the run
+older than KiCad 8 (KiCad 5's `module` footprints, which geom doesn't read,
+or KiCad 6/7's `fp_text reference`, which placelib reads no reference from,
+#1123) is first brought to the current format by `kicad-cli pcb upgrade` on a copy in the run
 dir, as intake does to every board; the board checks read that copy.
 
 A catch may give `constraints: {rev_a: {...}, rev_b: {...}}`: what that
@@ -52,6 +53,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -74,9 +76,42 @@ def cache_root(arg: str | None) -> Path:
     return c
 
 
+def sealed_files(path: Path = MANIFEST) -> dict[int, Path]:
+    """Sealed holdout rounds: `holdout/round-N.yaml` at the repo's top.
+
+    The folder sits outside `reference/` and `docs/`, so a grep there for a
+    part or a check doesn't reach a sealed defect.
+
+    A round stays in its own file while its defects are unread by rule
+    builders; builders open nothing under `holdout/` (see "A new holdout
+    round"). Unsealing a round moves its boards into the manifest."""
+    out = {}
+    for f in sorted((path.parent.parent / "holdout").glob("round-*.yaml")):
+        m = re.fullmatch(r"round-(\d+)\.yaml", f.name)
+        if m:
+            out[int(m.group(1))] = f
+    return out
+
+
+def _raw(path: Path, section: str) -> list[dict]:
+    """A section of the manifest, plus every sealed round for `holdout`."""
+    boards = list(yaml.safe_load(path.read_text(encoding="utf-8")).get(section) or [])
+    if section != "holdout":
+        return boards
+    for n, f in sealed_files(path).items():
+        sealed = yaml.safe_load(f.read_text(encoding="utf-8")).get("holdout") or []
+        for b in sealed:
+            r = (b.get("swept") or {}).get("round")
+            if r != n:
+                raise SystemExit(f"{b.get('id')}: in {f.name} but swept round {r}")
+        boards += sealed
+    return boards
+
+
 def load(path: Path = MANIFEST, section: str = "boards") -> list[dict]:
-    """One set of the manifest: `boards` (training) or `holdout`."""
-    boards = yaml.safe_load(path.read_text(encoding="utf-8")).get(section) or []
+    """One set of the manifest: `boards` (training) or `holdout`, the
+    holdout including the sealed rounds under `holdout/`."""
+    boards = _raw(path, section)
     for b in boards:
         for r in ("rev_a", "rev_b"):
             if r in b and "commit" in b[r] and len(str(b[r]["commit"])) != 40:
@@ -143,10 +178,15 @@ def matches(violation: dict, catch: dict) -> bool:
     return not refs or bool(refs & set(violation.get("refs") or ()))
 
 
+# KiCad 8's board format, the first with footprint fields as `property`
+KICAD8_PCB = 20240108
+
+
 def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     """The board a check reads: the revision's own file, or, for one older
-    than KiCad 6 (a `module`-era file, which geom reads no footprints from),
-    a copy `kicad-cli pcb upgrade` brought to the current format, as intake
+    than KiCad 8 (a `module`-era file, which geom reads no footprints from,
+    or a KiCad 6/7 one, whose references are `fp_text` that placelib and
+    check_connector_fit skip every footprint over, #1123), a copy `kicad-cli pcb upgrade` brought to the current format, as intake
     does to every board it takes in. The copy sits in the run dir and is
     reused while the source is unchanged."""
     import hashlib
@@ -154,7 +194,7 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     src = repo / b[rev]["pcb"]
     head = src.read_text(encoding="utf-8", errors="replace")[:400]
     m = re.search(r"\(version\s+(\d+)\)", head)
-    if m and int(m.group(1)) >= 20211014:  # KiCad 6's first board format
+    if m and int(m.group(1)) >= KICAD8_PCB:
         return src
     dest = empty.parent / f"{rev}-upgraded.kicad_pcb"
     stamp = dest.with_suffix(".src")
@@ -233,6 +273,11 @@ def _check_fp_package(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--live"]
 
 
+def _check_fp_geometry(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    return ["check_fp_geometry.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--live"]
+
+
 def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board alone: with no thermal entry it screens the power ICs
     reference/thermal_parts.yaml knows (#884)."""
@@ -288,12 +333,37 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_current": _check_current, "check_straps": _check_straps,
            "check_bom_sync": _check_bom_sync,
            "check_fp_package": _check_fp_package,
+           "check_fp_geometry": _check_fp_geometry,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
            "check_pinouts": _check_pinouts, "check_esd": _check_esd,
            "check_wicking": _check_wicking,
            "check_mounting": _check_mounting,
            "dfm": _dfm}
+
+
+class CheckCrashed(SystemExit):
+    """A check that wrote no report, or a report whose status is "error": its
+    return code, its error and the tail of its output ride along, so a crash
+    is never read as "no finding" (#1189). A check under checklib's contract
+    prints its error JSON on stdout with exit 2 and leaves stderr empty."""
+
+    TAIL = 20
+
+    def __init__(self, msg: str, rc: int | None, stderr: str | None,
+                 stdout: str | None = None):
+        self.rc = rc
+        self.check_error = None
+        for ln in reversed((stdout or "").splitlines()):
+            try:
+                self.check_error = json.loads(ln).get("error")
+                break
+            except (ValueError, AttributeError):
+                continue
+        self.tail = (stderr or "").rstrip("\n").splitlines()[-self.TAIL:]
+        super().__init__(f"{msg} (rc {rc})" + (
+            f": {self.check_error}" if self.check_error else "") + "".join(
+            f"\n  {ln}" for ln in self.tail))
 
 
 def audit(cache: Path, b: dict, rev: str, script: str,
@@ -307,14 +377,29 @@ def audit(cache: Path, b: dict, rev: str, script: str,
                                   .encode()).hexdigest()[:8]
     out = cache / "runs" / b["id"] / f"{rev}-{script}{tag}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
+    # a report left by an earlier run must not stand in for this one
+    out.unlink(missing_ok=True)
     empty = out.parent / f"constraints{tag}.json"
     empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
     cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b, rev), empty)
-    subprocess.run([sys.executable, str(SCRIPTS / cmd), *args, "--out", str(out)],
-                   capture_output=True, text=True, timeout=900)
+    try:
+        p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
+                            "--out", str(out)],
+                           capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired as e:
+        err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) \
+            else e.stderr
+        raise CheckCrashed(f"{b['id']} {rev}: {script} timed out after 900 s",
+                           None, err)
     if not out.is_file():
-        raise SystemExit(f"{b['id']} {rev}: {script} wrote no report")
-    return json.loads(out.read_text(encoding="utf-8")).get("violations", [])
+        raise CheckCrashed(f"{b['id']} {rev}: {script} wrote no report",
+                           p.returncode, p.stderr, p.stdout)
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    if rep.get("status") == "error":
+        raise CheckCrashed(f"{b['id']} {rev}: {script} reported an error",
+                           p.returncode, p.stderr,
+                           json.dumps({"error": rep.get("error")}))
+    return rep.get("violations", [])
 
 
 def _key(v: dict) -> tuple:
@@ -333,6 +418,11 @@ def sweep(cache: Path, b: dict) -> dict:
             continue
         try:
             a, z = (audit(cache, b, rev, script) for rev in ("rev_a", "rev_b"))
+        except CheckCrashed as e:
+            res[script] = {"error": str(e).splitlines()[0][:300], "rc": e.rc,
+                           "check_error": e.check_error,
+                           "stderr_tail": e.tail}
+            continue
         except (SystemExit, subprocess.SubprocessError, OSError) as e:
             res[script] = {"error": str(e)[:300]}
             continue
@@ -360,7 +450,15 @@ def run(cache: Path, b: dict) -> dict:
             cons = (c.get("constraints") or {}).get(rev) or {}
             key = (rev, c["script"], json.dumps(cons, sort_keys=True))
             if key not in found:
-                found[key] = audit(cache, b, rev, c["script"], cons)
+                try:
+                    found[key] = audit(cache, b, rev, c["script"], cons)
+                except CheckCrashed as e:
+                    found[key] = e
+            if isinstance(found[key], CheckCrashed):
+                e = found[key]
+                hit = {"crashed": c["script"], "error": str(e).splitlines()[0][:300],
+                       "rc": e.rc, "check_error": e.check_error}
+                break
             hit[rev] = any(matches(v, c) for v in found[key])
         res[d["id"]] = {"ran": True, **hit}
     (cache / "runs" / b["id"]).mkdir(parents=True, exist_ok=True)
@@ -376,6 +474,8 @@ def outcome(d: dict, r: dict | None) -> str:
         return f"{how}, since {d['caught_by']}"
     if not r or not r.get("ran"):
         return f"{d['verdict']} (not run here)"
+    if r.get("crashed"):
+        return f"crashed: {r['crashed']}"
     if r["rev_a"] and not r["rev_b"]:
         return "caught on rev A, gone on rev B"
     if r["rev_a"]:
@@ -434,10 +534,12 @@ round, pinned and swept before those rules are:
    revision fixes a defect the designer's own errata quote, both revisions
    pinned to a commit, and no repository an earlier round or the training
    set holds.
-2. Each goes under `holdout:` with `swept: {flow: SHA, date, round: N}`,
-   SHA being main as it stands, and its defects with the designer's quote,
+2. Each goes in the round's own sealed file, `holdout/round-N.yaml`
+   (a `holdout:` list), with `swept: {flow: SHA, date, round: N}`, SHA
+   being main as it stands, and its defects with the designer's quote,
    before anyone reads the findings. `errata_corpus.py sweep ID...` runs
-   every check on both revisions.
+   every check on both revisions; `load` merges the sealed files, so
+   `run` and `table` see them too.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board
@@ -447,11 +549,44 @@ round, pinned and swept before those rules are:
    blind. Round N is known once read: the next round of rules gets round
    N+1.
 5. Add the round's misses to `docs/miss-taxonomy.md`, one class per check,
-   and re-rank it: the next rules go to the top classes.
+   and re-rank it: the next rules go to the top classes. While the round is
+   sealed, its member lines go in `holdout/round-N-members.md`, and the
+   taxonomy says only how many members each class has from it.
+
+**Keeping a sealed round blind.** Until a round is unsealed, its defects
+live only in the repo's top `holdout/` folder: `holdout/round-N.yaml`,
+`holdout/round-N-members.md` and `holdout/round-N-errata.md` (written by
+`table`). It is outside `reference/` and `docs/`, so a grep there for a part
+or a check doesn't reach them. Rule builders open none of these, nor the round's
+boards or errata upstream, and their briefs quote only the taxonomy's
+Ranked table. Only the round's scorers read them. `tests/test_holdout_sealed.py`
+fails if a sealed defect id appears in any other tracked file. Unsealing a
+round (when a newer round replaces it as the blind test) moves its boards
+into `reference/errata_corpus.yaml` and its members into the taxonomy.
 """
 
 
-def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None) -> str:
+SEALED_NOTE = (
+    "Sealed: its boards and defects are in `holdout/round-{r}-errata.md`,"
+    " for the round's scorers only. Rule builders don't open it, or the"
+    " round's boards and errata; see \"A new holdout round\".")
+
+
+def sealed_table(cache: Path, holdout: list[dict], r: int) -> str:
+    """The per-board section of a sealed round, kept out of the main doc."""
+    lines = [f"# Holdout round {r} (sealed, scorers only)", "",
+             "Rule builders: stop here. This file names the round's defects, and",
+             "a rule written after reading it is no longer tested by the round.",
+             "Written by `bin/pcb-flow errata_corpus table` from",
+             f"`holdout/round-{r}.yaml`.", ""]
+    for b in holdout:
+        if b["swept"]["round"] == r:
+            lines += _board_rows(cache, b, True)
+    return "\n".join(lines)
+
+
+def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None,
+          sealed: set[int] | frozenset[int] = frozenset()) -> str:
     holdout = holdout or []
     lines = ["# The real-errata corpus", "",
              "Public boards whose next revision fixed a defect the first one shipped with,",
@@ -480,6 +615,9 @@ def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None) ->
         lines += _board_rows(cache, b, False)
     for r in rounds:
         lines += [f"## Holdout round {r}", ""]
+        if r in sealed:
+            lines += [SEALED_NOTE.format(r=r), ""]
+            continue
         for b in holdout:
             if b["swept"]["round"] == r:
                 lines += _board_rows(cache, b, True)
@@ -497,19 +635,33 @@ def main(argv: list[str] | None = None) -> int:
     cache = cache_root(a.cache)
     man = Path(a.manifest)
     if a.cmd == "table":
-        Path(a.out).write_text(table(cache, load(man), load(man, "holdout")),
-                               encoding="utf-8")
+        holdout = load(man, "holdout")
+        sealed = set(sealed_files(man))
+        out = Path(a.out)
+        out.write_text(table(cache, load(man), holdout, sealed), encoding="utf-8")
+        for r in sorted(sealed):
+            f = out.parent.parent / "holdout" / f"round-{r}-errata.md"
+            f.parent.mkdir(exist_ok=True)
+            f.write_text(sealed_table(cache, holdout, r), encoding="utf-8")
         return 0
     if a.cmd == "sweep":
         # unvalidated: a holdout board is fetched and swept before its
         # defects are judged, so before it has its blind verdicts
-        raw = yaml.safe_load(man.read_text(encoding="utf-8")).get("holdout") or []
+        raw = _raw(man, "holdout")
+        pairs, errored = 0, []
         for b in raw:
             if a.ids and b["id"] not in a.ids:
                 continue
             fetch(cache, b)
             for script, r in sweep(cache, b).items():
-                print(b["id"], script, json.dumps(r))
+                print(b["id"], script, *([f"crashed: {script}"] if "error" in r
+                                         else []), json.dumps(r))
+                pairs += 1
+                if "error" in r:
+                    errored.append(f"{b['id']} {script}")
+        # a crashed check is a hole in the sweep, not a clean pass (#1189)
+        print(f"sweep: {pairs} (board, check) pairs, {len(errored)} errored"
+              + (": " + ", ".join(errored) if errored else ""))
         return 0
     boards = [b for b in load_all(man) if not a.ids or b["id"] in a.ids]
     bad = 0
@@ -518,8 +670,10 @@ def main(argv: list[str] | None = None) -> int:
             fetch(cache, b)
         else:
             for did, r in run(cache, b).items():
-                print(did, json.dumps(r))
-                bad += r.get("ran", False) and not (r["rev_a"] and not r["rev_b"])
+                print(did, (f"crashed: {r['crashed']} " if r.get("crashed")
+                            else "") + json.dumps(r))
+                bad += r.get("ran", False) and (
+                    bool(r.get("crashed")) or not (r["rev_a"] and not r["rev_b"]))
     return 1 if bad else 0
 
 

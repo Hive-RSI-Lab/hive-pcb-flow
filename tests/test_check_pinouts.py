@@ -52,7 +52,8 @@ def test_table_rows_cite_a_source():
     assert {"altera-jtag-10", "audio-trs", "audio-trrs-ctia",
             "bedlift-lift-actuator"} <= set(t)
     for name, row in t.items():
-        assert row["kind"] in ("jtag", "audio_jack", "stated", "header"), name
+        assert row["kind"] in ("jtag", "audio_jack", "stated", "header",
+                               "power"), name
         assert row["source"] and row["url"].startswith("https://"), name
 
 
@@ -359,7 +360,9 @@ import mate_needs as mn  # noqa: E402
 def test_mate_needs_rows_cite_a_source():
     t = mn.load_table()
     rows = [*t["wired_or"]["lines"].values(), *t["wired_or"]["drivers"].values(),
-            *t["pulsed_loads"]["kinds"].values()]
+            *t["pulsed_loads"]["kinds"].values(),
+            *t["bus_drivers"]["parts"].values(),
+            *t["i2c_single_master"]["parts"].values()]
     for row in rows:
         assert row["source"]
         if row.get("cite"):
@@ -459,3 +462,186 @@ def test_connector_not_a_pulsed_load_is_not_judged():
     b = board({"/5V": [("J7", "1", "")], "GND": [("J7", "2", "")]},
               {"J7": ("Conn_01x02", "")})
     assert cp.check(b, {}) == ([], [])
+
+
+# -- class 9: shared-bus drivers --------------------------------------------
+
+def strobe(second="74HC08", fn="1Y", oe_net="GND"):
+    """A Z80's /WR with a second driver: a gate, or a 244 whose OE is on
+    `oe_net`."""
+    nets = {"/WR": [("U1", "22", "~{WR}"), ("U2", "3", fn),
+                    ("U9", "27", "~{WE}")],
+            "GND": [("U1", "29", "GND"), ("U2", "7", "GND")],
+            "+5V": [("U1", "11", "VCC"), ("U2", "14", "VCC")],
+            "/A": [("U2", "1", "1A")], "/B": [("U2", "2", "1B")]}
+    if second.startswith("74HC244"):
+        nets.setdefault(oe_net, []).append(("U2", "1", "~{1OE}"))
+        nets["/A"] = [("U2", "2", "1A1")]
+    return (board(nets, {"U1": ("Z84C0010", ""), "U2": (second, ""),
+                                 "U9": ("AS6C1008", "")}))
+
+
+def test_bus_strobe_with_a_push_pull_gate_fires():
+    v = cp.check(strobe(), {})[0]
+    assert kinds(v) == [("bus_driver_contention", ("U2",))]
+    assert "the bus strobe /WR (WR)" in v[0]["msg"]
+    assert "BUSACK" in v[0]["msg"]
+    assert v[0]["drivers"] == ["U1", "U2"]
+
+
+def test_bus_strobe_through_a_gated_buffer_is_quiet():
+    b = strobe("74HC244", "1Y1", oe_net="/BUSAK")
+    v, j = cp.check(b, {})
+    assert v == []
+    assert [x["verdict"] for x in j if x["standard"] == "bus_drivers"] == [
+        "switched"]
+
+
+def test_buffer_with_oe_grounded_on_a_strobe_fires():
+    v = cp.check(strobe("74HC244", "1Y1", oe_net="GND"), {})[0]
+    assert kinds(v) == [("bus_driver_contention", ("U2",))]
+    assert "OE on GND" in v[0]["msg"]
+
+
+def test_buffer_disabled_by_its_oe_rail_is_quiet():
+    assert cp.check(strobe("74HC244", "1Y1", oe_net="+5V"), {})[0] == []
+
+
+def test_open_drain_outputs_on_one_net_are_quiet():
+    nets = {"/RST": [("U1", "2", "1Y"), ("U2", "2", "1Y"), ("R1", "1", "")],
+            "+5V": [("R1", "2", "")]}
+    b = (board(nets, {"U1": ("74AHC05", ""), "U2": ("74AHC05", "")}))
+    v, j = cp.check(b, {})
+    assert v == []
+    assert [x["verdict"] for x in j if x["standard"] == "bus_drivers"] == [
+        "wired_or"]
+
+
+def test_one_parts_gates_tied_together_are_listed():
+    nets = {"/X": [("U1", "3", "1Y"), ("U1", "6", "2Y")]}
+    b = (board(nets, {"U1": ("74HC08", "")}))
+    v, j = cp.check(b, {})
+    assert v == []
+    assert [x["verdict"] for x in j if x["standard"] == "bus_drivers"] == [
+        "paralleled"]
+
+
+def hub(smbusz=None, other="STM32F072CBT6", isolator=False):
+    """A TUSB8041 on SDA/SCL with its EEPROM and one more IC."""
+    nets = {"/SDA": [("U1", "38", "SDA/SMBDAT"), ("U2", "5", "SDA"),
+                     ("R1", "1", "")],
+            "/SCL": [("U1", "39", "SCL/SMBCLK"), ("U2", "6", "SCL"),
+                     ("R2", "1", "")],
+            "+3V3": [("R1", "2", ""), ("R2", "2", "")]}
+    if smbusz:
+        nets.setdefault(smbusz, []).append(("U1", "40", "SMBUSz"))
+    comps = {"U1": ("TUSB8041RGC", ""), "U2": ("24LC64", "")}
+    if other:
+        nets["/SDA"].append(("U3", "43", "PB7/I2C1_SDA"))
+        nets["/SCL"].append(("U3", "42", "PB6/I2C1_SCL"))
+        comps["U3"] = (other, "")
+    if isolator:
+        nets["/SDA"].append(("U4", "4", "SDA"))
+        nets["/SCL"].append(("U4", "5", "SCL"))
+        comps["U4"] = ("PCA9541", "")
+    return (board(nets, comps))
+
+
+def test_single_master_hub_sharing_its_bus_fires():
+    v = cp.check(hub(), {})[0]
+    assert kinds(v) == [("i2c_single_master", ("U1",))] * 2
+    assert "U3 (STM32F072CBT6)" in v[0]["msg"]
+    assert "unconnected (internal pull-up)" in v[0]["msg"]
+
+
+def test_single_master_hub_with_only_its_eeprom_is_quiet():
+    v, j = cp.check(hub(other=None), {})
+    assert v == []
+    assert {x["verdict"] for x in j
+            if x["standard"] == "i2c_single_master"} == {"own_bus"}
+
+
+def test_hub_in_smbus_slave_mode_is_quiet():
+    assert cp.check(hub(smbusz="GND"), {})[0] == []
+
+
+def test_hub_mode_on_logic_is_listed():
+    v, j = cp.check(hub(smbusz="/HUB_MODE"), {})
+    assert v == []
+    assert {x["verdict"] for x in j
+            if x["standard"] == "i2c_single_master"} == {"switched"}
+
+
+def test_hub_behind_an_arbiter_is_listed():
+    v, j = cp.check(hub(isolator=True), {})
+    assert v == []
+    assert "isolated" in {x["verdict"] for x in j
+                          if x["standard"] == "i2c_single_master"}
+
+
+# ---- power entry (#1190): barrel jacks of stated polarity, XT30 ----
+
+BARREL_FP = "Connector_BarrelJack:BarrelJack_Horizontal"
+XT30_FP = "Connector_AMASS:AMASS_XT30U-M_1x02_P5.0mm_Vertical"
+
+
+def power(fp, value, p1, p2, p3=None, ref="J1"):
+    nets = {p1: [(ref, "1", "")]}
+    nets.setdefault(p2, []).append((ref, "2", ""))
+    if p3:
+        nets.setdefault(p3, []).append((ref, "3", ""))
+    nets.setdefault("GND", []).append(("C1", "2", ""))
+    return board(nets, {ref: (value, fp), "C1": ("10u", "")})
+
+
+def test_barrel_centre_positive_stated_reversed_fires():
+    """The centre pin (pad 1) on ground and the sleeve on +12V, stated
+    centre positive both ways: by constraints and by the Value."""
+    b = power(BARREL_FP, "Barrel_Jack", "GND", "+12V", "GND")
+    c = {"pinouts": [{"ref": "J1", "standard": "barrel-centre-positive"}]}
+    v, judged = cp.check(b, c)
+    assert judged == [{"ref": "J1", "standard": "barrel-centre-positive",
+                       "stated": True}]
+    assert sorted((x["kind"], x["pin"]) for x in v) == [
+        ("pinout_mismatch", "1"), ("pinout_mismatch", "2")]
+    b = power(BARREL_FP, "12V centre positive", "GND", "+12V")
+    v, judged = cp.check(b, {})
+    assert judged[0]["by"] == "value" and len(v) == 2
+
+
+def test_barrel_right_or_unstated_or_custom_is_quiet():
+    c = {"pinouts": [{"ref": "J1", "standard": "barrel-centre-positive"}]}
+    assert cp.check(power(BARREL_FP, "Barrel_Jack", "+12V", "GND", "GND"),
+                    c)[0] == []
+    # centre negative stated (a Boss-style pedal supply): - on the centre
+    v, _ = cp.check(power(BARREL_FP, "9V center negative", "GND", "+9V"), {})
+    assert v == []
+    # reversed but no polarity stated: listed, not judged
+    v, judged = cp.check(power(BARREL_FP, "Barrel_Jack", "GND", "+12V"), {})
+    assert v == [] and judged[0]["standard"] == "barrel_jack"
+    assert "no polarity stated" in judged[0]["not_judged"]
+    # stated by Value on a custom footprint: no source for its pad numbers
+    v, judged = cp.check(power("lib:DC-005", "DC jack centre positive",
+                               "GND", "+12V"), {})
+    assert v == [] and "not a stock" in judged[0]["not_judged"]
+    # the sleeve behind a reverse-polarity diode: unnamed, not judged
+    v, _ = cp.check(power(BARREL_FP, "centre positive", "Net-(D1-A)",
+                          "GND"), {})
+    assert v == []
+
+
+def test_xt30_plus_and_minus_swapped_fires_right_is_clean():
+    v, judged = cp.check(power(XT30_FP, "XT30U-M", "/VBAT", "GND"), {})
+    assert judged == [{"ref": "J1", "standard": "xt30", "by": "footprint"}]
+    assert sorted((x["kind"], x["pin"]) for x in v) == [
+        ("pinout_mismatch", "1"), ("pinout_mismatch", "2")]
+    assert cp.check(power(XT30_FP, "XT30U-M", "GND", "/VBAT"), {})[0] == []
+    v, judged = cp.check(power("lib:XT30_custom", "XT30", "/VBAT", "GND"), {})
+    assert v == [] and judged[0]["not_judged"]
+
+
+def test_jst_ph_battery_is_listed_not_judged_signal_one_ignored():
+    fp = "Connector_JST:JST_PH_S2B-PH-K_1x02_P2.00mm_Horizontal"
+    v, judged = cp.check(power(fp, "BAT", "GND", "/VBAT"), {})
+    assert v == [] and judged[0]["standard"] == "jst_ph_battery"
+    assert cp.check(power(fp, "LED", "/LED_A", "/LED_K"), {}) == ([], [])

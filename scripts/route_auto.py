@@ -787,7 +787,7 @@ def run(argv: list[str] | None = None):
     best_facts: dict = {}
     fr_ok = False
     dedup_facts = {"removed": 0}
-    drc = None
+    drc = best_grade = None
     # 4. SES import - best rung first, next-best on a truncated/corrupt SES;
     # with --tries every candidate is imported on its own copy and graded by
     # DRC (unrouted nets, then errors), and the best board is kept.

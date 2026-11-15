@@ -285,7 +285,7 @@ def test_pin_part_buck_inductor_only_when_sw_bk_is_used(tmp_path):
 
 def test_pin_part_value_window(tmp_path):
     # CDVDD 1u: a 100n across DVDD/DGND is off-value, a 2.2u is in
-    spec = [{"mpn": "X", "match": "^X1$", "requires": [
+    spec = [{"mpn": "X", "match": "^X1$", "verified": True, "requires": [
         {"id": "CDVDD", "pin": "DVDD", "to": "DGND", "kinds": ["C"], "value": "1u"}]}]
     def board(val):
         nets = {"DV": [("U1", "1", "power_out", "DVDD"), ("C1", "1", "passive", "")],
@@ -302,7 +302,7 @@ def test_pin_requirements_table_rows_are_well_formed():
         for r in part["requires"]:
             assert r["pin"] and r["to"] and r["source"]
             assert set(r["kinds"]) <= {"C", "L", "R"}
-            assert r.get("when") in (None, "connected")
+            assert r.get("when") in (None, "connected", "undriven")
 
 
 def test_check_current_catch_runs_on_the_board():
@@ -384,10 +384,10 @@ def test_a_revision_kept_only_in_history_gets_its_own_checkout(tmp_path):
     assert ec.repo_dir(tmp_path, b, "rev_b") == ec.repo_dir(tmp_path, b)
 
 
-def test_a_kicad6_board_is_read_as_it_is(tmp_path):
+def test_a_kicad8_board_is_read_as_it_is(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "x.kicad_pcb").write_text("(kicad_pcb (version 20211014))")
+    (repo / "x.kicad_pcb").write_text("(kicad_pcb (version 20240108))")
     b = {"id": "x", "rev_a": {"pcb": "x.kicad_pcb"}}
     empty = tmp_path / "run" / "constraints.json"
     empty.parent.mkdir()
@@ -423,3 +423,124 @@ def test_a_pre_kicad6_board_is_upgraded_once_into_the_run_dir(tmp_path, monkeypa
     src.write_text("(kicad_pcb (version 20171130) (module y))")
     ec._pcb(b, "rev_a", repo, empty)
     assert len(calls) == 2                       # source changed: redone
+    # mdbt-micro-50q, zxdiag (#1123): a KiCad 6/7 board's references are
+    # fp_text, which placelib reads none from, so it is upgraded too
+    src.write_text("(kicad_pcb (version 20211014) (footprint y))")
+    ec._pcb(b, "rev_a", repo, empty)
+    assert len(calls) == 3
+
+
+def test_a_check_that_writes_no_report_keeps_its_stderr(tmp_path, monkeypatch):
+    # #1189: the sweep scored a crashed check as "no finding"
+    def crash(c, b, rev, s):
+        if s == "check_current":
+            raise ec.CheckCrashed(f"h {rev}: {s} wrote no report", 1,
+                                  "".join(f"line {i}\n" for i in range(30))
+                                  + "KeyError: 'value'\n")
+        return []
+    monkeypatch.setattr(ec, "audit", crash)
+    r = ec.sweep(tmp_path, {"id": "h", "rev_a": {}, "rev_b": {}})
+    e = r["check_current"]
+    assert e["error"] == "h rev_a: check_current wrote no report (rc 1)"
+    assert e["rc"] == 1 and len(e["stderr_tail"]) == 20
+    assert e["stderr_tail"][-1] == "KeyError: 'value'"
+    assert "error" not in r["check_silk"]
+
+
+def test_audit_raises_with_the_check_stderr(tmp_path, monkeypatch):
+    b = {"id": "h", "rev_a": {}, "rev_b": {}}
+    monkeypatch.setitem(ec.RUNNERS, "check_current",
+                        lambda b, rev, d, c: ["nope.py"])
+    monkeypatch.setattr(ec, "repo_dir", lambda cache, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "SCRIPTS", tmp_path)
+    (tmp_path / "nope.py").write_text("import sys; sys.exit('boom here')")
+    try:
+        ec.audit(tmp_path, b, "rev_a", "check_current")
+    except ec.CheckCrashed as e:
+        assert e.rc == 1 and e.tail == ["boom here"]
+        assert "boom here" in str(e)
+    else:
+        raise AssertionError("no CheckCrashed")
+
+
+def _fake_check(tmp_path, monkeypatch, body):
+    monkeypatch.setitem(ec.RUNNERS, "check_current",
+                        lambda b, rev, d, c: ["fake.py"])
+    monkeypatch.setattr(ec, "repo_dir", lambda cache, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "SCRIPTS", tmp_path)
+    (tmp_path / "fake.py").write_text(body)
+    try:
+        ec.audit(tmp_path, {"id": "h"}, "rev_a", "check_current")
+    except ec.CheckCrashed as e:
+        return e
+    raise AssertionError("no CheckCrashed")
+
+
+def test_an_error_json_on_stdout_is_kept(tmp_path, monkeypatch):
+    # checklib.cli_wrap's contract: error JSON on stdout, exit 2, no stderr
+    e = _fake_check(tmp_path, monkeypatch, (
+        "import json, sys\n"
+        "print(json.dumps({'script': 'check_current', 'status': 'error',"
+        " 'error': 'StaleFillError: 1 zone(s) unfilled'}))\n"
+        "sys.exit(2)\n"))
+    assert e.rc == 2 and e.check_error == "StaleFillError: 1 zone(s) unfilled"
+    assert "StaleFillError" in str(e).splitlines()[0]
+
+
+def test_a_report_with_status_error_is_a_crash_not_a_pass(tmp_path, monkeypatch):
+    e = _fake_check(tmp_path, monkeypatch, (
+        "import json, sys\n"
+        "out = sys.argv[sys.argv.index('--out') + 1]\n"
+        "open(out, 'w').write(json.dumps({'status': 'error', 'error': 'x'}))\n"
+        "sys.exit(2)\n"))
+    assert e.check_error == "x" and "reported an error" in str(e)
+
+
+def _planted(tmp_path, monkeypatch, body):
+    """A check script `planted` whose source is `body`, run by the real
+    audit() through its runner, as a corpus check would be."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "planted.py").write_text(body)
+    monkeypatch.setattr(ec, "SCRIPTS", scripts)
+    monkeypatch.setattr(ec, "repo_dir", lambda c, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "RUNNERS", {"planted": lambda b, rev, repo, c: ["planted.py"]})
+    return tmp_path / "cache"
+
+
+CRASH = "import sys\nprint('boom: planted crash', file=sys.stderr)\nsys.exit(3)\n"
+
+
+def test_a_crashed_catch_reads_crashed_in_the_table(tmp_path, monkeypatch):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    d = {"id": "p-1", "verdict": "caught", "catch": {"script": "planted", "kind": "x"}}
+    b = {"id": "p", "rev_a": {}, "rev_b": {}, "defects": [d]}
+    res = ec.run(cache, b)
+    assert res["p-1"]["crashed"] == "planted" and res["p-1"]["rc"] == 3
+    assert ec.outcome(d, res["p-1"]) == "crashed: planted"
+    assert ec.outcome({**d, "caught_by": "#1"}, res["p-1"]).startswith("crashed: planted")
+
+
+def test_a_stale_report_does_not_stand_in_for_a_crash(tmp_path, monkeypatch):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    stale = cache / "runs" / "p" / "rev_a-planted.json"
+    stale.parent.mkdir(parents=True)
+    stale.write_text('{"violations": [{"kind": "old"}]}')
+    assert "error" in ec.sweep(cache, {"id": "p", "rev_a": {}, "rev_b": {}})["planted"]
+
+
+def test_sweep_output_labels_the_crash(tmp_path, monkeypatch, capsys):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    monkeypatch.setattr(ec, "fetch", lambda c, b: None)
+    monkeypatch.setattr(ec, "_raw", lambda m, w: [{"id": "p", "rev_a": {}, "rev_b": {}}])
+    ec.main(["sweep", "p", "--cache", str(cache)])
+    out = capsys.readouterr().out
+    assert "p planted crashed: planted" in out and "1 errored" in out
+
+
+def test_run_cli_counts_a_crash_as_bad(tmp_path, monkeypatch):
+    cache = _planted(tmp_path, monkeypatch, CRASH)
+    d = {"id": "p-1", "verdict": "caught", "catch": {"script": "planted", "kind": "x"}}
+    monkeypatch.setattr(ec, "load_all", lambda m: [{"id": "p", "rev_a": {}, "rev_b": {},
+                                                    "defects": [d]}])
+    assert ec.main(["run", "p", "--cache", str(cache)]) == 1

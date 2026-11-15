@@ -80,7 +80,10 @@ def test_fetch_refuses_a_file_that_isnt_the_pinned_blob(monkeypatch, tmp_path):
 
 
 def _env(tmp_path, *args):
-    env = {k: v for k, v in os.environ.items() if k != "HWDE_KNOWLEDGE_SOURCES"}
+    # run through a published copy, the outer hwde exports where that copy's
+    # sources are (HWDE_PUBLISHED): this hwde must find only its own
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("HWDE_KNOWLEDGE_SOURCES", "HWDE_PUBLISHED")}
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True, exist_ok=True)
     if not (venv / "bin" / "python").exists():

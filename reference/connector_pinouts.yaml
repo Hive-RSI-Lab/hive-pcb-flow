@@ -30,6 +30,17 @@
 #                     "pinouts": [{"ref": "J8", "standard": "<row>"}]
 #                   (an off-board part with no standard of its own: a cable
 #                   wired to a part's leads).
+#     power       - a power-entry connector (#1190), judged on its + and -
+#                   contacts only: SUPPLY on ground, or GND on a positive
+#                   rail (a named rail, or a VIN/VBAT/VBUS/VCC-style name),
+#                   is a reversed supply; an unnamed net is not judged.
+#                   `footprint` (a regex) is the stock footprints whose pad
+#                   numbering the row's source fixes. `auto: true` rows are
+#                   found by that footprint alone (an XT30 has one marked
+#                   polarity); the others only when the design states them,
+#                   by constraints.json "pinouts" or by `value` (a regex) on
+#                   the part's Value, on a `footprint` match (a barrel jack's
+#                   polarity is the adapter's, not the jack's).
 #   pinout: pin -> role. Roles: GND (a ground net), SUPPLY (a powered net,
 #     `volts` when the mate needs a level), NC (not judged), and signal names
 #     (a signal role must not be on a ground or supply rail; for jtag the IC
@@ -231,3 +242,47 @@ standards:
              "3": SDA, "4": {role: SUPPLY, volts: 5.0}, "5": SCL, "6": GND,
              "9": GND, "14": GND, "17": {role: SUPPLY, volts: 3.3},
              "20": GND, "25": GND, "30": GND, "34": GND, "39": GND}
+
+  # Power entry (#1190). No JST-PH battery row: no maker document was found
+  # that fixes which of a PH 2-pin's pads is + (JST's ePH.pdf could not be
+  # read; SparkFun's LiPo guide gives pin 1 +, an Adafruit forum answer pin
+  # 1 GND, neither saying whose numbering). State one per board with a
+  # "stated" row.
+  barrel-centre-positive:
+    kind: power
+    source: >-
+      KiCad 10.0.6 stock library: Connector:Barrel_Jack (and _Switch,
+      _MountingPin) pin 1 is the centre pin, pin 2 the sleeve, pin 3 the
+      switch; every Connector_BarrelJack footprint numbers its pads the same.
+      The maker agrees: Same Sky (CUI) PJ-102AH datasheet, schematic: 1
+      centre pin, 2 sleeve, 3 switch. Centre positive: + on the centre pin.
+    url: https://www.sameskydevices.com/product/resource/pj-102ah.pdf
+    footprint: '(^|:)BarrelJack_'
+    value: 'cent(re|er)[ _-]*(pos|\+)|(pos|\+)[ _-]*cent(re|er)|tip[ _-]*(pos|\+)'
+    pinout: {"1": SUPPLY, "2": GND, "3": NC}
+
+  barrel-centre-negative:
+    kind: power
+    source: >-
+      KiCad 10.0.6 stock library: Connector:Barrel_Jack pin 1 is the centre
+      pin, pin 2 the sleeve, pin 3 the switch; every Connector_BarrelJack
+      footprint numbers its pads the same. Same Sky (CUI) PJ-102AH
+      datasheet, schematic: 1 centre pin, 2 sleeve, 3 switch. Centre
+      negative: - on the centre pin, + on the sleeve.
+    url: https://www.sameskydevices.com/product/resource/pj-102ah.pdf
+    footprint: '(^|:)BarrelJack_'
+    value: 'cent(re|er)[ _-]*(neg|-)|(neg|-)[ _-]*cent(re|er)|tip[ _-]*(neg|-)'
+    pinout: {"1": GND, "2": SUPPLY, "3": NC}
+
+  xt30:
+    kind: power
+    auto: true
+    source: >-
+      KiCad 10.0.6 stock Connector_AMASS AMASS_XT30* footprints (XT30PW-F/M,
+      XT30U-F/M, XT30UPB-F/M): silk "-" beside pad 1, "+" beside pad 2 (the
+      vertical ones draw the chamfered end at pad 1). Amass XT30U manual: "The housing is asymmetric
+      with chamfered corners ... the positive pole is marked + on the
+      housing".
+    url: https://www.rotorama.com/assets/docs/b44c1efac18d74bc06d6cbcc02bbcd47/45426-1/manual-xt30u-en.pdf
+    footprint: '(^|:)AMASS_XT30'
+    pinout: {"1": GND, "2": SUPPLY}
