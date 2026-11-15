@@ -180,6 +180,12 @@ DATASHEET_SCHEMA: dict = {
         "lcsc": {"type": "string"},
         "package": {"type": "string"},
         "description": {"type": "string"},
+        # check_ratings holds [lo, hi] (C) against the board's ambient when
+        # parts.json gives no Operating Temperature; the source cites the
+        # datasheet page it was read from (rating_fill writes both)
+        "operating_temp_c": {"type": "array", "items": {"type": "number"},
+                             "minItems": 2, "maxItems": 2},
+        "operating_temp_source": {"type": "string"},
         # a fixed regulator's output, in volts: check_ratings judges its rail
         # against it. Leave it out for an adjustable part.
         "output_voltage": {"type": "number", "exclusiveMinimum": 0},
@@ -295,8 +301,10 @@ DATASHEET_SCHEMA: dict = {
                 "properties": {
                     "pins": {"type": "array", "items": {"type": "string"},
                              "minItems": 1},
+                    # power: watts at the datasheet's stated ambient
+                    # (rating_fill writes it for a resistor; not judged yet)
                     "kind": {"type": "string",
-                             "enum": ["voltage", "current"]},
+                             "enum": ["voltage", "current", "power"]},
                     "level": {"type": "string",
                               "enum": ["abs_max", "recommended"]},
                     "min": {"type": ["number", "string"]},
