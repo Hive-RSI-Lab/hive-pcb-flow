@@ -185,7 +185,7 @@ import mazeroute  # noqa: E402  (#1043 sense lines)
 import pairlaunch  # noqa: E402  (#546 pair stubs a coupled router can launch from)
 import route_edit  # noqa: E402  (width normalization ops)
 import zrules  # noqa: E402  (#489 rules_gen's per-layer impedance widths)
-import routelib  # noqa: E402  (fresh_work_dir / swap_in)
+import routelib  # noqa: E402  (fresh_work_dir / swap_in / dru_forms)
 from checklib import CheckError, violation  # noqa: E402
 
 SCRIPT = "route_critical"
@@ -443,7 +443,9 @@ def pair_via_size(floors: dict) -> float:
 
 # ------------------------------------------------------------ DRU parsing
 
-_DRU_RULE_RE = re.compile(r'\(rule\s+"([^"]+)"(.*?)\n\)', re.S)
+# the head of a (rule ...) form and its name, quoted or bare
+_DRU_RULE_HEAD_RE = re.compile(
+    r'\(\s*rule(?![^\s()"])\s*(?:"((?:[^"\\\n]|\\.)*)"?|([^\s()"]+))?')
 _DRU_CONSTRAINT_RE = re.compile(
     r'\(constraint\s+(\w+)\s+\(min\s+([\d.]+)\s*mm\)\)')
 _DRU_NETNAME_RE = re.compile(r"\.NetName\s*==\s*'([^']+)'")
@@ -456,14 +458,22 @@ def parse_dru_rules(text: str) -> list[dict]:
     [{name, constraint, min_mm, nets, condition, layer}]. nets = NetName
     literals in the condition ([] for unconditioned/baseline rules);
     condition = the raw condition string (None when absent); layer = the
-    (layer ...) clause token (None when absent). Only the shapes rules_gen
-    emits are recognized; anything else simply yields no row. A barrier rule
-    (aiee_iso_*) yields none on purpose: it holds between two domains, and every
-    reader here takes a NetName as net-wide, which would hold a net 8 mm from
-    its own domain. routelib.dru_barriers reads those."""
+    (layer ...) clause token (None when absent). The rules are the file's
+    top-level forms as KiCad reads them (routelib.dru_forms), so a rule may
+    close on any line and comment lines are skipped (#1163); inside a rule
+    only the shapes rules_gen emits are recognized, and anything else simply
+    yields no row. A barrier rule (aiee_iso_*) yields none on purpose: it
+    holds between two domains, and every reader here takes a NetName as
+    net-wide, which would hold a net 8 mm from its own domain.
+    routelib.dru_barriers reads those."""
     out: list[dict] = []
-    for m in _DRU_RULE_RE.finditer(text or ""):
-        name, body = m.group(1), m.group(2)
+    for form in routelib.dru_forms(text):
+        m = _DRU_RULE_HEAD_RE.match(form)
+        if not m:
+            continue
+        name = re.sub(r"\\(.)", r"\1", m.group(1)) \
+            if m.group(1) is not None else m.group(2) or ""
+        body = form[m.end():]
         if name.startswith("aiee_iso_"):
             continue
         c = _DRU_CONSTRAINT_RE.search(body)
@@ -480,6 +490,216 @@ def parse_dru_rules(text: str) -> list[dict]:
 
 
 _DRU_COURTYARD_RE = re.compile(r"intersectsCourtyard\('([^']+)'\)")
+
+
+# ------------------------------------------- DRU condition reading (#1146)
+# Lets a caller ask whether a rule MAY hold between two items instead of
+# taking its min as board-wide (board_update.swap_clash_details). Answers
+# are True, False, or None for "cannot tell", which a caller takes as may
+# hold: a term this reader does not know only ever makes it stricter.
+
+# KiCad's footprint tests -> the courtyard they read ("member" is
+# memberOfFootprint, no courtyard). inside* is read as intersects*: an item
+# clear of a courtyard is inside it neither way, the one answer that rules
+# a rule out.
+_DRU_SCOPE_FNS = {
+    "memberoffootprint": "member",
+    "intersectscourtyard": "court", "insidecourtyard": "court",
+    "intersectsfrontcourtyard": "front", "insidefrontcourtyard": "front",
+    "intersectsbackcourtyard": "back", "insidebackcourtyard": "back",
+}
+_DRU_SCOPE_TERM_RE = re.compile(r"([AB])\.(\w+)\(\s*'([^']*)'\s*\)")
+_DRU_CMP_TERM_RE = re.compile(r"([AB])\.(\w+)\s*(==|!=)\s*'([^']*)'")
+# the A.Type names of board items; a name outside these is not read
+_DRU_TYPES = {"pad", "via", "track", "arc", "zone", "text", "graphic",
+              "footprint"}
+_WX_RX: dict[str, re.Pattern] = {}
+
+
+def _dru_split(text: str, op: str) -> list[str] | None:
+    """text cut at each `op` outside parens and single quotes; None when
+    its parens or quotes do not balance."""
+    parts, depth, quoted, start, i = [], 0, False, 0, 0
+    while i < len(text):
+        ch = text[i]
+        if ch == "'":
+            quoted = not quoted
+        elif not quoted and ch in "()":
+            depth += 1 if ch == "(" else -1
+            if depth < 0:
+                return None
+        elif not quoted and depth == 0 and text.startswith(op, i):
+            parts.append(text[start:i])
+            i += len(op)
+            start = i
+            continue
+        i += 1
+    if depth or quoted:
+        return None
+    return parts + [text[start:]]
+
+
+def _dru_unwrap(text: str) -> str:
+    """text without its outer whitespace and the parens around all of it."""
+    text = text.strip()
+    while text[:1] == "(" and text[-1:] == ")" and \
+            _dru_split(text[1:-1], "||") is not None:
+        text = text[1:-1].strip()
+    return text
+
+
+def _dru_parse(text: str) -> tuple:
+    text = _dru_unwrap(text)
+    for op, kind in (("||", "or"), ("&&", "and")):
+        parts = _dru_split(text, op)
+        if parts is None:
+            return ("other", text)
+        if len(parts) > 1:
+            return (kind, [_dru_parse(p) for p in parts])
+    m = _DRU_SCOPE_TERM_RE.fullmatch(text)
+    if m and m.group(2).lower() in _DRU_SCOPE_FNS:
+        return ("scope", m.group(1), _DRU_SCOPE_FNS[m.group(2).lower()],
+                m.group(3))
+    m = _DRU_CMP_TERM_RE.fullmatch(text)
+    if m and m.group(2).lower() in ("type", "netname"):
+        return ("type" if m.group(2).lower() == "type" else "net",
+                m.group(1), m.group(3), m.group(4))
+    return ("other", text)
+
+
+def parse_dru_condition(text: str | None) -> tuple:
+    """A .kicad_dru condition string -> a small tree (#1146): ("or", kids)
+    and ("and", kids) for || and &&; ("scope", ab, fn, selector) for
+    A./B.memberOfFootprint (fn "member") and the intersects/inside
+    Courtyard tests (fn "court", or "front"/"back" for the Front/Back
+    ones); ("type", ab, op, value) and ("net", ab, op, value) for A./B.Type
+    and A./B.NetName held == or != to a quoted literal; ("other", text)
+    for anything else (negation, Layer, NetClass, malformed text). No
+    condition -> ("and", []), which holds for every pair."""
+    if not (text or "").strip():
+        return ("and", [])
+    return _dru_parse(text)
+
+
+def dru_condition_scoped(tree) -> bool:
+    """True when a parsed condition can hold only at a footprint: a
+    footprint test, an && with a scoped part, an || of scoped parts. Such
+    a rule's min is no board-wide floor (#1146)."""
+    if not tree:
+        return False
+    if tree[0] == "scope":
+        return True
+    if tree[0] == "and":
+        return any(dru_condition_scoped(t) for t in tree[1])
+    if tree[0] == "or":
+        return bool(tree[1]) and all(dru_condition_scoped(t)
+                                     for t in tree[1])
+    return False
+
+
+def _wx_matches(pattern: str, text: str) -> bool:
+    """wxString::Matches, how KiCad tests a footprint selector: * and ?
+    wildcards, case-sensitive, every other character ([ too) literal."""
+    rx = _WX_RX.get(pattern)
+    if rx is None:
+        rx = _WX_RX[pattern] = re.compile("".join(
+            ".*" if ch == "*" else "." if ch == "?" else re.escape(ch)
+            for ch in pattern), re.S)
+    return rx.fullmatch(text) is not None
+
+
+def dru_selector_matches(selector: str, ref: str, fpid: str | None = None):
+    """KiCad's footprint selector (testFootprintSelector) against a part
+    known by its reference and, when given, its library id: True, False,
+    or None when they cannot tell - a ${CLASS:...} component class, or a
+    library-id pattern (one with a ':') that the reference misses and no
+    fpid is given for."""
+    if selector.upper().startswith("${CLASS:") and selector.endswith("}"):
+        return None
+    if _wx_matches(selector, ref):
+        return True
+    if ":" not in selector:
+        return False
+    return None if fpid is None else _wx_matches(selector, fpid)
+
+
+def _dru_str_eq(value: str, literal: str) -> bool:
+    """KiCad's == between a string and a quoted literal: case-insensitive,
+    and a literal holding * or ? is a wildcard."""
+    if "*" in literal or "?" in literal:
+        return _wx_matches(literal.lower(), value.lower())
+    return value.lower() == literal.lower()
+
+
+def _dru_type_eq(item, literal: str):
+    """A.Type == literal for a geom item, or None when it cannot tell: a
+    wildcard or unknown name, an item that is no pad, via or track. A geom
+    Track may be a KiCad track or arc; a via is left open to 'Track'."""
+    lit = literal.lower()
+    if "*" in lit or "?" in lit or lit not in _DRU_TYPES:
+        return None
+    if isinstance(item, geom.Pad):
+        return lit == "pad"
+    if isinstance(item, geom.Via):
+        return True if lit == "via" else None if lit == "track" else False
+    if isinstance(item, geom.Track):
+        return None if lit in ("track", "arc") else False
+    return None
+
+
+def _and3(vals):
+    out = True
+    for v in vals:
+        if v is False:
+            return False
+        if v is None:
+            out = None
+    return out
+
+
+def _or3(vals):
+    out = False
+    for v in vals:
+        if v is True:
+            return True
+        if v is None:
+            out = None
+    return out
+
+
+def dru_condition_eval(tree, a, b, scope):
+    """A parsed condition (parse_dru_condition) for geom items a and b with
+    a as KiCad's A: True, False, or None when this reader cannot tell.
+    scope(fn, selector, item) answers a footprint test for one item, the
+    same three ways."""
+    kind = tree[0]
+    if kind == "and":
+        return _and3(dru_condition_eval(t, a, b, scope) for t in tree[1])
+    if kind == "or":
+        return _or3(dru_condition_eval(t, a, b, scope) for t in tree[1])
+    if kind not in ("scope", "type", "net"):
+        return None
+    item = a if tree[1] == "A" else b
+    if kind == "scope":
+        return scope(tree[2], tree[3], item)
+    hit = _dru_type_eq(item, tree[3]) if kind == "type" else \
+        _dru_str_eq(getattr(item, "net", None) or "", tree[3])
+    return hit if hit is None or tree[2] == "==" else not hit
+
+
+def dru_rule_holds(tree, x, y, scope):
+    """Whether a parsed condition holds for the item pair x, y: True,
+    False, or None when this reader cannot tell. KiCad tries a condition
+    with each item as A (DRC_RULE_CONDITION::EvaluateFor), so it holds
+    when either way does and fails only when both ways do."""
+    return _or3((dru_condition_eval(tree, x, y, scope),
+                 dru_condition_eval(tree, y, x, scope)))
+
+
+def dru_rule_may_hold(tree, x, y, scope) -> bool:
+    """Whether a parsed condition may hold for the item pair x, y: only
+    False both ways (dru_rule_holds) rules it out."""
+    return dru_rule_holds(tree, x, y, scope) is not False
 
 
 def _dru_text(dru_path: Path | None) -> str | None:

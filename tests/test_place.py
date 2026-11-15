@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from shapely.geometry import Point
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -150,6 +151,150 @@ def test_back_side_parsed_literally(tmp_path_factory):
     m = _model(tmp_path_factory, "back", body)
     assert m.footprints["B1"].side == "back"
     assert not m.footprints["B1"].courtyard_missing  # B.CrtYd found
+
+
+# ------------------------------------- exact courtyards for rule tests (#1146)
+
+def _g(head: str, body: str, layer: str = "F.CrtYd") -> str:
+    """One courtyard graphic for _fp's raw tail."""
+    return (f'    ({head} {body} (stroke (width 0.05) (type solid))'
+            f' (layer "{layer}"))\n')
+
+
+def _lines(*pts, layer="F.CrtYd") -> str:
+    """fp_lines joining pts in order (not closed unless pts repeats)."""
+    return "".join(_g("fp_line", f"(start {a} {b}) (end {c} {d})", layer)
+                   for (a, b), (c, d) in zip(pts, pts[1:]))
+
+
+def test_courtyard_exact_keeps_pieces_and_far_side(tmp_path_factory):
+    """KiCad's rule test reads each disjoint courtyard piece and both
+    sides; placement keeps reading the hull of the own side."""
+    tail = (_g("fp_rect", "(start -3 -1) (end -1 1)")
+            + _g("fp_rect", "(start 1 -1) (end 3 1)")
+            + _g("fp_rect", "(start -0.5 -0.5) (end 0.5 0.5)", "B.CrtYd"))
+    m = _model(tmp_path_factory, "exact_pieces",
+               _fp("J1", 10, 10, courtyard=None, pads=tail))
+    j1 = m.footprints["J1"]
+    own, far = j1.courtyard_exact
+    assert j1.courtyard_unreadable == (False, False)
+    assert own.geom_type == "MultiPolygon" and len(own.geoms) == 2
+    assert own.area == pytest.approx(2 * 1.99 * 1.99)  # 0.005 mm shrink
+    assert not own.contains(Point(0, 0))      # the gap
+    assert j1.courtyard_local.contains(Point(0, 0))  # hull
+    assert far.bounds == pytest.approx((-0.495, -0.495, 0.495, 0.495))
+
+
+def test_courtyard_exact_reads_curves_and_poly_arcs(tmp_path_factory):
+    """An fp_curve closing an outline and an arc inside an fp_poly are in
+    the rule courtyard; placement still reads neither."""
+    curve = (_lines((1, 1), (-1, 1), (-1, -1), (1, -1))
+             + _g("fp_curve", "(pts (xy 1 -1) (xy 2.3333333 -1)"
+                  " (xy 2.3333333 1) (xy 1 1))"))
+    poly = _g("fp_poly", "(pts (xy -1 -1) (xy 1 -1)"
+              " (arc (start 1 -1) (mid 2 0) (end 1 1)) (xy -1 1))"
+              " (fill no)")
+    body = (_fp("A1", 5, 5, courtyard=None, pads=curve)
+            + _fp("A2", 15, 5, courtyard=None, pads=poly))
+    m = _model(tmp_path_factory, "exact_curves", body)
+    for ref in ("A1", "A2"):
+        f = m.footprints[ref]
+        assert f.courtyard_unreadable == (False, False), ref
+        own = f.courtyard_exact[0]
+        assert own.contains(Point(1.9, 0)), ref
+        assert not own.contains(Point(2.1, 0)), ref
+        assert not f.courtyard_local.contains(Point(1.9, 0)), ref
+
+
+def test_courtyard_exact_holds_big_arcs(tmp_path_factory):
+    """A big courtyard arc, in an fp_poly or an fp_arc, is read to within
+    COURTYARD_ARC_TOL (#1163): a half disc of 10 mm radius comes inside
+    KiCad's own edge (0.005 mm in) by no more than that, where 16 or 64
+    even steps strayed 0.048 or 0.003 mm."""
+    r = 10
+    poly = _g("fp_poly", f"(pts (xy 0 {-r}) (arc (start 0 {-r}) (mid {r} 0)"
+              f" (end 0 {r})) (xy 0 {r})) (fill no)")
+    arc = (_lines((0, r), (0, -r))
+           + _g("fp_arc", f"(start 0 {-r}) (mid {r} 0) (end 0 {r})"))
+    m = _model(tmp_path_factory, "big_arcs",
+               _fp("H1", 30, 30, courtyard=None, pads=poly)
+               + _fp("H2", 60, 30, courtyard=None, pads=arc))
+    edge = r - placelib.COURTYARD_MAX_ERROR - placelib.COURTYARD_ARC_TOL \
+        - 0.0005
+    for ref in ("H1", "H2"):
+        f = m.footprints[ref]
+        assert f.courtyard_unreadable == (False, False), ref
+        own = f.courtyard_exact[0]
+        for k in range(1, 400):
+            a = math.pi * (k / 400 - 0.5)
+            assert own.contains(Point(edge * math.cos(a),
+                                      edge * math.sin(a))), (ref, k)
+        assert not own.contains(Point(r - 0.004, 0)), ref
+
+
+@pytest.mark.parametrize("tail", [
+    _lines((-1, -1), (1, -1), (1, 1), (-1, 1), (-1, -1))
+    + _lines((1, 0), (2, 0)),                              # dangling line
+    _lines((-1, -1), (1, -1), (1, 1), (-1, 1)),            # never closes
+    _g("fp_arc", "(start 0 0) (end 1 0) (angle 90)"),      # KiCad 5 arc
+    _g("fp_rect", "(start -2 -2) (end 2 2)")
+    + _g("fp_rect", "(start -1 -1) (end 1 1)"),            # one in another
+    _g("fp_rect", "(start -2 -1) (end 0 1)")
+    + _g("fp_rect", "(start 0 -1) (end 2 1)"),             # pieces touch
+    _g("fp_curve", "(pts (xy 0 0) (xy 1 1) (xy 2 0))"),    # 3-point curve
+    _g("fp_rect", "(start 0 0) (end 2 0)"),                # no area
+    _g("fp_circle", "(center 0 0) (end 0 0)"),             # no radius
+], ids=["dangling", "open", "kicad5_arc", "nested", "touching",
+        "short_curve", "flat_rect", "zero_circle"])
+def test_courtyard_unreadable_for_rule_tests(tmp_path_factory, tail):
+    """A courtyard KiCad may build otherwise (a hole, a malformed outline,
+    a graphic placement skips) cannot answer a rule's courtyard test; the
+    model still loads (a KiCad 5 arc used to stop it)."""
+    m = _model(tmp_path_factory, "unreadable",
+               _fp("U1", 10, 10, courtyard=None, pads=tail))
+    assert m.footprints["U1"].courtyard_unreadable == (True, False)
+
+
+def test_courtyard_exact_clean_rect_and_empty_side(tmp_path_factory):
+    m = _model(tmp_path_factory, "exact_clean", _fp("R1", 10, 10))
+    r1 = m.footprints["R1"]
+    assert r1.courtyard_unreadable == (False, False)
+    assert r1.courtyard_exact[1] is None            # nothing on B.CrtYd
+    assert r1.courtyard_exact[0].bounds == pytest.approx(
+        (-0.995, -0.995, 0.995, 0.995))
+
+
+def test_courtyard_exact_flips_with_mirror(tmp_path_factory):
+    tail = (_g("fp_rect", "(start 0 0) (end 2 1)")
+            + _g("fp_rect", "(start -1 -3) (end 0 -2)", "B.CrtYd"))
+    m = _model(tmp_path_factory, "exact_flip",
+               _fp("Q1", 10, 10, courtyard=None, pads=tail))
+    q1 = m.footprints["Q1"]
+    own, far = (g.bounds for g in q1.courtyard_exact)
+    q1.mirror()
+    assert q1.side == "back"
+    flipped = tuple(g.bounds for g in q1.courtyard_exact)
+    assert flipped[0] == pytest.approx((own[0], -own[3], own[2], -own[1]))
+    assert flipped[1] == pytest.approx((far[0], -far[3], far[2], -far[1]))
+    q1.mirror()
+    assert tuple(g.bounds for g in q1.courtyard_exact) == (own, far)
+
+
+def test_back_part_reads_own_side_first(tmp_path_factory):
+    tail = (_g("fp_rect", "(start -1 -1) (end 1 1)", "B.CrtYd")
+            + _g("fp_rect", "(start -3 -3) (end 3 3)", "F.CrtYd"))
+    m = _model(tmp_path_factory, "exact_back",
+               _fp("B2", 10, 10, layer="B.Cu", courtyard=None, pads=tail))
+    own, far = m.footprints["B2"].courtyard_exact
+    assert own.bounds == pytest.approx((-0.995, -0.995, 0.995, 0.995))
+    assert far.bounds == pytest.approx((-2.995, -2.995, 2.995, 2.995))
+
+
+def test_duplicate_refs_recorded(tmp_path_factory):
+    body = _fp("R1", 5, 5) + _fp("R1", 15, 5) + _fp("R2", 25, 5)
+    m = _model(tmp_path_factory, "dups", body)
+    assert m.dup_refs == {"R1"}
+    assert m.footprints["R1"].pos == (15.0, 5.0)    # the last one kept
 
 
 # ------------------------------------------------- per-pad rotation (T6)

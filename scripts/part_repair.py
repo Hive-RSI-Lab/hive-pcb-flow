@@ -104,6 +104,7 @@ import geom  # noqa: E402
 import kc  # noqa: E402
 import mazeroute  # noqa: E402
 import place_edit  # noqa: E402
+import placelib  # noqa: E402
 import route_auto  # noqa: E402
 import route_cleanup  # noqa: E402
 import route_edit  # noqa: E402
@@ -741,8 +742,24 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
     for it in seeds(bg0, old, new):
         rip.add(it, "copper on an old pad")
     clashes = 0
+    # a rule's footprint test reads the board the ops leave: the parts
+    # where the trial puts them. A board's model is loaded only when such
+    # a test first needs it (#1163): most boards have none
+    models: dict = {}
+
+    def model_of(path: Path) -> placelib.PlaceModel:
+        if path not in models:
+            models[path] = placelib.PlaceModel(path)
+        return models[path]
+
+    def new_fps() -> dict:
+        moved = model_of(trial).footprints
+        return {r: moved.get(r) for r in refs}
+
     for r in refs:
-        hits = board_update.swap_clashes(bg0, r, new[r], base)
+        hits = board_update.swap_clashes(
+            bg0, r, new[r], base, model=lambda: model_of(base),
+            pending=set(refs) - {r}, new_fps=new_fps)
         clashes += len(hits)
         for it in hits:
             rip.add(it, f"other-net copper too close to {r}'s new pads")

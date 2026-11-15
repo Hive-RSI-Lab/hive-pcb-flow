@@ -28,10 +28,16 @@ invocation applies the whole diff atomically):
                      an exposed pad, 0603 -> 0805). Copper of other nets the
                      new pads would short or crowd under the clearance is
                      ripped, with what it alone held up (the fix loop
-                     reroutes those nets). The new footprint inherits the
-                     old one's schematic link, BOM/pos exclusions and field
-                     texts. Otherwise (or --no-keep-copper) it is composed
-                     as del_part + add_part and the plan's notes say why.
+                     reroutes those nets). The clearance is weighed per
+                     pair: a .kicad_dru rule held to a footprint or a net
+                     name counts only where it may hold on the board the
+                     update leaves, and copper the old pad already came as
+                     close to under the same rules stays (the plan's notes
+                     list it; DRC still flags it) (#1146). The new
+                     footprint inherits the old one's schematic link,
+                     BOM/pos exclusions and field texts. Otherwise (or
+                     --no-keep-copper) it is composed as del_part +
+                     add_part and the plan's notes say why.
                      PR #68 (hifi-receiver-2 core: TPA3220 to its EP
                      package) did this with swap_fp.py + rip_ep.py.
   DNP                the netlist's `(property (name "dnp"))` is the truth:
@@ -82,6 +88,15 @@ Known limitations (adversarial-review verdicts, accepted with reasons):
    zones; a zone regression would surface at refill/DRC, not silently).
  - Region search is front-side only and conservatively treats
    opposite-side courtyards and to-be-deleted parts' copper as obstacles.
+ - A swap's clash clearance (swap_clash_details, #1146) takes the largest
+   rule that may hold for a pair, not KiCad's last matching one, and
+   counts a rule it cannot answer for a pair as holding (a test it does
+   not read; a part the update adds or swaps with no spot yet, as a dry
+   run's adds; a courtyard it cannot build as KiCad does): both can only
+   rip more. DRC on the staged board stays the truth. It weighs only the
+   rules route_critical.parse_dru_rules reads: one written otherwise (a
+   second constraint, mil or inch, opt or max before min) or a barrier
+   rule (aiee_iso_*) is left out, where KiCad holds it (#1273).
 
 CLI (SPEC section 6):
   board_update.py --pcb B.kicad_pcb --netlist NEW.net
@@ -100,6 +115,7 @@ import copy
 import dataclasses
 import math
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -394,6 +410,31 @@ def placed_pads(bg, mod_path: Path, ref: str, place: dict,
             for p in sink._pads]
 
 
+def _placed_footprint(ref: str, fpid: str, mod_path: Path | None,
+                      place: dict):
+    """The placelib.Footprint a .kicad_dru footprint test reads of a
+    library footprint once placed at `place` ({x, y, deg, side}), as
+    placed_pads places its pads: library id, side and both sides'
+    courtyards (Footprint.courtyard_exact), flipped TOP_BOTTOM for the
+    back; no pads. None when the footprint cannot be read
+    (swap_clash_details then cannot tell what a test of it answers)."""
+    try:
+        root = sexpdata.loads(Path(mod_path).read_text(encoding="utf-8"))
+        _, front, front_bad = placelib._courtyard_read(root, "F.CrtYd")
+        _, back, back_bad = placelib._courtyard_read(root, "B.CrtYd")
+        fp = placelib.Footprint(
+            ref=ref, fpid=fpid, pos=(float(place["x"]), float(place["y"])),
+            angle=float(place.get("deg") or 0.0), side="front",
+            attrs=frozenset(), locked=False, pads=[], courtyard_local=None,
+            courtyard_missing=True, courtyard_exact=(front, back),
+            courtyard_unreadable=(front_bad, back_bad))
+        if place.get("side") == "back":
+            fp.mirror()
+        return fp
+    except Exception:  # noqa: BLE001 - unread reads as "cannot tell"
+        return None
+
+
 def _touching(bg, pad) -> list:
     """Tracks and vias whose copper touches `pad` on a layer they share."""
     return [t for t in bg.tracks_of()
@@ -433,34 +474,292 @@ def swap_keeps_copper(bg, ref: str, new_pads: list,
     return None
 
 
-def swap_clashes(bg, ref: str, new_pads: list, pcb: Path) -> list:
-    """Tracks and vias of another net that the new footprint's pads would
-    short or come closer to than the clearance - rip_ep.py, which cleared
-    the copper an HTSSOP's new exposed pad and its thermal vias landed on.
-    Clearance: the larger of the two nets' netclass/.kicad_dru clearance
-    and the board floor (route_cleanup's reading of the rules)."""
+def _rule_layer_ok(layer: str | None, ly: str) -> bool:
+    """Whether a .kicad_dru rule's (layer ...) clause takes in copper layer
+    ly: outer is F.Cu and B.Cu, inner the In*.Cu layers, a copper layer's
+    name only itself; no clause, or a name this reader does not know,
+    takes in every layer."""
+    if layer == "outer":
+        return ly in ("F.Cu", "B.Cu")
+    if layer == "inner":
+        return re.fullmatch(r"In\d+\.Cu", ly) is not None
+    if layer is not None and re.fullmatch(r"(F|B|In\d+)\.Cu", layer):
+        return layer == ly
+    return True
+
+
+# the reads of a .kicad_dru condition that a swapped part's old pad and its
+# same-numbered new pad on the same net share against the same item: both
+# are pads of one net, so a test of these answers the same for either
+# (swap_clash_details)
+_PAIR_READS = frozenset({"type", "net", "netname", "netclass", "indiffpair",
+                         "iscoupleddiffpair"})
+
+
+def _dru_reads(tree) -> set[str]:
+    """What a parsed .kicad_dru condition (route_critical.
+    parse_dru_condition) reads of its items, lowercased: "footprint" for a
+    footprint test, "type" and "net" for the Type and NetName tests the
+    reader parses, the A./B. names in any other text, and "?" for a text
+    that names none."""
+    kind = tree[0]
+    if kind in ("and", "or"):
+        return set().union(*(_dru_reads(t) for t in tree[1]))
+    if kind == "scope":
+        return {"footprint"}
+    if kind in ("type", "net"):
+        return {kind}
+    return {w.lower() for w in re.findall(r"\b[AB]\.(\w+)", tree[1])} or \
+        {"?"}
+
+
+def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
+                       old_pads: list | None = None, model=None,
+                       pending=(), new_fps=None, gone=(),
+                       kept: list | None = None) -> list:
+    """[(item, info)]: the tracks and vias of another net that ref's new
+    pads would short or come closer to than the clearance, each once with
+    its worst shortfall: info {clearance_mm, gap_mm, pad, rule}, rule
+    naming where the clearance came from. rip_ep.py did this by hand for
+    an HTSSOP's new exposed pad and its thermal vias.
+
+    The clearance is taken per pad, item and shared layer (#1146): the
+    board floor, raised by either net's netclass or .kicad_dru per-net
+    clearance (route_cleanup._rules_clearance with scoped=False), then by
+    the largest .kicad_dru clearance rule held to a footprint or a net
+    name that may hold for the pair on that layer (route_critical.
+    dru_rule_may_hold): a memberOfFootprint or courtyard test
+    (dru_condition_scoped), or a NetName test, read per pair as KiCad
+    reads it (case-insensitive, wildcards, ||) where the per-net reading
+    takes each name literally and leaves out a rule held to a courtyard
+    (#924).
+
+    A footprint test reads the board as the update leaves it: model (a
+    placelib.PlaceModel of pcb, by default loaded from pcb) without the
+    refs in gone (parts the update deletes), with ref and the refs in
+    pending (parts it adds or swaps) given their footprint from new_fps
+    (ref -> placelib.Footprint, _placed_footprint). Either may be given
+    as a function that returns it, called only when a rule first needs a
+    footprint, as the default model is loaded (#1163). A courtyard
+    test reads both sides' courtyards as KiCad builds them
+    (Footprint.courtyard_exact). A part whose footprint is not known (no
+    new_fps entry, or a reference two footprints carry) or whose courtyard
+    cannot be read answers "cannot tell", which counts as may hold.
+
+    With old_pads (ref's pads before the swap) a pair is left alone where
+    a same-numbered old pad, on the same net (_nets_equal) and layer,
+    already came at least as close to the item, and every clearance rule
+    that reads more of an item than its type and net (_dru_reads) answers
+    the same, and knowingly, for the old pad on the board before the
+    update as for the new pad after it: the old pad needed the same
+    clearance, so copper the board held next to it is not this swap's to
+    rip. Where the two net names differ (an open pad's unconnected-* name
+    against no net) the per-net clearance must match too, and every
+    clearance rule must answer the same. Such pairs go into kept (when a
+    list is given) as (item, info), worst per item, for items not ripped
+    anyway: a violation the board already had, which DRC still flags."""
     import route_cleanup  # noqa: PLC0415 - heavy, lazy
+    import route_critical as rc  # noqa: PLC0415 - heavy, lazy
 
-    nets = sorted(set(bg.nets))
-    per_net, floor, *_ = route_cleanup._rules_clearance(pcb, nets)
+    per_net, floor, *_ = route_cleanup._rules_clearance(
+        pcb, sorted(set(bg.nets)), scoped=False)
+    try:
+        text = pcb.with_suffix(".kicad_dru").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    rules, compared, every = [], [], []
+    for r in rc.parse_dru_rules(text):
+        if r["constraint"] != "clearance":
+            continue
+        tree = rc.parse_dru_condition(r["condition"])
+        if r["nets"] or rc.dru_condition_scoped(tree):
+            rules.append((r["min_mm"], r["layer"], tree, r["name"]))
+        every.append((r["layer"], tree))
+        if _dru_reads(tree) - _PAIR_READS:
+            compared.append((r["layer"], tree))
+    rules.sort(key=lambda r: -r[0])
+    pending = set(pending) - {ref}
+    held = {"model": model, "fps": new_fps}
 
-    def clr(a, b) -> float:
-        return max(floor, per_net.get(a or "", floor),
-                   per_net.get(b or "", floor))
+    def loaded(key: str, load):
+        """held[key], called first if a function, or load() if None."""
+        if held[key] is None:
+            held[key] = load()
+        elif callable(held[key]):
+            held[key] = held[key]()
+        return held[key]
 
-    hits: dict[int, object] = {}
-    for n in new_pads:
-        for t in bg.tracks_of():
-            if t.layer in n.layers and (not n.net or t.net != n.net) \
-                    and t.poly.distance(n.poly) < clr(n.net, t.net) - 1e-6:
-                hits[id(t)] = t
-        for v in bg.vias_of():
-            if (n.net and v.net == n.net) or not any(
-                    v.spans(ly) for ly in n.layers):
+    def placed() -> dict:
+        fps = loaded("fps", dict)
+        return {k: fps.get(k) for k in pending | {ref}}
+
+    def world(over):
+        """scope(fn, sel, item) for the board before the update (over
+        None) or after it: the refs in gone removed, those over() names
+        given their footprint (None: not known)."""
+        cache: dict = {}
+        picks: dict[str, list] = {}
+        courts: dict[tuple, object] = {}
+        hits: dict[tuple, bool | None] = {}
+
+        def parts() -> dict:
+            if "parts" not in cache:
+                m = loaded("model", lambda: placelib.PlaceModel(pcb))
+                out = dict(m.footprints)
+                if over is not None:
+                    for name in gone:
+                        out.pop(name, None)
+                    out.update(over())
+                # KiCad's tests read every footprint a reference names;
+                # the model keeps one of them
+                out.update(dict.fromkeys(m.dup_refs))
+                cache["parts"] = out
+            return cache["parts"]
+
+        def fpid(name: str, sel: str) -> str | None:
+            # a library id is read only for a selector that can name one
+            if ":" not in sel:
+                return None
+            fp = parts().get(name)
+            return None if fp is None else fp.fpid
+
+        def named(sel: str) -> list:
+            """[(name, m)]: the parts sel may name, m True or None."""
+            if sel not in picks:
+                picks[sel] = [
+                    (name, m) for name in parts()
+                    if (m := rc.dru_selector_matches(
+                        sel, name, fpid(name, sel))) is not False]
+            return picks[sel]
+
+        def court(name: str, fp, side: int):
+            if (name, side) not in courts:
+                g = fp.courtyard_exact[side]
+                courts[name, side] = None if g is None else prep(
+                    affinity.translate(affinity.rotate(
+                        g, -fp.angle, origin=(0, 0)), *fp.pos))
+            return courts[name, side]
+
+        def meets(fn: str, name: str, item):
+            """Whether item meets part name's courtyard (fn court: either
+            side's; front or back: that side's), or None: cannot tell."""
+            key = (fn, name, id(item))
+            if key not in hits:
+                fp = parts().get(name)
+                if fp is None:
+                    hits[key] = None
+                else:
+                    # courtyard_exact is (own side, far side)
+                    sides = (0, 1) if fn == "court" else \
+                        (0 if fn == fp.side else 1,)
+                    hits[key] = rc._or3(
+                        None if fp.courtyard_unreadable[s] else
+                        False if fp.courtyard_exact[s] is None else
+                        court(name, fp, s).intersects(item.poly)
+                        for s in sides)
+            return hits[key]
+
+        def scope(fn: str, sel: str, item):
+            if fn == "member":
+                if not isinstance(item, geom.Pad):
+                    return False
+                return rc.dru_selector_matches(sel, item.ref,
+                                               fpid(item.ref, sel))
+            if sel in ("A", "B"):
+                # KiCad reads the item itself as the footprint: no pad or
+                # copper is one
+                return False
+            out = False
+            for name, m in named(sel):
+                hit = meets(fn, name, item)
+                if hit is False:
+                    continue
+                if m is True and hit is True:
+                    return True
+                out = None
+            return out
+
+        return scope
+
+    before = world(None)
+    after = world(placed)
+
+    def clr(n, it, ly: str) -> tuple[float, str]:
+        c, src = floor, "board floor"
+        for net in (n.net, it.net):
+            v = per_net.get(net or "")
+            if v is not None and v > c:
+                c, src = v, f"net {net}"
+        for mn, layer, tree, name in rules:
+            if mn <= c:
+                break
+            if _rule_layer_ok(layer, ly) and \
+                    rc.dru_rule_may_hold(tree, n, it, after):
+                return mn, f"rule {name}"
+        return c, src
+
+    def same(tree, p, n, it) -> bool:
+        """Whether a rule's answer for old pad p is known and the same
+        as for new pad n, each against it on its own board."""
+        was = rc.dru_rule_holds(tree, p, it, before)
+        return was is not None and \
+            was == rc.dru_rule_holds(tree, n, it, after)
+
+    def old_held(n, it, ly: str, d: float) -> bool:
+        for p in old_pads or []:
+            if p.number != n.number or not _nets_equal(p.net, n.net) or \
+                    not p.on(ly) or it.poly.distance(p.poly) > d + 1e-6:
                 continue
-            if v.poly.distance(n.poly) < clr(n.net, v.net) - 1e-6:
-                hits[id(v)] = v
-    return list(hits.values())
+            # an open pad's net name churns (_nets_equal): where the names
+            # differ, a rule or netclass that reads the name may not
+            # answer the same, so each must
+            if (p.net or None) == (n.net or None):
+                tests = compared
+            elif per_net.get(p.net or "") == per_net.get(n.net or ""):
+                tests = every
+            else:
+                continue
+            if all(same(tree, p, n, it) for layer, tree in tests
+                   if _rule_layer_ok(layer, ly)):
+                return True
+        return False
+
+    top = rules[0][0] if rules else 0.0
+    items = bg.tracks_of() + bg.vias_of()
+    worst: dict[int, tuple] = {}
+    spared: dict[int, tuple] = {}
+    for n in new_pads:
+        for it in items:
+            if n.net and it.net == n.net:
+                continue
+            lays = [ly for ly in n.layers
+                    if (it.layer == ly if isinstance(it, geom.Track)
+                        else it.spans(ly))]
+            if not lays:
+                continue
+            d = it.poly.distance(n.poly)
+            if d >= max(floor, top, per_net.get(n.net or "", floor),
+                        per_net.get(it.net or "", floor)) - 1e-6:
+                continue
+            for ly in lays:
+                c, src = clr(n, it, ly)
+                if d >= c - 1e-6:
+                    continue
+                out = spared if old_held(n, it, ly, d) else worst
+                if id(it) not in out or c - d > out[id(it)][0]:
+                    out[id(it)] = (c - d, it, {
+                        "clearance_mm": round(c, 4), "gap_mm": round(d, 4),
+                        "pad": n.number, "rule": src})
+    if kept is not None:
+        kept.extend((it, info) for k, (_, it, info) in spared.items()
+                    if k not in worst)
+    return [(it, info) for _, it, info in worst.values()]
+
+
+def swap_clashes(bg, ref: str, new_pads: list, pcb: Path, **kw) -> list:
+    """The items of swap_clash_details (same arguments), without the
+    detail."""
+    return [it for it, _ in swap_clash_details(bg, ref, new_pads, pcb, **kw)]
 
 
 # ----------------------------------------------------------- orphan analysis
@@ -912,10 +1211,20 @@ def resolve_placement(ref: str, spec: dict, mod_path: Path,
 
 
 def analyse_swaps(plan: dict, resolved: dict, bg, fp_paths: list[Path],
-                  pcb: Path, no_keep: bool) -> list:
+                  pcb: Path, no_keep: bool, model=None,
+                  pending=None) -> list:
     """Decide per swap_new_fp entry whether it keeps the part's routing
     (entry["keep_copper"], or a note saying why not) and return the other
-    nets' copper the kept swaps' new pads clash with, to rip."""
+    nets' copper the kept swaps' new pads clash with, to rip. model (the
+    board's placelib.PlaceModel) and pending (the refs the update adds or
+    swaps; by default the plan's) go to swap_clash_details, with the
+    plan's deletions and, for each added or swapped part resolved holds a
+    spot for, its new footprint there; a pending part without one is one
+    a rule's footprint test cannot be answered for."""
+    if pending is None:
+        pending = {e["ref"] for e in plan["swap_new_fp"] + plan["add"]}
+    gone = {e["ref"] for e in plan["del"]}
+    new_fps: dict | None = None
     clashes: list = []
     for entry in plan["swap_new_fp"]:
         ref = entry["ref"]
@@ -940,13 +1249,32 @@ def analyse_swaps(plan: dict, resolved: dict, bg, fp_paths: list[Path],
             plan["notes"].append(f"{ref}: footprint swap rips its routing "
                                  f"(del + add): {why}")
             continue
-        hit = swap_clashes(bg, ref, new_pads, pcb)
+        if new_fps is None:
+            new_fps = {}
+            for e in plan["swap_new_fp"] + plan["add"]:
+                if e["ref"] in resolved:
+                    fpid = e.get("fp") or e["fp_new"]
+                    new_fps[e["ref"]] = _placed_footprint(
+                        e["ref"], fpid, find_mod(fpid, fp_paths),
+                        resolved[e["ref"]])
+        kept: list = []
+        found = swap_clash_details(
+            bg, ref, new_pads, pcb, old_pads=bg.pads_of(ref=ref),
+            model=model, pending=set(pending) - {ref}, new_fps=new_fps,
+            gone=gone, kept=kept)
+        if kept:
+            nets = sorted({it.net or "(no net)" for it, _ in kept})
+            plan["notes"].append(
+                f"{ref}: kept {len(kept)} track(s)/via(s) of other nets "
+                f"({', '.join(nets)}) closer to the new pads than the "
+                "clearance, as close as the old pad already came; DRC "
+                "still flags them")
         entry["clashes"] = [
-            {"kind": "via", "net": it.net, "at": list(it.at)}
+            {"kind": "via", "net": it.net, "at": list(it.at), **info}
             if isinstance(it, geom.Via) else
             {"kind": "track", "net": it.net, "layer": it.layer,
-             "uuid": it.uuid} for it in hit]
-        clashes += hit
+             "uuid": it.uuid, **info} for it, info in found]
+        clashes += [it for it, _ in found]
     return clashes
 
 
@@ -1348,7 +1676,9 @@ def run(argv: list[str] | None = None):
         if spots:
             analyse_swaps({**plan, "swap_new_fp": [
                 e for e in plan["swap_new_fp"] if e["ref"] in spots]},
-                spots, bg, fp_paths, pcb, args.no_keep_copper)
+                spots, bg, fp_paths, pcb, args.no_keep_copper, model=model,
+                pending={e["ref"] for e in plan["swap_new_fp"]
+                         + plan["add"]})
         # classification never reads zone fills - a stale-fill board may
         # still be PLANNED against (apply below does demand freshness)
         if plan["unsupported"]:
@@ -1409,7 +1739,7 @@ def run(argv: list[str] | None = None):
                 extra_obstacles=placed_courts)
 
     clashes = analyse_swaps(plan, resolved, bg, fp_paths, pcb,
-                            args.no_keep_copper)
+                            args.no_keep_copper, model=model)
     orphans = plan_orphans(
         bg, [e["ref"] for e in plan["del"] + plan["swap_new_fp"]
              if not e.get("keep_copper")], removed=clashes)

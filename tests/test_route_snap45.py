@@ -427,14 +427,19 @@ def test_snap_env_tags_drills_and_reads_hole_clearance(tmp_path):
 
 # ============================================================ DRU fallback
 
-def _dru_rules(tmp_path, *rules):
+def _dru_rules(tmp_path, *rules, scoped=True, pro_floor=None):
     pcb = tmp_path / "r.kicad_pcb"
     text = "(version 1)\n" + "".join(
         f'(rule "r{i}"\n\t(constraint clearance (min {mm}mm))\n'
         + (f'\t(condition "{cond}")\n' if cond else "") + ")\n"
         for i, (mm, cond) in enumerate(rules))
     pcb.with_suffix(".kicad_dru").write_text(text, encoding="utf-8")
-    return rcl._rules_clearance(pcb, ["VCC", "SIG"])
+    if pro_floor is not None:  # the netclass floor, else KiCad's 0.2 mm
+        pcb.with_suffix(".kicad_pro").write_text(json.dumps(
+            {"net_settings": {"classes": [
+                {"name": "Default", "clearance": pro_floor}]}}),
+            encoding="utf-8")
+    return rcl._rules_clearance(pcb, ["VCC", "SIG"], scoped=scoped)
 
 
 def test_unconditioned_dru_clearance_enables_fallback(tmp_path):
@@ -457,6 +462,26 @@ def test_conditioned_clearance_rule_takes_the_maximum(tmp_path):
     # only a conditioned rule still counts
     got = _dru_rules(tmp_path, (0.15, "A.NetName == 'VCC'"))
     assert got[3] == {} and got[4] == 0.15
+
+
+def test_unscoped_floor_leaves_footprint_rules_out(tmp_path):
+    # the voice board's shape (#1146): a floor, package ratings held to
+    # J801's pads and U702's courtyard, a BGA escape rule at U301, and a
+    # via rule that holds anywhere
+    rules = ((0.0762, None),
+             (0.19, "A.memberOfFootprint('J801') && "
+                    "B.memberOfFootprint('J801')"),
+             (0.14, "A.intersectsCourtyard('U702') && "
+                    "B.intersectsCourtyard('U702') && "
+                    "A.Type != 'Zone' && B.Type != 'Zone'"),
+             (0.0889, "A.intersectsCourtyard('U301') || "
+                      "B.intersectsCourtyard('U301')"),
+             (0.1, "A.Type == 'via'"))
+    got = _dru_rules(tmp_path, *rules, pro_floor=0.0762)
+    assert got[1] == 0.19 and got[4] == 0.19
+    got = _dru_rules(tmp_path, *rules, pro_floor=0.0762, scoped=False)
+    # the floor drops to the via rule; the hard fallback stays the maximum
+    assert got[1] == 0.1 and got[4] == 0.19
 
 
 def test_no_clearance_rule_keeps_fallback_off(tmp_path):
