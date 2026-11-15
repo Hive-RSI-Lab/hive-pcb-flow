@@ -30,7 +30,9 @@ constraints file, what hwde reads before anyone has written one:
 netlist_audit on the schematic, check_mate_pins and check_current on the
 board, check_straps on the board with the netlist kicad-cli exports from the
 schematic, check_connector_fit, check_silk and check_esd on the board (no
-parts/, so check_esd reads no victim's abs max), check_pinouts on the
+parts/, so check_esd reads no victim's abs max), check_ratings on the board
+(each pin rated from hwde's library extractions by its LCSC number, rails
+from net names: no parts/ and no power tree), check_pinouts on the
 schematic, check_bom_sync on the board with --live (the package of each LCSC part
 comes from JLC's record, as nothing in the foreign tree holds it),
 check_fp_package on the board with --live (each part's package from JLC's
@@ -288,6 +290,20 @@ def _check_esd(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--constraints", str(empty), "--parts", str(empty.parent / "no-parts")]
 
 
+def _check_ratings(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """Each pin's rating against its net, rated from hwde's library
+    extractions only: --parts is an empty folder in the run dir (the foreign
+    repo's parts/ is not read, and check_ratings needs the folder to exist)
+    and --power-tree names no file, so a rail's volts come from its net name.
+    audit() runs it with HWDE_LEDGER_WRITE=0, so no ledger.json lands in the
+    cached repo."""
+    parts = empty.parent / "ratings-no-parts"
+    parts.mkdir(exist_ok=True)
+    return ["check_ratings.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--constraints", str(empty), "--parts", str(parts),
+            "--power-tree", str(empty.parent / "no-power-tree.md")]
+
+
 def _check_bom_sync(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_bom_sync.py", "--pcb", str(_pcb(b, rev, repo, empty)), "--live"]
 
@@ -361,6 +377,7 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_connector_fit": _check_connector_fit,
            "check_silk": _check_silk, "check_thermal": _check_thermal,
            "check_pinouts": _check_pinouts, "check_esd": _check_esd,
+           "check_ratings": _check_ratings,
            "check_wicking": _check_wicking,
            "check_mounting": _check_mounting,
            "dfm": _dfm}
@@ -407,9 +424,11 @@ def audit(cache: Path, b: dict, rev: str, script: str,
     empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
     cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b, rev), empty)
     try:
+        # nothing is written into the foreign tree (check_ratings' ledger)
         p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
                             "--out", str(out)],
-                           capture_output=True, text=True, timeout=900)
+                           capture_output=True, text=True, timeout=900,
+                           env={**os.environ, "HWDE_LEDGER_WRITE": "0"})
     except subprocess.TimeoutExpired as e:
         err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) \
             else e.stderr
