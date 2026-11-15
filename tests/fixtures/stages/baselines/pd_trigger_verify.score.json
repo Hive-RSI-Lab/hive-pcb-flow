@@ -39,6 +39,7 @@
    "check_net_tie": 0,
    "check_pinouts": 0,
    "check_power_path": 0,
+   "check_rail_budget": 0,
    "check_reset_drive": 0,
    "check_rf_match": 0,
    "check_si": 0,
@@ -51,6 +52,7 @@
    "check_via_stubs": 0,
    "check_vias": 0,
    "check_wicking": 4,
+   "mlcc_dcbias": 0,
    "netlist_audit": 0
   },
   "by_kind": {
