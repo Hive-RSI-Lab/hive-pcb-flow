@@ -7,7 +7,10 @@ asked for more than it can give. No DRC sees this class; it is a respin.
 
 Inputs (pure Python, no KiCad run):
  - the board (--pcb): footprint refs, their `LCSC` / `LCSC Part` property,
-   and the net on every pad;
+   and the net on every pad. A footprint with no LCSC code is keyed by its
+   MPN (#1119: the `MPN` property, else the parts.json line naming its ref)
+   when parts/<MPN>.json or a parts.json line with that mpn exists, as on a
+   US-sourced board; its findings carry `part_key` "MPN <mpn>";
  - the parts directory (--parts, default <ws>/parts beside <ws>/kicad):
    parts.json (the P3 BOM, per-part `attributes`) and the per-part
    extraction <LCSC>.json that datasheet_extract.py validates (pinout +
@@ -234,8 +237,12 @@ def _kids(n, name):
     return [c for c in n[1:] if isinstance(c, list) and c and _t(c[0]) == name]
 
 
+MPN_PROPS = ("MPN", "Manufacturer Part Number", "Manufacturer_Part_Number",
+             "Part Number", "PN")
+
+
 def load_parts_on_board(pcb: Path) -> list[dict]:
-    """[{ref, lcsc, pads{number: net}}] from the .kicad_pcb text."""
+    """[{ref, lcsc, mpn, pads{number: net}}] from the .kicad_pcb text."""
     try:
         root = sexpdata.loads(pcb.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001
@@ -269,6 +276,8 @@ def load_parts_on_board(pcb: Path) -> list[dict]:
                     "in_bom": not (attrs & {"exclude_from_bom", "board_only"}),
                     "lcsc": (props.get("LCSC") or props.get("LCSC Part")
                              or "").strip(),
+                    "mpn": next((props[k].strip() for k in MPN_PROPS
+                                 if (props.get(k) or "").strip()), ""),
                     "value": props.get("Value", ""),
                     "footprint": str(fp[1]) if len(fp) > 1 else "",
                     "pads": pads, "fns": fns, "nums": sorted(nums)})
@@ -276,6 +285,52 @@ def load_parts_on_board(pcb: Path) -> list[dict]:
 
 
 # --- net voltages -------------------------------------------------------------
+
+def _safe_name(key: str) -> bool:
+    return bool(key) and not re.search(r"[/\\]|^\.", key)
+
+
+def key_by_mpn(board: list[dict], bom: list[dict], parts_dir: Path,
+               bom_by_lcsc: dict) -> dict[str, str]:
+    """#1119: give a footprint with no LCSC code its MPN as the part key
+    when a record is found under it - parts/<MPN>.json (or the library's),
+    or a parts.json line with that mpn and no lcsc, which then joins
+    bom_by_lcsc under the MPN. The MPN is the footprint's MPN property,
+    else the mpn of the parts.json line that lists its ref. {ref: mpn}."""
+    from mpn_decode import norm
+    by_ref = {r: p for p in bom for r in (p.get("refs") or [])
+              if isinstance(r, str)}
+    by_mpn = {norm(p["mpn"]): p for p in bom
+              if p.get("mpn") and not str(p.get("lcsc") or "").strip()}
+    keyed = {}
+    for b in board:
+        if b["lcsc"]:
+            continue
+        mpn = b.get("mpn") or str((by_ref.get(b["ref"]) or {}).get("mpn")
+                                  or "").strip()
+        if not mpn:
+            continue
+        line = by_mpn.get(norm(mpn))
+        # the record's file name: the MPN as written, knowledgelib's safe
+        # name ('#' and '/' made '-'), or that with '.' made '-' too, as
+        # hand-made records are named (ABM8G-24.000MHZ-18-D2Y-T is stored
+        # as ABM8G-24-000MHZ-18-D2Y-T.json)
+        stems = [x for x in (mpn, re.sub(r"[^A-Za-z0-9._-]", "-", mpn),
+                             re.sub(r"[^A-Za-z0-9_-]", "-", mpn))
+                 if _safe_name(x)]
+        if not stems:
+            continue
+        on_disk = next((s for s in stems for d in (parts_dir, LIBRARY_DIR)
+                        if (d / f"{s}.json").is_file()), None)
+        if not (on_disk or line):
+            continue
+        mpn = on_disk or stems[0]
+        b["lcsc"] = mpn
+        if line is not None:
+            bom_by_lcsc.setdefault(mpn, line)
+        keyed[b["ref"]] = mpn
+    return keyed
+
 
 def base_net(net: str) -> str:
     return net.rsplit("/", 1)[-1].upper()
@@ -1081,6 +1136,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     trusted = set(trusted or ())
     bom_by_lcsc = {str(p.get("lcsc") or "").strip(): p for p in bom
                    if p.get("lcsc")}
+    by_mpn = key_by_mpn(board, bom, parts_dir, bom_by_lcsc)
     exts: dict[str, dict] = {}
     for lcsc in {b["lcsc"] for b in board if b["lcsc"]}:
         if (ext := load_extraction(parts_dir, lcsc)) is not None:
@@ -1137,6 +1193,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     checked_pins = 0
 
     def emit(kind, sev, ref, net, msg, **extra):
+        if ref in by_mpn:
+            extra.setdefault("part_key", f"MPN {by_mpn[ref]}")
         out.append(violation(SCRIPT, sev, None, None, net, [ref], msg, SCRIPT,
                              kind=kind, **extra))
 
@@ -1577,6 +1635,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         board, exts, bom_by_lcsc, read_from, held_back, rated_by_ref, trusted,
         emit, out)
     facts = {"parts_on_board": len(board), "extractions": sorted(exts),
+             "keyed_by_mpn": by_mpn,
              "net_volts": {n: {"v": volts[n], "src": vsrc[n]}
                            for n in sorted(volts)},
              "pins_checked": checked_pins,
