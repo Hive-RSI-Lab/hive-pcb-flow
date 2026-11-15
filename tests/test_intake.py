@@ -498,10 +498,11 @@ GOLDEN_WARNINGS = {
 # check_straps and check_reset_drive know blinky2's STM32F103 since #885 (the
 # STM32F1 row in reference/reset_states.yaml) and must pass it, as below.
 # The checks blinky2 gives nothing to judge: it has none of what they read.
+# check_mounting says so since #1295 (blinky2 has no mounting holes).
 GOLDEN_NOTHING_TO_JUDGE = {
     "check_antenna", "check_cap_load", "check_creepage", "check_ddr_timing", "check_diffpair",
     "check_isolation", "check_kelvin", "check_length_groups", "check_mate_pins",
-    "check_net_tie", "check_pinouts", "check_rail_budget", "check_rf_match", "check_stackup", "check_surge", "check_thermal",
+    "check_mounting", "check_net_tie", "check_pinouts", "check_rail_budget", "check_rf_match", "check_stackup", "check_surge", "check_thermal",
     "check_transformer", "check_usb_phy", "check_via_stubs",
 }
 
