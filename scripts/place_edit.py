@@ -11,6 +11,11 @@ Contract:
   place_edit.py --pcb B.kicad_pcb --ops ops.json [--out-report r.json]
   ops.json: {"version": 1, "ops": [...]}  (op shapes: see lib/place_swig.py)
 
+flip mirrors the part top to bottom about its own position, not left to
+right: each pad's local y and the part's angle are negated (-90 becomes 90),
+local x is kept. Follow it with rotate (or use place with deg) to set the
+angle you want.
+
 Atomic + rollback: ops are validated first (schema + refs against the board);
 the board is copied to a scratch dir INSIDE the board's directory; the SWIG
 worker edits and saves the copy; the driver re-parses the copy and verifies
