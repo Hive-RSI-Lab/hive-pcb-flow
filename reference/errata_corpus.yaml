@@ -584,6 +584,59 @@ boards:
       moved here: check_silk's per-pin pin_label_wrong form (#1028) was
       written knowing this defect, so its catch is a training catch. The
       blind and swept fields are kept as the record.
+- id: byte-hamr
+  url: https://github.com/robertrico/project_byte_hamr
+  commit: f3e105fb7585f033e00b76cff71ce3e86d2bcfd3
+  licence: MIT
+  rev_a: {name: Rev 2, sch: hardware/byte_hamr/kicad/project_byte_hamr.kicad_sch,
+          pcb: hardware/byte_hamr/kicad/project_byte_hamr.kicad_pcb}
+  rev_b: {name: Rev 3, sch: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_sch,
+          pcb: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_pcb}
+  source: hardware/byte_hamr/rev2_errata.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
+  defects:
+  - id: byte-hamr-1
+    summary: U14 SN74LVC8T245 drives the Apple II slot's wired-OR lines (IRQ, NMI, DMA, INH, RES) push-pull, DIR and OE tied to GND
+    source_quote: "DIR (pin 2) and OE (pin 22) are tied to GND, so it always drives B -> A, push-pull."
+    fault_class: SCH (driver type on a shared line)
+    blind: missed
+    verdict: caught
+    catch: {script: check_pinouts, kind: wired_or_push_pull, refs: [U14]}
+    note: >-
+      Swept blind as a holdout board (missed, with the flow at db43cb8), then
+      moved here: check_pinouts' wired_or_push_pull (#1087) was seeded from
+      the I2C specification, the Apple II manual's open-collector slot lines
+      and TI's 74LVC8T245 function table, but written knowing this defect,
+      so its catch is a training catch. Rev 3 drives the slot lines through
+      open-drain 74LVC07s and is clean. The blind and swept fields are kept as the record.
+- id: identidem-breakout
+  url: https://github.com/acornelissen/IDENTIDEM.design-MRF2
+  commit: e495d6494dc63f787853599f9da19c583d280a12
+  licence: GPL-3.0
+  rev_a: {name: MRF-Pro-v7.5 breakout, sch: PCBs/v1.0/Breakout/KiCAD/MRF-Pro-v7.5-breakout.kicad_sch,
+          pcb: PCBs/v1.0/Breakout/KiCAD/MRF-Pro-v7.5-breakout.kicad_pcb,
+          cpl: PCBs/v1.0/Breakout/JLCPCB/positions.csv}
+  rev_b: {name: MRF-Pro-v8 breakout, sch: PCBs/v2.0/Breakout/KiCAD/MRF-Pro-v8-breakout.kicad_sch,
+          pcb: PCBs/v2.0/Breakout/KiCAD/MRF-Pro-v8-breakout.kicad_pcb,
+          cpl: PCBs/v2.0/Breakout/JLCPCB/positions.csv}
+  source: Documentation/hardware-errata/lidar-stage1-decoupling.md
+  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
+  defects:
+  - id: identidem-1
+    summary: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it
+    source_quote: "with no decoupling capacitor anywhere near the sensor."
+    fault_class: PI (local decoupling)
+    blind: missed
+    verdict: caught
+    catch: {script: check_pinouts, kind: pulsed_load_no_bulk, refs: [J7]}
+    note: >-
+      Swept blind as a holdout board (missed, with the flow at db43cb8), then
+      moved here: check_pinouts' pulsed_load_no_bulk (#1090) was seeded from
+      makers' supply notes for pulsed loads (Garmin's LIDAR-Lite, SIMCom's
+      SIM800), but written knowing this defect, so its catch is a training
+      catch. J7's supply, /3.3V, has no capacitor of 10 uF or more; v8 feeds
+      J7 from its own filtered rail with 47 uF on it and is clean. The blind and swept fields are kept as the
+      record.
 holdout:
 - id: netscore-main
   url: https://github.com/arcticlula/Netscore
@@ -644,24 +697,6 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "a part placed with another part's symbol (#1086)"
-- id: byte-hamr
-  url: https://github.com/robertrico/project_byte_hamr
-  commit: f3e105fb7585f033e00b76cff71ce3e86d2bcfd3
-  licence: MIT
-  rev_a: {name: Rev 2, sch: hardware/byte_hamr/kicad/project_byte_hamr.kicad_sch,
-          pcb: hardware/byte_hamr/kicad/project_byte_hamr.kicad_pcb}
-  rev_b: {name: Rev 3, sch: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_sch,
-          pcb: hardware/byte_hamr/kicad_rev3/project_byte_hamr.kicad_pcb}
-  source: hardware/byte_hamr/rev2_errata.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
-  defects:
-  - id: byte-hamr-1
-    summary: U14 SN74LVC8T245 drives the Apple II slot's wired-OR lines (IRQ, NMI, DMA, INH, RES) push-pull, DIR and OE tied to GND
-    source_quote: "DIR (pin 2) and OE (pin 22) are tied to GND, so it always drives B -> A, push-pull."
-    fault_class: SCH (driver type on a shared line)
-    blind: missed
-    verdict: missed
-    follow_up: "a push-pull driver on an open-collector shared line (#1087)"
 - id: cmm2-jlc
   url: https://github.com/Manawyrm/CMM2-JLC
   commit: 318b012b10ac030cdc8469f89d6df7e5b2cf0741
@@ -779,27 +814,6 @@ holdout:
     blind: missed
     verdict: missed
     follow_up: "check_silk reading a header's labels against its pins' nets (#1028)"
-- id: identidem-breakout
-  url: https://github.com/acornelissen/IDENTIDEM.design-MRF2
-  commit: e495d6494dc63f787853599f9da19c583d280a12
-  licence: GPL-3.0
-  rev_a: {name: MRF-Pro-v7.5 breakout, sch: PCBs/v1.0/Breakout/KiCAD/MRF-Pro-v7.5-breakout.kicad_sch,
-          pcb: PCBs/v1.0/Breakout/KiCAD/MRF-Pro-v7.5-breakout.kicad_pcb,
-          cpl: PCBs/v1.0/Breakout/JLCPCB/positions.csv}
-  rev_b: {name: MRF-Pro-v8 breakout, sch: PCBs/v2.0/Breakout/KiCAD/MRF-Pro-v8-breakout.kicad_sch,
-          pcb: PCBs/v2.0/Breakout/KiCAD/MRF-Pro-v8-breakout.kicad_pcb,
-          cpl: PCBs/v2.0/Breakout/JLCPCB/positions.csv}
-  source: Documentation/hardware-errata/lidar-stage1-decoupling.md
-  swept: {flow: db43cb8459ff0a339304ebdf951b4eaf3e7e8dcf, date: 2026-11-14, round: 1}
-  defects:
-  - id: identidem-1
-    summary: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it
-    source_quote: "with no decoupling capacitor anywhere near the sensor."
-    fault_class: PI (local decoupling)
-    blind: missed
-    verdict: missed
-    follow_up: "a connector feeding an off-board pulsed load with no capacitor near it (#1090)"
-# Holdout round 2: pinned and swept blind before the rules from #1085 on were scored.
 - id: ice1usb-r01
   url: https://github.com/osmocom/osmo-e1-hardware
   commit: 85acea8b6d656add7c098d51f816f4ac34084fa2

@@ -15,9 +15,9 @@ only for the round's first reading: each round is swept once.
 
 ## Count
 
-- Training: 36 of 42 caught (36 caught, 2 missed, 4 not_static).
-- Holdout round 1, blind: 1 of 12 caught (1 caught, 11 missed).
-- Holdout round 1, with the rules written since: 2 of 12 caught (2 caught, 10 missed).
+- Training: 38 of 44 caught (38 caught, 2 missed, 4 not_static).
+- Holdout round 1, blind: 1 of 10 caught (1 caught, 9 missed).
+- Holdout round 1, with the rules written since: 2 of 10 caught (2 caught, 8 missed).
 - Holdout round 2, blind: 1 of 26 caught (1 caught, 25 missed).
 - Holdout round 2, with the rules written since: 1 of 26 caught (1 caught, 25 missed).
 
@@ -171,6 +171,22 @@ round, pinned and swept before those rules are:
 |---|---|---|---|
 | one-rom-1: SWD header silk labels CLK and DIO swapped | SILK (pin label vs net) | caught on rev A, gone on rev B (`check_silk` pin_label_wrong) | Swept blind as a holdout board (missed, with the flow at db43cb8), then moved here: check_silk's per-pin pin_label_wrong form (#1028) was written knowing this defect, so its catch is a training catch. The blind and swept fields are kept as the record. |
 
+### byte-hamr: Rev 2 -> Rev 3
+
+[https://github.com/robertrico/project_byte_hamr](https://github.com/robertrico/project_byte_hamr) at `f3e105fb7585`, MIT; errata `hardware/byte_hamr/rev2_errata.md`.
+
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| byte-hamr-1: U14 SN74LVC8T245 drives the Apple II slot's wired-OR lines (IRQ, NMI, DMA, INH, RES) push-pull, DIR and OE tied to GND | SCH (driver type on a shared line) | caught on rev A, gone on rev B (`check_pinouts` wired_or_push_pull) | Swept blind as a holdout board (missed, with the flow at db43cb8), then moved here: check_pinouts' wired_or_push_pull (#1087) was seeded from the I2C specification, the Apple II manual's open-collector slot lines and TI's 74LVC8T245 function table, but written knowing this defect, so its catch is a training catch. Rev 3 drives the slot lines through open-drain 74LVC07s and is clean. The blind and swept fields are kept as the record. |
+
+### identidem-breakout: MRF-Pro-v7.5 breakout -> MRF-Pro-v8 breakout
+
+[https://github.com/acornelissen/IDENTIDEM.design-MRF2](https://github.com/acornelissen/IDENTIDEM.design-MRF2) at `e495d6494dc6`, GPL-3.0; errata `Documentation/hardware-errata/lidar-stage1-decoupling.md`.
+
+| defect | class | pcb-flow on rev A | follow-up |
+|---|---|---|---|
+| identidem-1: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it | PI (local decoupling) | caught on rev A, gone on rev B (`check_pinouts` pulsed_load_no_bulk) | Swept blind as a holdout board (missed, with the flow at db43cb8), then moved here: check_pinouts' pulsed_load_no_bulk (#1090) was seeded from makers' supply notes for pulsed loads (Garmin's LIDAR-Lite, SIMCom's SIM800), but written knowing this defect, so its catch is a training catch. J7's supply, /3.3V, has no capacitor of 10 uF or more; v8 feeds J7 from its own filtered rail with 47 uF on it and is clean. The blind and swept fields are kept as the record. |
+
 ## Holdout round 1
 
 ### netscore-main: main-board v3.0 -> main-board v3.1
@@ -189,14 +205,6 @@ round, pinned and swept before those rules are:
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | netscore-big-1: 0.8 in score digits placed with the 0.2 in digit symbol, so common anode and two segments land wrong | LIB (symbol pin map vs part) | missed | missed | a part placed with another part's symbol (#1086) |
-
-### byte-hamr: Rev 2 -> Rev 3
-
-[https://github.com/robertrico/project_byte_hamr](https://github.com/robertrico/project_byte_hamr) at `f3e105fb7585`, MIT; errata `hardware/byte_hamr/rev2_errata.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
-
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| byte-hamr-1: U14 SN74LVC8T245 drives the Apple II slot's wired-OR lines (IRQ, NMI, DMA, INH, RES) push-pull, DIR and OE tied to GND | SCH (driver type on a shared line) | missed | missed | a push-pull driver on an open-collector shared line (#1087) |
 
 ### cmm2-jlc: Rev.A -> Rev.B
 
@@ -232,14 +240,6 @@ round, pinned and swept before those rules are:
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | lofence-1: ISP header silk marks RES where 3V3 is | SILK (pin label vs net) | missed | missed | check_silk reading a header's labels against its pins' nets (#1028) |
-
-### identidem-breakout: MRF-Pro-v7.5 breakout -> MRF-Pro-v8 breakout
-
-[https://github.com/acornelissen/IDENTIDEM.design-MRF2](https://github.com/acornelissen/IDENTIDEM.design-MRF2) at `e495d6494dc6`, GPL-3.0; errata `Documentation/hardware-errata/lidar-stage1-decoupling.md`. Holdout round 1, swept blind with pcb-flow `db43cb8459ff` on 2026-11-14.
-
-| defect | class | blind sweep | pcb-flow on rev A | follow-up |
-|---|---|---|---|---|
-| identidem-1: pulsed-laser LiDAR on J7 fed 3.3 V over a long path with no decoupling capacitor near it | PI (local decoupling) | missed | missed | a connector feeding an off-board pulsed load with no capacitor near it (#1090) |
 
 ## Holdout round 2
 

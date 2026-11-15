@@ -34,6 +34,20 @@ document that fixes the pinout):
    it: the highest rail on that IC's other pins.
  - pinout_unresolved (warning): a ref or standard named in "pinouts" that
    the board or the table doesn't have.
+ - wired_or_push_pull (#1087, scripts/mate_needs.py): a push-pull output on
+   a line every device pulls low against a pull-up (I2C SDA/SCL, UM10204
+   3.1.1; the Apple II slot's open-collector lines): a bus transceiver
+   whose OE and DIR are tied so its side on the line drives (byte-hamr
+   Rev 2: U14, a 74LVC8T245, on the slot's IRQ, NMI, DMA, INH and RES), or
+   a TXB01xx whose
+   OE is not grounded. Drivers are found by value in
+   reference/mate_needs.yaml; one whose OE or DIR is driven by logic is
+   listed, not judged.
+ - pulsed_load_no_bulk (#1090, scripts/mate_needs.py): a connector to a
+   load that draws in pulses (a LIDAR-Lite, a GSM module) with no capacitor
+   of bulk_uf_min or more on its named supply nets, or with --pcb none
+   within bulk_mm of its pad (identidem v7.5: J7, a ToF LiDAR on /3.3V
+   with none).
 
     check_pinouts.py --pcb B.kicad_pcb [--netlist B.net] [--constraints C]
     check_pinouts.py --sch B.kicad_sch [--constraints C]
@@ -445,11 +459,20 @@ def judge_headers(board: Board, ref: str, pins: dict, rows: dict):
     return first[1], {"ref": ref, "standard": first[0], "by": fits[first[0]]}
 
 
-def check(parsed: dict, constraints: dict, table: dict | None = None):
+def check(parsed: dict, constraints: dict, table: dict | None = None,
+          mates: dict | None = None, pcb: str | None = None):
+    import mate_needs  # noqa: PLC0415
     table = load_table() if table is None else table
+    mates = mate_needs.load_table() if mates is None else mates
     board = Board(parsed)
     viols: list[dict] = []
     judged: list[dict] = []
+    v, j = mate_needs.judge_wired_or(board, mates)
+    viols += v
+    judged += [dict(x, standard="wired_or") for x in j]
+    v, j = mate_needs.judge_pulsed(board, mates, pcb)
+    viols += v
+    judged += [dict(x, standard="pulsed_load") for x in j]
     stated = {}
     for ent in constraints.get("pinouts", []) or []:
         ref, std = ent.get("ref"), ent.get("standard")
@@ -541,7 +564,7 @@ def run(argv=None):
     from netlist_audit import parse_netlist  # noqa: PLC0415
     constraints = (checklib.load_json(args.constraints, "constraints")
                    if args.constraints else {})
-    viols, judged = check(parse_netlist(netlist), constraints)
+    viols, judged = check(parse_netlist(netlist), constraints, pcb=args.pcb)
     return checklib.report(
         SCRIPT, board, viols, connectors=judged,
         nothing_to_judge=None if judged else

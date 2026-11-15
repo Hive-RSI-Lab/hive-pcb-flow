@@ -349,3 +349,113 @@ def test_2x20_with_a_few_rails_where_the_pi_has_them_is_not_judged():
                  "9": "/+3V3_HDR", "34": "GND", "39": "GND"})
     assert cp.check(header("J1", "SBH11-PBPC-D20-ST-BK", PI_FP, pins),
                     {}) == ([], [])
+
+
+# -- #1087 wired-OR push-pull, #1090 pulsed load without bulk ----------------
+
+import mate_needs as mn  # noqa: E402
+
+
+def test_mate_needs_rows_cite_a_source():
+    t = mn.load_table()
+    rows = [*t["wired_or"]["lines"].values(), *t["wired_or"]["drivers"].values(),
+            *t["pulsed_loads"]["kinds"].values()]
+    for row in rows:
+        assert row["source"]
+        if row.get("cite"):
+            assert row["url"].startswith("https://"), row["source"]
+        for cite in row.get("cite") or ():
+            assert len(cite["sha256"]) == 64 and cite["quote"], row["source"]
+
+
+def shifter(value="SN74LVC8T245", dir_net="GND", oe_net="GND", oe_fn="~{OE}",
+            a_net="/SDA", b_net="/MCU_D0", dir_fn="DIR"):
+    nets = {"GND": [("U2", "11", "GND")], "+3V3": [("U1", "8", "VDD")],
+            a_net: [("U1", "3", "SDA"), ("U2", "3", "A1")],
+            b_net: [("U3", "10", "PB7"), ("U2", "21", "B1")]}
+    for net, pin, fn in ((dir_net, "2", dir_fn), (oe_net, "22", oe_fn)):
+        if fn:
+            nets.setdefault(net, []).append(("U2", pin, fn))
+    return board(nets, {"U1": ("BME280", ""), "U2": (value, ""),
+                        "U3": ("STM32", "")})
+
+
+def test_transceiver_driving_sda_fires():
+    v, judged = cp.check(shifter(), {})
+    assert kinds(v) == [("wired_or_push_pull", ("U2",))]
+    assert v[0]["nets"] == ["/SDA"] and v[0]["driver"] == "sn74lvc8t245"
+
+
+def test_transceiver_receiving_from_sda_is_clean():
+    v, judged = cp.check(shifter(dir_net="+3V3"), {})
+    assert v == [] and any(j.get("verdict") == "receives" for j in judged)
+
+
+def test_transceiver_between_two_i2c_lines_fires_either_way():
+    """Whichever way DIR points, one side drives an I2C line."""
+    v, _ = cp.check(shifter(dir_net="+3V3", b_net="/MCU_SDA"), {})
+    assert kinds(v) == [("wired_or_push_pull", ("U2",))]
+    assert v[0]["nets"] == ["/MCU_SDA"]
+
+
+def test_transceiver_with_oe_from_logic_is_listed_not_judged():
+    v, judged = cp.check(shifter(oe_net="/BUS_EN"), {})
+    assert v == [] and any(j.get("verdict") == "switched" for j in judged)
+
+
+def test_transceiver_disabled_by_oe_high_is_clean():
+    v, judged = cp.check(shifter(oe_net="+3V3"), {})
+    assert v == [] and any(j.get("verdict") == "isolated" for j in judged)
+
+
+def test_txb_with_oe_not_grounded_fires_and_grounded_is_clean():
+    b = shifter(value="TXB0108", oe_net="+3V3", oe_fn="OE", dir_fn=None)
+    assert kinds(cp.check(b, {})[0]) == [("wired_or_push_pull", ("U2",))]
+    b = shifter(value="TXB0108", oe_net="GND", oe_fn="OE", dir_fn=None)
+    assert cp.check(b, {})[0] == []
+
+
+def test_open_drain_buffer_is_clean():
+    b = board({"/SDA": [("U1", "3", "SDA"), ("U2", "4", "Y")],
+               "/X": [("U2", "2", "A")]},
+              {"U1": ("BME280", ""), "U2": ("SN74LVC1G07", "")})
+    v, judged = cp.check(b, {})
+    assert v == [] and any(j.get("verdict") == "open_drain" for j in judged)
+
+
+def test_pull_up_resistor_is_not_a_hop_to_a_driver():
+    """R1 pulls /SDA up to +3V3; U2 on the rail is no driver of the line."""
+    b = board({"/SDA": [("U1", "3", "SDA"), ("R1", "1", "")],
+               "+3V3": [("R1", "2", ""), ("U2", "1", "A1"),
+                        ("U2", "2", "DIR"), ("U2", "22", "~{OE}")]},
+              {"U1": ("BME280", ""), "R1": ("4k7", ""),
+               "U2": ("SN74LVC8T245", "")})
+    assert cp.check(b, {})[0] == []
+
+
+def lidar(caps):
+    nets = {"/5V_LIDAR": [("J7", "1", "")], "GND": [("J7", "6", "")],
+            "/LIDAR_SDA": [("J7", "5", "")]}
+    comps = {"J7": ("LIDAR-Lite v3", "")}
+    for i, val in enumerate(caps, 1):
+        nets["/5V_LIDAR"].append((f"C{i}", "1", ""))
+        nets["GND"].append((f"C{i}", "2", ""))
+        comps[f"C{i}"] = (val, "")
+    return board(nets, comps)
+
+
+def test_pulsed_load_with_no_bulk_fires():
+    v, judged = cp.check(lidar(["100nF"]), {})
+    assert kinds(v) == [("pulsed_load_no_bulk", ("J7",))]
+    assert v[0]["load"] == "lidar_lite" and v[0]["vendor_uf"] == 680
+
+
+def test_pulsed_load_with_bulk_is_clean():
+    v, judged = cp.check(lidar(["100nF", "47uF"]), {})
+    assert v == [] and any(j.get("verdict") == "ok" for j in judged)
+
+
+def test_connector_not_a_pulsed_load_is_not_judged():
+    b = board({"/5V": [("J7", "1", "")], "GND": [("J7", "2", "")]},
+              {"J7": ("Conn_01x02", "")})
+    assert cp.check(b, {}) == ([], [])
