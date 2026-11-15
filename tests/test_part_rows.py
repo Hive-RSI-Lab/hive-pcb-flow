@@ -289,3 +289,67 @@ def test_planted_wrong_address_is_caught(tmp_path, af_pdf):
     res = _verify(tmp_path, af_pdf, _addr_table(af_pdf, 0x2D))
     assert res["cites"][0]["problems"] == [
         "address=45 is not in the quote as 7-bit binary, 0xNN or NNh"]
+
+
+# ------------------------------------------------ part_pinouts (#1135)
+
+PIN_PAGES = [
+    ["Table of Contents",
+     "6 Pin Configuration and Functions ........ 4",
+     "7 Specifications ........ 5",
+     "8 Detailed Description ........ 9"],
+    ["6 Pin Configuration and Functions",
+     "Table 6-1. Pin Functions",
+     "NAME NO. TYPE DESCRIPTION",
+     "INLA 1 I Low-side gate driver control input",
+     "INLB 2 I Low-side gate driver control input",
+     "GND 6 G Device ground",
+     "NC 7, 8 - No connection",
+     "INHA 22 I High-side gate driver control input"],
+    ["INHB 23 I High-side gate driver control input",
+     "7 Specifications",
+     "VCC 99 Absolute maximum"],
+]
+
+
+@pytest.fixture()
+def pin_pdf(tmp_path):
+    return _pdf(tmp_path / "drv.pdf", PIN_PAGES)
+
+
+def test_pin_table_drafts_a_row_and_skips_the_contents_page(pin_pdf):
+    [row] = part_rows.draft("TESTDRV", pin_pdf)["part_pinouts"]
+    assert row["verified"] is False and row["match"] == "TODO"
+    # the table runs onto page 3 up to its next section heading
+    assert row["pins"] == {"1": "INLA", "2": "INLB", "6": "GND", "7": "NC",
+                           "8": "NC", "22": "INHA", "23": "INHB"}
+    assert [c["page"] for c in row["cite"]] == [2, 3]
+    assert row["cite"][0]["table"].startswith("Table 6-1")
+
+
+def _pin_row(pdf: Path, pins: dict) -> dict:
+    d = part_rows.draft("TESTDRV", pdf)["part_pinouts"][0]
+    d.update(match="^TESTDRV", footprint="QFN", pins=pins, verified=True)
+    return {"parts": [d]}
+
+
+def test_a_drafted_pin_table_passes_its_own_verify(tmp_path, pin_pdf):
+    row = part_rows.draft("TESTDRV", pin_pdf)["part_pinouts"][0]
+    res = _verify(tmp_path, pin_pdf, _pin_row(pin_pdf, row["pins"]))
+    assert res["counts"] == {"ok": 2, "fail": 0, "unchecked": 0}
+
+
+def test_planted_wrong_pin_number_is_caught(tmp_path, pin_pdf):
+    # INHA on 21, not the table's 22
+    pins = {"1": "INLA", "2": "INLB", "6": "GND", "21": "INHA", "23": "INHB"}
+    res = _verify(tmp_path, pin_pdf, _pin_row(pin_pdf, pins))
+    assert res["counts"]["fail"] == 2
+    assert all(c["problems"] == ["pins not in the quote as a name beside "
+                                 "its number: 21=INHA"]
+               for c in res["cites"])
+
+
+def test_pin_quotes_fold_the_datasheets_minus_sign():
+    assert part_rows._pins_in_quote({"3": "-IN", "2": "+IN"},
+                                    "\u2212IN 3 + IN 2 +IN 2") == []
+    assert part_rows._pins_in_quote({"4": "-IN"}, "\u2212IN 3") == ["4=-IN"]
