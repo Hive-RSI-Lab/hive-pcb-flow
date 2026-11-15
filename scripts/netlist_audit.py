@@ -1973,6 +1973,240 @@ def _debug_pins(nets: dict, comps: dict,
     yield "checked", checked, None, None, None, None, None
 
 
+# Design intent (class 8 of docs/miss-taxonomy.md, #1137).
+#
+# A named bus whose members a master has to read together: a part that
+# takes all of them but one, while that one still reaches the connector the
+# others come in on, has dropped it. Zilog UM0080 (Z80 CPU User Manual),
+# pin descriptions: MREQ "indicates that the address bus holds a valid
+# address for a memory read or memory write operation", IORQ "indicates
+# that the lower half of the address bus holds a valid I/O address for an
+# I/O read or write operation", RD and WR say which way; a part decoding
+# bus cycles from RD and WR needs both MREQ and IORQ to tell a memory cycle
+# from an I/O one. IEEE 1149.1 section 3: TCK, TMS, TDI and TDO are the
+# four required TAP signals. A byte-wide data port reads D0..D7. SPI is left
+# out: a write-only device has no MISO by design.
+_BUS_GROUPS = (
+    ("Z80 bus-cycle strobes", ("MREQ", "IORQ", "RD", "WR"),
+     "Zilog UM0080 pin descriptions: MREQ and IORQ tell a memory cycle "
+     "from an I/O one, RD and WR its direction"),
+    ("JTAG TAP", ("TCK", "TMS", "TDI", "TDO"),
+     "IEEE 1149.1 section 3: TCK, TMS, TDI and TDO are the required TAP "
+     "signals"),
+    ("data byte", tuple(f"D{i}" for i in range(8)),
+     "a byte-wide data port reads all of D0..D7"),
+)
+_BUS_MASTER_MIN_PINS = 20
+# a buffer, latch or gate passes the bus on; it doesn't read it
+_LOGIC_VALUE_RE = re.compile(r"74[A-Z]*\d{2,}|^CD4\d{3}|^4\d{3}[A-Z]?$",
+                             re.I)
+
+
+def _bus_name(name: str) -> str:
+    """A net or pin name with its path, ~{} and active-low marks gone."""
+    name = _norm_pin(name.rsplit("/", 1)[-1])
+    return re.sub(r"[#*{}~/ ]", "", name)
+
+
+def _bus_member(name: str, member: str) -> str | None:
+    """The prefix NAME carries before bus member MEMBER (ZXMREQ: 'ZX',
+    LCD_D3: 'LCD_'), or None when NAME isn't that member."""
+    m = re.fullmatch(rf"((?:[A-Z0-9]*?_)?(?:ZX|Z80_?|CPU_?)?)N?{member}"
+                     r"(?:_N|_B|N)?", _bus_name(name))
+    return m.group(1) if m else None
+
+
+def _bus_members_dropped(nets: dict, comps: dict,
+                         comp_pins: dict[str, dict[str, str]]):
+    """Yield (group, member, net, master, read, connectors, source) for a
+    bus member that reaches a connector the rest of its group comes in on,
+    while a part of 20 pins or more reads every other member (directly or
+    through one series resistor) but not this one. The last item is
+    ('checked', n, ...)."""
+    checked = 0
+    for gname, members, src in _BUS_GROUPS:
+        # (prefix) -> member -> net
+        found: dict[str, dict[str, str]] = {}
+        for net, ms in nets.items():
+            if net.startswith("unconnected-"):
+                continue
+            for mem in members:
+                pre = _bus_member(net, mem)
+                if pre is None:
+                    continue
+                found.setdefault(pre, {}).setdefault(mem, net)
+        for pre, have in sorted(found.items()):
+            if len(have) < len(members):
+                continue
+            checked += 1
+            reach = {mem: _debug_reach(net, nets, comps, comp_pins)
+                     for mem, net in have.items()}
+            conns = {mem: {m["ref"] for n in r for m in nets.get(n, [])
+                           if _OB_CONN_RE.match(m["ref"] or "")}
+                     for mem, r in reach.items()}
+            parts = {mem: {m["ref"] for n in r for m in nets.get(n, [])
+                           if (m["ref"] or "").startswith("U")}
+                     for mem, r in reach.items()}
+            for ref in sorted(set().union(*parts.values())):
+                if len(comp_pins.get(ref, {})) < _BUS_MASTER_MIN_PINS \
+                        or comps.get(ref, {}).get("dnp") \
+                        or _LOGIC_VALUE_RE.search(
+                            comps.get(ref, {}).get("value") or ""):
+                    continue
+                miss = [mem for mem in members if ref not in parts[mem]]
+                if len(miss) != 1:
+                    continue
+                mem = miss[0]
+                # another chip on the board reads it (pico-if1 v1.3: a
+                # 4075 takes MREQ for the ROM, the I/O Pico needs only IORQ)
+                if parts[mem]:
+                    continue
+                read = [m for m in members if m != mem]
+                shared = conns[mem] & set().union(
+                    *(conns[m] for m in read))
+                if not shared:
+                    continue
+                yield (gname, mem, have[mem], ref, read, sorted(shared),
+                       src)
+    yield "checked", checked, None, None, None, None, None
+
+
+# A UART line whose name says which way it runs (RX_FROM_AUX,
+# TX_TO_CONTROL_BOARD) reaching an MCU pin whose fixed UART function is the
+# other way (errata corpus: smart-lcc rev A put RX_FROM_AUX on the Nano
+# RP2040 Connect's D8, GPIO20, which is UART1 TX).
+_UART_NET_DIR = (("RX", re.compile(r"(^|[/_])RXD?_FROM(_|$)")),
+                 ("TX", re.compile(r"(^|[/_])TXD?_TO(_|$)")))
+
+
+def _uart_dir_row(ref: str, comp: dict, rows: list[dict],
+                  stated: dict[str, str]) -> dict | None:
+    """REF's mcu_pins.yaml row: what design_intent.modules says it is,
+    else its Value."""
+    if ref in stated:
+        return _mcu_row({"value": stated[ref]}, rows)
+    return _mcu_row(comp, rows)
+
+
+def _uart_directions(nets: dict, comps: dict,
+                     comp_pins: dict[str, dict[str, str]], table: dict,
+                     stated: dict[str, str]):
+    """Yield (ref, pin, func, function, net, way, row) for an MCU pin on a
+    net whose name gives its direction (`way`, from this board's side)
+    when the pin's UART function, by its own name (TX, RXD) or the row's
+    module_pins and the chip's uart table, is the opposite. A series
+    resistor in between is followed. The last item is ('checked', n, ...)."""
+    rows = table.get("mcus") or []
+    chips = {r["mpn"]: r for r in rows if r.get("uart")}
+    checked = 0
+    for ref in sorted(comps):
+        if comps[ref].get("dnp") or not ref.startswith(("U", "A", "M")):
+            continue
+        row = _uart_dir_row(ref, comps[ref], rows, stated)
+        chip = row if row and row.get("uart") else None
+        if row and row.get("module_of"):
+            chip = next((c for m, c in chips.items()
+                         if m.startswith(row["module_of"])), None)
+        mod = (row or {}).get("module_pins") or {}
+        seen = False
+        for func, (pn, net) in sorted(_pin_funcs(ref, nets,
+                                                 comp_pins).items()):
+            toks = _pin_tokens(func)
+            fn = None
+            if toks & {"TX", "TXD", "TXO"}:
+                fn = "TX"
+            elif toks & {"RX", "RXD", "RXI"}:
+                fn = "RX"
+            elif chip:
+                for t in toks:
+                    g = str(mod.get(t, t))
+                    u = (chip.get("uart") or {}).get(g)
+                    if u:
+                        fn = f"{g} {u}"
+                        break
+            if not fn:
+                continue
+            seen = True
+            for n in _debug_reach(net, nets, comps, comp_pins):
+                way = next((w for w, rx in _UART_NET_DIR
+                            if rx.search(n.upper())), None)
+                if way and not fn.endswith(way):
+                    yield ref, pn, func, fn, n, way, row
+                    break
+        checked += seen
+    yield "checked", checked, None, None, None, None, None
+
+
+# A bus transceiver ('245 family) enabled all the time, with one side on a
+# host connector's lines and DIR straight off a connector strobe: it drives
+# the host's bus on every cycle of that strobe, whoever is addressed
+# (errata corpus: pico-if1 v1.0 tied the 74LS245's OE to ground and put DIR
+# on the edge connector's raw /RD; v1.1 drives DIR from a decoded ROM read).
+# TI SN74LS245 (SDLS146) function table: OE low enables the outputs, DIR
+# low sends B to A and DIR high A to B, so whichever side faces the host is
+# driven for one level of DIR.
+_XCVR_RE = re.compile(r"74[A-Z]*(245|640|645)|74[A-Z]*8T245|LVC[H]?4245",
+                      re.I)
+_XCVR_DEFAULT = {"DIR": "1", "OE": "19"}
+
+
+def _host_bus_transceivers(nets: dict, comps: dict,
+                           comp_pins: dict[str, dict[str, str]],
+                           rails: dict):
+    """Yield (ref, oe_pin, oe_net, dir_pin, dir_net, side_nets, conns) for
+    each always-on '245 whose DIR comes straight from a connector while
+    four or more of one side's data pins sit on that connector's nets. The
+    last item is ('checked', n, ...)."""
+    checked = 0
+    for ref in sorted(comps):
+        comp = comps[ref]
+        if comp.get("dnp") or not _XCVR_RE.search(
+                f"{comp.get('value') or ''} "
+                f"{(comp.get('libsource') or ('', ''))[1]}"):
+            continue
+        funcs = _pin_funcs(ref, nets, comp_pins)
+        by = {}
+        for f, (pn, net) in funcs.items():
+            toks = _pin_tokens(f)
+            if "DIR" in toks or "T/R" in _norm_pin(f) or "->" in f:
+                by["DIR"] = (pn, net)
+            elif toks & {"OE", "G", "CE", "E"} or _norm_pin(f) in {
+                    "~OE", "OE#", "~G", "~CE"}:
+                by["OE"] = (pn, net)
+        pins = comp_pins.get(ref, {})
+        for k, pn in _XCVR_DEFAULT.items():
+            if k not in by and pn in pins and len(pins) == 20:
+                by[k] = (pn, pins[pn])
+        if set(by) != {"DIR", "OE"}:
+            continue
+        checked += 1
+        (oe_pin, oe_net), (dir_pin, dir_net) = by["OE"], by["DIR"]
+        if _net_polarity(oe_net, rails) != "ground":
+            continue
+        # DIR tied to a rail is a one-way buffer, not a strobe-driven one
+        if _net_polarity(dir_net, rails) is not None:
+            continue
+        dconn = {m["ref"] for m in nets.get(dir_net, [])
+                 if _OB_CONN_RE.match(m["ref"] or "")}
+        drivers = [m for m in nets.get(dir_net, [])
+                   if m["ref"] != ref and not _OB_CONN_RE.match(
+                       m["ref"] or "") and _part_kind(m["ref"]) is None
+                   and _base_type(m.get("pintype")) in _OB_DRIVE_TYPES
+                   # another transceiver's data pin passes the strobe on
+                   and not _XCVR_RE.search(
+                       comps.get(m["ref"], {}).get("value") or "")]
+        if not dconn or drivers:
+            continue
+        side = [net for f, (pn, net) in funcs.items()
+                if re.fullmatch(r"[AB]\d", _norm_pin(f) or "")
+                and any(m["ref"] in dconn for m in nets.get(net, []))]
+        if len(side) < 4:
+            continue
+        yield ref, oe_pin, oe_net, dir_pin, dir_net, sorted(side), \
+            sorted(dconn)
+    yield "checked", checked, None, None, None, None, None
+
+
 # An off-board input: a connector pin whose net is held only by a resistor
 # to a rail, read by an IC input or a transistor's base or gate. TI SPRACK9
 # (Appendix A Table 2) on a cable line that "is pulled up to eliminate
@@ -4838,6 +5072,77 @@ def audit(parsed: dict, constraints: dict,
         v, vt, not_judged, nets, comps, comp_pins, pl_rails, io_table,
         abs_table, pl_specs, io_tolerance)
 
+    # 34-36. wiring against design intent (class 8 of
+    # docs/miss-taxonomy.md, #1137). design_intent states what no design
+    # file says: a module drawn with another's symbol, a bus member left
+    # unread on purpose.
+    intent = constraints.get("design_intent") or {}
+    stated = {e["ref"]: e["is"] for e in intent.get("modules") or []
+              if isinstance(e, dict) and e.get("ref") and e.get("is")}
+    unread = {e["net"] for e in intent.get("bus_unread") or []
+              if isinstance(e, dict) and e.get("net")}
+
+    # 34. a named bus with one member that reaches the connector but not
+    # the part reading the rest (errata corpus: zxdiag v1.1's Pico read
+    # MREQ, RD and WR off the ZX edge but not IORQ; v1.2 added GPIO20)
+    bus_checked = 0
+    for gname, mem, net, ref, read, conns, src in _bus_members_dropped(
+            nets, comps, comp_pins):
+        if gname == "checked":
+            bus_checked = mem
+            continue
+        if net in unread:
+            continue
+        v("warning", "bus_member_dropped", net, [ref] + conns,
+          f"{ref} ({comps[ref].get('value')}) reads {', '.join(read)} of "
+          f"the {gname} but not {mem}: '{net}' reaches "
+          f"{', '.join(conns)} with the others and stops there. Without "
+          f"{mem} the part can't tell the cycles apart; wire it to a free "
+          f"pin, or say why not in constraints design_intent.bus_unread "
+          f"[{src}]",
+          group=gname, member=mem, master=ref, connectors=conns)
+
+    # 35. a UART line named for its direction on a pin that runs the other
+    # way (errata corpus: smart-lcc rev A, RX_FROM_AUX on the Nano RP2040
+    # Connect's D8, which is UART1 TX)
+    uart_checked = 0
+    for ref, pn, func, fn, net, way, row in _uart_directions(
+            nets, comps, comp_pins, mp_table, stated):
+        if ref == "checked":
+            uart_checked = pn
+            continue
+        part = (row or {}).get("mpn") or comps[ref].get("value")
+        src = (f" [{' '.join(row['source'].split())}]"
+               if row and row.get("source") else "")
+        said = (f", as constraints design_intent.modules says"
+                if ref in stated else "")
+        v("warning", "uart_direction", net, [ref],
+          f"'{net}' is named as this board's {way}, but it reaches {ref} "
+          f"({part}{said}) on {func} (pin {pn}), which is {fn}: TX must "
+          f"meet the far end's RX. Swap the two lines or rename the net"
+          f"{src}",
+          pin=pn, function=fn, way=way, part=part)
+
+    # 36. an always-on bus transceiver whose DIR is a raw connector strobe
+    # (errata corpus: pico-if1 v1.0's 74LS245, OE grounded and DIR on /RD)
+    xcvr_checked = 0
+    for ref, oe_pin, oe_net, dir_pin, dir_net, side, conns in \
+            _host_bus_transceivers(nets, comps, comp_pins, pl_rails):
+        if ref == "checked":
+            xcvr_checked = oe_pin
+            continue
+        v("warning", "transceiver_drives_host_bus", dir_net,
+          [ref] + conns,
+          f"{ref} ({comps[ref].get('value')}) has OE (pin {oe_pin}) tied "
+          f"to '{oe_net}', so it is always on, and DIR (pin {dir_pin}) on "
+          f"'{dir_net}' straight from {', '.join(conns)}: every cycle of "
+          f"that strobe it drives {len(side)} host lines "
+          f"({', '.join(side[:4])}...) whoever is addressed, fighting the "
+          f"part the host meant to read. Gate OE (or DIR) with this "
+          f"board's own address decode [TI SN74LS245 (SDLS146) function "
+          f"table: OE low enables, DIR sets the way]",
+          oe_net=oe_net, dir_net=dir_net)
+
     facts = {
         "nets": len(nets),
         "components": len(comps),
@@ -4880,6 +5185,9 @@ def audit(parsed: dict, constraints: dict,
         "source_limits_checked": sl_checked,
         "polarity_pins_checked": pol_pins,
         "io_domain_pairs_checked": dom_pairs,
+        "bus_groups_checked": bus_checked,
+        "uart_parts_checked": uart_checked,
+        "transceivers_checked": xcvr_checked,
     }
     if not_judged:
         facts["not_judged"] = not_judged

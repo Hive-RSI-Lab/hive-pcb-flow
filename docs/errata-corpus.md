@@ -15,11 +15,11 @@ only for the round's first reading: each round is swept once.
 
 ## Count
 
-- Training: 47 of 55 caught (47 caught, 4 missed, 4 not_static).
+- Training: 49 of 55 caught (49 caught, 2 missed, 4 not_static).
 - Holdout round 1, blind: 1 of 4 caught (1 caught, 3 missed).
 - Holdout round 1, with the rules written since: 2 of 4 caught (2 caught, 2 missed).
 - Holdout round 2, blind: 1 of 21 caught (1 caught, 20 missed).
-- Holdout round 2, with the rules written since: 11 of 21 caught (11 caught, 10 missed).
+- Holdout round 2, with the rules written since: 12 of 21 caught (12 caught, 9 missed).
 - Holdout round 3, blind: 1 of 29 caught (1 caught, 28 missed).
 - Holdout round 3, with the rules written since: 1 of 29 caught (1 caught, 28 missed).
 
@@ -210,7 +210,7 @@ into `reference/errata_corpus.yaml` and its members into the taxonomy.
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| smart-lcc-1: auxiliary UART RX and TX crossed the wrong way | SCH (signal direction) | missed | off-board and standard connector pinouts, with the mate stated (#1027) |
+| smart-lcc-1: auxiliary UART RX and TX crossed the wrong way | SCH (signal direction) | caught_with_constraints (not run here), since #1137 (`netlist_audit` uart_direction, with constraints) | off-board and standard connector pinouts, with the mate stated (#1027) |
 | smart-lcc-2: no zener/diode protection on the RX and TX ports | SCH (port protection) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_unprotected) | check_esd counting a bare zener to ground as a port clamp, seeded from a training board |
 
 ### fc980c: rev1 -> rev2
@@ -228,7 +228,7 @@ into `reference/errata_corpus.yaml` and its members into the taxonomy.
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | missed | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137) |
+| zxdiag-v11-1: /IORQ not connected to the Pico | SCH (missing connection) | caught (not run here), since #1137 (`netlist_audit` bus_member_dropped) | a named bus checked complete at the MCU: a Z80 control line the target needs left off the Pico (#1137) |
 | zxdiag-v11-2: 1N4148 clamps on the -5V input let -0.7 V reach the Pico ADC, whose minimum is -0.5 V | SCH (input beyond absolute maximum) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_clamp) | a clamp diode's forward drop against the clamped pin's negative abs-max (-0.5 V on the RP2040 ADC) |
 | zxdiag-v11-3: Top of the -5V divider fed from the system-under-test +5V, not a reliable reference | SCH (reference from an unreliable rail) | caught on rev A, gone on rev B (`netlist_audit` offboard_input_rail_absent) | a measurement divider whose reference comes from an off-board rail |
 
@@ -312,7 +312,7 @@ into `reference/errata_corpus.yaml` and its members into the taxonomy.
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
 | pico-if1-v10-1: Transistor Q1 footprint rotated 90 degrees | PCB (part rotation) | caught | caught on rev A, gone on rev B (`netlist_audit` sot23_pinout) | The erratum calls it a rotation; the flow names the same part's fault as pin order (an E-B-C symbol on a B-E-C SOT-23), and the finding is gone on rev B. Counted caught on the part and the fault. |
-| pico-if1-v10-2: Data bus level shifter direction on /RD instead of ROM_READ_INV | SCH (wrong net) | missed | missed | a level shifter's DIR pin checked against a stated direction (read strobe) net |
+| pico-if1-v10-2: Data bus level shifter direction on /RD instead of ROM_READ_INV | SCH (wrong net) | missed | caught (not run here), since #1137 (`netlist_audit` transceiver_drives_host_bus) | a level shifter's DIR pin checked against a stated direction (read strobe) net |
 | pico-if1-v10-3: GND via for U4 pin 19 (/OE) sits under the chip where it can't be reached | PCB (via placement) | missed | missed | a via under a part's body tying one of its own pins, on a hand-built board |
 
 ### pico-if1-v13: v1.3 -> v1.4

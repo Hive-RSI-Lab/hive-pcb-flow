@@ -261,6 +261,16 @@ Consumers per key (script -> phase):
     "mount_heights": {"U1": {"height_mm": 16.0, "datum": "body_underside",
                              "tol_mm": 0.3, "source": "README: 16 mm printed standoff"}}},
 
+  // netlist_audit rules 34-35 (#1137): design intent no design file holds.
+  // modules: a part drawn with another part's symbol, by what it really is
+  // (an mcu_pins.yaml row's Value), so its pin functions are looked up
+  // right. bus_unread: a named-bus member (Z80 MREQ/IORQ/RD/WR, JTAG, a
+  // data byte) the board's master leaves unread on purpose. why is required.
+  "design_intent": {
+    "modules": [{"ref": "U1", "is": "Arduino Nano RP2040 Connect",
+                 "why": "README: the board takes a Nano RP2040 Connect"}],
+    "bus_unread": [{"net": "ZXIORQ", "why": "the board only watches memory cycles"}]},
+
   // check_surge (P8, #492): IEC 61000-4-5 surge / 61000-4-4 EFT on cable
   // ports. Only declared ports are judged. kind picks the assumed level from
   // reference/surge_levels.yaml (environment residential | industrial, by

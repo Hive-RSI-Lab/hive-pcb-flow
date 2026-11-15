@@ -322,7 +322,8 @@ TOP_NUMBERS = {"ambient_c", "ambient_min_c",
 SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
     "placement", "coating", "antennas", "pcb_antennas", "si", "cable_pf",
     "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
-    "isolation", "mechanical", "transformers", "pinouts"}
+    "isolation", "mechanical", "transformers", "pinouts",
+    "design_intent"}
 PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",
@@ -700,6 +701,29 @@ class _FileLint:
                              "body_underside|lead_protrusion, tol_mm?: "
                              "number >= 0, source: text, model?: text}}",
                              path)
+            elif key == "design_intent":
+                # netlist_audit rules 34-35 (#1137): what no design file
+                # says - a module drawn with another's symbol, a bus member
+                # left unread on purpose
+                def _rows(name, field):
+                    rows = val.get(name, []) if isinstance(val, dict) \
+                        else None
+                    return isinstance(rows, list) and all(
+                        isinstance(e, dict)
+                        and isinstance(e.get(field), str) and e[field]
+                        and isinstance(e.get("why"), str)
+                        and e["why"].strip()
+                        and (name != "modules" or (
+                            isinstance(e.get("is"), str) and e["is"]))
+                        for e in rows)
+                if not isinstance(val, dict) or set(val) - {
+                        "modules", "bus_unread"} or not (
+                        _rows("modules", "ref")
+                        and _rows("bus_unread", "net")):
+                    self.add("error", "bad_type",
+                             f"{path}: design_intent must be {{modules: "
+                             "[{ref: U1, is: <part>, why: text}], "
+                             "bus_unread: [{net: N, why: text}]}", path)
             elif key == "pinouts":
                 # check_pinouts (#1027): an off-board connector held to a row
                 # of reference/connector_pinouts.yaml

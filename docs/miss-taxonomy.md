@@ -38,6 +38,20 @@ classes (12-15) and re-ranks the table. No rule has been written from round
 landed after the sweep, healthmonitor-1 and -2 (round 2) are caught: 53
 misses, round 2 down to 15.
 
+**Since then (#1137, rules 34-36, class 8).** zxdiag-v11-1 and
+smart-lcc-1 (training) and pico-if1-v10-2 (holdout round 2) are caught:
+a Z80 strobe the Pico doesn't read, a UART line crossed against the Nano
+RP2040 Connect's fixed UART pins (once the settings key design_intent
+says which module U1 really is), and an always-on '245 whose DIR sits on
+the raw /RD. None is independent: each rule was written after its defect
+was read. gp8b-v50-2 (a timing fault) and ice1usb-r01-2 (an RJ45 pair
+order, not a jumper) stay missed. Counted from the regenerated table,
+which also holds #1136's five connector catches (zxdiag-v10-1/-2,
+mdbt-micro-50q-1, gcm-v50-4, gp8b-v50-1, round 2, class 2 below): 45
+misses, training 6 (2 missed, 4 not_static), holdout round 1: 2, round 2:
+9, round 3: 28. Round 3 was not swept with rules 34-36 here; its re-score
+is a7156's.
+
 ## How classes are cut and ranked
 
 A class is **one check**: misses that a single rule with one data source
@@ -69,12 +83,12 @@ parts on an ordinary board.
 | 2 | Connector mechanics vs the mate | 7 | 2 | 14 | footprint, 3D | lead sizes per connector footprint, the mate's gender and row pitch (a stated mating side), mounting heights of raised THT parts, power-connector pin order |
 | 12 | Footprint geometry vs the maker's drawing | 4 | 3 | 12 | footprint | the maker's land pattern: hole sizes, pin-1 corner, pin order seen from the mating face |
 | 14 | Active-low polarity across a connection | 3 | 3 | 9 | netlist | the active level of each pin (from its name: ~, /, N suffix; from the symbol) and of each net it is wired to |
-| 8 | Wiring against design intent | 8 | 1 | 8 | netlist + a stated fact | which signal a pin should carry: UART crossover, a level shifter's DIR net, a jumper map, a named bus checked complete, ISA IRQ per port |
 | 15 | I/O supply domain vs the bus level | 2 | 3 | 6 | netlist | each IC's I/O supply pins and the level each interface needs; which rail powers the parts on a bus |
 | 13 | Boot straps on modules | 2 | 3 | 6 | netlist | reference/reset_states.yaml rows for modules (ESP-12/ESP8266); check_straps exists, the rows don't |
 | 7 | Datasheet application circuit (part landed, #1158) | 3 | 2 | 6 | netlist | per-part required externals and reference networks from the typical-application figure; pins that must be connected (unused CMOS inputs, open-collector inputs' pulls) |
 | 10 | Silk pin labels and polarity marks (two-column legend rule landed, #1172) | 3 | 2 | 6 | footprint + silk | none; extends #1028 to pin-number legends and diode cathode marks |
 | 9 | Shared-bus drivers (strobe and I2C-master rules landed, #1087, #1170, #1171) | 5 | 1 | 5 | netlist | driver type per part (push-pull, open drain, tri-state), I2C masters per bus, bus strobes, a pull on a tri-state line |
+| 8 | Wiring against design intent (part landed, #1137) | 5 | 1 | 5 | netlist + a stated fact | netlist_audit rules 34-36 and design_intent (modules, bus_unread) judge a named bus, UART crossover and a '245's DIR; left: a jumper map, ISA IRQ per port, gp8b-v50-2 (pulse timing), ice1usb-r01-2 (E1 NT/TE pinouts) |
 | 5 | Symbol pin map vs the part (landed, #1134) | 1 | 3 | 3 | netlist + symbol | per-part pin tables: KiCad's stock symbol, the LCSC record's symbol, module pinouts |
 | 6 | Pin function on the wrong net (landed, #1155) | 1 | 3 | 3 | netlist | pin names of the stock symbols, protector cell/load pin names, reference/mcu_pins.yaml debug pins; input-only pins of CPLDs |
 | 11 | Load against a source's limit | 1 | 1 | 1 | netlist + a stated load | the off-board load's capacitance |
