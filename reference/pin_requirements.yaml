@@ -149,6 +149,19 @@ parts:
          cite: [{doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 3, table: 'Pin Descriptions', quote: '100nF capacitor is recommended from BST to SW to power the high-side driver.', fields: [value]},
                 {doc: ap64350.pdf, sha256: bb9aa134375fc5b87433141e477aff20aee1a8766d922c6d9b9ace1f56539f48, page: 15, table: '', quote: 'To ensure proper operation, a ceramic capacitor must be connected between the BST and SW pins.', fields: []}]}
 
+  - mpn: ADR4520
+    match: '^ADR452[05]'
+    # ADI ADR4520/4525/4530/4533/4540/4550 Rev. B, Chinese edition (LCSC
+    # C579305): analog.com was unreachable from the tower (#1227). Recite
+    # from the English edition when it can be fetched.
+    verified: true   # read 2026-11-15, table 12 and the ADR4520 table
+    requires:
+      - {id: COUT, pin: VOUT, to: GND, kinds: [C], min: 1.0e-6, max: 100.0e-6,
+         source: "ADR4520 Rev. B (Chinese edition) output capacitor section and table 12: ADR4520/ADR4525 need COUT of at least 1.0 uF for stability; the ADR4520 table gives load capacitance 1 to 100 uF",
+         cite: [{doc: adr4520.pdf, sha256: 512ab2dfe214da568c1b7a4db91cba1246c6d6be9947984a6cf47501d0e42923, page: 31, table: '表12', quote: '出于稳定性和滤除低电平电压噪声的考虑，需要使用一个输 出电容。输出电容的最小值见表12。', fields: []},
+                {doc: adr4520.pdf, sha256: 512ab2dfe214da568c1b7a4db91cba1246c6d6be9947984a6cf47501d0e42923, page: 31, table: '表12', quote: 'ADR4520、ADR4525 1.0 µF', fields: [min]},
+                {doc: adr4520.pdf, sha256: 512ab2dfe214da568c1b7a4db91cba1246c6d6be9947984a6cf47501d0e42923, page: 4, table: '', quote: '负载电容 1 100 µF', fields: [max]}]}
+
   - mpn: TPS7A20
     match: '^TPS7A20'
     verified: true   # TI SBVS338H read 2026-11-14

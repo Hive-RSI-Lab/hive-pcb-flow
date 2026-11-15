@@ -143,6 +143,26 @@ def test_tps7a20_output_capacitor(cap, want):
     assert _parts(viol) == want
 
 
+# ------------------------------------------- voltage reference output cap
+
+@pytest.mark.parametrize("cap,want", [
+    (None, [("error", "U1", "COUT")]),
+    ("470n", [("error", "U1", "COUT")]),   # under ADI's 1.0 uF (table 12)
+    ("2.2u", []),                          # PCB-0014's C5
+    ("220u", [("error", "U1", "COUT")])])  # over the 100 uF load cap max
+def test_adr4520_output_capacitor(cap, want):
+    comps = {"U1": "ADR4520BRZ"}
+    nets = {"/VREF": [_m("U1", "6", "VOUT", "power_out")],
+            "GND": [_m("U1", "4", "GND", "power_in")],
+            "+5V": [_m("U1", "2", "VIN", "power_in")]}
+    if cap:
+        comps["C1"] = cap
+        nets["/VREF"].append(_m("C1", "1"))
+        nets["GND"].append(_m("C1", "2"))
+    viol, _ = _audit(comps, nets)
+    assert _parts(viol) == want
+
+
 # ---------------------------------------------------- must-connect EN pin
 
 @pytest.mark.parametrize("en,fault", [("open", True), ("rail", False)])
