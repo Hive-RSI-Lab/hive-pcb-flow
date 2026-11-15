@@ -475,7 +475,8 @@ def test_a_dru_layer_ban_holds_in_plan_routes(tmp_path):
                 if op.get("layer") == "B.Cu"]
     facts = json.loads(json.dumps(rf._rules_facts(rules)))
     assert facts["bans"]["track"] == [
-        {"nets": ["SIG"], "not": [], "layers": ["B.Cu"]}]
+        {"nets": ["SIG"], "not": [], "classes": [], "not_classes": [],
+         "layers": ["B.Cu"]}]
     pcb = _board(tmp_path, body, dru=DRU + off.format(ly="F.Cu")
                  + off.format(ly="B.Cu"))
     _, jobs = _plan(pcb, [_pair("SIG", (5, 15), (25, 15))])
