@@ -506,11 +506,14 @@ def test_dru_sized_nets_reads_every_width_and_gap_rule(tmp_path):
 \t(constraint clearance (min 0.635mm))
 \t(condition "A.NetName == 'V48'")
 )
+(rule "clk" (constraint track_width (min 0.1mm) (max 0.2mm)) (condition "A.NetName == 'SPI_CLK'"))
+# (rule "old" (constraint track_width (min 0.1mm)) (condition "A.NetName == 'GND'"))
 """, encoding="utf-8")
     nets = {"/USB0_DP", "/USB0_DM", "/ETH_TX+", "/eth_rx-", "/D[0]", "ANT",
-            "V48", "GND", ""}
+            "V48", "GND", "SPI_CLK", ""}
+    # a one-line rule counts and a commented one doesn't (#1163's reader)
     assert rc.dru_sized_nets(dru, nets, {"ANT": ("RF",)}) == {
-        "/USB0_DP", "/USB0_DM", "/ETH_TX+", "/eth_rx-", "ANT"}
+        "/USB0_DP", "/USB0_DM", "/ETH_TX+", "/eth_rx-", "ANT", "SPI_CLK"}
     assert rc.dru_net_floors(dru, "track_width") == {}
     assert rc.dru_sized_nets(None, nets) == set()
     assert rc.dru_sized_nets(tmp_path / "nope.kicad_dru", nets) == set()
