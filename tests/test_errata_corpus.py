@@ -1,6 +1,7 @@
 """The real-errata corpus: its manifest, its matcher, and the three
 netlist_audit rules its rev-A boards needed (ground_island, pin_net_swap,
 sot23_pinout), each on a netlist shaped like the board it came from."""
+import json
 import re
 import sys
 from pathlib import Path
@@ -453,6 +454,74 @@ def test_a_pre_kicad6_board_is_upgraded_once_into_the_run_dir(tmp_path, monkeypa
     src.write_text("(kicad_pcb (version 20211014) (footprint y))")
     ec._pcb(b, "rev_a", repo, empty)
     assert len(calls) == 3
+
+
+def _pins_repo(tmp_path, monkeypatch, renet=None):
+    """blinky2 (no pin names on its pads) as a checkout, with a schematic
+    whose netlist names U2's pins; `renet` moves pads to other nets, as a
+    schematic that is not this board's would."""
+    import shutil
+    from test_pin_backfill import AMS1117, BLINKY2, _netlist
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    shutil.copyfile(BLINKY2, repo / "b.kicad_pcb")
+    (repo / "b.kicad_sch").write_text("(kicad_sch)")
+    net = tmp_path / "b.net"
+    net.write_text(_netlist(BLINKY2, {"U2": AMS1117}, renet=renet))
+    calls = []
+    monkeypatch.setattr(ec, "_netlist", lambda *a: calls.append(a) or net)
+    b = {"id": "x", "rev_a": {"pcb": "b.kicad_pcb", "sch": "b.kicad_sch"}}
+    empty = tmp_path / "run" / "constraints.json"
+    empty.parent.mkdir()
+    return repo, b, empty, calls
+
+
+def test_the_sweep_reads_a_board_with_its_schematics_pin_names(tmp_path,
+                                                               monkeypatch):
+    # hwde-holdout-3: 11 of 25 blind boards carry no pin names, so every
+    # check that finds a pin by name judged them from constraints alone
+    import pin_backfill as pb
+    repo, b, empty, calls = _pins_repo(tmp_path, monkeypatch)
+    before = (repo / "b.kicad_pcb").read_bytes()
+    got = ec._pcb(b, "rev_a", repo, empty)
+    assert got == empty.parent / "rev_a-pins.kicad_pcb"
+    u2 = {p["num"]: p["fn"] for fp in pb.footprints(got.read_text("utf-8"))
+          if fp["ref"] == "U2" for p in fp["pads"]}
+    assert u2["2"] == "VOUT" and u2["3"] == "VIN"
+    assert (repo / "b.kicad_pcb").read_bytes() == before   # checkout untouched
+    rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
+    assert rep["status"] == "written"
+    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 1
+    (repo / "b.kicad_sch").write_text("(kicad_sch (changed))")
+    assert ec._pcb(b, "rev_a", repo, empty) == got and len(calls) == 2
+
+
+def test_a_schematic_that_is_not_the_boards_names_nothing(tmp_path,
+                                                          monkeypatch):
+    import pin_backfill as pb
+    from test_pin_backfill import BLINKY2
+    fps = pb.footprints(BLINKY2.read_text("utf-8"))
+    renet = {f'{fp["ref"]}.{p["num"]}': "OTHER" for fp in fps
+             for p in fp["pads"]}
+    repo, b, empty, calls = _pins_repo(tmp_path, monkeypatch, renet)
+    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    assert not (empty.parent / "rev_a-pins.kicad_pcb").exists()
+    rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
+    assert rep["status"] == "mismatch"
+    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    assert len(calls) == 1                       # the verdict is kept too
+
+
+def test_a_board_whose_netlist_will_not_export_is_read_as_it_is(tmp_path,
+                                                                monkeypatch):
+    repo, b, empty, _ = _pins_repo(tmp_path, monkeypatch)
+
+    def fail(*a):
+        raise SystemExit("export failed")
+    monkeypatch.setattr(ec, "_netlist", fail)
+    assert ec._pcb(b, "rev_a", repo, empty) == repo / "b.kicad_pcb"
+    rep = json.loads((empty.parent / "rev_a-pins.json").read_text())
+    assert rep["status"] == "no_netlist"
 
 
 def test_a_check_that_writes_no_report_keeps_its_stderr(tmp_path, monkeypatch):
