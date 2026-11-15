@@ -10,6 +10,8 @@ MECH-05, a declared mated pair (constraints.json "mating_pairs"):
  - mate_family_mismatch: the two footprints are known families that do not
    plug into each other, or their pad patterns do not overlay.
  - mate_pair_unresolved: a declared ref, or the mate board, is not there.
+ - mate_row_spacing: both are 2-row connectors at one pitch whose rows are
+   a different distance apart (#1124).
  - mate_mirrored: a pair with a connector on B.Cu whose pins meet the wrong
    nets, and would all meet their own nets mirrored (the other mount): a
    bottom-side connector mirrored against its mate (#474; 5 of 18 bring-up
@@ -27,6 +29,17 @@ standard_headers, a mate whose pinout is a standard):
    standard_headers fact (a run that judged one is not nothing_to_judge,
    #893); one whose pins 1-3 aren't the two-row pattern is named in
    not_judged.
+
+MECH-05, a mate stated without its board (mating_pairs "mate_standard",
+connector_pinmap.yaml mate_standards or a family name, #1124):
+ - mate_gender_mismatch: the connector's family and the stated mate have the
+   same gender (a socket where the mating side is a socket too).
+ - mate_row_spacing: a 2-row connector whose rows are not the stated mate's
+   row_pitch_mm apart (an edge connector footprint with 2.54 mm rows where
+   the edge socket's are 5.08, zxdiag v1.0 Z101).
+ - mate_family_mismatch: its pin pitch is not the mate's pitch_mm.
+Each one judged is in the stated_mates fact; a connector no family knows the
+gender of, or whose pads are not straight rows, is named in not_judged.
 
 MECH-06, on this board alone:
  - mate_unkeyed_rail_swap: two connectors with the same footprint in an
@@ -60,6 +73,8 @@ constraints.json "mating_pairs" entries:
    "mount": "stack",            # stack | flip | cable (default stack)
    "rotation": 0,               # mate board turn, degrees CCW, top view
    "net_map": {"+3V3": "VDD"}}  # this board's net -> the mate's name for it
+  {"ref": "Z101", "mate_standard": "zx-spectrum-edge"}  # mate with no board:
+                                # a mate_standards row or a family name
 Nets are compared by their last path segment, case-insensitive, so "/SWDIO"
 on one board meets "SWDIO" on the other. Pads with no net, or an
 "unconnected-" net, on either side are not compared.
@@ -106,7 +121,8 @@ def load_table(path=TABLE) -> dict:
     socks = [{**f, "re": re.compile(f["match"], re.I)}
              for f in doc.get("ffc_sockets") or []]
     return {"tol": float((doc.get("defaults") or {}).get("overlay_tol_mm", 0.2)),
-            "families": fams, "standards": stds, "ffc_sockets": socks}
+            "families": fams, "standards": stds, "ffc_sockets": socks,
+            "mate_standards": list(doc.get("mate_standards") or [])}
 
 
 def family(fpid: str, table: dict) -> dict | None:
@@ -184,6 +200,129 @@ def meetings(a_fp, b_fp, mount, rotation, tol):
     return pairs
 
 
+def _clusters(vals, tol):
+    out: list[list[float]] = []
+    for v in sorted(vals):
+        if out and v - out[-1][-1] <= tol:
+            out[-1].append(v)
+        else:
+            out.append([v])
+    return [sum(c) / len(c) for c in out]
+
+
+def row_geometry(fp, tol: float = 0.1) -> dict | None:
+    """{rows, row_pitch, pitch} of a connector's numbered pads in its own
+    frame: 1 or 2 straight rows (row_pitch None for one). None for any other
+    pattern, or fewer than 2 pads."""
+    pts = {(round(p.local[0], 3), round(p.local[1], 3))
+           for p in fp.pads if p.number}
+    if len(pts) < 2:
+        return None
+    xs = _clusters([x for x, _ in pts], tol)
+    ys = _clusters([y for _, y in pts], tol)
+    for across, along in ((xs, ys), (ys, xs)):
+        if len(across) <= 2 and len(along) >= 2 and \
+                len(across) * len(along) >= len(pts):
+            steps = sorted(b - a for a, b in zip(along, along[1:]))
+            return {"rows": len(across),
+                    "row_pitch": (round(across[1] - across[0], 3)
+                                  if len(across) == 2 else None),
+                    "pitch": round(steps[0], 3)}
+    return None
+
+
+def stated_mate(name: str, table: dict) -> dict | None:
+    """The mate_standards row, or the family, a pair's mate_standard names."""
+    for row in table["mate_standards"]:
+        if row["name"] == name:
+            return {**row, "family": False}
+    for f in table["families"]:
+        if f["name"] == name:
+            return {**f, "family": True,
+                    "pitch_mm": f.get("row_pitch_mm"),
+                    "row_pitch_mm": None}
+    return None
+
+
+def stated_violations(model, pairs: list, table: dict
+                      ) -> tuple[list[dict], list[dict], list[str]]:
+    """MECH-05 against a mate named by mate_standard (no mate board, #1124):
+    gender, pin pitch and row spacing. (violations, facts, not judged)."""
+    out, facts, left = [], [], []
+    tol = table["tol"]
+    for pair in pairs:
+        ref, name = pair["ref"], pair["mate_standard"]
+        std = stated_mate(name, table)
+        if std is None:
+            raise checklib.CheckError(
+                f"mating_pairs {ref}: mate_standard {name!r} is not a "
+                "mate_standards row or family in connector_pinmap.yaml")
+        fp = model.footprints.get(ref)
+        if fp is None:
+            out.append(checklib.violation(
+                "mate_pins", "error", None, None, None, [ref],
+                f"declared mate {ref} -> {name}: {ref} is not on this board",
+                SCRIPT, kind="mate_pair_unresolved", connector=ref,
+                mate=name))
+            continue
+        fam = family(fp.fpid, table)
+        geo = row_geometry(fp)
+        short = fp.fpid.split(":")[-1]
+        where = fp.center_abs()
+        fact = {"ref": ref, "mate_standard": name,
+                "family": fam["name"] if fam else None,
+                "geometry": geo, "judged": []}
+        g_a, g_b = (fam or {}).get("gender"), std.get("gender")
+        if g_a and g_b:
+            fact["judged"].append("gender")
+            if g_a == g_b and name not in (fam.get("mates") or []):
+                out.append(checklib.violation(
+                    "mate_pins", "error", where, None, None, [ref],
+                    f"{ref} ({short}) is {g_a}, and so is the {name} it is "
+                    f"stated to mate with: a {g_a} part cannot take a "
+                    f"{g_b} one. Use the other gender",
+                    SCRIPT, kind="mate_gender_mismatch", connector=ref,
+                    mate=name, gender=g_a, mate_gender=g_b))
+        elif not g_a:
+            left.append(f"{ref} ({short}): no connector family gives its "
+                        f"gender, so it was not judged against {name}")
+        if geo is None:
+            if std.get("pitch_mm") or std.get("row_pitch_mm"):
+                left.append(f"{ref} ({short}): its pads are not one or two "
+                            f"straight rows, so pitch and row spacing were "
+                            f"not judged against {name}")
+        else:
+            pitch = std.get("pitch_mm")
+            if pitch:
+                fact["judged"].append("pitch")
+                if abs(geo["pitch"] - float(pitch)) > tol:
+                    out.append(checklib.violation(
+                        "mate_pins", "error", where, None, None, [ref],
+                        f"{ref} ({short}) has its pins {geo['pitch']:g} mm "
+                        f"apart, and {name} {float(pitch):g} mm",
+                        SCRIPT, kind="mate_family_mismatch", connector=ref,
+                        mate=name, pitch_mm=geo["pitch"],
+                        mate_pitch_mm=float(pitch)))
+            want = std.get("row_pitch_mm")
+            want = [float(w) for w in (want if isinstance(want, list)
+                                       else [want] if want else [])]
+            if want and geo["rows"] == 2:
+                fact["judged"].append("row_spacing")
+                if all(abs(geo["row_pitch"] - w) > tol for w in want):
+                    ok = " or ".join(f"{w:g}" for w in want)
+                    src = f" ({std['source']})" if std.get("source") else ""
+                    out.append(checklib.violation(
+                        "mate_pins", "error", where, None, None, [ref],
+                        f"{ref} ({short}) has its two rows "
+                        f"{geo['row_pitch']:g} mm apart; {name} needs {ok} mm"
+                        f"{src}, so it cannot go in",
+                        SCRIPT, kind="mate_row_spacing", connector=ref,
+                        mate=name, row_pitch_mm=geo["row_pitch"],
+                        mate_row_pitch_mm=want))
+        facts.append(fact)
+    return out, facts, left
+
+
 def _resolve_mate(pair: dict, pcb: Path, cons_dir: Path | None, model,
                   cache: dict):
     rel = pair.get("mate_pcb")
@@ -250,6 +389,22 @@ def pair_violations(model, pcb: Path, pairs: list, cons_dir: Path | None,
             met = meetings(a_fp, b_fp, mount, float(pair.get("rotation", 0)),
                            table["tol"])
             fam_bad = fa and fb and fb["name"] not in (fa.get("mates") or [])
+        if met is None and not fam_bad and mount != "cable":
+            ga, gb = row_geometry(a_fp), row_geometry(b_fp)
+            if ga and gb and ga["rows"] == gb["rows"] == 2 \
+                    and abs(ga["pitch"] - gb["pitch"]) <= table["tol"] \
+                    and abs(ga["row_pitch"] - gb["row_pitch"]) > table["tol"]:
+                out.append(checklib.violation(
+                    "mate_pins", "error", a_fp.center_abs(), None, None,
+                    [ref],
+                    f"{ref} ({a_fp.fpid.split(':')[-1]}) has its two rows "
+                    f"{ga['row_pitch']:g} mm apart and {mref} "
+                    f"({b_fp.fpid.split(':')[-1]}) on {mpath.name} "
+                    f"{gb['row_pitch']:g} mm: they cannot mate",
+                    SCRIPT, kind="mate_row_spacing", connector=ref,
+                    mate=mref, row_pitch_mm=ga["row_pitch"],
+                    mate_row_pitch_mm=[gb["row_pitch"]]))
+                continue
         if met is None or fam_bad:
             why = (f"{fa['name']} does not plug into {fb['name']}" if fam_bad
                    else f"pad patterns do not line up ({mount} mount)")
@@ -480,16 +635,22 @@ def run(argv=None):
         if args.constraints else {}
     pairs = cons.get("mating_pairs") or []
     if not isinstance(pairs, list) or not all(
-            isinstance(p, dict) and p.get("ref") and p.get("mate_ref")
+            isinstance(p, dict) and p.get("ref")
+            and bool(p.get("mate_ref")) != bool(p.get("mate_standard"))
             for p in pairs):
         raise checklib.CheckError(
-            "constraints mating_pairs must be a list of {ref, mate_ref, ...}")
+            "constraints mating_pairs must be a list of {ref, mate_ref, ...} "
+            "or {ref, mate_standard}")
+    stated = [p for p in pairs if p.get("mate_standard")]
+    pairs = [p for p in pairs if p.get("mate_ref")]
     table = load_table()
     model = placelib.PlaceModel(pcb)
     cons_dir = Path(args.constraints).parent if args.constraints else None
     cables: list = []
     violations, facts = pair_violations(model, pcb, pairs, cons_dir, table,
                                         cables)
+    found, stated_facts, stated_left = stated_violations(model, stated, table)
+    violations += found
     if args.wireviz:
         Path(args.wireviz).write_text(
             yaml.safe_dump(cablelib.wireviz(cables), sort_keys=False),
@@ -497,17 +658,18 @@ def run(argv=None):
     judged: list = []
     unread: list = []
     violations += standard_violations(
-        model, table, {p.get("ref") for p in pairs}, judged, unread)
+        model, table, {p.get("ref") for p in pairs + stated}, judged, unread)
     violations += unkeyed_violations(model, table)
     for v in violations:
         v["check"] = "mate_pins"
     groups, left = identical_connectors(model, table)
     left += [f"{f['ref']} <-> {f['mate_ref']}: no pin has a net on both sides"
-             for f in facts if not f["compared"]] + unread
-    compared = any(f["compared"] for f in facts)
+             for f in facts if not f["compared"]] + unread + stated_left
+    compared = any(f["compared"] for f in facts) or any(
+        f["judged"] for f in stated_facts)
     return checklib.report(
-        SCRIPT, str(pcb), violations, pairs=facts, standard_headers=judged,
-        not_judged=left,
+        SCRIPT, str(pcb), violations, pairs=facts, stated_mates=stated_facts,
+        standard_headers=judged, not_judged=left,
         nothing_to_judge=None if compared or groups or judged else
         "no mating_pairs compared, no identical unkeyed connectors and no "
         "standard header on B.Cu"), args.out

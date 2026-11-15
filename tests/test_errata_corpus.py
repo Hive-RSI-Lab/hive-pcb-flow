@@ -384,10 +384,10 @@ def test_a_revision_kept_only_in_history_gets_its_own_checkout(tmp_path):
     assert ec.repo_dir(tmp_path, b, "rev_b") == ec.repo_dir(tmp_path, b)
 
 
-def test_a_kicad6_board_is_read_as_it_is(tmp_path):
+def test_a_kicad8_board_is_read_as_it_is(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "x.kicad_pcb").write_text("(kicad_pcb (version 20211014))")
+    (repo / "x.kicad_pcb").write_text("(kicad_pcb (version 20240108))")
     b = {"id": "x", "rev_a": {"pcb": "x.kicad_pcb"}}
     empty = tmp_path / "run" / "constraints.json"
     empty.parent.mkdir()
@@ -423,3 +423,8 @@ def test_a_pre_kicad6_board_is_upgraded_once_into_the_run_dir(tmp_path, monkeypa
     src.write_text("(kicad_pcb (version 20171130) (module y))")
     ec._pcb(b, "rev_a", repo, empty)
     assert len(calls) == 2                       # source changed: redone
+    # mdbt-micro-50q, zxdiag (#1123): a KiCad 6/7 board's references are
+    # fp_text, which placelib reads none from, so it is upgraded too
+    src.write_text("(kicad_pcb (version 20211014) (footprint y))")
+    ec._pcb(b, "rev_a", repo, empty)
+    assert len(calls) == 3

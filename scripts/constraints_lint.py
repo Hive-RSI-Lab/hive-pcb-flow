@@ -198,10 +198,12 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
         "optional": {"dt_c": "num"},
     },
     # check_mate_pins (+ cablelib): a connector and its mate, on this board
-    # or on mate_pcb
+    # or on mate_pcb, or a mate with no board (mate_standard, #1124); one of
+    # mate_ref / mate_standard is needed, and check_mate_pins says so
     "mating_pairs": {
-        "required": {"ref": "str", "mate_ref": "str"},
-        "optional": {"mount": "mount", "mate_pcb": "str", "rotation": "num",
+        "required": {"ref": "str"},
+        "optional": {"mate_ref": "str", "mate_standard": "str",
+                     "mount": "mount", "mate_pcb": "str", "rotation": "num",
                      "net_map": "str_map", "cable": "cable"},
     },
 }

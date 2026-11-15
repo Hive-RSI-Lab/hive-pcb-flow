@@ -133,7 +133,8 @@
                "ends": {"J2": {"contact": "top", "entry": "tabs",
                                "source": "datasheet"}},
                "name": "flex", "part": "FFC-GENERIC-10", "length_mm": 100,
-               "pitch_mm": 0.5}}
+               "pitch_mm": 0.5}},
+    {"ref": "Z1", "mate_standard": "zx-spectrum-edge"}
   ],
   "placement": {
     "fixed": ["J1"],

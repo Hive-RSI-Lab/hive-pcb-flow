@@ -38,8 +38,9 @@ record of its LCSC/JLC number or of the exact part its MPN names), check_thermal
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
 copy of it. A catch for another script is reported as not run. A board
-older than KiCad 6 (`module` footprints, which geom doesn't read) is first
-brought to the current format by `kicad-cli pcb upgrade` on a copy in the run
+older than KiCad 8 (KiCad 5's `module` footprints, which geom doesn't read,
+or KiCad 6/7's `fp_text reference`, which placelib reads no reference from,
+#1123) is first brought to the current format by `kicad-cli pcb upgrade` on a copy in the run
 dir, as intake does to every board; the board checks read that copy.
 
 A catch may give `constraints: {rev_a: {...}, rev_b: {...}}`: what that
@@ -143,10 +144,15 @@ def matches(violation: dict, catch: dict) -> bool:
     return not refs or bool(refs & set(violation.get("refs") or ()))
 
 
+# KiCad 8's board format, the first with footprint fields as `property`
+KICAD8_PCB = 20240108
+
+
 def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     """The board a check reads: the revision's own file, or, for one older
-    than KiCad 6 (a `module`-era file, which geom reads no footprints from),
-    a copy `kicad-cli pcb upgrade` brought to the current format, as intake
+    than KiCad 8 (a `module`-era file, which geom reads no footprints from,
+    or a KiCad 6/7 one, whose references are `fp_text` that placelib and
+    check_connector_fit skip every footprint over, #1123), a copy `kicad-cli pcb upgrade` brought to the current format, as intake
     does to every board it takes in. The copy sits in the run dir and is
     reused while the source is unchanged."""
     import hashlib
@@ -154,7 +160,7 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     src = repo / b[rev]["pcb"]
     head = src.read_text(encoding="utf-8", errors="replace")[:400]
     m = re.search(r"\(version\s+(\d+)\)", head)
-    if m and int(m.group(1)) >= 20211014:  # KiCad 6's first board format
+    if m and int(m.group(1)) >= KICAD8_PCB:
         return src
     dest = empty.parent / f"{rev}-upgraded.kicad_pcb"
     stamp = dest.with_suffix(".src")

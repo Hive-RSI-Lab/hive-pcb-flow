@@ -19,7 +19,7 @@ only for the round's first reading: each round is swept once.
 - Holdout round 1, blind: 1 of 4 caught (1 caught, 3 missed).
 - Holdout round 1, with the rules written since: 2 of 4 caught (2 caught, 2 missed).
 - Holdout round 2, blind: 1 of 21 caught (1 caught, 20 missed).
-- Holdout round 2, with the rules written since: 4 of 21 caught (4 caught, 17 missed).
+- Holdout round 2, with the rules written since: 9 of 21 caught (9 caught, 12 missed).
 
 ## A new holdout round
 
@@ -285,8 +285,8 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| zxdiag-v10-1: Edge connector footprint has its rows about 2.5 mm apart instead of 5 mm | LIB (wrong footprint geometry) | missed | missed | an edge connector's row spacing against the mating connector's |
-| zxdiag-v10-2: Edge connector header holes too small for the pins | PCB (drill size) | missed | missed | check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint |
+| zxdiag-v10-1: Edge connector footprint has its rows about 2.5 mm apart instead of 5 mm | LIB (wrong footprint geometry) | missed | caught_with_constraints (not run here), since #1124 (`check_mate_pins` mate_row_spacing, with constraints) | Not an independent catch: the rule was written after this holdout defect was read (#1124), though the row spacings come from the Sullins ABC card-edge socket datasheet, not from this board. v1.0's Z101 has its rows 2.54 mm apart; v1.1's Spectrum_Edge_Connector 5.08 mm, which the edge socket takes. Only the stated mate says which is right. |
+| zxdiag-v10-2: Edge connector header holes too small for the pins | PCB (drill size) | missed | caught (not run here), since #1123 (`check_connector_fit` tht_pin_tight) | Not an independent catch: the rule was written after this holdout defect was read (#1123). v1.0 is a KiCad 6 board, whose footprints placelib read no reference from until intake's kicad-cli upgrade was applied here; Z101 is a project-library pin header (2.54 mm holes apart) drilled 0.76 mm for a 0.64 mm square post (Samtec TSW), 0.91 mm across its corners. v1.1's edge connector has no such holes. |
 
 ### pico-if1-v10: v1.0 -> v1.1
 
@@ -316,7 +316,7 @@ round, pinned and swept before those rules are:
 | gcm-v50-1: U12 on the BWRITE1 bus, in conflict with U40; V5.1 moves it to BWRITE2 | SCH (bus conflict) | missed | missed | bus contention: two drivers enabled by one bus strobe (U12 and U40 on BWRITE1) |
 | gcm-v50-2: A symbol's pins flipped and out of order, causing a clock problem | LIB (symbol pinout) | missed | caught on rev A, gone on rev B, since #1134 (`netlist_audit` bus_order_flipped) | Not an independent catch: the rule was written after this defect was read. On V5.0 one unit of each SN74LV393A divider chain counts its QA..QD outputs onto the clock nets the other way round from its twin unit. The warning is gone on V5.1. |
 | gcm-v50-3: J7 on the wrong footprint | LIB (wrong footprint) | missed | missed | the footprint against the part's MPN package |
-| gcm-v50-4: J12 the wrong gender; V5.1 uses a male connector | PCB (connector gender) | missed | missed | connector gender against a stated mating side |
+| gcm-v50-4: J12 the wrong gender; V5.1 uses a male connector | PCB (connector gender) | missed | caught_with_constraints (not run here), since #1124 (`check_mate_pins` mate_gender_mismatch, with constraints) | Not an independent catch: the rule was written after this holdout defect was read (#1124). V5.0's J12 is a PinSocket_2x21 where it mates with a socket; V5.1's is a PinHeader. Only the stated mate says which gender is right. A KiCad 5 board, read through intake's upgrade. |
 
 ### gp8b-v50: V5.0 -> V5.1
 
@@ -324,7 +324,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| gp8b-v50-1: J1 not a male connector | PCB (connector gender) | missed | missed | connector gender against a stated mating side |
+| gp8b-v50-1: J1 not a male connector | PCB (connector gender) | missed | caught_with_constraints (not run here), since #1124 (`check_mate_pins` mate_gender_mismatch, with constraints) | Not an independent catch: the rule was written after this holdout defect was read (#1124). V5.0's J1 is a PinSocket_1x06 where it mates with a socket; V5.1's is a PinHeader. A KiCad 5 board, read through intake's upgrade. |
 | gp8b-v50-2: ADDSCR_CLK not sending the right pulses to the motherboard | SCH (wrong net) | missed | missed | the erratum does not name the fault; read the v5.0 to v5.1 ADDSCR_CLK change to find a rule |
 
 ### mdbt-micro-50q: 50q-v1.1 -> 50q-v1.2
@@ -333,7 +333,7 @@ round, pinned and swept before those rules are:
 
 | defect | class | blind sweep | pcb-flow on rev A | follow-up |
 |---|---|---|---|---|
-| mdbt-micro-50q-1: Pro Micro 2.54 mm header holes 0.7 mm, too small; 1 mm in v1.2 | DFM (hole size) | missed | missed | check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why |
+| mdbt-micro-50q-1: Pro Micro 2.54 mm header holes 0.7 mm, too small; 1 mm in v1.2 | DFM (hole size) | missed | caught (not run here), since #1123 (`check_connector_fit` tht_pin_tight) | Not an independent catch: the rule was written after this holdout defect was read (#1123). J1 is the project's Pro Micro footprint, which no stock lead row knew; it now takes a 2.54 mm header's 0.64 mm square post (Samtec TSW) when its holes stand 2.54 mm apart. v1.1 drills 0.80 mm (the erratum says 0.7), too small for the post's 0.91 mm corners; v1.2's 1.00 mm holes fit, with an IPC-2222 warning only. |
 
 ### flexgrid-v3: V3 -> V4
 

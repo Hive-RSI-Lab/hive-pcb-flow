@@ -51,7 +51,10 @@ has no `mechanical` block are listed under `unverified`, so a review sees
 what this check could not hold to a drawing. A part with no extraction is
 never failed for it. A part with no `mechanical.pins` whose footprint is a
 stock pin header is held to reference/tht_leads.yaml's lead instead (the
-part's fact says `lead_source: stock`).
+part's fact says `lead_source: stock`). A row whose name does not say the
+pitch (a project's own `*Pin_Header*`, a Pro Micro's footprint: zxdiag Z101
+and mdbt-micro J1 had 0.76 and 0.8 mm holes for 0.64 mm square posts, #1123)
+holds only when the holes stand its `pitch_mm` apart.
 
 A solder-wire pad pair (KiCad's Connector_Wire:SolderWire-*) has no part
 and no drawing: its holes are sized for the wire the footprint is named
@@ -106,6 +109,8 @@ SPEC_TOL_MM = 0.10
 # Unplated holes finish +-0.05 mm of the drill.
 POST_TOL_MM = 0.05
 EDGE_TOL_MM = 0.30
+# A stock row's pitch_mm holds to this (hole positions are on a 0.01 grid)
+PITCH_TOL_MM = 0.05
 CONNECTOR_REF = re.compile(r"^(J|CN|P|USB|X)\d", re.I)
 SOLDER_WIRE = re.compile(r"^SolderWire-")
 # IPC-2221 outer-layer trace current, I = k dT^0.44 (W t)^0.725 (mil); a
@@ -304,12 +309,31 @@ def load_leads(path: Path = LEADS) -> list[dict]:
     return [{**e, "re": re.compile(e["match"])} for e in data.get("leads") or []]
 
 
-def stock_lead(fpid: str, leads: list[dict]) -> dict | None:
-    """The stock-table `mechanical` for a footprint, or None."""
+def hole_pitch(pads) -> float | None:
+    """The median distance from each plated hole to its nearest neighbour,
+    or None with fewer than two."""
+    xy = [p.at[:2] for p in _holes(pads) if p.ptype == "thru_hole"]
+    if len(xy) < 2:
+        return None
+    nn = sorted(min(math.dist(a, b) for j, b in enumerate(xy) if j != i)
+                for i, a in enumerate(xy))
+    return nn[len(nn) // 2]
+
+
+def stock_lead(fpid: str, leads: list[dict], pads=None) -> dict | None:
+    """The stock-table `mechanical` for a footprint, or None. A row with
+    `pitch_mm` (a name that does not say its pitch: a project's own header
+    or a Pro Micro's footprint) holds only when the footprint's plated holes
+    stand that far apart."""
     name = fpid.split(":")[-1]
     for e in leads:
-        if e["re"].search(name):
-            return {"pins": e["pins"], "source": e.get("source", "")}
+        if not e["re"].search(name):
+            continue
+        if e.get("pitch_mm") is not None:
+            got = hole_pitch(pads or [])
+            if got is None or abs(got - float(e["pitch_mm"])) > PITCH_TOL_MM:
+                continue
+        return {"pins": e["pins"], "source": e.get("source", "")}
     return None
 
 
@@ -575,7 +599,7 @@ def check(pcb: Path, parts: Path | None) -> tuple[list[dict], dict]:
         if mech:
             used = check_pins(ref, f, b["pads"], mech, viols, fact)
             check_posts(ref, f, b["pads"], mech, used, viols, fact)
-        elif (stock := stock_lead(f.fpid, leads)) is not None:
+        elif (stock := stock_lead(f.fpid, leads, b["pads"])) is not None:
             fact["lead_source"] = "stock"
             check_pins(ref, f, b["pads"], stock, viols, fact)
             facts["parts"].append(fact)
