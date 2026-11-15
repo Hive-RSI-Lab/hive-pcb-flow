@@ -10,6 +10,9 @@ disagree about the clearance an escape is laid at:
                                  regular grid (>= 3 x 3, pitch <= 1.27 mm)
   escape_params(bga, floors)  -> the dog-bone escape geometry and its budget
   dru_rule(ref, clearance)    -> the courtyard-scoped clearance rule text
+  fine_via(bga, n, cap, free) -> the fab's smallest filled via for a fine
+                                 field on a stack that fills vias free (#1252)
+  fine_rule(ref, fv)          -> the courtyard rule that lets that via pass
 
 The budget (all mm, c = escape clearance):
   via     = max(min via diameter, drill + 2 * min annular ring)
@@ -41,6 +44,17 @@ KEEP_LAST = ("aiee_hv_", "aiee_pkg_rating_", "aiee_iso_")
 # KiCad board-setup hole clearance when the project sets none
 # (rules_gen.KICAD_HOLE_CLEARANCE_MM - the same number).
 KICAD_HOLE_CLEARANCE_MM = 0.25
+
+# Fine fields (#1252). JLC's BGA guide (jlcpcb.com/help/article/BGA-Design-
+# Guidelines---PCB-Layout-Recommendations-for-BGA-packages) calls a 0.5 mm
+# dog-bone not manufacturable and gives 0.25 mm pads with filled via-in-pad;
+# its capability page (jlcpcb.com/capabilities/pcb-capabilities) gives the
+# via: 0.25/0.15 mm minimum (jlc_capabilities abs_min_via_*), filled and
+# capped (POFV, 0.15-0.55 mm vias, the default from 6 layers up), 0.2 mm via
+# hole-to-hole, and 0.2 mm via hole to track.
+FINE_PITCH_MM = 0.5
+FINE_VIA_HOLE_CLEARANCE_MM = 0.2
+FINE_RULE_PREFIX = "aiee_bga_fine_via_"
 
 
 @dataclass
@@ -200,6 +214,56 @@ def escape_params(bga: Bga, floors: dict) -> dict:
             "budget": budget, "dogbone_ok": ok["gap"] and ok["street"]}
 
 
+def fine_via(bga: Bga, n_copper: int, cap: dict | None,
+             free: set[int]) -> dict | None:
+    """The fab's smallest via, filled in the pad, for a field of pitch
+    <= FINE_PITCH_MM on a stack whose filled vias cost nothing (`free`, the
+    layer counts jlc_pricing via_fill_epoxy prices 0), else None. A 4-layer
+    board never gets one, whatever `free` says. cap: the board's
+    jlc_capabilities row; one with no abs_min_via_* floors (another fab)
+    gives None. Returns floors keys for escape_params and fine_rule."""
+    if n_copper <= 4 or n_copper not in free or not cap:
+        return None
+    if bga.pitch > FINE_PITCH_MM + GRID_TOL:
+        return None
+    keys = ("abs_min_via_diameter_mm", "abs_min_via_drill_mm",
+            "abs_min_via_hole_to_hole_mm")
+    if any(k not in cap for k in keys):
+        return None
+    di, dr, h2h = (float(cap[k]) for k in keys)
+    return {"via_diameter": di, "via_drill": dr,
+            "annular": round((di - dr) / 2, 4), "hole_to_hole": h2h,
+            "hole_clearance": FINE_VIA_HOLE_CLEARANCE_MM}
+
+
+def free_fill_layers() -> set[int]:
+    """Layer counts whose filled, capped vias the fab charges nothing for
+    (jlc_pricing.yaml options.via_fill_epoxy priced 0)."""
+    import order_quote
+    table = (order_quote.load_pricing(order_quote.PRICING).get("options")
+             or {}).get("via_fill_epoxy") or {}
+    return {int(k) for k, v in table.items() if float(v or 0) == 0}
+
+
+def fine_rule_name(ref: str) -> str:
+    return FINE_RULE_PREFIX + "".join(c if c.isalnum() else "_" for c in ref)
+
+
+def fine_rule(ref: str, fv: dict) -> str:
+    """KiCad DRU text: the fine via's floors (diameter, hole, ring, hole to
+    hole, hole clearance) for copper touching the courtyard. A custom rule
+    wins over the board-setup minimums in KiCad 10, so the board's own via
+    floor stays in force everywhere else."""
+    rows = (("via_diameter", fv["via_diameter"]),
+            ("hole_size", fv["via_drill"]),
+            ("annular_width", fv["annular"]),
+            ("hole_to_hole", fv["hole_to_hole"]),
+            ("hole_clearance", fv["hole_clearance"]))
+    body = "".join(f"\t(constraint {c} (min {v:.4f}mm))\n" for c, v in rows)
+    return (f'(rule "{fine_rule_name(ref)}"\n{body}'
+            f'\t(condition "{rule_condition(ref)}")\n)\n')
+
+
 def rule_name(ref: str) -> str:
     return RULE_PREFIX + "".join(c if c.isalnum() else "_" for c in ref)
 
@@ -222,34 +286,42 @@ def dru_rule(ref: str, clearance: float) -> str:
             ')\n')
 
 
-def ensure_rules(dru_text: str, rules: list[tuple[str, float]]) -> tuple[str, list[str]]:
+def ensure_rules(dru_text: str, rules: list[tuple]) -> tuple[str, list[str]]:
     """dru_text with each (ref, clearance) escape rule present exactly once
-    (an existing rule of that name is replaced). Returns (text, names
+    (an existing rule of that name is replaced). A third item, a fine_via
+    dict, adds that part's fine-via rule too (#1252). Returns (text, names
     changed)."""
-    import re
     changed = []
     if not dru_text.strip():
         dru_text = "(version 1)\n"      # KiCad ignores a DRU without it
-    for ref, clr in rules:
-        name = rule_name(ref)
-        new = dru_rule(ref, clr)
-        pat = re.compile(r'\(rule "' + re.escape(name)
-                         + r'"\n(?:[ \t].*\n)*\)(?:\n|$)')
-        m = pat.search(dru_text)
-        if m:
-            if m.group(0) != new:
-                dru_text = dru_text[:m.start()] + new + dru_text[m.end():]
-                changed.append(name)
-            continue
-        # before the first HV / package-rating rule: KiCad's later rule
-        # wins, and an escape clearance must never undercut those spacings
-        hv = re.search(r'^\(rule "(?:' + "|".join(KEEP_LAST) + ')',
-                       dru_text, re.M)
-        if hv:
-            dru_text = dru_text[:hv.start()] + new + dru_text[hv.start():]
-        else:
-            if dru_text and not dru_text.endswith("\n"):
-                dru_text += "\n"
-            dru_text += new
-        changed.append(name)
+    for ref, clr, *fv in rules:
+        dru_text = _put_rule(dru_text, rule_name(ref), dru_rule(ref, clr),
+                             changed)
+        if fv and fv[0]:
+            dru_text = _put_rule(dru_text, fine_rule_name(ref),
+                                 fine_rule(ref, fv[0]), changed)
     return dru_text, changed
+
+
+def _put_rule(dru_text: str, name: str, new: str, changed: list[str]) -> str:
+    import re
+    pat = re.compile(r'\(rule "' + re.escape(name)
+                     + r'"\n(?:[ \t].*\n)*\)(?:\n|$)')
+    m = pat.search(dru_text)
+    if m:
+        if m.group(0) != new:
+            dru_text = dru_text[:m.start()] + new + dru_text[m.end():]
+            changed.append(name)
+        return dru_text
+    # before the first HV / package-rating rule: KiCad's later rule
+    # wins, and an escape clearance must never undercut those spacings
+    hv = re.search(r'^\(rule "(?:' + "|".join(KEEP_LAST) + ')',
+                   dru_text, re.M)
+    if hv:
+        dru_text = dru_text[:hv.start()] + new + dru_text[hv.start():]
+    else:
+        if dru_text and not dru_text.endswith("\n"):
+            dru_text += "\n"
+        dru_text += new
+    changed.append(name)
+    return dru_text

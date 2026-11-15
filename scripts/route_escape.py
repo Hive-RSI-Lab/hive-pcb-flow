@@ -735,8 +735,9 @@ def fan_one(ctx: dict, bga: bgalib.Bga, ep: dict, layers: list[str],
     staged, work, krt = ctx["staged"], ctx["work"], ctx["krt"]
     out = work / (f"{staged.stem}.{bga.ref}.{method or ep['method']}"
                   f"{'.' + tag if tag else ''}.kicad_pcb")
-    fab = fab_overrides(work, ep, ctx["floors"])
-    launch = ["--hole-to-hole", f"{ctx['floors']['hole_to_hole']:g}"]
+    fl = {**ctx["floors"], **(ep.get("fine_via") or {})}
+    fab = fab_overrides(work, ep, fl)
+    launch = ["--hole-to-hole", f"{fl['hole_to_hole']:g}"]
     if open_to:
         plan = work / f"{out.stem}.open.json"
         plan.write_text(json.dumps({"open": {n: list(s) for n, s in
@@ -891,9 +892,19 @@ def run(argv: list[str] | None = None):
     keep_vip, vip_why = via_in_pad_choice(
         len(bg0.copper_layers), args.allow_via_in_pad, args.no_via_in_pad,
         free_filled_via_layers())
+    fine_cap = fine_cap_row(len(bg0.copper_layers)) \
+        if keep_vip and not build else None
     plans = []
     for b in bgas:
-        ep = bgalib.escape_params(b, floors)
+        fv = bgalib.fine_via(b, len(bg0.copper_layers), fine_cap,
+                             free_filled_via_layers()) if fine_cap else None
+        ep = bgalib.escape_params(b, {**floors, **fv} if fv else floors)
+        if fv:      # #1252: the fab's smallest via, filled, in the pad
+            ep.update(method="underpad", fine_via=fv,
+                      why=(f"{b.pitch:g} mm field on {len(bg0.copper_layers)}"
+                           f" layers: filled {fv['via_diameter']:g}/"
+                           f"{fv['via_drill']:g} mm via in the pad "
+                           "(JLC's BGA guide; POFV free from 6 layers)"))
         if args.method:
             ep["method"] = args.method
         layers, planes = escape_layers(bg0, b, explicit_layers)
@@ -902,9 +913,14 @@ def run(argv: list[str] | None = None):
                       "pairs": pairs, "pair_gap": gap})
 
     def _plan_fact(p):
+        fv = p["ep"].get("fine_via")
         return {**p["bga"].as_dict(), **{k: p["ep"][k] for k in (
             "via_size", "via_drill", "track_width", "clearance", "method",
             "why", "budget")}, "layers": p["layers"],
+            **({"fine_via": {"rule": bgalib.fine_rule_name(p["bga"].ref),
+                             "hole_to_hole": fv["hole_to_hole"],
+                             "hole_clearance": fv["hole_clearance"]}}
+               if fv else {}),
             "plane_layers": p["planes"],
             **({"pairs": p["pairs"], "pair_gap_mm": p["pair_gap"]}
                if p["pairs"] else {}),
@@ -931,7 +947,8 @@ def run(argv: list[str] | None = None):
     dru = staged.with_suffix(".kicad_dru")
     dru_text = dru.read_text(encoding="utf-8") if dru.is_file() else ""
     dru_text, rules_changed = bgalib.ensure_rules(
-        dru_text, [(p["bga"].ref, p["ep"]["clearance"]) for p in plans])
+        dru_text, [(p["bga"].ref, p["ep"]["clearance"],
+                    p["ep"].get("fine_via")) for p in plans])
     if rules_changed:
         dru.write_text(dru_text, encoding="utf-8")
     pristine = {f.name: f.read_bytes() for f in work.iterdir()
@@ -1016,8 +1033,8 @@ def run(argv: list[str] | None = None):
             r["via_in_pad"]["items_removed"] = rc.rip_new_copper(
                 staged, old_uuids, set(vip))
         elif vip:
-            clash = vip_conflicts(bg, b, new, floors["hole_to_hole"],
-                                  ep["clearance"])
+            clash = vip_conflicts(bg, b, new, (ep.get("fine_via") or floors)
+                                  ["hole_to_hole"], ep["clearance"])
             if clash:
                 r["via_in_pad"]["clashing"] = sorted(clash)
                 r["via_in_pad"]["items_removed"] = rip_in_fields(
@@ -1134,12 +1151,19 @@ def filled_via_layers() -> set[int]:
     return {int(k) for k in table}
 
 
+def fine_cap_row(n_copper: int) -> dict | None:
+    """The JLC capability row (1 oz) whose abs_min_via_* floors size a
+    fine field's via (#1252); None when there is no such row."""
+    import fabfloors
+    try:
+        return fabfloors.profile(n_copper, 1.0)[1]
+    except fabfloors.FabFloorError:
+        return None
+
+
 def free_filled_via_layers() -> set[int]:
     """Layer counts whose filled, capped vias the fab charges nothing for."""
-    import order_quote
-    table = (order_quote.load_pricing(order_quote.PRICING).get("options")
-             or {}).get("via_fill_epoxy") or {}
-    return {int(k) for k, v in table.items() if float(v or 0) == 0}
+    return bgalib.free_fill_layers()
 
 
 def plane_ball_specs(bg, refs: list[str], nets: list[str]) -> list[str]:

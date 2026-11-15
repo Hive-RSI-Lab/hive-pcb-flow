@@ -130,6 +130,16 @@ class Rule:
         return "\n".join(lines)
 
 
+class TextRule(Rule):
+    """A rule another module renders whole (several constraints)."""
+    def __init__(self, name: str, text: str):
+        super().__init__(name, "")
+        self.text = text
+
+    def render(self) -> str:
+        return self.text.rstrip("\n")
+
+
 def baseline_rules(cap: dict) -> list[Rule]:
     """Fab-floor rules from a jlc_capabilities.yaml design-rule row.
 
@@ -450,19 +460,29 @@ def bga_rules(bg, cap: dict, stackup: dict | None = None
 
     if hdi:
         add_hdi(hdilib.via_type_rules(stackup, caps))
-    for b in bgalib.find_bgas(bg):
-        ep = bgalib.escape_params(b, floors)
+    bgas = bgalib.find_bgas(bg)
+    free = bgalib.free_fill_layers() if bgas and not hdi else set()
+    for b in bgas:
+        fv = None if hdi else bgalib.fine_via(b, len(bg.copper_layers),
+                                              cap, free)
+        ep = bgalib.escape_params(b, {**floors, **fv} if fv else floors)
         name = bgalib.rule_name(b.ref)
         clr = float(caps["min_clearance_mm"]) if hdi else ep["clearance"]
         rules.append(Rule(name, "clearance", clr,
                           condition=bgalib.rule_condition(b.ref)))
+        if fv:      # route_escape's fine via (#1252): the same rule text
+            rules.append(TextRule(bgalib.fine_rule_name(b.ref),
+                                  bgalib.fine_rule(b.ref, fv)))
         if hdi:
             add_hdi(hdilib.field_rules(b.ref, float(caps["min_trace_width_mm"]),
                                        clr, bgalib.rule_condition(b.ref)))
         facts.append({"ref": b.ref, "pitch_mm": b.pitch,
                       "clearance_mm": ep["clearance"],
                       "via_mm": [ep["via_size"], ep["via_drill"]],
-                      "method": ep["method"], "rule": name})
+                      "method": "underpad" if fv else ep["method"],
+                      "rule": name,
+                      **({"fine_via_rule": bgalib.fine_rule_name(b.ref)}
+                         if fv else {})})
     return rules, facts
 
 
