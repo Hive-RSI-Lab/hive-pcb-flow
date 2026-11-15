@@ -440,3 +440,28 @@ def test_solder_wire_unbounded_feed_not_judged(tmp_path, why):
     loose, facts = _loose(tmp_path, body)
     assert loose == []
     assert not any(p["ref"] == "J1" for p in facts["parts"])
+
+
+def test_project_header_and_pro_micro_held_to_the_post_at_their_pitch(tmp_path):
+    # zxdiag Z101 (zxbus:ZX_Bus_Pin_Header, 0.762 mm) and mdbt-micro J1
+    # (a Pro Micro footprint, 0.8 mm): names that do not say the pitch, held
+    # to a 0.64 mm square post because the holes stand 2.54 mm apart (#1123)
+    for fp in ("zxbus:ZX_Bus_Pin_Header", "MDBTMicro_library:ProMicro"):
+        vs, facts = ccf.check(_board(tmp_path, header(0.762, n=2, fpid=fp)),
+                              None)
+        assert _kinds(vs, "error") == ["tht_pin_tight"] * 4, fp
+        assert facts["parts"][0]["lead_source"] == "stock"
+
+
+def test_a_project_header_off_its_pitch_or_a_socket_is_not_judged(tmp_path):
+    def two_mm(drill, fpid):
+        pads = "".join(_tht(str(i + 1), 2.0 * i, 0, drill) for i in range(4))
+        return (f'  (footprint "{fpid}" (layer "F.Cu")\n    (at 10 5)\n'
+                f'    (property "Reference" "J3" (at 0 0 0))\n{pads})\n')
+    vs, facts = ccf.check(_board(tmp_path, two_mm(0.7, "my:Pin_Header_4")),
+                          None)
+    assert vs == [] and facts["parts"] == []
+    vs, _ = ccf.check(_board(tmp_path, header(0.7, n=2,
+                                              fpid="my:Pin_Header_Socket")),
+                      None)
+    assert vs == []

@@ -1004,15 +1004,36 @@ holdout:
     source_quote: "Wrong footprint for the Spectrum edge connector. I used zxbus:ZX_Bus_Pin_Header, which is two rows of pin headers about 2.5mm apart. They should be 5mm apart."
     fault_class: LIB (wrong footprint geometry)
     blind: missed
-    verdict: missed
-    follow_up: "an edge connector's row spacing against the mating connector's"
+    verdict: caught_with_constraints
+    caught_by: "#1124"
+    catch:
+      script: check_mate_pins
+      kind: mate_row_spacing
+      refs: [Z101]
+      constraints:
+        rev_a: {mating_pairs: [{ref: Z101, mate_standard: zx-spectrum-edge}]}
+        rev_b: {mating_pairs: [{ref: Z101, mate_standard: zx-spectrum-edge}]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1124), though the row spacings come from the Sullins
+      ABC card-edge socket datasheet, not from this board. v1.0's Z101 has
+      its rows 2.54 mm apart; v1.1's Spectrum_Edge_Connector 5.08 mm, which
+      the edge socket takes. Only the stated mate says which is right.
   - id: zxdiag-v10-2
     summary: Edge connector header holes too small for the pins
     source_quote: "Further, the holes are too small."
     fault_class: PCB (drill size)
     blind: missed
-    verdict: missed
-    follow_up: "check_connector_fit gave no finding on the edge header's holes: find whether the lead size is unknown for this footprint"
+    verdict: caught
+    caught_by: "#1123"
+    catch: {script: check_connector_fit, kind: tht_pin_tight, refs: [Z101]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1123). v1.0 is a KiCad 6 board, whose footprints
+      placelib read no reference from until intake's kicad-cli upgrade was
+      applied here; Z101 is a project-library pin header (2.54 mm holes
+      apart) drilled 0.76 mm for a 0.64 mm square post (Samtec TSW), 0.91 mm
+      across its corners. v1.1's edge connector has no such holes.
 - id: pico-if1-v10
   url: https://github.com/derekfountain/zx-spectrum-pico-interface-one
   commit: 7d1be0cb53fe19f4c43f2c90e31ed24b3ee89d19
@@ -1128,8 +1149,20 @@ holdout:
     source_quote: "J12 have been correctly replaced with a male connector"
     fault_class: PCB (connector gender)
     blind: missed
-    verdict: missed
-    follow_up: "connector gender against a stated mating side"
+    verdict: caught_with_constraints
+    caught_by: "#1124"
+    catch:
+      script: check_mate_pins
+      kind: mate_gender_mismatch
+      refs: [J12]
+      constraints:
+        rev_a: {mating_pairs: [{ref: J12, mate_standard: pin-socket-2.54}]}
+        rev_b: {mating_pairs: [{ref: J12, mate_standard: pin-socket-2.54}]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1124). V5.0's J12 is a PinSocket_2x21 where it mates
+      with a socket; V5.1's is a PinHeader. Only the stated mate says which
+      gender is right. A KiCad 5 board, read through intake's upgrade.
 - id: gp8b-v50
   url: https://github.com/JonathSpirit/GP8B
   commit: 6335b5a59bfc2553559fee35edc3b826b83e146f
@@ -1144,8 +1177,20 @@ holdout:
     source_quote: "J1 wasn't a male connector"
     fault_class: PCB (connector gender)
     blind: missed
-    verdict: missed
-    follow_up: "connector gender against a stated mating side"
+    verdict: caught_with_constraints
+    caught_by: "#1124"
+    catch:
+      script: check_mate_pins
+      kind: mate_gender_mismatch
+      refs: [J1]
+      constraints:
+        rev_a: {mating_pairs: [{ref: J1, mate_standard: pin-socket-2.54}]}
+        rev_b: {mating_pairs: [{ref: J1, mate_standard: pin-socket-2.54}]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1124). V5.0's J1 is a PinSocket_1x06 where it mates
+      with a socket; V5.1's is a PinHeader. A KiCad 5 board, read through
+      intake's upgrade.
   - id: gp8b-v50-2
     summary: ADDSCR_CLK not sending the right pulses to the motherboard
     source_quote: "ADDSCR_CLK was not sending the right pulses to the motherboard"
@@ -1167,8 +1212,16 @@ holdout:
     source_quote: "Fixed the ProMicro board 2.54mm pin headers hole size from 0.7mm to 1mm."
     fault_class: DFM (hole size)
     blind: missed
-    verdict: missed
-    follow_up: "check_connector_fit gave no finding on 0.7 mm holes for 2.54 mm header pins: find why"
+    verdict: caught
+    caught_by: "#1123"
+    catch: {script: check_connector_fit, kind: tht_pin_tight, refs: [J1]}
+    note: >-
+      Not an independent catch: the rule was written after this holdout
+      defect was read (#1123). J1 is the project's Pro Micro footprint, which
+      no stock lead row knew; it now takes a 2.54 mm header's 0.64 mm square
+      post (Samtec TSW) when its holes stand 2.54 mm apart. v1.1 drills
+      0.80 mm (the erratum says 0.7), too small for the post's 0.91 mm
+      corners; v1.2's 1.00 mm holes fit, with an IPC-2222 warning only.
 - id: flexgrid-v3
   url: https://github.com/Open-Muscle/OpenMuscle-FlexGrid
   commit: d3529287a8998dba79bdf6f593d1d67532386edc

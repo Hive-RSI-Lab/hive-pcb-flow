@@ -400,3 +400,86 @@ def test_front_side_pair_with_wrong_nets_is_not_called_a_mirror(tmp_path):
     vs = _run(main, [{"ref": "J2", "mate_ref": "J1",
                       "mate_pcb": "mate/d.kicad_pcb"}])
     assert {v["kind"] for v in vs} == {"mate_pin_mismatch"}
+
+
+# ------------------------------------- MECH-05 against a stated mate (#1124)
+
+def _fp2row(ref, fpid, n, row_pitch, pitch=2.54):
+    """2 rows of n pins along +y, row_pitch apart in x, at (10, 5)."""
+    pads = "".join(
+        f'    (pad "{2 * i + r + 1}" thru_hole circle (at {row_pitch * r} '
+        f'{pitch * i}) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask"))\n'
+        for i in range(n) for r in range(2))
+    return (f'  (footprint "{fpid}" (layer "F.Cu") (at 10 5)\n'
+            f'    (property "Reference" "{ref}" (at 0 -2 0))\n'
+            f'    (attr through_hole)\n'
+            f'    (fp_rect (start -1.5 -1.5) (end {row_pitch + 1.5} '
+            f'{pitch * n}) (stroke (width 0.05)) (fill no) (layer "F.CrtYd"))'
+            f'\n{pads}  )\n')
+
+
+def test_stated_mate_of_the_same_gender(tmp_path):
+    pcb = _board(tmp_path / "b.kicad_pcb", _fp("J1", SKT4, 10, 10, NETS))
+    vs = _run(pcb, [{"ref": "J1", "mate_standard": "pin-socket-2.54"}])
+    assert [v["kind"] for v in vs] == ["mate_gender_mismatch"]
+    assert "female" in vs[0]["msg"]
+    assert _run(pcb, [{"ref": "J1", "mate_standard": "pin-header-2.54"}]) \
+        == []
+
+
+def test_stated_mate_row_spacing(tmp_path):
+    # a DIP-40 socket (rows 15.24 apart) where a Pico (17.78) goes
+    dip = _board(tmp_path / "dip.kicad_pcb",
+                 _fp2row("U1", "Package_DIP:DIP-40_W15.24mm_Socket", 20,
+                         15.24))
+    vs = _run(dip, [{"ref": "U1", "mate_standard": "raspberry-pi-pico"}])
+    assert [v["kind"] for v in vs] == ["mate_row_spacing"]
+    assert vs[0]["row_pitch_mm"] == 15.24 and "17.78" in vs[0]["msg"]
+    ok = _board(tmp_path / "ok.kicad_pcb",
+                _fp2row("U1", "x:Pico_Socket", 20, 17.78))
+    assert _run(ok, [{"ref": "U1", "mate_standard": "raspberry-pi-pico"}]) \
+        == []
+
+
+def test_stated_edge_mate_takes_either_row_spacing(tmp_path):
+    for rp, want in ((2.54, ["mate_row_spacing"]), (3.56, []), (5.08, [])):
+        pcb = _board(tmp_path / f"e{rp}.kicad_pcb",
+                     _fp2row("Z1", "zxbus:ZX_Bus_Pin_Header", 28, rp))
+        vs = _run(pcb, [{"ref": "Z1", "mate_standard": "zx-spectrum-edge"}])
+        assert [v["kind"] for v in vs] == want, rp
+
+
+def test_stated_mate_pitch_and_unknowns(tmp_path):
+    pcb = _board(tmp_path / "b.kicad_pcb",
+                 _fp2row("U1", "x:Thing", 20, 17.78, pitch=2.0))
+    vs = _run(pcb, [{"ref": "U1", "mate_standard": "raspberry-pi-pico"}])
+    assert [v["kind"] for v in vs] == ["mate_family_mismatch"]
+    with pytest.raises(checklib.CheckError, match="mate_standard"):
+        _run(pcb, [{"ref": "U1", "mate_standard": "no-such-thing"}])
+    with pytest.raises(checklib.CheckError, match="mate_ref"):
+        _run(pcb, [{"ref": "U1", "mate_ref": "J1",
+                    "mate_standard": "raspberry-pi-pico"}])
+
+
+def test_declared_pair_with_other_row_spacing_is_named(tmp_path):
+    main = _board(tmp_path / "main.kicad_pcb",
+                  _fp2row("J2", "x:Hdr", 5, 2.54))
+    _board(tmp_path / "mate" / "d.kicad_pcb",
+           _fp2row("J1", "x:Skt", 5, 5.08))
+    vs = _run(main, [{"ref": "J2", "mate_ref": "J1",
+                      "mate_pcb": "mate/d.kicad_pcb", "mount": "stack"}])
+    assert [v["kind"] for v in vs] == ["mate_row_spacing"]
+
+
+def test_row_geometry():
+    class P:
+        def __init__(s, x, y):
+            s.local, s.number = (x, y), "1"
+
+    class F:
+        pads = [P(0, 2.54 * i) for i in range(3)] + \
+            [P(5.08, 2.54 * i) for i in range(3)]
+    assert check_mate_pins.row_geometry(F) == \
+        {"rows": 2, "row_pitch": 5.08, "pitch": 2.54}
+    F.pads = [P(0, 0), P(1, 1), P(2, 3)]
+    assert check_mate_pins.row_geometry(F) is None

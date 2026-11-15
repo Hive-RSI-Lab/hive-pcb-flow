@@ -89,9 +89,9 @@ parts on an ordinary board.
    - Not built yet: a case-size limit per value (the largest C a case holds).
 
 2. **Connector mechanics vs the mate** (afcfa's area, #1027 and #1052).
-   - Gender: gcm-v50-4 and gp8b-v50-1.
-   - Holes too small, where check_connector_fit says nothing: zxdiag-v10-2 and mdbt-micro-50q-1.
-   - Row spacing against the mate: zxdiag-v10-1.
+   - Gender: gcm-v50-4 and gp8b-v50-1. Caught with a stated mate since #1124 (not independent).
+   - Holes too small, where check_connector_fit says nothing: zxdiag-v10-2 and mdbt-micro-50q-1. Caught since #1123 (not independent).
+   - Row spacing against the mate: zxdiag-v10-1. Caught with a stated mate since #1124 (not independent).
    - Raised-part height: minuet-7, in training.
 
 3. **Off-board inputs.** Rule 28 (offboard_input_*) judges every IC pin
