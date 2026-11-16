@@ -37,7 +37,22 @@ Where the part's record comes from, first found wins:
      (1N5819W).
   A code with no record, or a record whose package name is not read, falls
   back to the decoded MPN field, then to the record's own model.
-  Neither read: "not judged", never a guess.
+  3. none of those (no LCSC field, and a maker mpn_packages.yaml does not
+     know, offline): the part's own record in the parts dir
+     (datasheet_extract's parts/<MPN>.json, the one check_fp_geometry
+     reads; found by the part number, MPN field, Value or LCSC field). Its
+     `body_mm` ({dia, height} or {length, width}, tol_mm), else the body
+     its package text states ("can dia 8.0 +-0.5, L 6.2 +-0.3",
+     "D8xL10.5mm", "L 1.0 +/-0.05 x W 0.5 +/-0.05", "body 1.6 x 0.8 mm"),
+     is held to the body the footprint's name is drawn for: a KiCad round
+     can (CP_Elec_6.3x7.7, CP_Radial_D8.0mm) or a chip case (0402 is
+     1.0 x 0.5). A can's diameter or a chip's length or width off by more
+     than the record's tolerance (else 0.5 mm, or 10 %) is an error; a can
+     of the right diameter and another height is a warning (#1366,
+     haos-voice C715: Panasonic's 8 mm E can on the 6.3 mm D8 land). The
+     record's free text is not read as a package name: "QFN28 5 x 5" there
+     reads as 285 pins.
+  None read: "not judged", never a guess.
 --live answers are cached in --cache (default ~/.cache/hwde/fp_package) so
 a sweep asks JLC once per code or name.
 
@@ -240,9 +255,11 @@ class Records:
     answers cached on disk."""
 
     def __init__(self, local: dict, table: dict, live: bool,
-                 cache: Path | None, fetch=None, refs: dict | None = None):
+                 cache: Path | None, fetch=None, refs: dict | None = None,
+                 part_recs: dict | None = None):
         self.local, self.table, self.live = local, table, live
         self.refs = refs or {}
+        self.part_recs = part_recs or {}  # part_records(): the parts dir
         self.cache, self.fetch = cache, fetch or stocklib.http_fetch
         self.errors: list[str] = []
 
@@ -432,6 +449,178 @@ def _mpn_field(fp: dict) -> str | None:
                  and v.strip() not in ("~", "-")), None)
 
 
+# ------------------------------------------------------------ part records
+
+def part_records(parts: Path | None) -> dict[str, tuple[str, dict]]:
+    """The workspace's part records (datasheet_extract's parts/<MPN>.json,
+    the ones check_fp_geometry reads) that name an mpn and give a package
+    or a `body_mm`, keyed by lower-cased mpn, lcsc and file stem: name ->
+    ("dir/file", record). `parts` is the parts dir or a file in it such as parts.json;
+    a key two records share goes to the first file by name (#1366)."""
+    if parts is None:
+        return {}
+    d = Path(parts)
+    d = d.parent if (d.is_file() or d.suffix == ".json") else d
+    if not d.is_dir():
+        return {}
+    out: dict[str, tuple[str, dict]] = {}
+    for f in sorted(d.glob("*.json")):
+        if f.name.endswith(".grounding.json") or f.name == "parts.json":
+            continue
+        try:
+            rec = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not (isinstance(rec, dict) and isinstance(rec.get("mpn"), str)
+                and (isinstance(rec.get("package"), str) or rec.get("body_mm"))):
+            continue
+        for key in (rec.get("mpn"), rec.get("lcsc"), f.stem):
+            if isinstance(key, str) and key.strip():
+                out.setdefault(key.strip().lower(), (f"{d.name}/{f.name}",
+                                                     rec))
+    return out
+
+
+def part_record_of(fp: dict, mpn: str | None, records: dict
+                   ) -> tuple[str, dict] | None:
+    """The record of the part on this footprint, found by the MPN read
+    from it, its MPN field, Value or LCSC field, in that order."""
+    keys = [mpn, _mpn_field(fp), fp["value"]] + [
+        v for k, v in fp["props"].items()
+        if bom_cpl.is_lcsc_field(k) or is_jlc_field(k)]
+    for k in keys:
+        k = (k or "").strip().lower()
+        if k and k in records:
+            return records[k]
+    return None
+
+
+_N = r"(\d+(?:\.\d+)?)"
+_TOL = r"(?:\s*mm)?(?:\s*(?:\+/-|\+-|±)\s*" + _N + r")?"
+# a round can: Panasonic's "can dia 8.0 +-0.5, L 6.2 +-0.3", "body
+# diameter 6.3 x height 5.4", LCSC's "D8xL10.5mm", "dia 8.0 x 6.2 L"
+_CAN = [
+    re.compile(r"\b(?:can|case|body)\s+(?:dia(?:meter)?\.?|ø|φ|Φ|D)\s*"
+               + _N + _TOL + r"(?:\s*mm)?\s*[,x×]?\s*(?:L|H|height|length)\.?\s*"
+               + _N + _TOL, re.I),
+    re.compile(r"\b(?:can|case|body)\s+(?:dia(?:meter)?\.?|ø|φ|Φ|D)\s*"
+               + _N + _TOL, re.I),
+    re.compile(r"(?<![A-Za-z])(?:D|ø|φ|Φ)\s*" + _N + r"()\s*(?:mm\s*)?[x×]\s*"
+               r"L\s*" + _N + r"()(?:\s*mm)?\b", re.I),
+    re.compile(r"\bdia\.?\s*" + _N + r"()\s*(?:mm\s*)?[x×]\s*" + _N
+               + r"()\s*(?:mm\s*)?L\b", re.I),
+]
+# a chip body: "L 1.0 +/-0.05 x W 0.5 +/-0.05" (Murata, Samsung, Yageo),
+# "1.0 +-0.05 long x 0.5 +-0.05 wide" (Murata BLM), "body 1.6 +-0.1 x 0.8
+# +-0.1 mm" (Wurth LEDs; the larger is taken as the length)
+_BOX = [
+    re.compile(r"\bL\s*" + _N + _TOL + r"\s*(?:mm\s*)?[x×]\s*W\s*" + _N
+               + _TOL),
+    re.compile(r"(?<![\d.])" + _N + _TOL + r"\s*(?:mm\s*)?long,?\s*(?:[x×]|and)?"
+               r"\s*" + _N + _TOL + r"\s*(?:mm\s*)?wide\b", re.I),
+    re.compile(r"\bbody\s+" + _N + _TOL + r"\s*(?:mm\s*)?[x×]\s*" + _N + _TOL
+               + r"(?![\d.]|\s*(?:mm\s*)?[x×])", re.I),
+]
+# a chip case's nominal body, length x width in mm (EIA-198 metric codes)
+_CHIP_MM = {"01005": (0.4, 0.2), "0201": (0.6, 0.3), "0402": (1.0, 0.5),
+            "0603": (1.6, 0.8), "0805": (2.0, 1.25), "1206": (3.2, 1.6),
+            "1210": (3.2, 2.5), "2010": (5.0, 2.5), "2512": (6.4, 3.2)}
+# KiCad's round-can footprints: CP_Elec_6.3x7.7 (dia x height), C_Elec_8x10.2,
+# CP_Radial_D8.0mm_P3.50mm (dia)
+_CAN_FP = re.compile(r"^C[P]?_(?:Elec_" + _N + r"x" + _N + r"|Radial_D" + _N
+                     + r"mm)")
+
+
+def _f(s) -> float | None:
+    return float(s) if s not in (None, "") else None
+
+
+def record_body(rec: dict) -> dict | None:
+    """The body a part record gives: {shape: "can", dia, height, tol_dia,
+    tol_height} or {shape: "box", length, width, tol_length, tol_width},
+    with `text` the words it was read from. A `body_mm` field ({dia,
+    height} or {length, width}, with tol_mm) wins over the package text;
+    a text that says neither form is None, never a guess."""
+    b = rec.get("body_mm")
+    if isinstance(b, dict):
+        tol = _f(b.get("tol_mm")) if isinstance(b.get("tol_mm"), (int, float)) \
+            else None
+        try:
+            if b.get("dia") is not None:
+                return {"shape": "can", "dia": float(b["dia"]),
+                        "height": _f(b.get("height")), "tol_dia": tol,
+                        "tol_height": tol, "text": f"body_mm {json.dumps(b)}"}
+            if b.get("length") is not None and b.get("width") is not None:
+                return {"shape": "box", "length": float(b["length"]),
+                        "width": float(b["width"]), "tol_length": tol,
+                        "tol_width": tol, "text": f"body_mm {json.dumps(b)}"}
+        except (TypeError, ValueError):
+            return None
+    text = rec.get("package") if isinstance(rec.get("package"), str) else ""
+    for rx in _CAN:
+        m = rx.search(text)
+        if m:
+            g = list(m.groups()) + [None] * 4
+            if len(m.groups()) == 2:      # dia and its tolerance only
+                g = [g[0], g[1], None, None]
+            return {"shape": "can", "dia": float(g[0]), "tol_dia": _f(g[1]),
+                    "height": _f(g[2]), "tol_height": _f(g[3]),
+                    "text": m.group(0).strip()}
+    for rx in _BOX:
+        m = rx.search(text)
+        if m:
+            (a, ta), (b, tb) = sorted(
+                ((float(m.group(1)), _f(m.group(2))),
+                 (float(m.group(3)), _f(m.group(4)))), reverse=True)
+            return {"shape": "box", "length": a, "tol_length": ta,
+                    "width": b, "tol_width": tb, "text": m.group(0).strip()}
+    return None
+
+
+def footprint_body(fpid: str) -> dict | None:
+    """The body a footprint's name is drawn for, in record_body's shapes:
+    a KiCad round can (CP_Elec_6.3x7.7, CP_Radial_D8.0mm) or a chip case
+    (C_0402_1005Metric, its EIA nominal 1.0 x 0.5); else None."""
+    name = fpid.split(":")[-1]
+    m = _CAN_FP.match(name)
+    if m:
+        return {"shape": "can", "dia": float(m.group(1) or m.group(3)),
+                "height": _f(m.group(2))}
+    code = engcalc.package_code(fpid)
+    if code in _CHIP_MM:
+        return {"shape": "box", "length": _CHIP_MM[code][0],
+                "width": _CHIP_MM[code][1], "chip": code}
+    return None
+
+
+def compare_body(part: dict, foot: dict) -> tuple[str, list[str]]:
+    """("ok" | "error" | "warning" | "skip", reasons): each dimension both
+    give, against the record's tolerance (else 0.5 mm on a can, 10 % on a
+    chip). A can's diameter or a chip's length or width off is the wrong
+    part (an error); a can of the right diameter but another height sits on
+    the same land (a warning)."""
+    if part["shape"] != foot["shape"]:
+        return "skip", ["the part record's body and the footprint's are not "
+                        "the same kind"]
+    dims = (("dia", "diameter", True), ("height", "height", False)) \
+        if part["shape"] == "can" else \
+        (("length", "length", True), ("width", "width", True))
+    errs, warns = [], []
+    for key, word, hard in dims:
+        a, b = part.get(key), foot.get(key)
+        if a is None or b is None:
+            continue
+        tol = part.get(f"tol_{key}")
+        if tol is None:
+            tol = 0.5 if part["shape"] == "can" else 0.1 * a
+        if abs(a - b) > tol + 1e-9:
+            (errs if hard else warns).append(
+                f"the part's {word} is {a:g} mm (+-{tol:g}), the "
+                f"footprint's {b:g} mm")
+    return ("error", errs + warns) if errs else (
+        ("warning", warns) if warns else ("ok", []))
+
+
 # ------------------------------------------------------------------ values
 
 _DESC_VAL = {
@@ -579,7 +768,40 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
                     where = f"{where}; package from the {src} {alt}"
                     break
         if not rec and not pkg:
-            skip(why)
+            found = part_record_of(fp, mpn or code, recs.part_recs)
+            if not found:
+                skip(why)
+                continue
+            # #1366: a part no table or JLC row knows (no LCSC field, its
+            # maker not in mpn_packages.yaml) is judged by the body its own
+            # part record gives, against the body its footprint is drawn for
+            src, prec = found
+            body, fbody = record_body(prec), footprint_body(fp["fpid"])
+            verdict, why_not = ("skip", [
+                "the part record gives no body that is read" if not body
+                else "the footprint's name gives no body"]) \
+                if not (body and fbody) else compare_body(body, fbody)
+            if verdict == "skip":
+                skip(why_not[0])
+                continue
+            named = mpn or code
+            judged.append({"ref": ref, "named": named,
+                           "from": f"{where}; body from {src}",
+                           "package": body["text"], "footprint": fp["fpid"],
+                           "ok": verdict == "ok"})
+            if verdict == "ok":
+                continue
+            sev = "warning" if where == "Value" else verdict
+            viols.append(checklib.violation(
+                SCRIPT, sev, fp["at"], fp["layer"], None, [ref],
+                f"{ref} is {named} (the part number from its {where}), whose "
+                f"part record {src} gives its body as {body['text']!r}, but "
+                f"its footprint is {fp['fpid']}: {'; '.join(why_not)}. Fix: "
+                "the footprint the part's datasheet gives, or the part that "
+                "fits these pads",
+                SCRIPT, kind="footprint_package_mismatch",
+                footprint=fp["fpid"], package=body["text"], part=named,
+                part_from=f"{where}; body from {src}", reasons=why_not))
             continue
         rec = rec or pkg
         foot = pkgname.describe(fp["fpid"])
@@ -710,7 +932,8 @@ def run(argv=None):
         parts = parts / "parts.json"
     codes, refs = parts_json_records(parts)
     recs = Records(codes, lcsc_packages.load(), args.live,
-                   Path(args.cache) if args.cache else None, refs=refs)
+                   Path(args.cache) if args.cache else None, refs=refs,
+                   part_recs=part_records(parts))
     viols, facts = check(pcb, recs)
     return checklib.report(SCRIPT, pcb, viols, **facts), args.out
 

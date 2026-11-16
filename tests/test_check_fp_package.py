@@ -64,7 +64,8 @@ def row(code, model, package, describe=""):
 
 def run(pcb, live=False, fetch=None, table=None, cache=None):
     codes, refs = cfp.parts_json_records(cfp.find_parts_json(pcb))
-    recs = cfp.Records(codes, table or {}, live, cache, fetch, refs=refs)
+    recs = cfp.Records(codes, table or {}, live, cache, fetch, refs=refs,
+                       part_recs=cfp.part_records(pcb.parent))
     return cfp.check(pcb, recs)
 
 
@@ -600,3 +601,174 @@ def test_case_limit_counts_as_judged(tmp_path):
     assert facts["judged"] == 1 and facts["case_limits_judged"] == 1
     assert [v["kind"] for v in viols] == ["passive_case_limit"]
     assert facts["parts"][0]["from"] == "case limits"
+
+
+# ------------------------------------------------- the part's own record
+
+def part_record(tmp_path, mpn, package=None, **extra):
+    """A datasheet_extract record parts/<MPN>.json beside the board."""
+    rec = {"mpn": mpn, **({"package": package} if package else {}), **extra}
+    (tmp_path / f"{mpn}.json").write_text(json.dumps(rec), encoding="utf-8")
+
+
+FK_E = ("Panasonic FK SMD aluminium electrolytic, size code E: can dia 8.0 "
+        "+-0.5, L 6.2 +-0.3, seat plate A = B 8.3 +-0.2")
+FK_D8 = ("Panasonic FK SMD aluminium electrolytic, size code D8: can dia "
+         "6.3 +-0.5, L 7.7 +-0.3, seat plate A = B 6.6 +-0.2")
+CAN = "Capacitor_SMD:CP_Elec_6.3x7.7"
+
+
+def test_part_record_body_judges_a_maker_no_table_knows(tmp_path):
+    # #1366, haos-voice C715-C718: EEE-FK1E101P has no LCSC field and
+    # Panasonic is not in mpn_packages.yaml; its record says the 8 mm E can,
+    # its footprint is the 6.3 mm D8 one
+    part_record(tmp_path, "EEE-FK1E101P", FK_E)
+    pcb = board(tmp_path, footprint("C715", CAN, "100u",
+                                    {"MPN": "EEE-FK1E101P",
+                                     "Manufacturer": "Panasonic"}))
+    viols, facts = run(pcb)
+    assert facts["judged"] == 1 and len(viols) == 1, facts
+    v = viols[0]
+    assert v["severity"] == "error" and v["refs"] == ["C715"]
+    assert v["kind"] == "footprint_package_mismatch"
+    assert "EEE-FK1E101P.json" in v["msg"] and "can dia 8.0" in v["msg"]
+    assert "diameter is 8 mm (+-0.5), the footprint's 6.3 mm" in v["msg"]
+
+
+def test_part_record_body_that_fits_is_quiet(tmp_path):
+    # the quiet twin: the D8 part, EEE-FK1E101XP, on the same footprint
+    part_record(tmp_path, "EEE-FK1E101XP", FK_D8)
+    pcb = board(tmp_path, footprint("C715", CAN, "100u",
+                                    {"MPN": "EEE-FK1E101XP"}))
+    viols, facts = run(pcb)
+    assert viols == [] and facts["judged"] == 1, facts
+    assert "EEE-FK1E101XP.json" in facts["parts"][0]["from"]
+
+
+def test_part_record_can_of_another_height_is_a_warning(tmp_path):
+    part_record(tmp_path, "CAP-LOW", "SMD electrolytic, can dia 6.3 +-0.5, "
+                "L 5.4 +-0.3")
+    viols, _ = run(board(tmp_path, footprint("C1", CAN, "47u",
+                                             {"MPN": "CAP-LOW"})))
+    assert [v["severity"] for v in viols] == ["warning"]
+    assert "height is 5.4 mm" in viols[0]["msg"]
+
+
+@pytest.mark.parametrize("fpid,hit", [
+    ("Capacitor_SMD:C_0603_1608Metric", True),
+    ("Capacitor_SMD:C_0402_1005Metric", False),
+])
+def test_part_record_chip_body_against_chip_footprint(tmp_path, fpid, hit):
+    part_record(tmp_path, "GRM155R71C104KA88D",
+                "Murata GRM15 size, 1005M (0402): L 1.0 +/-0.05 x W 0.5 "
+                "+/-0.05 x T 0.5 +/-0.05 mm")
+    viols, facts = run(board(tmp_path, footprint(
+        "C1", fpid, "100n", {"MPN": "GRM155R71C104KA88D"})))
+    assert facts["judged"] == 1
+    assert bool(viols) == hit
+    if hit:
+        assert viols[0]["severity"] == "error"
+        assert "length is 1 mm (+-0.05), the footprint's 1.6 mm" \
+            in viols[0]["msg"]
+
+
+def test_part_record_found_by_value_is_a_warning(tmp_path):
+    # a part number in the Value (a D, Q or U's) may name a variant it
+    # does not spell
+    part_record(tmp_path, "150060GS75000", "0603 (1608 metric) SMT chip "
+                "LED: body 1.6 +-0.1 x 0.8 +-0.1 mm, 0.7 +-0.1 mm high")
+    viols, facts = run(board(tmp_path, footprint(
+        "D1", "LED_SMD:LED_0805_2012Metric", "150060GS75000")))
+    assert [v["severity"] for v in viols] == ["warning"], facts
+
+
+@pytest.mark.parametrize("package,fpid,why", [
+    ("Hirose DM3AT microSD push-push card socket", CAN,
+     "the part record gives no body that is read"),
+    ("QFN28 5 x 5 mm, 0.5 mm pitch", CAN,
+     "the part record gives no body that is read"),
+    (FK_E, "Connector:Some_Socket", "the footprint's name gives no body"),
+    (FK_E, "Capacitor_SMD:C_0805_2012Metric",
+     "the part record's body and the footprint's are not the same kind"),
+])
+def test_part_record_not_judged(tmp_path, package, fpid, why):
+    part_record(tmp_path, "P1", package)
+    viols, facts = run(board(tmp_path, footprint("C1", fpid, "x",
+                                                 {"MPN": "P1"})))
+    assert viols == [] and facts["judged"] == 0
+    assert facts["not_judged"] == {why: 1}, facts
+
+
+def test_no_part_record_keeps_the_old_reason(tmp_path):
+    part_record(tmp_path, "OTHER", FK_E)
+    _, facts = run(board(tmp_path, footprint("C1", CAN, "x",
+                                             {"MPN": "EEE-FK1E101P"})))
+    assert facts["judged"] == 0
+    assert list(facts["not_judged"]) == [
+        "an MPN is looked up only with --live"]
+
+
+def test_grounding_and_recordless_files_are_not_part_records(tmp_path):
+    (tmp_path / "X.grounding.json").write_text(json.dumps(
+        {"mpn": "X", "package": FK_E}), encoding="utf-8")
+    (tmp_path / "notes.json").write_text(json.dumps(["a list"]),
+                                         encoding="utf-8")
+    (tmp_path / "broken.json").write_text("{", encoding="utf-8")
+    part_record(tmp_path, "Y", FK_E, lcsc="C99")
+    recs = cfp.part_records(tmp_path / "parts.json")
+    assert set(recs) == {"y", "c99"}
+    assert recs["c99"][0] == f"{tmp_path.name}/Y.json"
+
+
+@pytest.mark.parametrize("rec,want", [
+    ({"package": "can dia 8.0 +-0.5, L 6.2 +-0.3"},
+     {"shape": "can", "dia": 8.0, "tol_dia": 0.5, "height": 6.2,
+      "tol_height": 0.3}),
+    ({"package": "Aluminium electrolytic SMD,D8xL10.5mm"},
+     {"shape": "can", "dia": 8.0, "height": 10.5, "tol_dia": None}),
+    ({"package": "radial can, dia 8.0 x 6.2 L"},
+     {"shape": "can", "dia": 8.0, "height": 6.2}),
+    ({"package": "case D 10 mm"}, {"shape": "can", "dia": 10.0,
+                                   "height": None}),
+    ({"package": "BLM15: 1.0 +-0.05 long x 0.5 +-0.05 wide x 0.5 high"},
+     {"shape": "box", "length": 1.0, "width": 0.5, "tol_width": 0.05}),
+    ({"package": "chip LED: body 0.8 +-0.1 x 1.6 +-0.1 mm, 0.7 high"},
+     {"shape": "box", "length": 1.6, "width": 0.8, "tol_length": 0.1}),
+    ({"package": "x", "body_mm": {"dia": 5, "height": 5.4, "tol_mm": 0.2}},
+     {"shape": "can", "dia": 5.0, "height": 5.4, "tol_dia": 0.2}),
+    ({"body_mm": {"length": 2.0, "width": 1.25}},
+     {"shape": "box", "length": 2.0, "width": 1.25, "tol_length": None}),
+    ({"package": "QFN28 5 x 5 mm"}, None),
+    ({"package": "PQFN body 3.2 x 2.5 x 0.75 mm"}, None),
+    ({"package": "SOT-23-5 (DBV0005A)"}, None),
+    ({"body_mm": {"dia": "big"}}, None),
+])
+def test_record_body_forms(rec, want):
+    got = cfp.record_body(rec)
+    if want is None:
+        assert got is None, got
+    else:
+        assert got and {k: got[k] for k in want} == want, got
+
+
+@pytest.mark.parametrize("fpid,want", [
+    ("aiee:CP_Elec_6.3x7.7", {"shape": "can", "dia": 6.3, "height": 7.7}),
+    ("Capacitor_THT:CP_Radial_D8.0mm_P3.50mm",
+     {"shape": "can", "dia": 8.0, "height": None}),
+    ("Resistor_SMD:R_0805_2012Metric",
+     {"shape": "box", "length": 2.0, "width": 1.25, "chip": "0805"}),
+    ("Package_TO_SOT_SMD:SOT-23-5", None),
+])
+def test_footprint_body(fpid, want):
+    assert cfp.footprint_body(fpid) == want
+
+
+def test_run_reads_part_records_from_the_parts_dir(tmp_path):
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    part_record(parts, "EEE-FK1E101P", FK_E)
+    pcb = board(tmp_path, footprint("C715", CAN, "100u",
+                                    {"MPN": "EEE-FK1E101P"}))
+    rep, _ = cfp.run(["--pcb", str(pcb), "--parts", str(parts),
+                      "--cache", ""])
+    assert [v["refs"] for v in rep["violations"]] == [["C715"]]
