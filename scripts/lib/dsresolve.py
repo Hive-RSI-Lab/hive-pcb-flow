@@ -32,6 +32,15 @@ a PDF with nothing to check it by, or a host or the allowlist refused it),
 (a host that might have had it timed out, once more after STALL_BACKOFF
 seconds, so the part is not judged rather than called not found). `tried`
 lists each URL and what came of it.
+
+A stalled miss gets one more way (#1520, `mirror`): when the maker's own host
+stalled twice, LCSC's live product page for the part itself, or for the
+part on a reel (its maker's packing code alone, land_batch's `PACKING`:
+LPS35HW as LPS35HWTR), names the PDF LCSC keeps. It is taken only from
+datasheet.lcsc.com, only the one the page gives for that product code,
+and fetched and checked like any other; `via` starts MIRROR_VIA so the
+part shows where its sheet came from. Another grade, temperature range or
+package (AD724 as AD724JRZ) is another part, and is never used.
 """
 from __future__ import annotations
 
@@ -55,10 +64,19 @@ MAKERS = HERE.parent.parent / "reference" / "datasheet_makers.yaml"
 # printed) is its own kind, unjudged.
 # 4: a stalled fetch is tried once more after STALL_BACKOFF, and a miss
 # with a stall in it is "stalled", not "not found" (#1480).
-VERSION = 4
+# 5: a stalled miss tries LCSC's mirror of the exact part or the part on a
+# reel, read off its live product page (`mirror`, #1520).
+VERSION = 5
 FETCH_TIMEOUT = 20.0            # seconds: a maker site that stalls is skipped
 STALL_BACKOFF = 15.0            # seconds before the one retry of a stalled fetch
 MAX_CUT = 6                     # ordering-suffix characters `candidates` cuts
+MIRROR_VIA = "datasheet from LCSC mirror after maker stall"
+LCSC_PAGE = "https://www.lcsc.com/product-detail/{code}.html"
+# the sheet a product page names: on datasheet.lcsc.com, for that product
+# (the page also links its certificates and related products' sheets)
+LCSC_SHEET = re.compile(
+    r"https://datasheet\.lcsc\.com/datasheet/pdf/[0-9a-f]+\.pdf"
+    r"\?productCode=(C\d+)")
 MAX_LCSC = 3                    # LCSC copies tried per part
 
 # A listing for a board, not the chip (TLV320AIC3104EVM): its "datasheet" is
@@ -174,10 +192,12 @@ def _verdict(got: dict) -> tuple[str, str]:
 
 
 def resolve(mpn: str, brand: str | None, dest: Path, *, makers=None,
-            fetch=None, transport=None, search=None, pages=None) -> dict:
+            fetch=None, transport=None, search=None, pages=None,
+            page=None) -> dict:
     """A datasheet for `mpn` fetched into `dest`; see the module doc.
-    fetch/transport/search/pages stand in for datasheet_extract's fetcher,
-    the HTTP transport, the JLC search and the PDF text in tests."""
+    fetch/transport/search/pages/page stand in for datasheet_extract's
+    fetcher, the HTTP transport, the JLC search, the PDF text and LCSC's
+    product page in tests."""
     if makers is None:
         makers = load_makers()
     maker, how = maker_of(mpn, brand, makers)
@@ -245,6 +265,7 @@ def resolve(mpn: str, brand: str | None, dest: Path, *, makers=None,
                         "via": f"{maker['name']} URL pattern {tpl} for {c} "
                                f"({maker.get('cite') or 'datasheet_makers.yaml'})"}
 
+    own = list(tried)       # what the maker's own host did
     copies = lcsc_copies(cands, maker, search, tried)
     for c, h in copies[:MAX_LCSC]:
         import partslib  # noqa: PLC0415
@@ -259,7 +280,93 @@ def resolve(mpn: str, brand: str | None, dest: Path, *, makers=None,
         "stalled" for t in tried if t.get("after") == "stalled"}
     miss = "refused" if kinds & {"wrong", "unjudged", "blocked"} \
         else "stalled" if "stalled" in kinds else "not found"
+    if miss == "stalled" and any(t["kind"] == "stalled" or t.get("after")
+                                 == "stalled" for t in own):
+        for h, url in mirror(mpn, maker, search, page, tried):
+            got = attempt(url)
+            if got:
+                return {**base, "url": got["url"], "got": got, "tried": tried,
+                        "via": f"{MIRROR_VIA}: {maker['name']}'s host stalled "
+                               f"twice; LCSC's product page for {h.get('lcsc')} "
+                               f"{h.get('mpn')} ({h.get('brand')})"}
     return {**base, "miss": miss, "tried": tried}
+
+
+def same_part(mpn: str, hit: dict) -> str:
+    """'exact' when the listing is the part, 'packing' when it is the part
+    with its maker's packing code alone (land_batch.PACKING, under that
+    maker's brand), else ''. Espressif's fit codes are flash sizes, another
+    part, and are not packing here."""
+    import land_batch  # noqa: PLC0415 - scripts/ on the path
+    from mpn_decode import norm  # noqa: PLC0415
+    if norm(hit.get("mpn")) == norm(mpn):
+        return "exact"
+    code = land_batch.packing_suffix(mpn, hit)
+    return "packing" if code and code not in land_batch.ESPRESSIF_FITS else ""
+
+
+def mirror(mpn: str, maker: dict, search, page, tried: list[dict]
+           ) -> list[tuple[dict, str]]:
+    """[(listing, PDF URL)]: LCSC listings under the maker's brand that are
+    the part or the part on a reel (`same_part`, exact first), each with the
+    datasheet.lcsc.com sheet its live product page names for its own
+    product code. Anything else the search finds is noted and passed over."""
+    import partslib  # noqa: PLC0415
+    if search is None:
+        def search(q):
+            rows, _ = partslib.live_search(q, page_size=25)
+            return [partslib.normalize(r) for r in rows]
+    if page is None:
+        page = lcsc_page
+    q = (candidates(mpn) or [mpn])[0]
+    try:
+        hits = search(q)
+    except Exception as exc:  # noqa: BLE001 - a failed search is a note
+        tried.append({"url": f"lcsc search {q} (mirror)", "kind": "stalled",
+                      "why": f"{type(exc).__name__}: {exc}"[:200]})
+        return []
+    keep, other = [], set()
+    for h in hits or []:
+        if not h.get("lcsc") or not any(_brand_has(h.get("brand") or "", a)
+                                        for a in maker.get("brands") or []):
+            continue
+        how = same_part(q, h)
+        if how:
+            keep.append((how != "exact", h.get("lcsc") or "", h))
+        elif str(h.get("mpn") or "").upper().startswith(q):
+            other.add(str(h.get("mpn")))
+    if other:
+        tried.append({"url": f"lcsc search {q} (mirror)", "kind": "skipped",
+                      "why": "not the part or the part on a reel: "
+                             + ", ".join(sorted(other))[:160]})
+    out = []
+    for _, code, h in sorted(keep, key=lambda k: k[:2])[:MAX_LCSC]:
+        url = LCSC_PAGE.format(code=code)
+        try:
+            html = page(code)
+        except Exception as exc:  # noqa: BLE001 - a failed page is a note
+            tried.append({"url": url, "kind": "stalled",
+                          "why": f"{type(exc).__name__}: {exc}"[:200]})
+            continue
+        sheets = [m[0] for m in LCSC_SHEET.finditer(html or "")
+                  if m[1] == code]
+        if not sheets:
+            tried.append({"url": url, "kind": "absent",
+                          "why": f"the page names no datasheet.lcsc.com "
+                                 f"sheet for {code}"})
+            continue
+        out.append((h, sheets[0]))
+    return out
+
+
+def lcsc_page(code: str) -> str:
+    """LCSC's live product page for `code`, as text."""
+    import researchlib  # noqa: PLC0415
+    got = researchlib.http_transport(LCSC_PAGE.format(code=code),
+                                     timeout=FETCH_TIMEOUT)
+    if int(got.get("status") or 0) != 200:
+        raise OSError(f"HTTP {got.get('status')}")
+    return (got.get("body") or b"").decode("utf-8", "replace")
 
 
 def lcsc_copies(cands: list[str], maker: dict, search, tried: list[dict]
