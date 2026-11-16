@@ -320,6 +320,18 @@ def test_a_suspect_datasheet_is_not_read(tmp_path, monkeypatch):
         (parts / "C307331.json").read_text())
 
 
+def test_a_scan_is_not_read_and_says_not_judged(tmp_path, monkeypatch):
+    parts, transport, _ = _fetch_board(tmp_path, monkeypatch, "not_judged")
+    out = tmp_path / "rep.json"
+    assert rf.main(["--parts", str(parts), "--fetch", "--write",
+                    "--out", str(out)], transport=transport) == 0
+    r = json.loads(out.read_text())["records"][0]
+    assert r["status"] == "not_judged" and r["fetch"]["status"] == "not_judged"
+    assert r["notes"] == ["datasheet not judged, not read: no text layer"]
+    assert "pin_ratings" not in json.loads(
+        (parts / "C307331.json").read_text())
+
+
 def test_no_url_is_not_judged_with_the_reason(tmp_path, monkeypatch):
     parts, transport, asks = _fetch_board(tmp_path, monkeypatch)
     (parts / "C307331.json").write_text(json.dumps(_rec(GRM)))

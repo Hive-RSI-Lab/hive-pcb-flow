@@ -213,15 +213,46 @@ def test_assess_truncated_file_is_suspect():
     assert any("truncated" in r for r in a["reasons"]), a
 
 
-def test_assess_no_text_layer_is_suspect():
+def test_assess_no_text_layer_is_not_judged():
+    # a scan: nothing to check the MPN against, so no verdict either way
     a = datasheet_extract.assess_pdf(NOTEXT, MPN)
-    assert a["status"] == "suspect" and a["text_chars"] == 0, a
-    assert any("no text layer" in r for r in a["reasons"]), a
+    assert a["status"] == "not_judged" and a["text_chars"] == 0, a
+    assert a["reasons"] and all(r.startswith("no text layer:")
+                                for r in a["reasons"]), a
+
+
+def test_a_cut_off_scan_is_still_suspect():
+    a = datasheet_extract.assess_pdf(NOTEXT[:len(NOTEXT) * 2 // 3], MPN)
+    assert a["status"] == "suspect", a
 
 
 def test_assess_without_an_mpn_skips_only_the_name_check():
     assert datasheet_extract.assess_pdf(WRONG, None)["status"] == "ok"
-    assert datasheet_extract.assess_pdf(NOTEXT, None)["status"] == "suspect"
+    assert datasheet_extract.assess_pdf(NOTEXT, None)["status"] == "not_judged"
+
+
+def test_fetch_of_a_scan_is_not_judged_kept_and_indexed():
+    with tempfile.TemporaryDirectory() as d:
+        ws = Path(d)
+        (ws / "parts").mkdir()
+        (ws / "parts" / "parts.json").write_text(json.dumps({"parts": [
+            {"lcsc": "C1", "mpn": MPN, "datasheet": WMSC}]}))
+        out, code = datasheet_extract.do_fetch(
+            Namespace(fetch=str(ws), lcsc=None), transport=_serve(NOTEXT),
+            resolve=lambda *_a: {"miss": "not_found"})
+        assert code == 1, out
+        assert (out["fetched"], out["suspect"], out["not_judged"]) == (0, 0, 1)
+        assert out["datasheets"][0]["status"] == "not_judged", out
+        assert (ws / "parts/datasheets/C1.pdf").is_file()
+        idx = json.loads((ws / "parts/datasheets/index.json").read_text())
+        assert idx["C1"]["status"] == "not_judged" and idx["C1"]["reasons"]
+        parts = ws / "parts"
+        # it holds its facts back, but is not called wrong: it is unassessed
+        assert list(datasheet_extract.suspect_datasheets(parts, ["C1"])) \
+            == ["C1"]
+        assert datasheet_extract.suspect_datasheets(
+            parts, ["C1"], statuses=("suspect",)) == {}
+        assert datasheet_extract.unassessed_datasheets(parts, ["C1"]) == ["C1"]
 
 
 def test_fetch_suspect_is_not_fetched_but_is_kept_and_indexed():
@@ -387,10 +418,79 @@ def test_the_right_series_with_a_field_it_cannot_decode_stays_suspect():
 
 
 def test_a_series_name_alone_decodes_nothing():
-    # names the series word, has no ordering table
+    # names the series word, has no ordering table: never ok. It prints no
+    # part number either, so it is not judged (#1434), not suspect
     prose = "CL = Multi layer Ceramic Capacitors, RT series, general catalog"
     for mpn in ("CL05B104KO5NNNC", "RT0402BRD0712KL"):
-        assert datasheet_extract.assess_pdf(_doc(prose), mpn)["status"] == "suspect"
+        a = datasheet_extract.assess_pdf(_doc(prose), mpn)
+        assert a["status"] == "not_judged" and "match" not in a, a
+    # with another part's number on page 1 it is suspect
+    a = datasheet_extract.assess_pdf(_pdf([prose + " GRM155R71C104KA88", JUNK]),
+                                     "CL05B104KO5NNNC")
+    assert a["status"] == "suspect", a
+
+
+# #1434: what an approval sheet or a series brochure prints, as pypdf reads it
+KENTO_SHEET = ("湖北匡通电子股份有限公司 0603-0.6翠绿 第 1 页 共 11 页 承 认 书 "
+               "Specification for approval 客户料号(Customer part NO)： "
+               "版本(Revision)： A.0 发件日期(Issue date)： 2018-12-06 "
+               "外观尺寸/ Package ( L/W/H ) : 1.6*0.8*0.6 mm 颜色/ Color: 翠绿 / "
+               "Green light Meet ROHS, Green Product " + "x" * 200)
+KENTO_TESTS = ("Reliability: JESD22-A103 high temperature storage, JESD22-A108 "
+               "operating life, 85 C RH60 " + "x" * 200)
+TXC_BROCHURE = ("1. Output Frequency：1 ~ 200MHz 3. Supply Voltage ： 1.8 , 2.5 , "
+                "3.3V Think of Frequency, Think of TXC CMOS XO 7X Series "
+                "Table 1 . Electrical Specifications Rev. A (2023.11.27) Page 1 "
+                "of 3 www.txc.com.tw Supply Voltage Vdd 1.8 , 2.5 , 3.3 V " + "x" * 200)
+
+
+def test_a_sheet_that_prints_no_part_number_is_not_judged():
+    for mpn, pages in (("KT-0603G", [KENTO_SHEET, KENTO_SHEET, KENTO_TESTS]),
+                       ("7X80000600", [TXC_BROCHURE, TXC_BROCHURE, JUNK])):
+        a = datasheet_extract.assess_pdf(_pdf(pages), mpn)
+        assert a["status"] == "not_judged" and "match" not in a, a
+        assert len(a["reasons"]) == 1 and a["reasons"][0].startswith(
+            "MPN not printed: pages 1-2 name no part number at all"), a
+    assert datasheet_extract.part_numbers(KENTO_SHEET + TXC_BROCHURE) == []
+    # a quantity and its unit is not a part number; a test standard on a
+    # later page is not on pages 1-2
+    assert datasheet_extract.part_numbers("200MHZ 3000PCS 0603-0") == []
+
+
+# #1434: LCSC's sheet for Fenghua's 2 kV 1206B102K202NT (C9196) is the
+# general series, whose table stops at 50 V: a scheme, no part number
+FENGHUA_GENERAL = (
+    "GENERA L TYPE MLCC 产品规格书 PRODUCT SPECIFICATION PART NAME： General "
+    "Series Multi-layer Ceramic Capacitors SPECIFICATION: 1005～1812TYPE " + "x" * 200)
+FENGHUA_ORDERING = (
+    "How To Order 0805 尺寸规格 Si zeCode 1206 1206 3.20×1.60 CG 介质种类 "
+    "Dielectric Code B X7R 102 标称容量 Nominal Capacitance 500 额定电压 Rated "
+    "Voltage 6R3 6.3 500 50×100 201 20×101 Conventional Voltage （Ur≤50V） products")
+
+
+def test_another_series_sheet_that_prints_no_part_number_is_not_judged_too():
+    # the known miss: nothing in the text tells the general series from the
+    # high-voltage one, so a wrong sheet is not_judged, not suspect. Its
+    # facts are held back all the same and it is never ok.
+    a = datasheet_extract.assess_pdf(
+        _pdf([FENGHUA_GENERAL, FENGHUA_GENERAL, FENGHUA_ORDERING]), "1206B102K202NT")
+    assert a["status"] == "not_judged" and "match" not in a, a
+    assert a["reasons"][0].startswith("MPN not printed"), a
+
+
+def test_a_sheet_that_prints_another_part_number_stays_suspect():
+    for page1 in ("0603-0.6 Green light KT-0805G", "7X Series 8Z25000001"):
+        a = datasheet_extract.assess_pdf(_pdf([page1 + " " + "x" * 200, JUNK]),
+                                         "KT-0603G")
+        assert a["status"] == "suspect", (page1, a)
+    # a later page that lists parts names them
+    a = datasheet_extract.assess_pdf(
+        _pdf([KENTO_SHEET, KENTO_SHEET, "Part No. KT-0805G KT-0805R"]), "KT-0603G")
+    assert a["status"] == "suspect", a
+    # a cut-off file is suspect whatever it prints
+    pdf = _pdf([KENTO_SHEET, KENTO_SHEET])
+    a = datasheet_extract.assess_pdf(pdf[:pdf.rindex(b"%%EOF")], "KT-0603G")
+    assert a["status"] == "suspect", a
 
 
 def test_the_whole_mpn_deep_in_another_parts_datasheet_stays_suspect():
@@ -445,6 +545,24 @@ def test_assess_writes_a_status_into_old_entries_and_keeps_the_rest():
         assert idx["C2"]["status"] == "suspect" and idx["C2"]["reasons"]
         # no PDF to read: stays unassessed, never ok
         assert idx["C3"]["status"] == "unassessed" and idx["C3"]["reasons"]
+
+
+def test_assess_counts_a_scan_as_not_judged_and_its_verdict_outlives_the_pdf():
+    old = {"file": "x", "url": "u", "sha256": "s", "mpn": MPN}
+    with tempfile.TemporaryDirectory() as d:
+        ws = _assess_ws(d, {"C1": old, "C2": old},
+                        {"C1": RIGHT, "C2": NOTEXT})
+        out, code = datasheet_extract.do_assess(Namespace(assess=str(ws),
+                                                          lcsc=None))
+        assert code == 1, out
+        assert (out["ok"], out["suspect"], out["not_judged"],
+                out["unassessed"]) == (1, 0, 1, 0), out
+        (ws / "parts/datasheets/C2.pdf").unlink()
+        out, _ = datasheet_extract.do_assess(Namespace(assess=str(ws),
+                                                       lcsc="C2"))
+        assert out["not_judged"] == 1, out
+        idx = json.loads((ws / "parts/datasheets/index.json").read_text())
+        assert idx["C2"]["status"] == "not_judged"
 
 
 def test_assess_takes_the_mpn_from_parts_json_for_an_entry_without_one():
@@ -716,9 +834,14 @@ def test_the_suspect_remediation_page_covers_each_case():
             / "rating_datasheet_suspect.md").read_text(encoding="utf-8")
     assert page.startswith("# rating_datasheet_suspect")
     for section in ("## Is it real?", "## Fix ladder", "## Do not", "## Verify",
-                    "no text layer", "never names", "ordering table",
+                    "never names", "ordering table",
                     "ordering_codes.yaml", "--force", "--fetch"):
         assert section in page, section
+    # a scan is not suspect (not_judged): the unassessed page says what to do
+    assert "not_judged" in page
+    page = (Path(__file__).resolve().parent.parent / "reference" / "remediations"
+            / "rating_datasheet_unassessed.md").read_text(encoding="utf-8")
+    assert "not_judged" in page and "no text layer" in page
 
 
 def test_a_bracketed_packaging_code_is_cut_and_tried_again():

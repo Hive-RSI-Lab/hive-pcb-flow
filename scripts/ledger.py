@@ -115,7 +115,8 @@ def run(argv=None) -> tuple[dict, str | None, int]:
                                        a.source)
             if doubt and not (a.force or "").strip():
                 raise SystemExit(
-                    "refused: the datasheet this rests on is suspect ("
+                    "refused: the datasheet this rests on is suspect or a "
+                    "scan with nothing to judge it by ("
                     + "; ".join(f"{c}: {w}" for c, w in sorted(doubt.items()))
                     + "). Fetch another, or read it by eye and pass "
                     '--force "why" to record it')

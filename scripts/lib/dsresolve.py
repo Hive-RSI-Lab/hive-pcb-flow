@@ -27,8 +27,9 @@ carries "AD724" inside "AD7245", and is not AD724's; TPS620865's carries
 Every result says where its URL came from (`via`), and every miss is named:
 "maker not known" (no brand or family in the table; a clone's brand is not
 read as its original's maker), "refused" (a PDF came back for another part,
-or a host or the allowlist refused it), "not found" (no pattern URL is a
-PDF and LCSC lists no copy). `tried` lists each URL and what came of it.
+a PDF with nothing to check it by, or a host or the allowlist refused it),
+"not found" (no pattern URL is a PDF and LCSC lists no copy). `tried` lists
+each URL and what came of it.
 """
 from __future__ import annotations
 
@@ -47,7 +48,9 @@ for _p in (HERE, HERE.parent):        # lib/ and scripts/: its lazy imports
 MAKERS = HERE.parent.parent / "reference" / "datasheet_makers.yaml"
 
 # Bump when a change here can change a result: cached results are keyed by it.
-VERSION = 2
+# 3: a PDF fetch could not judge (status not_judged: a scan, or no part number
+# printed) is its own kind, unjudged.
+VERSION = 3
 FETCH_TIMEOUT = 20.0            # seconds: a maker site that stalls is skipped
 MAX_CUT = 6                     # ordering-suffix characters `candidates` cuts
 MAX_LCSC = 3                    # LCSC copies tried per part
@@ -144,7 +147,8 @@ def _host(url: str) -> str:
 
 def _verdict(got: dict) -> tuple[str, str]:
     """(kind, why) for one fetch: ok, wrong (another part's PDF or a bad
-    file), blocked (the allowlist or the host refused), absent (no PDF
+    file), unjudged (nothing to judge it by: a scan, or no part number
+    printed), blocked (the allowlist or the host refused), absent (no PDF
     there), stalled (the transport failed)."""
     st = got.get("status")
     err = str(got.get("error") or "")
@@ -152,6 +156,9 @@ def _verdict(got: dict) -> tuple[str, str]:
         return "ok", ""
     if st == "suspect":
         return "wrong", "; ".join((got.get("assessment") or {}).get("reasons") or [])
+    if st == "not_judged":
+        return "unjudged", "; ".join(
+            (got.get("assessment") or {}).get("reasons") or [])
     if st == "refused" and (got.get("blocked_by_host") or "not a PDF" not in err):
         return "blocked", err
     if st == "error" and err.startswith("transport failure"):
@@ -232,7 +239,8 @@ def resolve(mpn: str, brand: str | None, dest: Path, *, makers=None,
                     "via": f"LCSC's copy of the {maker['name']} PDF, listed for "
                            f"{h.get('lcsc')} {h.get('mpn')} ({h.get('brand')})"}
     kinds = {t["kind"] for t in tried}
-    miss = "refused" if kinds & {"wrong", "blocked"} else "not found"
+    miss = "refused" if kinds & {"wrong", "unjudged", "blocked"} \
+        else "not found"
     return {**base, "miss": miss, "tried": tried}
 
 
