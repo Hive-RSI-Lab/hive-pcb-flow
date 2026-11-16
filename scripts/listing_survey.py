@@ -7,7 +7,10 @@ Walks every `parts/parts.json` under the roots and compares each part that has a
 extraction beside it, with check_ratings.listing_comparisons. --sample adds the
 parts someone read by hand, one row per part (tests/fixtures/ratings/
 listing_sample.json); an extraction wins for a part in both. A part on several
-boards counts once.
+boards counts once. --corpus adds a datasheet corpus laid out as the errata
+corpus is (ext/<MPN>.json extractions, listings/<LCSC>.json LCSC listings): a
+listing joins the extraction that names its LCSC code, else its MPN. Give it
+the training split only, never a held-out one.
 
 Many parts can share one catalogue PDF, so the table gives parts and distinct
 datasheets: the rate is per part, but its evidence is only as wide as the second
@@ -15,7 +18,7 @@ count. Only `high` lets a real over-voltage pass a `listed` check. The bound is
 the 95 % upper limit on the high rate (Wilson), which is what a zero is worth.
 
 Writes nothing but may judge a PDF on disk (suspect_datasheets), so give it a copy.
-    bin/hwde listing_survey ROOT [ROOT...] [--sample FILE] [--json]
+    bin/hwde listing_survey ROOT [ROOT...] [--sample FILE] [--corpus DIR] [--json]
 """
 from __future__ import annotations
 
@@ -121,6 +124,53 @@ def extracted_rows(roots: list[Path]) -> tuple[list[dict], list[dict]]:
     return list(rows.values()), list(skipped.values())
 
 
+SHA_RE = re.compile(r"sha256\s+([0-9a-f]{12})")
+
+
+def _mpn_key(mpn) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(mpn or "").upper())
+
+
+def corpus_rows(corpus: Path) -> tuple[list[dict], list[dict]]:
+    """(compared, not compared) for a corpus dir: each listings/<LCSC>.json
+    against the ext/*.json that names its LCSC code, else its MPN. A listing
+    with no extraction is left out, as a board part with none is. The PDF a
+    row counts against is the source_pdf's sha256 when it gives one."""
+    exts: dict[str, dict] = {}
+    for f in sorted((corpus / "ext").glob("*.json")):
+        try:
+            ext = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for k in (str(ext.get("lcsc") or "").strip(), _mpn_key(ext.get("mpn")),
+                  _mpn_key(f.stem)):
+            if k:
+                exts.setdefault(k, ext)
+    rows, skipped = [], []
+    for f in sorted((corpus / "listings").glob("*.json")):
+        try:
+            part = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        lcsc = str(part.get("lcsc") or f.stem).strip()
+        ext = exts.get(lcsc) or exts.get(_mpn_key(part.get("mpn")))
+        if not ext or not check_ratings.listing_ratings(part):
+            continue
+        sha = SHA_RE.search(str(ext.get("source_pdf") or ""))
+        base = {"lcsc": lcsc, "mpn": part.get("mpn"), "board": corpus.name,
+                "class": part_class(part)}
+        comps = check_ratings.listing_comparisons(part, ext)
+        if not comps:
+            skipped.append({**base, "why": "no voltage row in the extraction"})
+            continue
+        c = _worst(comps)
+        rows.append({**base, "how": "extraction", "rating": c["rating"],
+                     "listing_v": c["listing_v"], "datasheet_v": c["datasheet_v"],
+                     "row": c["datasheet_row"], "agree": c["agree"], "side": c["side"],
+                     "datasheet": sha.group(1) if sha else lcsc})
+    return rows, skipped
+
+
 def sample_rows(path: Path, tol: float = check_ratings.LISTING_TOL) -> list[dict]:
     """Hand-read rows, judged by the same tolerance as the finding."""
     out = []
@@ -154,9 +204,16 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("roots", nargs="*", type=Path)
     ap.add_argument("--sample", type=Path, help="hand-read parts, JSON")
+    ap.add_argument("--corpus", type=Path, action="append", default=[],
+                    help="a corpus dir with ext/ and listings/ (training only)")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     rows, skipped = extracted_rows(a.roots)
+    for corpus in a.corpus:
+        have = {r["lcsc"] for r in rows}
+        more, miss = corpus_rows(corpus)
+        rows += [r for r in more if r["lcsc"] not in have]
+        skipped += [s for s in miss if s["lcsc"] not in have]
     if a.sample:
         have = {r["lcsc"] for r in rows}
         rows += [r for r in sample_rows(a.sample) if r["lcsc"] not in have]

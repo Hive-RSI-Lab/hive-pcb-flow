@@ -91,4 +91,34 @@ def test_hand_read_sample_holds_its_known_answers():
     assert rows["C970725"]["side"] == "high"
     assert rows["C8465"]["side"] == "low"
     assert rows["C20917"]["agree"] and rows["C25076"]["agree"]
-    assert [r["lcsc"] for r in rows.values() if not r["agree"]] == ["C970725", "C8465"]
+    # #810: three HX headers listed at their 1000 V withstand (rated 250 V),
+    # KF128 listed at IEC 250 V (UL 300 V); USB4105 read from rev B3, 48 V.
+    assert [r["lcsc"] for r in rows.values() if not r["agree"]] == [
+        "C970725", "C8465", "C32713270", "C32713268", "C32713271", "C474952"]
+    assert rows["C32713268"]["side"] == "high" and rows["C474952"]["side"] == "low"
+    assert rows["C3020560"]["agree"]
+    # a part LCSC served another maker's PDF for is left out
+    assert not {"C110775", "C865172", "C865592", "C2918511"} & set(rows)
+
+
+def test_a_corpus_listing_joins_its_extraction_by_lcsc_then_mpn(tmp_path):
+    (tmp_path / "ext").mkdir()
+    (tmp_path / "listings").mkdir()
+    pin = {"pin_ratings": [{"pins": ["VCC"], "kind": "voltage", "level": "abs_max",
+                            "min": -0.5, "max": 6.5, "source": "p.3 VCC -0.5 +6.5 V"}],
+           "source_pdf": "x.pdf sha256 7e54baea5ee5b2c403f3"}
+    (tmp_path / "ext" / "74LVC07AD-118.json").write_text(json.dumps(
+        {**pin, "mpn": "74LVC07AD,118", "lcsc": "C6049"}))
+    (tmp_path / "ext" / "TLV9001.json").write_text(json.dumps(
+        {"mpn": "TLV9001IDBVR", "abs_max": [{"param": "Id", "value": 5, "unit": "A"}]}))
+    for lcsc, mpn, v in (("C6049", "74LVC07AD,118", "1.65V~5.5V"),
+                         ("C9", "TLV9001IDBVR", "1.8V~5.5V"),
+                         ("C7", "NOEXT", "5V")):
+        (tmp_path / "listings" / f"{lcsc}.json").write_text(json.dumps(
+            {"lcsc": lcsc, "mpn": mpn, "description": "buffer IC",
+             "attributes": [{"name": "Voltage - Supply", "value": v}]}))
+    rows, skipped = ls.corpus_rows(tmp_path)
+    assert [(r["lcsc"], r["class"], r["agree"], r["datasheet"]) for r in rows] == [
+        ("C6049", "ic", True, "7e54baea5ee5")]
+    assert [(s["lcsc"], s["why"]) for s in skipped] == [
+        ("C9", "no voltage row in the extraction")]

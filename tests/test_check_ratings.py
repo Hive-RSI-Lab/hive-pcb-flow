@@ -94,6 +94,11 @@ def test_real_shipped_board_passes():
     (200, "BVDSS_min", False, (None, None)),       # abs 'min' above 0
     (6.5, "VCC supply (min -0.5)", False, (-0.5, 6.5)),  # TI min column
     (18.5, "VBR at 1 mA (min 16.7)", False, (None, None)),  # breakdown min
+    # IRF640's own VDSS row: the 'min' is its note's breakdown figure (#810)
+    (200, "Vdss drain-to-source voltage (headline p.1; V(BR)Dss 200 V min at "
+          "Vgs=0 V, Id=250 uA, p.2)", False, (None, 200.0)),
+    (4.5, "VIN 4.5 V min", False, (None, None)),   # quiet twin: the row's own min
+    (200, "V(BR)DSS breakdown (min)", False, (None, None)),
     (2.2, "operating range min", True, (2.2, None)),
     ("3.0 / 3.3 / 3.6", "VDD33 recommended", True, (3.0, 3.6)),
     ("-0.5 to (VS) + 0.5", "ALERT", False, (-0.5, ("VS", 0.5))),
@@ -3255,6 +3260,24 @@ def test_a_vds_listing_is_not_judged_against_the_gate_row():
     ext = {"abs_max": [{"param": "Vgs gate-to-source voltage", "value": "+/-20",
                         "unit": "V"}]}
     assert cr.listing_comparisons(bom, ext) == []
+
+
+IRF640_VDSS = {"param": "Vdss drain-to-source voltage (headline p.1; V(BR)Dss "
+                        "200 V min at Vgs=0 V, Id=250 uA, p.2)",
+               "value": 200, "unit": "V"}
+
+
+@pytest.mark.parametrize("listed,agree,side", [("200V", True, None),
+                                               ("400V", False, "high")])
+def test_irf640s_vdss_row_now_answers_its_vds_listing(listed, agree, side):
+    """#810: the row whose note says '200 V min' is read, so the listing is
+    compared against it, not left out; a planted 400 V listing is high."""
+    bom = {"attributes": [{"name": "Drain to Source Voltage", "value": listed}]}
+    ext = {"abs_max": [IRF640_VDSS, {"param": "Vgs gate-to-source voltage",
+                                     "value": "+/-20", "unit": "V"}]}
+    [c] = cr.listing_comparisons(bom, ext)
+    assert c["datasheet_v"] == pytest.approx(200) and "Vdss" in c["datasheet_row"]
+    assert (c["agree"], c["side"]) == (agree, side)
 
 
 # NTMFS5C628NL's own abs-max table names the drain row VDSS and the gate row
