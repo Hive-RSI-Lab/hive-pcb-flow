@@ -304,6 +304,11 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     partnum_backfill gives them: the schematic's symbol fields, the BOM files
     in the board's folder, parts.json. Every board gets the same step; it
     only adds an LCSC or MPN field where the footprint has no such field.
+    The other revision's own sources come last (partnum_backfill's
+    other_revision: the same ref, where its footprint and Value match), so
+    a board whose BOM ships with one revision only gets its part numbers
+    from the same sources on both, and a finding does not look gone or new
+    only because of the BOM.
     The copy sits in the run dir (`{rev}-partnum.kicad_pcb`, with what
     partnum_backfill said in `{rev}-partnum.json`), nothing is written into
     the checkout, and it is reused while its inputs are unchanged."""
@@ -321,9 +326,11 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
             net = None
     else:
         sch = None
+    other = _other_rev(b, rev, empty)
     digest = hashlib.sha256(
         base.read_bytes() + b"\0" + str(repo / b[rev]["pcb"]).encode()
         + b"\0" + (net.read_bytes() if net else b"")
+        + b"\0" + json.dumps(other.get("key")).encode()
         + b"\0" + (SCRIPTS / "partnum_backfill.py").read_bytes()).hexdigest()
     if stamp.is_file() and stamp.read_text().split("\n")[0] == digest:
         return dest if stamp.read_text().split("\n")[1:2] == ["written"] \
@@ -338,6 +345,7 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
         cmd += ["--netlist", str(net)]
     if sch:
         cmd += ["--sch", str(sch)]
+    cmd += other.get("args", [])
     subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     try:
         status = json.loads(report.read_text(encoding="utf-8"))["status"]
@@ -348,6 +356,40 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
         status = status if status != "written" else "error"
     stamp.write_text(f"{digest}\n{status}")
     return dest if status == "written" else base
+
+
+def _other_rev(b: dict, rev: str, empty: Path) -> dict:
+    """partnum_backfill's --other-* arguments for the board's other
+    revision (its pin-named board, checkout, netlist and schematic), and a
+    key of their contents for _pcb's reuse stamp; {} when there is none or
+    it cannot be read."""
+    import hashlib
+    orev = "rev_b" if rev == "rev_a" else "rev_a"
+    if not (b.get(orev) or {}).get("pcb"):
+        return {}
+    cache = empty.parent.parent.parent
+    orepo = repo_dir(cache, b, orev)
+    if not (orepo / b[orev]["pcb"]).is_file():
+        return {}
+    try:
+        opcb = _pins_pcb(b, orev, orepo, empty)
+    except (SystemExit, subprocess.SubprocessError, OSError):
+        return {}
+    args = ["--other-pcb", str(opcb),
+            "--other-src-pcb", str(orepo / b[orev]["pcb"]),
+            "--other-repo", str(orepo)]
+    key = [hashlib.sha256(opcb.read_bytes()).hexdigest(),
+           str(orepo / b[orev]["pcb"])]
+    osch = orepo / b[orev]["sch"] if b[orev].get("sch") else None
+    if osch is not None and osch.is_file():
+        try:
+            onet = _netlist(b, orev, orepo, empty)
+            args += ["--other-netlist", str(onet)]
+            key.append(hashlib.sha256(onet.read_bytes()).hexdigest())
+        except (SystemExit, subprocess.SubprocessError, OSError):
+            pass
+        args += ["--other-sch", str(osch)]
+    return {"args": args, "key": key}
 
 
 def _pins_pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
