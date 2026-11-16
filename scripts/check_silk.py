@@ -48,6 +48,16 @@ One concern: silkscreen that will not assemble or read.
    column read swapped (form "columns"), or on the bottom side unmirrored
    (form "mirrored").
 
+ - SILK POLARITY: a polarised part's silk mark on the wrong end versus its
+   pads - silk_polarity_wrong (error): a diode's band or cut corners, or a
+   polarised cap's "+", leaning to the A or - pad (the K or + pad by pin
+   function, A/K pad names or the KiCad footprint name), or an IC's pin-1
+   dot, chamfer or outline notch at a corner or end away from pin 1. The
+   marks are read by cpl_verify's silk_mark, here from the board alone, with
+   no CPL. A pin-1 mark is called wrong only when it is the part's one mark
+   and sits by a corner pad. Parts whose mark or pad roles aren't known are
+   listed in the `polarity_marks` fact as not_judged, with why.
+
 Silk geometry is parsed here (not in geom.py, which is copper-only): top-level
 gr_text / gr_line / gr_poly / gr_rect / gr_circle / gr_arc on *.SilkS, plus the
 same fp_* items and the reference/value fields inside footprints, transformed to
@@ -71,6 +81,7 @@ from shapely import affinity
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import checklib  # noqa: E402
 import geom  # noqa: E402
@@ -891,6 +902,202 @@ def _single(s, ref, pads, word):
         silk_text=s.text, form="pin", pin=near.number, named_pin=best.number)
 
 
+# ------------------------------------------------------- silk polarity marks
+
+NOTCH_CHORD_MM = (0.4, 3.0)  # an outline notch's width
+NOTCH_SAG = 0.25             # its depth, as a share of its width at least
+NOTCH_ACROSS = 0.25          # how far off the part's middle line it may sit
+
+
+def _notch(cv, fp):
+    """(where, "ok"|"wrong") for a two-row part's outline notch: an open arc
+    on its own silk, beyond the end pads along the rows and about on the
+    middle line between them. Pin 1's end of the rows is where it belongs.
+    None where there is no single notch, or the part is not in two rows."""
+    pads = [p for p in fp.pads if p.number]
+    pin = next((p for p in pads if p.number == "1"), None)
+    if pin is None:
+        return None
+    xs, ys = {round(p.x, 2) for p in pads}, {round(p.y, 2) for p in pads}
+    if len(xs) == 2 and len(ys) > 2:
+        axis = 1
+    elif len(ys) == 2 and len(xs) > 2:
+        axis = 0
+    else:
+        return None
+    box = cv._pad_field(fp)
+    lo, hi = box[axis], box[axis + 2]
+    a0, a1 = box[1 - axis], box[3 - axis]
+    mid_v, mid_u, width = (lo + hi) / 2, (a0 + a1) / 2, a1 - a0
+    ends = set()
+    where = None
+    for s in fp.own_silk:
+        if len(s) != 3 or math.dist(s[0], s[2]) <= cv.ARC_CLOSED_MM:
+            continue
+        a, m, e = s
+        chord = math.dist(a, e)
+        c = ((a[0] + e[0]) / 2, (a[1] + e[1]) / 2)
+        if not (NOTCH_CHORD_MM[0] <= chord <= NOTCH_CHORD_MM[1]
+                and math.dist(c, m) >= NOTCH_SAG * chord
+                and abs(c[1 - axis] - mid_u) <= NOTCH_ACROSS * width
+                and not lo < c[axis] < hi):
+            continue
+        ends.add(c[axis] > mid_v)
+        where = (round(c[0], 3), round(c[1], 3))
+    pin_v = (pin.x, pin.y)[axis]
+    if len(ends) != 1 or abs(pin_v - mid_v) < 1e-6:
+        return None
+    return where, ("ok" if ends == {pin_v > mid_v} else "wrong")
+
+
+KICAD5_MODULE = re.compile(r"^\s*\(module\s", re.M)
+FIGURE_STROKES = 7  # a seven-segment display's 8 is seven strokes
+
+
+def _strokes_inside(cv, fp, board: bool) -> int:
+    """Silk line strokes wholly inside the pad field: a figure drawn on the
+    part's body (a display's segments), where a dot is its decimal point."""
+    x0, y0, x1, y1 = cv._pad_field(fp)
+    silk = fp.board_silk if board else fp.own_silk
+    return sum(1 for s in silk if len(s) == 2 and all(
+        x0 < x < x1 and y0 < y < y1 for x, y in s))
+
+
+def _corner_pads(cv, fp) -> set[str]:
+    """The numbered pads nearest each corner of the pad field."""
+    pads = [p for p in fp.pads if p.number]
+    x0, y0, x1, y1 = cv._pad_field(fp)
+    return {min(pads, key=lambda p: math.hypot(p.x - cx, p.y - cy)).number
+            for cx, cy in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))}
+
+
+KICAD_POLAR_NAME = re.compile(r"^(D_|LED_|CP_|C_Elec)")
+
+
+def _roles_guessed(cv, fp) -> bool:
+    """True where board_roles' K/A comes only from its last resort: an
+    imported "LED..." footprint read with KiCad's numbering (pin 1 = K). No
+    pin function, no A/K pad names, no KiCad library name: an imported
+    library may number it the other way (hifi-receiver-2's LCSC
+    LED-SMD_L1.6-W0.8-R-RD has its anode net on pad 1 and the cut corner by
+    pad 2, on GND), so a band read against that guess says nothing."""
+    if any(cv.role(p.function) for p in fp.pads):
+        return False
+    named = {p.number.upper() for p in fp.pads}
+    if named in ({"A", "C"}, {"A", "K"}):
+        return False
+    return not KICAD_POLAR_NAME.match(fp.name)
+
+
+def polarity_mark_of(cv, fp) -> dict:
+    """{"state": "ok"|"wrong"|"not_judged"|None, "why", ...} for one part's
+    silk polarity mark against its pads, from the board alone. cpl_verify's
+    reader finds the mark (silk_mark: a two-pad part's band, cut corners or
+    "+" against its K or + pad; a U/IC/Q part's or ball grid's dot, small
+    shape or chamfer against pin 1's corner); a two-row IC with no dot may
+    show a notch instead. A pin-1 mark is only called wrong when it is the
+    part's one mark and sits by a corner pad: a mark by a pad mid-row (a
+    display's decimal point, a library's every-tenth-pin tick) or one of
+    several marks says nothing sure about pin 1. None: not a polarised part."""
+    m = cv.silk_mark(fp)
+    st = m["state"]
+    nums = {p.number for p in fp.pads if p.number}
+    if m.get("basis") == "polarity" and _roles_guessed(cv, fp):
+        return {"state": "not_judged",
+                "why": "which pad is the cathode is only guessed from an "
+                       "imported LED footprint's name (no pin function or "
+                       "A/K pad names); its library may number it the "
+                       "other way"}
+    if st is None:
+        if (len(nums) != 2 or not cv.is_polar(fp) or cv.is_keyed(fp)
+                or cv.is_switch(fp)):
+            return {"state": None}
+        roles = cv.board_roles(fp, None)
+        if not ({"K", "A"} <= set(roles.values())
+                or {"+", "-"} <= set(roles.values())):
+            return {"state": "not_judged",
+                    "why": "which pad is the cathode or + is not known (no "
+                           "pin function on its pads, no A/K pad names, and "
+                           "its footprint name does not say)"}
+        return {"state": "not_judged",
+                "why": "no band, cut corner or \"+\" on its silk that leans "
+                       "to one pad"}
+    if st == "none":
+        if m.get("basis") != "polarity":
+            n = _notch(cv, fp)
+            if n:
+                where, verdict = n
+                return {"state": verdict, "pin": "1", "form": "notch",
+                        "at": where,
+                        "why": f"its outline notch at {where} is at the end "
+                               f"of the rows away from pin 1"}
+        return {"state": "not_judged",
+                "why": "no polarity or pin-1 mark found on its silk"}
+    if st == "ok":
+        return {"state": "ok", "pin": m.get("pin")}
+    if m.get("basis") == "polarity":
+        return {"state": "wrong", "pin": m.get("pin"), "form": "band",
+                "at": (m.get("off") or [None])[0], "why": m.get("why")}
+    marks = (fp.board_marks if m.get("source") == "board" else fp.marks)
+    if len(marks) != 1:
+        return {"state": "not_judged",
+                "why": f"{len(marks)} mark-like shapes on its silk, so which "
+                       f"one is pin 1's is not sure"}
+    mx, my = marks[0]
+    inside = _strokes_inside(cv, fp, m.get("source") == "board")
+    if inside >= FIGURE_STROKES:
+        return {"state": "not_judged",
+                "why": f"its mark sits in a figure drawn inside its pads "
+                       f"({inside} strokes: a display's segments and "
+                       f"decimal point), not read as a pin-1 mark"}
+    pads = [p for p in fp.pads if p.number]
+    near = min(pads, key=lambda p: math.hypot(p.x - mx, p.y - my))
+    if near.number not in _corner_pads(cv, fp):
+        return {"state": "not_judged",
+                "why": f"its one mark sits by pad {near.number}, mid-row, "
+                       f"so it is not read as a pin-1 mark"}
+    return {"state": "wrong", "pin": m.get("pin"), "form": "dot",
+            "at": (round(mx, 3), round(my, 3)),
+            "why": f"its pin-1 mark sits by pad {near.number}'s corner, not "
+                   f"pin {m.get('pin')}'s"}
+
+
+def check_polarity_marks(pcb) -> tuple[list[dict], dict]:
+    """SILK POLARITY: every polarised part's silk mark against its pads,
+    from the board alone (no CPL). Returns the violations and a fact:
+    counts of ok / wrong / not_judged, and the not_judged refs with why."""
+    import cpl_verify as cv
+    vios, ok, unjudged = [], 0, {}
+    fps = cv.board_footprints(pcb)
+    if not fps:
+        old = len(KICAD5_MODULE.findall(Path(pcb).read_text(encoding="utf-8")))
+        if old:
+            return [], {"ok": 0, "wrong": 0, "not_judged": old,
+                        "not_judged_refs": [], "not_judged_board": (
+                            f"a KiCad 5 board: its {old} parts are `module` "
+                            f"blocks, which the part reader does not read")}
+    for ref in sorted(fps, key=cv._natural):
+        fp = fps[ref]
+        r = polarity_mark_of(cv, fp)
+        if r["state"] == "ok":
+            ok += 1
+        elif r["state"] == "not_judged":
+            unjudged.setdefault(r["why"], []).append(ref)
+        elif r["state"] == "wrong":
+            layer = ("F" if fp.side == "top" else "B") + ".SilkS"
+            vios.append(violation(
+                SCRIPT, "error", (fp.x, fp.y), layer, None, [ref],
+                f"{ref} ({fp.name}): the silk polarity mark is on the wrong "
+                f"end: {r['why']}", SCRIPT, kind="silk_polarity_wrong",
+                ref=ref, footprint=fp.name, mark=r.get("form"),
+                mark_at=r.get("at"), pin=r.get("pin")))
+    fact = {"ok": ok, "wrong": len(vios),
+            "not_judged": sum(len(v) for v in unjudged.values()),
+            "not_judged_refs": [{"why": w, "refs": refs}
+                                for w, refs in unjudged.items()]}
+    return vios, fact
+
+
 # ------------------------------------------------------------ CLI
 
 def run(argv=None):
@@ -907,6 +1114,8 @@ def run(argv=None):
     violations.extend(check_attribution(bg, root))
     violations.extend(check_pin_labels(bg, silks))
     violations.extend(check_label_nets(bg, silks))
+    pol_vios, polarity = check_polarity_marks(Path(args.pcb))
+    violations.extend(pol_vios)
 
     off_silk = refdes_off_silk(root)
     payload = checklib.report(
@@ -917,6 +1126,7 @@ def run(argv=None):
                   "refdes_checked": len(refdes_texts(root)),
                   "refdes_off_silk": len(off_silk)}],
         refdes_off_silk=off_silk,
+        polarity_marks=polarity,
         nothing_to_judge=None if violations or silks or refdes_texts(root)
         else "the board has no silk and no reference text")
     return payload, args.out
