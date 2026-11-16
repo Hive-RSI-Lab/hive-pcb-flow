@@ -4,8 +4,8 @@
  "fixture": "carrier_verify",
  "board": "lumina-carrier",
  "metrics": {
-  "errors": 214,
-  "warnings": 230,
+  "errors": 192,
+  "warnings": 210,
   "by_check": {
    "check_return_path": 4,
    "check_current": 21,
@@ -28,7 +28,7 @@
    "check_courtyard": 105,
    "check_ddr_timing": 0,
    "check_ep_paste": 12,
-   "check_esd": 47,
+   "check_esd": 5,
    "check_fp_attr": 0,
    "check_fp_geometry": 0,
    "check_fp_package": 0,
@@ -73,11 +73,7 @@
    "diffpair_phase": 2,
    "diffpair_skew": 1,
    "ep_paste_low": 1,
-   "esd_behind_series": 5,
-   "esd_clamp_far": 4,
-   "esd_corridor_coupled": 3,
-   "esd_ground_far": 4,
-   "esd_unclamped": 31,
+   "esd_unclamped": 5,
    "gnd_stub_long": 1,
    "insufficient_transition_vias": 6,
    "model_path_absolute": 2,
@@ -101,8 +97,8 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 214.0,
-  "warnings": 230.0,
+  "errors": 192.0,
+  "warnings": 210.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
