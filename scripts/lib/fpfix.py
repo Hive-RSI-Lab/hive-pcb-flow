@@ -31,7 +31,6 @@ them measured against real DRC on the shipped boards (LEARNINGS 2026-07-28
      is redrawn as one rectangle: the old courtyard's bbox united with the pad
      field grown by COURTYARD_EXCESS, rounded outward to COURTYARD_GRID. A
      courtyard that covers its pads is never touched.
-
   F  exposed-pad thermal vias with no number: EasyEDA draws an EP's via grid
      as `(pad "" thru_hole circle ...)` with paste on them (the TPA3118's
      HTSSOP-32), so they join no net and print paste into open holes. An
@@ -47,6 +46,21 @@ them measured against real DRC on the shipped boards (LEARNINGS 2026-07-28
      keeps its own type; with both and no type at all it is residue: only the
      part's drawing says how it is fitted.
 
+  H  courtyard inside the body: EasyEDA's radial electrolytics
+     (CAP-TH_BD6.3-P2.50, CAP-TH_BD10.0-P5.00) draw the can as a circle on
+     F.SilkS and ship a courtyard round the two pads only (+-2.35 x +-1.05 mm
+     under a 6.3 mm can), so placement packed an SO-8 and 1210s under the
+     cans on hw-lab hc-power (#587). The body is the largest unfilled circle
+     on a SilkS or Fab layer that holds the centre of every numbered pad (two
+     or more); with none drawn, the footprint's own 3D model when it is a
+     round can (fix_file: its outline above the board fills its smallest
+     enclosing circle to ROUND_BODY). A courtyard that leaves more than
+     BODY_TOL_MM2 of that disc outside is redrawn as a circle round the body
+     and the pads plus COURTYARD_EXCESS, its radius rounded up to
+     COURTYARD_GRID; one whose old graphics reach outside that circle becomes
+     the rectangle over both. A footprint with no body drawn and no round
+     model is left alone: nothing says where the body ends.
+
 Flags (reported, never fixed: only the part's drawing can settle them), from
 the footprint's own 3D model when lib_pull fetched one (body_flags):
   model_off_footprint  the model's pins below the board miss the footprint's
@@ -60,7 +74,8 @@ the footprint's own 3D model when lib_pull fetched one (body_flags):
                        has no hole: a locating peg or pin with nowhere to go
                        (the stacked RCA XDJK-0271-1650's two pegs)
   body_outside_courtyard  the model's body overhangs the courtyard, so
-                       placement packs parts into it (the same RCA's body)
+                       placement packs parts into it (the same RCA's body;
+                       a round can's courtyard is redrawn by rule H first)
 
 Text surgery on the raw file: only the nodes that change are rewritten, so
 nothing else can be reformatted, and re-running is a no-op (idempotent).
@@ -72,7 +87,7 @@ Library API:
   analyze(text, **opts)  -> {"items": [...], "worst_gap_mm": float|None, ...}
   fix_file(path, **opts) -> report dict
 
-Board API (rules E and G):
+Board API (rules E, G and H):
   fix_board(pcb, dry_run=False) -> report dict: the courtyards and placement
   types of the footprints PLACED on a board, which KiCad copies in and a library fix does
   not reach. Run it after fixing the library the board was built from.
@@ -91,6 +106,7 @@ import sys
 from pathlib import Path
 
 import sexpdata
+import shapely
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
@@ -110,6 +126,13 @@ COURTYARD_EXCESS = 0.25
 COURTYARD_GRID = 0.05
 # Copper outside a courtyard below this (mm2) is arc sampling, not a miss.
 COURTYARD_TOL_MM2 = 1e-3
+# Rule H: body disc outside the courtyard below this (mm2) is sampling and
+# stroke, not a can over its neighbours (a 0.05 mm sliver round a 5 mm can is
+# 0.8 mm2).
+BODY_TOL_MM2 = 0.5
+# Rule H's model route: a model outline above the board filling this much of
+# its smallest enclosing circle is a round can (a square 0.64, a 2:1 box 0.51).
+ROUND_BODY = 0.85
 # Fraction of the nominal glyph height used as per-character advance (stroke font).
 TEXT_ADVANCE = 0.75
 
@@ -445,8 +468,11 @@ def sanitize(text: str, *, min_gap: float = MIN_GAP,
              fix_body_text: bool = True,
              fix_courtyard: bool = True,
              fix_ep_vias: bool = True,
-             fix_attr: bool = True) -> tuple[str, list[dict]]:
-    """Apply rules A-G. Returns (new_text, actions); idempotent."""
+             fix_attr: bool = True,
+             model_body: tuple | None = None) -> tuple[str, list[dict]]:
+    """Apply rules A-H. Returns (new_text, actions); idempotent. model_body
+    is rule H's (cx, cy, r) from the footprint's 3D model (fix_file reads
+    it), used only when no body outline is drawn."""
     nodes, copper, silk = _collect(text)
     actions: list[dict] = []
     edits: list[tuple[int, int, str | None, str]] = []  # start, end, replacement|None
@@ -564,8 +590,10 @@ def sanitize(text: str, *, min_gap: float = MIN_GAP,
                             "text": txt, "at": [round(v, 3) for v in _nums(_kid(node, "at"))[:2]]})
 
     # ---- E: a courtyard that leaves pad copper outside -> pads + excess
+    # ---- H: a courtyard that leaves the body outside -> body + excess
     if fix_courtyard:
-        for start, end, repl, act in courtyard_edits(text, nodes, copper):
+        for start, end, repl, act in courtyard_edits(text, nodes, copper,
+                                                     model_body):
             edits.append((start, end, repl, "courtyard"))
             if act:
                 actions.append(act)
@@ -688,12 +716,75 @@ def _crtyd_line(legacy: bool, layer: str, a, b, indent: str) -> str:
             f'{f(b[1])}) (stroke (width 0.05) (type solid)) (layer "{layer}"))')
 
 
-def courtyard_edits(text: str, nodes, copper):
-    """Rule E: (start, end, replacement|None, action|None) per courtyard
-    graphic to rewrite. The first graphic of a failing layer becomes the new
-    rectangle (four fp_lines), the layer's others are dropped."""
+def body_circle(nodes, model_body: tuple | None = None):
+    """Rule H's body, (cx, cy, r, side) in the footprint frame or None: the
+    largest unfilled fp_circle on a SilkS or Fab layer whose disc holds the
+    centre of every numbered pad (two or more), else model_body (cx, cy, r)
+    on the front."""
+    centres = [tuple(_nums(_kid(n, "at"))[:2]) for h, _, _, n in nodes
+               if h == "pad" and len(n) >= 4 and not _unnamed(n)
+               and _kid(n, "at") is not None]
+    if len(centres) < 2:
+        return None
+    best = None
+    for head, _s, _e, node in nodes:
+        if head != "fp_circle" or _is_filled(node):
+            continue
+        side = next((ly.split(".")[0] for ly in _layers(node)
+                     if ly.endswith((".SilkS", ".Fab"))), None)
+        c, e = _kid(node, "center"), _kid(node, "end")
+        if side is None or c is None or e is None:
+            continue
+        (cx, cy), (ex, ey) = _nums(c)[:2], _nums(e)[:2]
+        r = math.hypot(ex - cx, ey - cy)
+        if all(math.hypot(x - cx, y - cy) < r for x, y in centres) and \
+                (best is None or r > best[2]):
+            best = (cx, cy, r, side)
+    if best is None and model_body is not None:
+        cx, cy, r = model_body
+        if all(math.hypot(x - cx, y - cy) < r for x, y in centres):
+            best = (cx, cy, r, "F")
+    return best
+
+
+def _model_body(text: str, path: Path | None) -> tuple | None:
+    """Rule H's (cx, cy, r) from the footprint's VRML model when its outline
+    above the board is round (ROUND_BODY), else None."""
+    from shapely.geometry import MultiPoint
+    wrl, xf = _model_file(text, path)
+    if wrl is None:
+        return None
+    above = [(x, y) for x, y, z in model_points(wrl, xf) if z >= -1e-6]
+    if len(above) < 3:
+        return None
+    hull = MultiPoint(above).convex_hull
+    if hull.geom_type != "Polygon":
+        return None
+    mbc = shapely.minimum_bounding_circle(hull)
+    if hull.area < ROUND_BODY * mbc.area:
+        return None
+    c = mbc.centroid
+    return (float(c.x), float(c.y), float(shapely.minimum_bounding_radius(hull)))
+
+
+def _crtyd_circle(legacy: bool, layer: str, c, r: float) -> str:
+    f = lambda v: f"{v:.2f}"  # noqa: E731
+    if legacy:
+        return (f"(fp_circle (center {f(c[0])} {f(c[1])}) (end {f(c[0] + r)} "
+                f"{f(c[1])}) (layer {layer}) (width 0.05))")
+    return (f'(fp_circle (center {f(c[0])} {f(c[1])}) (end {f(c[0] + r)} '
+            f'{f(c[1])}) (stroke (width 0.05) (type solid)) (fill none) '
+            f'(layer "{layer}"))')
+
+
+def courtyard_edits(text: str, nodes, copper, model_body: tuple | None = None):
+    """Rules E and H: (start, end, replacement|None, action|None) per
+    courtyard graphic to rewrite. The first graphic of a failing layer
+    becomes the new courtyard (four fp_lines, or one fp_circle round a
+    body), the layer's others are dropped."""
     if copper is None or copper.is_empty:
         return []
+    body = body_circle(nodes, model_body)
     by_layer: dict[str, list] = {}
     for head, s, e, node in nodes:
         if head not in _GRAPHIC_HEADS:
@@ -705,12 +796,46 @@ def courtyard_edits(text: str, nodes, copper):
         by_layer.setdefault(ly, []).append((s, e, sh))
     legacy = text.lstrip().startswith("(module")
     out = []
+    if body is not None and not any(ly.startswith(body[3] + ".")
+                                    for ly in by_layer):
+        return []   # no courtyard on the body's side: fp_verify's warning
     for ly, items in sorted(by_layer.items()):
         area = _courtyard_area([sh for _, _, sh in items if sh is not None])
         missed = copper.area if area is None else copper.difference(area).area
-        if missed <= COURTYARD_TOL_MM2:
+        disc = None
+        if body is not None and ly.startswith(body[3] + "."):
+            disc = Point(body[0], body[1]).buffer(body[2], quad_segs=32)
+            bmiss = disc.area if area is None else disc.difference(area).area
+            if bmiss <= BODY_TOL_MM2:
+                disc = None
+        if missed <= COURTYARD_TOL_MM2 and disc is None:
             continue
-        x1, y1, x2, y2 = copper.bounds
+        s0, e0, _ = items[0]
+        old = None if area is None else [round(v, 3) for v in area.bounds]
+        if disc is not None:
+            cx, cy, r = body[:3]
+            far = max(math.hypot(x - cx, y - cy)
+                      for x, y in shapely.get_coordinates(copper))
+            g = COURTYARD_GRID
+            rr = round(math.ceil((max(r, far) + COURTYARD_EXCESS) / g - 1e-6) * g, 4)
+            circ = Point(cx, cy).buffer(rr, quad_segs=32)
+            if area is None or area.difference(circ.buffer(0.01)).area <= COURTYARD_TOL_MM2:
+                out.append((s0, e0, _crtyd_circle(legacy, ly, (cx, cy), rr),
+                            {"rule": "H", "action": "rebuild_courtyard_body",
+                             "layer": ly, "from_bbox": old,
+                             "body": [round(v, 3) for v in (cx, cy, r)],
+                             "to_circle": [round(cx, 3), round(cy, 3), rr],
+                             "body_outside_mm2": round(bmiss, 2)}))
+                for s, e, _ in items[1:]:
+                    out.append((s, e, None, None))
+                continue
+            # the old courtyard reaches past the circle: one rectangle over
+            # both, the body's square shrunk by the excess added below
+            cu = unary_union([copper, circ.envelope.buffer(-COURTYARD_EXCESS,
+                                                           join_style=2)])
+        else:
+            cu = copper
+        x1, y1, x2, y2 = cu.bounds
         x1, y1 = x1 - COURTYARD_EXCESS, y1 - COURTYARD_EXCESS
         x2, y2 = x2 + COURTYARD_EXCESS, y2 + COURTYARD_EXCESS
         if area is not None:
@@ -721,15 +846,14 @@ def courtyard_edits(text: str, nodes, copper):
         x1, y1 = (math.floor(v / g + 1e-6) * g for v in (x1, y1))
         x2, y2 = (math.ceil(v / g - 1e-6) * g for v in (x2, y2))
         x1, y1, x2, y2 = (round(v, 4) + 0.0 for v in (x1, y1, x2, y2))
-        s0, e0, _ = items[0]
         ls = text.rfind("\n", 0, s0) + 1
         indent = text[ls:s0] if not text[ls:s0].strip() else ""
         corners = [(x1, y2), (x1, y1), (x2, y1), (x2, y2)]
         lines = [_crtyd_line(legacy, ly, corners[i], corners[(i + 1) % 4],
                              indent if i else "") for i in range(4)]
-        old = None if area is None else [round(v, 3) for v in area.bounds]
         out.append((s0, e0, "\n".join(lines),
-                    {"rule": "E", "action": "rebuild_courtyard", "layer": ly,
+                    {"rule": "E" if disc is None else "H",
+                     "action": "rebuild_courtyard", "layer": ly,
                      "from_bbox": old, "to_bbox": [x1, y1, x2, y2],
                      "copper_outside_mm2": round(missed, 4)}))
         for s, e, _ in items[1:]:
@@ -966,6 +1090,11 @@ def fix_file(path: str | Path, *, dry_run: bool = False,
     text = p.read_text(encoding="utf-8")
     before = analyze(text, opts.get("min_gap", MIN_GAP),
                      opts.get("min_line_width", MIN_LINE_WIDTH))
+    if opts.get("fix_courtyard", True) and "model_body" not in opts:
+        try:
+            opts["model_body"] = _model_body(text, p)
+        except Exception:  # noqa: BLE001  (an unreadable model: no body)
+            opts["model_body"] = None
     new, actions = sanitize(text, **opts)
     after = analyze(new, opts.get("min_gap", MIN_GAP),
                     opts.get("min_line_width", MIN_LINE_WIDTH))
@@ -1025,8 +1154,29 @@ def _apply(text: str, edits) -> str:
     return out
 
 
+def board_bodies(text: str) -> dict[str, tuple]:
+    """Rule H's body circle, (cx, cy, r, side) in the footprint's file frame,
+    per reference of every placed footprint that draws one."""
+    out = {}
+    for head, s, e in top_level_nodes(text):
+        if head != "footprint":
+            continue
+        sub = text[s:e]
+        root = _parse(sub)
+        ref = next((str(_tok(c[2])) for c in root[1:]
+                    if isinstance(c, list) and len(c) >= 3
+                    and _tok(c[0]) == "property"
+                    and str(_tok(c[1])) == "Reference"), None)
+        nodes = [(h, a, b, _parse(sub[a:b])) for h, a, b in top_level_nodes(sub)
+                 if h in ("fp_circle", "pad")]
+        body = body_circle(nodes)
+        if ref and body is not None:
+            out[ref] = body
+    return out
+
+
 def fix_board(pcb: str | Path, *, dry_run: bool = False) -> dict:
-    """Rules E and G on every footprint placed on a board, in place."""
+    """Rules E, G and H on every footprint placed on a board, in place."""
     p = Path(pcb)
     text = p.read_text(encoding="utf-8")
     edits, rows = [], []
@@ -1120,7 +1270,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--lib", help="a .pretty directory")
-    src.add_argument("--pcb", help="a board: rules E and G on its placed footprints")
+    src.add_argument("--pcb", help="a board: rules E, G and H on its placed footprints")
     ap.add_argument("--only", nargs="+", help="limit to these footprint names")
     ap.add_argument("--min-gap", type=float, default=MIN_GAP,
                     help=f"silk-to-copper bar, mm (default {MIN_GAP})")

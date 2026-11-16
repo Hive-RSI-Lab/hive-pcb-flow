@@ -746,3 +746,82 @@ def test_apply_hier_shapes_puts_back_each_declared_shape(tmp_path):
     assert '(hierarchical_label "SDA"\n\t\t(shape bidirectional)' in text
     assert '(hierarchical_label "VOUT" (shape output)' in text
     assert '(hierarchical_label "EN" (shape input)' in text
+
+
+# ---------------------------------------------------------------- rule H (#587)
+BD10 = ROOT / "pinned" / "core" / "lib" / "aiee.pretty" / "CAP-TH_BD10.0-P5.00-D1.0-FD.kicad_mod"
+PADS_ONLY = "".join(
+    f"\t(fp_line (start {a}) (end {b}) (layer F.CrtYd) (width 0.05))\n"
+    for a, b in (("-3.60 -1.05", "3.60 -1.05"), ("3.60 -1.05", "3.60 1.05"),
+                 ("3.60 1.05", "-3.60 1.05"), ("-3.60 1.05", "-3.60 -1.05")))
+CIRCLE_CY = "\t(fp_circle (center 0 0) (end 5.3 0) (layer F.CrtYd) (width 0.05))\n"
+SILK_CAN = "\t(fp_circle (center 0.00 0.00) (end 5.00 0.00) (layer F.SilkS) (width 0.25))\n"
+
+
+def _bd10(courtyard: str) -> str:
+    text = BD10.read_text()
+    assert CIRCLE_CY in text and SILK_CAN in text
+    return text.replace(CIRCLE_CY, courtyard)
+
+
+def _eh(actions):
+    return [a for a in actions if a["rule"] in ("E", "H")]
+
+
+def test_rule_h_rebuilds_a_pads_only_courtyard_round_the_drawn_can():
+    # EasyEDA's pull (hc-power, #587): the courtyard is the pads, the can a
+    # 10 mm circle on the silk; placement packed parts under it
+    new, acts = fpfix.sanitize(_bd10(PADS_ONLY))
+    h = _eh(acts)
+    assert [(a["rule"], a["action"]) for a in h] == [("H", "rebuild_courtyard_body")]
+    assert h[0]["to_circle"] == [0.0, 0.0, 5.25] and h[0]["body_outside_mm2"] > 60
+    cy = [ln.strip() for ln in new.splitlines() if "CrtYd" in ln]
+    assert cy == ["(fp_circle (center 0.00 0.00) (end 5.25 0.00) (layer F.CrtYd) (width 0.05))"]
+    again, acts2 = fpfix.sanitize(new)
+    assert again == new and _eh(acts2) == []
+
+
+def test_rule_h_twin_a_courtyard_round_the_can_is_left_alone():
+    text = BD10.read_text()
+    new, acts = fpfix.sanitize(text)
+    assert _eh(acts) == [] and CIRCLE_CY in new
+
+
+def test_rule_h_takes_a_round_model_only_and_never_guesses():
+    # no body drawn: the footprint's own model, when it is a round can, is
+    # the body; with no model either the courtyard is left as it is
+    bare = _bd10(PADS_ONLY).replace(SILK_CAN, "")
+    _, acts = fpfix.sanitize(bare)
+    assert _eh(acts) == []
+    body = fpfix._model_body(BD10.read_text(), BD10)
+    assert body is not None and abs(body[2] - 5.0) < 0.05
+    _, acts = fpfix.sanitize(bare, model_body=body)
+    assert [a["action"] for a in _eh(acts)] == ["rebuild_courtyard_body"]
+    # a square body is not a can
+    assert fpfix.body_circle([], (0, 0, 5)) is None
+
+
+def test_rule_h_keeps_an_old_courtyard_that_reaches_past_the_can():
+    wide = _bd10(PADS_ONLY.replace("-3.60", "-7.00"))
+    _, acts = fpfix.sanitize(wide)
+    h = _eh(acts)
+    assert [(a["rule"], a["action"]) for a in h] == [("H", "rebuild_courtyard")]
+    assert h[0]["to_bbox"] == [-7.0, -5.25, 5.25, 5.25]
+
+
+def test_rule_h_on_a_placed_board_footprint(tmp_path):
+    fp = ('\t(footprint "aiee:CAP" (layer "F.Cu") (at 50 50 90)\n'
+          '\t\t(attr through_hole)\n'
+          '\t\t(property "Reference" "C1" (at 0 0 0) (layer "F.SilkS"))\n'
+          '\t\t(pad "1" thru_hole circle (at -2.54 0 90) (size 1.6 1.6) (drill 1) (layers "*.Cu" "*.Mask"))\n'
+          '\t\t(pad "2" thru_hole circle (at 2.54 0 90) (size 1.6 1.6) (drill 1) (layers "*.Cu" "*.Mask"))\n'
+          '\t\t(fp_circle (center 0 0) (end 5 0) (stroke (width 0.25) (type solid)) (fill none) (layer "F.SilkS"))\n'
+          '\t\t(fp_rect (start -3.6 -1.05) (end 3.6 1.05) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))\n'
+          '\t)\n')
+    pcb = tmp_path / "b.kicad_pcb"
+    pcb.write_text("(kicad_pcb\n\t(version 20240108)\n" + fp + ")\n")
+    out = fpfix.fix_board(pcb)
+    assert [a["action"] for r in out["results"] for a in r["actions"]
+            if a["rule"] == "H"] == ["rebuild_courtyard_body"]
+    assert '(fp_circle (center 0.00 0.00) (end 5.25 0.00) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))' in pcb.read_text()
+    assert fpfix.fix_board(pcb)["changed"] == 0

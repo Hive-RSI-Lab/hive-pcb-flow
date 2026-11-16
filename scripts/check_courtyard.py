@@ -11,14 +11,22 @@ check makes the footprint itself say so.
 
 One finding per footprint whose declared courtyard (F.CrtYd, or B.CrtYd for
 a back-side part, as placelib reads it) leaves some of its pad copper
-outside, by more than TOL_MM2:
+outside, by more than TOL_MM2, or the body it draws by more than
+fpfix.BODY_TOL_MM2:
   courtyard_pads   error: the pads the courtyard misses and by how much
+  courtyard_body   error: the body circle (the largest unfilled circle on
+                   the part's SilkS or Fab holding every numbered pad, as
+                   fpfix rule H reads it) reaches outside the courtyard, so
+                   a part can be placed under the can: EasyEDA's radial
+                   electrolytics, a 6.3 or 10 mm can over a courtyard round
+                   the two pads (#587). A footprint that draws no body is
+                   not judged by it.
 A footprint with no courtyard at all is fp_verify's warning, not this
 check's (stock mounting holes and logos have none).
 
 The repair belongs in the footprint, not the board: fpfix rule E (run by
 lib_pull) rebuilds a pulled courtyard that misses its pads as the pad field
-plus 0.25 mm; a board made before then gets its footprints re-pulled or
+plus 0.25 mm, rule H one that misses the body as the body circle plus 0.25; a board made before then gets its footprints re-pulled or
 fixed with `fpfix.py --lib` and updated from the library.
 
 CLI: --pcb board.kicad_pcb [--out report.json]
@@ -31,12 +39,14 @@ import sys
 from pathlib import Path
 
 from shapely import affinity
+from shapely.geometry import Point
 from shapely.ops import unary_union
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "lib"))
 import checklib  # noqa: E402
+import fpfix  # noqa: E402
 import geom  # noqa: E402
 import placelib  # noqa: E402
 
@@ -60,9 +70,10 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
     pads: dict[str, list] = {}
     for p in bg.pads_of():
         pads.setdefault(p.ref, []).append(p)
+    bodies = fpfix.board_bodies(Path(pcb).read_text(encoding="utf-8"))
     viols = []
     seen = {"footprints": 0, "with_courtyard": 0, "no_courtyard": [],
-            "duplicate_refs": sorted(bg.dup_refs)}
+            "with_body": 0, "duplicate_refs": sorted(bg.dup_refs)}
     for ref in sorted(model.footprints):
         f = model.footprints[ref]
         seen["footprints"] += 1
@@ -74,6 +85,27 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
         if cy is None or not pads.get(ref) or ref in bg.dup_refs:
             continue
         seen["with_courtyard"] += 1
+        layer = "F.CrtYd" if f.side == "front" else "B.CrtYd"
+        body = bodies.get(ref)
+        if body is not None and body[3] == layer[0]:
+            seen["with_body"] += 1
+            # both in the footprint's file frame, as placelib reads it
+            disc = Point(body[0], body[1]).buffer(body[2], quad_segs=32)
+            out = disc.difference(f.courtyard_local).area
+            if out > fpfix.BODY_TOL_MM2:
+                x1, y1, x2, y2 = f.courtyard_local.bounds
+                viols.append(checklib.violation(
+                    SCRIPT, "error", f.pos, layer, None, [ref],
+                    f"{ref} ({f.fpid}): the body drawn as a "
+                    f"{2 * body[2]:.2f} mm circle reaches {out:.2f} mm2 "
+                    f"outside the courtyard ({x2 - x1:.2f} x {y2 - y1:.2f} "
+                    f"mm), so a part can be placed under it. Fix the "
+                    f"footprint (fpfix rule H) and update it from the library",
+                    SOURCE, kind="courtyard_body", footprint=f.fpid,
+                    body_diameter_mm=checklib.rnd(2 * body[2]),
+                    body_outside_mm2=checklib.rnd(out),
+                    courtyard_bbox=[checklib.rnd(v) for v in
+                                    courtyard_abs(f).bounds]))
         missed = []
         for p in pads[ref]:
             out = p.poly.difference(cy).area
@@ -86,8 +118,7 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
         px1, py1, px2, py2 = copper.bounds
         names = ", ".join(f"{n} ({a:.2f} mm2)" for n, a in missed)
         viols.append(checklib.violation(
-            SCRIPT, "error", f.pos, "F.CrtYd" if f.side == "front"
-            else "B.CrtYd", None, [ref],
+            SCRIPT, "error", f.pos, layer, None, [ref],
             f"{ref} ({f.fpid}): the courtyard "
             f"({cx2 - cx1:.2f} x {cy2 - cy1:.2f} mm) leaves pad(s) {names} "
             f"outside it; the pads span {px2 - px1:.2f} x {py2 - py1:.2f} mm. "
