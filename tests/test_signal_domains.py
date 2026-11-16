@@ -12,6 +12,12 @@ knowledge, each with a quiet twin that differs only in the fault:
   74HC595's RCLK (storage clock, TI SCLS041) tied to a rail or held by a
   pull, a 74HC165's ~PL tied low; a latch pin on an unlisted part is
   not_judged;
+- an active-low ~{CS} into a 74HC573's active-high LE, and an active-low
+  ~{ALERT} (TI TMP102, open drain) into a regulator's active-high EN,
+  directly and through a buffer, quiet through a 74HC04;
+- two power-goods through a NAND into an active-high enable (quiet
+  through an AND), two fault flags through an AND where the shutdown
+  needs an OR; a gate the table doesn't know is not_judged;
 - a 5 V 74HC595 output into an RP2040 GPIO (IOVDD + 0.5 V abs max, RP2040
   datasheet 5.5.1, pin_abs_max.yaml);
 - a 3.3 V RP2040 output into a 5 V 74HC input (VIH 3.15 V at 4.5 V, TI
@@ -33,7 +39,8 @@ import netlist_audit  # noqa: E402
 import signal_domains  # noqa: E402
 
 KINDS = ("polarity_", "idle_pull_asserted", "io_domain_",
-         "latch_enable_held", "latch_enable_polarity")
+         "latch_enable_held", "latch_enable_polarity",
+         "drive_level_mismatch")
 
 HC_ROW = {"mpn": "SN74HC245", "match": r"^(SN)?74HC\d", "pintypes": "input",
           "vin_max_vdd": 0.0, "vih": 3.15, "vih_vdd": 4.5,
@@ -425,6 +432,112 @@ def test_a_driver_of_unknown_level_is_not_judged():
     assert hits == []
     nj = facts["not_judged"]
     assert any("latch_enable_polarity on LATCH" in x for x in nj), nj
+
+
+# ---------------------------------------------------- drive_level_mismatch
+
+def _cross(tgt, via=None, drv="~{ALERT}", drv_type="open_collector",
+           two=False):
+    """U1 (a TPS62130 regulator) with its control input TGT on net CTL,
+    driven by U2 (a TMP102) pin DRV, and with TWO by U3 (a second one)
+    too. VIA puts a gate U4 between: 'buf' a 74LVC1G17 (A 2, Y 4), 'inv'
+    a 74HC04 (1A, 1Y), 'nand'/'and'/'or' a 74HC00/08/32 gate 1 (1A, 1B,
+    1Y), 'unknown' a 74HC10 3-input NAND."""
+    comps = {"U1": "TPS62130", "U2": "TMP102", "U3": "TMP102"}
+    nets = _rails(("U1", "1", "+3V3", "VIN"), ("U2", "4", "+3V3", "V+"),
+                  ("U3", "4", "+3V3", "V+"))
+    a = _m("U2", "3", drv, drv_type)
+    b = _m("U3", "3", drv, drv_type)
+    pin = _m("U1", "11", tgt, "input")
+    if via is None:
+        nets["CTL"] = [pin, a] + ([b] if two else [])
+        return comps, nets
+    part, ins, out = {
+        "buf": ("74LVC1G17", [("2", "A")], ("4", "Y")),
+        "inv": ("74HC04", [("1", "1A")], ("2", "1Y")),
+        "nand": ("74HC00", [("1", "1A"), ("2", "1B")], ("3", "1Y")),
+        "and": ("74HC08", [("1", "1A"), ("2", "1B")], ("3", "1Y")),
+        "or": ("74HC32", [("1", "1A"), ("2", "1B")], ("3", "1Y")),
+        "unknown": ("74HC10", [("1", "1A"), ("2", "1B")], ("12", "1Y")),
+    }[via]
+    comps["U4"] = part
+    nets["+3V3"].append(_m("U4", "14", "VCC", "power_in"))
+    nets["CTL"] = [pin, _m("U4", out[0], out[1], "output")]
+    srcs = [a, b] if two else [a, a]
+    for (pn, fn), src in zip(ins, srcs):
+        n = f"SRC_{src['ref']}"
+        nets.setdefault(n, []).append(_m("U4", pn, fn, "input"))
+        if src not in nets[n]:
+            nets[n].append(src)
+    return comps, nets
+
+
+def test_an_active_low_alert_into_an_active_high_enable_is_a_fault():
+    hits, facts = _audit(*_cross("EN"))
+    assert _kinds(hits) == [("drive_level_mismatch", "error", ["U1"])]
+    assert "asserts low" in hits[0]["msg"]
+    assert facts["drive_levels_checked"] == 1
+    # the reverse: an active-high interrupt into an active-low reset
+    hits, _ = _audit(*_cross("~{RESET}", drv="INT", drv_type="output"))
+    assert hits == []       # INT drawn plain on a symbol with no bars
+    comps, nets = _cross("~{RESET}", drv="INT", drv_type="output")
+    nets["CTL"].append(_m("U2", "6", "~{CS}", "input"))
+    hits, _ = _audit(comps, nets)
+    assert _kinds(hits) == [("drive_level_mismatch", "error", ["U1"])]
+
+
+def test_the_same_alert_through_a_buffer_is_a_fault():
+    hits, _ = _audit(*_cross("EN", via="buf"))
+    assert _kinds(hits) == [("drive_level_mismatch", "error", ["U1"])]
+    assert "U4 (74LVC1G17)" in hits[0]["msg"]
+
+
+def test_the_same_alert_through_an_inverter_or_into_its_own_level_is_quiet():
+    hits, facts = _audit(*_cross("EN", via="inv"))
+    assert hits == []
+    assert facts["drive_levels_checked"] == 1
+    assert _audit(*_cross("~{EN}"))[0] == []
+    assert _audit(*_cross("~{RESET}", via="buf"))[0] == []
+
+
+def test_a_port_pin_or_a_same_kind_pair_is_left_alone():
+    assert _audit(*_cross("EN", drv="GPIO4", drv_type="output"))[0] == []
+    # a reset output into a reset input is polarity_mismatch's pair
+    hits, _ = _audit(*_cross("RESET", drv="~{RESET}", drv_type="output"))
+    assert [h["kind"] for h in hits] == ["polarity_mismatch"]
+
+
+def test_a_gate_the_table_does_not_know_is_not_judged():
+    hits, facts = _audit(*_cross("EN", via="unknown"))
+    assert hits == []
+    nj = facts["not_judged"]
+    assert any("drive_level_mismatch on CTL" in x and "74HC10" in x
+               for x in nj), nj
+
+
+def test_a_nand_of_power_goods_into_an_active_high_enable_is_a_fault():
+    hits, _ = _audit(*_cross("EN", via="nand", drv="PG", drv_type="output",
+                             two=True))
+    assert _kinds(hits) == [("drive_level_mismatch", "error", ["U1"])]
+    assert "inverted by U4 (74HC00)" in hits[0]["msg"]
+    assert _audit(*_cross("EN", via="and", drv="PG", drv_type="output",
+                          two=True))[0] == []
+
+
+def test_fault_flags_through_an_and_where_the_shutdown_needs_an_or():
+    # FAULT asserts high (TPS2553-style flag drawn plain): any one fault
+    # has to shut the regulator down, so the flags need an OR
+    hits, _ = _audit(*_cross("SHDN", via="and", drv="FAULT",
+                             drv_type="output", two=True))
+    assert _kinds(hits) == [("drive_level_mismatch", "error", ["U1"])]
+    assert "only when any of its inputs do, where the input needs all" \
+        in hits[0]["msg"]
+    assert _audit(*_cross("SHDN", via="or", drv="FAULT", drv_type="output",
+                          two=True))[0] == []
+    # active-low alerts into an active-low reset: an AND resets on any
+    assert _audit(*_cross("~{RESET}", via="and", two=True))[0] == []
+    hits, _ = _audit(*_cross("~{RESET}", via="or", two=True))
+    assert _kinds(hits) == [("drive_level_mismatch", "error", ["U1"])]
 
 
 # ---------------------------------------------------------- io domain
