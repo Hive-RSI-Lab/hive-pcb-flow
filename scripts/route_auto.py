@@ -202,10 +202,14 @@ def _dsn_track_bans(staged: Path, dsn: Path, bg: geom.BoardGeom) -> list[dict]:
 
 def _dsn_merge_wires(dsn: Path) -> int:
     """Join the exported DSN's split pre-routed wires (Freerouting 2.2.4
-    overflows its stack on them); returns the wires folded together."""
+    overflows its stack on them); returns the wires folded together. The
+    joined wires are sorted again (routelib.dsn_sort_wiring): a joined
+    wire takes the place of one of its pieces, so two exports of one board
+    that list the pieces in other orders would list the same wires in
+    other orders (#1412)."""
     text, merged = routelib.dsn_merge_wires(dsn.read_text(encoding="utf-8"))
     if merged:
-        dsn.write_text(text, encoding="utf-8")
+        dsn.write_text(routelib.dsn_sort_wiring(text), encoding="utf-8")
     return merged
 
 

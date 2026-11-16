@@ -1006,3 +1006,31 @@ def test_drop_pre_forgets_only_the_dropped_copper(tmp_path):
     out = route_auto._drop_pre(pre, bg, {"esc-s", "esc-v"})
     assert out["vias"] == []
     assert [t[0] for t in out["tracks"]] == ["/S5_5"]
+
+
+def test_merged_wires_come_out_in_one_order_however_the_track_was_split(
+        tmp_path):
+    """#1412: two saves of one board list a track's pieces in another
+    order (each piece keeps its direction); they join into the same wires,
+    which then go to Freerouting in one order."""
+    def dsn(*wires):
+        body = "\n".join("    " + w for w in wires)
+        return ("(pcb t.dsn\n  (parser\n    (string_quote \")\n  )\n"
+                "  (network\n    (net /A\n      (pins U1-1 J1-1)\n    )\n"
+                "    (net /B\n      (pins U1-2 J1-2)\n    )\n  )\n"
+                f"  (wiring\n{body}\n  )\n)\n")
+
+    def w(pts, net):
+        return f"(wire (path F.Cu 200  {pts})(net {net})(type route))"
+    a = tmp_path / "a.dsn"
+    b = tmp_path / "b.dsn"
+    a.write_text(dsn(w("0 0  100 0", "/A"), w("100 0  200 0", "/A"),
+                     w("0 500  100 500", "/B"), w("100 500  200 500", "/B")))
+    b.write_text(dsn(w("100 500  200 500", "/B"), w("100 0  200 0", "/A"),
+                     w("0 500  100 500", "/B"), w("0 0  100 0", "/A")))
+    assert a.read_text() != b.read_text()
+    for f in (a, b):
+        assert route_auto._dsn_merge_wires(f) == 4
+    ta, tb = a.read_text(), b.read_text()
+    assert sorted(ta.splitlines()) == sorted(tb.splitlines())
+    assert ta == tb
