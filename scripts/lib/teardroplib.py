@@ -795,7 +795,8 @@ def teardrop_zones(root) -> list[tuple[str, str, list, str | None]]:
     return out
 
 
-def left_by(pcb, gone: list, kept: list) -> list[dict]:
+def left_by(pcb, gone: list, kept: list, moved: list = (),
+            shifted=frozenset()) -> list[dict]:
     """The drops a rip leaves with no track to answer (#1144).
 
     gone: the tracks (geom.Track) the edit removes; kept: every other
@@ -807,8 +808,14 @@ def left_by(pcb, gone: list, kept: list) -> list[dict]:
     the tip in its band: a drop that also answers a kept track (a track
     re-laid on the same line, or the one going on past the removed one's
     outer end with two_tracks) stays. A track_end drop is no item's and
-    is not looked at. Returns [{net, layer, at: tip}], the tip one of the
-    zone's outline vertices, so the worker finds the zone by it."""
+    is not looked at. moved: the tracks an edit moves an end of, as they
+    are after it (their old shape in gone, #1436); one answers a drop only
+    when its copper still meets the item's, so a track whose end left the
+    via leaves the via's drop even where the tip still lies on it.
+    shifted: the uuids of the vias the edit moves; no moved track answers
+    a drop left at one's old place, the via no longer there. Returns
+    [{net, layer, at: tip}], the tip one of the zone's outline vertices, so
+    the worker finds the zone by it."""
     if not gone:
         return []
     area = unary_union([t.poly for t in gone]).buffer(0.1)
@@ -819,6 +826,9 @@ def left_by(pcb, gone: list, kept: list) -> list[dict]:
             if not mine:
                 continue
             rest = [t for t in kept if t.net == it.net and t.layer == layer]
+            if it.uuid not in shifted:
+                rest += [t for t in moved if t.net == it.net and t.layer
+                         == layer and t.poly.intersects(it.poly)]
             for tip in tips:
                 key = (it.net, layer, round(tip.x, 6), round(tip.y, 6))
                 if key in seen or not _in_band(tip, _bands(mine)) or \

@@ -168,8 +168,12 @@ kept track's), through a remove_teardrop {net, layer, at} the driver adds
 (the worker takes the teardrop zone of that net and layer with a vertex at
 `at`); the verify checks it is gone, and the op's result counts them
 (teardrops_removed). A drop that also answers a track the list keeps or
-lays stays. Drops of tracks other ops move (set_point, move_via) are not
-looked at: refill for those.
+lays stays. A set_point that moves a track end (set_end, a move_via's
+drag) takes the drop it leaves the same way (#1436): the moved track
+answers a drop only while its copper still meets the via or pad's, and
+never one at the old place of a via the list moves. A via moved with no
+drag, and a drop at a free track end, are not looked at:
+refill for those.
 
 Patches (#1145): a PATCH_<net> zone (zone_patch) that held a via of its
 net before the edit and holds none after it (the vias the list removes,
@@ -826,23 +830,41 @@ def _resolve_copy_from(bg, op: dict) -> list[dict]:
 
 
 def _drops_left(pcb: Path, bg, flat: list[dict]) -> list[tuple[int, dict]]:
-    """(index of the remove in flat, remove_teardrop op) for each drop the
-    tracks the list removes leave with nothing to answer (#1144,
-    teardroplib.left_by). Only a board with teardrop zones is read."""
+    """(index of the op in flat, remove_teardrop op) for each drop the
+    tracks the list removes, or moves an end of, leave with nothing to
+    answer (#1144, #1436; teardroplib.left_by). A set_point start|end
+    (set_end, a move_via's drag) counts as its old track gone and the moved
+    one kept, the moved one answering only while it still meets the item
+    and the item stays (a via the list moves leaves all the drops of the
+    tracks dragged with it). Only a board with teardrop zones is read."""
+    from shapely.geometry import LineString
     tracks = {t.uuid: t for t in bg.tracks_of() if t.uuid}
     gone = {op["uuid"]: j for j, op in enumerate(flat)
             if op["op"] == "remove" and op["uuid"] in tracks}
+    ends: dict[str, list] = {}
+    for j, op in enumerate(flat):
+        u = op.get("uuid")
+        if op["op"] == "set_point" and op["which"] in ("start", "end") \
+                and u in tracks and u not in gone:
+            c = ends.setdefault(u, [j, list(tracks[u].shape.coords)])[1]
+            c[0 if op["which"] == "start" else -1] = tuple(op["to"])
+    for u, (j, _) in ends.items():
+        gone.setdefault(u, j)
+    shifted = {op["uuid"] for op in flat
+               if op["op"] == "set_point" and op["which"] == "at"}
     if not gone or "(teardrop" not in pcb.read_text(encoding="utf-8"):
         return []
-    from shapely.geometry import LineString
+    moved = [geom.Track(tracks[u].net, tracks[u].layer, tracks[u].width,
+                        LineString(c)) for u, (_, c) in ends.items()]
     kept = [t for u, t in tracks.items() if u not in gone]
     kept += [t for t in bg.tracks_of() if not t.uuid]
     kept += [geom.Track(op["net"], op["layer"], float(op["width"]),
                         LineString([op["start"], op["end"]]))
              for op in flat if op["op"] == "add_track"]
     out = []
-    for d in tdl.left_by(pcb, [tracks[u] for u in gone], kept):
-        # the remove whose track the drop answered (the first, if several)
+    for d in tdl.left_by(pcb, [tracks[u] for u in gone], kept, moved,
+                          shifted):
+        # the op whose track the drop answered (the first, if several)
         j = min(j for u, j in gone.items()
                 if tracks[u].net == d["net"] and tracks[u].layer == d["layer"]
                 and tdl._in_band(_point(d["at"]), tdl._bands([tracks[u]])))
