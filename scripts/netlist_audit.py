@@ -288,7 +288,10 @@ schematic-level structural problems BEFORE board work starts:
    latch held low, a storage clock or load pin that never moves. Its
    active level is the family's datasheet's (lib/signal_domains.py
    _LATCHES); a latch-named pin (LE, STB, STROBE, RCLK...) held on a part
-   not listed there is not_judged. Class 14; fact latch_enables_checked.
+   not listed there is not_judged. A listed part whose pins come through
+   with numbers only (no pin names) is judged by its package's pin table
+   (_LATCH_PINOUTS: 165, 166, 595, 373, 573 in a leaded package), else
+   not_judged. Class 14; fact latch_enables_checked.
  - io_domain_overdrive (error), io_domain_underdrive (warning),
    io_domain_pull_rail (error over, warning under): an output on one
    rail into an input whose datasheet row (reference/io_tolerance.yaml,
@@ -4547,7 +4550,9 @@ def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
               f"with nothing on '{hit['net']}' to drive it")
         ps = "; ".join(
             f"{m['ref']} ({comps.get(m['ref'], {}).get('value')}) "
-            f"{m.get('pinfunction')} (pin {m['pin']}) {what[mode]}"
+            f"{m.get('pinfunction')} (pin {m['pin']}"
+            f"{', by its package pin table' if m.get('by_table') else ''}"
+            f") {what[mode]}"
             for m, _s, mode in hit["pins"])
         v("error", "latch_enable_held", hit["net"],
           sorted({m["ref"] for m, _s, _m in hit["pins"]}),

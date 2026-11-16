@@ -25,6 +25,8 @@ Active level (polarity):
    low never updates), 74x259 LE while low; a 74x595 RCLK or a 74x165 ~PL
    has to move, so held either way is a fault. A pin named like one (LE,
    STB, STROBE, RCLK, XLAT...) on a part not in the table is not_judged.
+   A table part with numbers only for pin names is read by its package's
+   pin table (_LATCH_PINOUTS), else listed in not_judged as 'no pin names'.
 
 A pin's active level comes from its name: KiCad's overbar ~{X}, a
 leading ~ or /, a # or * suffix, an N, _N, _B or _L suffix, a lowercase n
@@ -573,6 +575,47 @@ _LATCH_NAMES = {"LE", "STB", "STR", "STROBE", "LATCH", "LAT", "RCLK",
                 "RCK", "STCP", "XLAT"}
 
 
+# a part above whose pins come through with numbers only (a custom
+# library the netlist carries no pin names for): where the family's
+# pinout is the same in every leaded package, the latch pin by number,
+# from the datasheet's pin table, keyed on the footprint's pin count.
+# (family, pin count, {pin number: name}); another package is not judged
+_LATCH_PINOUTS = (
+    (re.compile(_FAM + r"165(?![0-9])"), 16, {"1": "PL"}),
+    (re.compile(_FAM + r"166(?![0-9])"), 16, {"15": "PE"}),
+    (re.compile(_FAM + r"595(?![0-9])"), 16, {"12": "RCLK"}),
+    (re.compile(_FAM + r"(?:373|573)(?![0-9])"), 20, {"11": "LE"}),
+)
+_LEADED = re.compile(r"^(?:P?DIP|SOIC|SO|SOP|SSOP|TSSOP|QSOP)(\d+)$")
+
+
+def _nameless(ref, nets, comp_pins):
+    """True when none of REF's pins carries a name, only its number."""
+    pins = comp_pins.get(ref, {})
+    if not pins:
+        return False
+    for pnum, net in pins.items():
+        m = next((x for x in nets.get(net, []) if x["ref"] == ref
+                  and x["pin"] == pnum), {})
+        f = str(m.get("pinfunction") or "").strip()
+        if f and f != pnum and not f.isdigit():
+            return False
+    return True
+
+
+def _latch_pinout(comp):
+    """{pin number: name} for a part in _LATCH_PINOUTS in a leaded
+    package of its pin count; None when the package isn't one of those."""
+    import pinmaplib  # noqa: PLC0415
+    val = " ".join(str(x or "") for x in (
+        comp.get("value"), (comp.get("libsource") or ("", ""))[1])).upper()
+    pkg = _LEADED.match(pinmaplib.package_family(comp.get("footprint")) or "")
+    for pat, count, pins in _LATCH_PINOUTS:
+        if pat.search(val):
+            return pins if pkg and int(pkg.group(1)) == count else None
+    return None
+
+
 def _latch_family(comp):
     val = " ".join(str(x or "") for x in (
         comp.get("value"), (comp.get("libsource") or ("", ""))[1])).upper()
@@ -641,7 +684,28 @@ def latch_enables(nets, comps, comp_pins, rails, h):
     update. {'not_judged': msg} for a held latch-named pin on a part whose
     active level isn't known; the last item is {'checked': n}."""
     checked = 0
+    # a table part with numbers only for pin names: its latch pin by the
+    # package's pin table, else listed, never skipped without a word
+    by_number = {}
+    for ref, comp in sorted(comps.items()):
+        if _latch_family(comp) is None or not _nameless(ref, nets,
+                                                        comp_pins):
+            continue
+        pins = _latch_pinout(comp)
+        if pins is None:
+            yield {"not_judged":
+                   f"latch_enable_held on {ref} ({comp.get('value')}): no "
+                   f"pin names - its pins come through with numbers only "
+                   f"and there is no pin table here for its package "
+                   f"({comp.get('footprint') or 'no footprint'}), so its "
+                   f"latch or load pin isn't judged"}
+            continue
+        by_number[ref] = pins
     for net, ms in sorted(nets.items()):
+        ms = [dict(m, pinfunction=by_number[m["ref"]][m["pin"]],
+                   pintype="input", by_table=True)
+              if m["pin"] in by_number.get(m["ref"], {}) else m
+              for m in ms]
         bad, unknown = [], []
         for m in ms:
             ref = m["ref"]

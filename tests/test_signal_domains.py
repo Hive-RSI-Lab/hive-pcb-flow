@@ -529,3 +529,68 @@ def test_each_golden_mutant_fires_and_its_twin_is_quiet(tmp_path):
     payload, _ = netlist_audit.run_audit(base, None, None, None)
     assert [v for v in payload["violations"]
             if v["kind"].startswith(KINDS)] == []
+
+
+def _nameless(value, footprint, to):
+    """U1 (VALUE, FOOTPRINT) from a library with no pin names: every pin
+    is a bare number. Its pin 15 (a 74x166's ~PE) is on LOAD, tied to TO
+    or driven by U2's GPIO ('mcu')."""
+    comps, nets = _latch(value, "", to, pin_type="")
+    for ms in nets.values():
+        for m in ms:
+            if m["ref"] == "U1":
+                m["pinfunction"], m["pintype"] = "", ""
+                if m["pin"] == "11":
+                    m["pin"] = "15"
+    parsed_fp = {"U1": footprint}
+    return comps, nets, parsed_fp
+
+
+def _audit_fp(comps, nets, fps):
+    parsed = {"components": {r: {"value": v, "footprint": fps.get(r, ""),
+                                 "libsource": ("Custom", v)}
+                             for r, v in comps.items()},
+              "nets": nets}
+    viol, facts = netlist_audit.audit(
+        parsed, {}, None, pin_requirements=[], pin_states=[],
+        stock_symbols="", io_tolerance=[])
+    return [x for x in viol if x["kind"].startswith(KINDS)], facts
+
+
+SOIC16 = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"
+
+
+def test_a_nameless_166_in_an_unknown_package_is_listed_not_skipped():
+    hits, facts = _audit_fp(*_nameless("74HC166", "Custom:MY_PKG", "GND"))
+    assert hits == []
+    nj = [n for n in facts["not_judged"] if "latch_enable_held" in n]
+    assert len(nj) == 1 and "no pin names" in nj[0] and "U1" in nj[0]
+    assert facts["latch_enables_checked"] == 0
+
+
+def test_a_nameless_166_pe_held_in_soic16_is_a_fault_by_pin_table():
+    for to in ("GND", "+3V3", "pull+3V3"):
+        hits, facts = _audit_fp(*_nameless("74HC166", SOIC16, to))
+        assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])], to
+        assert "pin table" in hits[0]["msg"]
+        assert facts["latch_enables_checked"] == 1
+        assert not [n for n in facts.get("not_judged", []) if "no pin names" in n]
+
+
+def test_a_nameless_166_pe_driven_in_soic16_is_quiet():
+    # gp8b-v50 rev_b: a custom 74HC166, ~PE (pin 15) from U6
+    hits, facts = _audit_fp(*_nameless("74HC166", SOIC16, "mcu"))
+    assert hits == []
+    assert facts["latch_enables_checked"] == 1
+
+
+def test_a_nameless_part_reads_only_its_family_pin():
+    # pin 15 of a 595 is QA, not its storage clock: not checked
+    hits, facts = _audit_fp(*_nameless("74HC595", "Package_DIP:DIP-16_W7.62mm",
+                                       "GND"))
+    assert hits == [] and facts["latch_enables_checked"] == 0
+    # a 20-pin package for a 16-pin family is not that pinout
+    hits, facts = _audit_fp(*_nameless(
+        "74HC166", "Package_DFN_QFN:DHVQFN-16-1EP_2.5x3.5mm_P0.5mm", "GND"))
+    assert hits == []
+    assert any("no pin names" in n for n in facts.get("not_judged", []))
