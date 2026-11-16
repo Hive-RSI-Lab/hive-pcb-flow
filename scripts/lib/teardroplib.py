@@ -653,22 +653,10 @@ def read(pcb, cfg: dict | None = None, area=None) -> Board:
     # every teardrop zone (each is copper, never a pour), and those that
     # are an item's drop: type padvia, or none in an older file
     drop_zones, credit = [], []
-    for z in _kids(root, "zone"):
-        attr = _kid(z, "attr")
-        td = _kid(attr, "teardrop") if attr is not None else None
-        if td is None:
-            continue
-        net = _kid(z, "net")
-        layer = _kid(z, "layer")
-        poly = _kid(z, "polygon")
-        pts = _kid(poly, "pts") if poly is not None else None
-        xy = [tuple(_nums(p)[:2]) for p in _kids(pts, "xy")] if pts else []
-        if len(xy) >= 3 and net is not None and layer is not None:
-            drop_zones.append((_strs(net)[0] if _strs(net) else "",
-                               _strs(layer)[0], Polygon(xy).buffer(0)))
-            ty = _kid(td, "type")
-            if ty is None or _strs(ty)[:1] in ([], ["padvia"]):
-                credit.append(drop_zones[-1])
+    for net, layer, xy, ty in teardrop_zones(root):
+        drop_zones.append((net, layer, Polygon(xy).buffer(0)))
+        if ty in (None, "padvia"):
+            credit.append(drop_zones[-1])
 
     def own(p):
         """(enabled, its own settings over ITEM_PARAMS or None)"""
@@ -781,6 +769,69 @@ def read(pcb, cfg: dict | None = None, area=None) -> Board:
                 tip = max(out, key=lambda v: math.dist(it.at, v))
                 it.tips.setdefault(layer, []).append(Point(tip))
     return Board(items, drop_zones, flex_areas(root))
+
+
+def teardrop_zones(root) -> list[tuple[str, str, list, str | None]]:
+    """Every teardrop zone of the board, (net, layer, outline vertices,
+    type: padvia | track_end | None in an older file). The file gives them
+    no uuid (KiCad 10): a drop is known by its net, layer and outline."""
+    out = []
+    for z in _kids(root, "zone"):
+        attr = _kid(z, "attr")
+        td = _kid(attr, "teardrop") if attr is not None else None
+        if td is None:
+            continue
+        net = _kid(z, "net")
+        layer = _kid(z, "layer")
+        poly = _kid(z, "polygon")
+        pts = _kid(poly, "pts") if poly is not None else None
+        xy = [tuple(_nums(p)[:2]) for p in _kids(pts, "xy")] if pts else []
+        if len(xy) >= 3 and net is not None and layer is not None:
+            ty = _kid(td, "type")
+            out.append((_strs(net)[0] if _strs(net) else "",
+                        _strs(layer)[0], xy,
+                        (_strs(ty)[:1] or [None])[0] if ty is not None
+                        else None))
+    return out
+
+
+def left_by(pcb, gone: list, kept: list) -> list[dict]:
+    """The drops a rip leaves with no track to answer (#1144).
+
+    gone: the tracks (geom.Track) the edit removes; kept: every other
+    track of the board after it (the ones it adds included). KiCad
+    rebuilds drops only on a refill, so an edit that takes a track away
+    leaves its drop behind as copper of its net. A drop is the removed
+    track's when its tip (read()) lies in that track's band (half width +
+    BAND_MM), and left behind when no kept track of its net and layer has
+    the tip in its band: a drop that also answers a kept track (a track
+    re-laid on the same line, or the one going on past the removed one's
+    outer end with two_tracks) stays. A track_end drop is no item's and
+    is not looked at. Returns [{net, layer, at: tip}], the tip one of the
+    zone's outline vertices, so the worker finds the zone by it."""
+    if not gone:
+        return []
+    area = unary_union([t.poly for t in gone]).buffer(0.1)
+    out, seen = [], set()
+    for it in read(pcb, area=area).items:
+        for layer, tips in it.tips.items():
+            mine = [t for t in gone if t.net == it.net and t.layer == layer]
+            if not mine:
+                continue
+            rest = [t for t in kept if t.net == it.net and t.layer == layer]
+            for tip in tips:
+                key = (it.net, layer, round(tip.x, 6), round(tip.y, 6))
+                if key in seen or not _in_band(tip, _bands(mine)) or \
+                        _in_band(tip, _bands(rest)):
+                    continue
+                seen.add(key)
+                out.append({"net": it.net, "layer": layer,
+                            "at": [round(tip.x, 6), round(tip.y, 6)]})
+    return out
+
+
+def _bands(tracks) -> list:
+    return [(t.shape, t.width / 2.0 + BAND_MM) for t in tracks]
 
 
 def _is_drop(zone, layer, drop_zones) -> bool:
