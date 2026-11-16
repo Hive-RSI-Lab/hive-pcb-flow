@@ -551,13 +551,18 @@ def faults_only(report: dict) -> dict:
 
 
 def grade_and_rip(staged: Path, old_uuids: set[str], before: dict,
-                  bgas: list, drc) -> tuple[dict, dict, list[dict]]:
+                  bgas: list, drc, paired: set[str] = frozenset()
+                  ) -> tuple[dict, dict, list[dict]]:
     """DRC the staged escape (`drc()`: refill and grade) and rip, up to
     ESCAPE_RIP_ROUNDS times, the nets whose new copper is in a new error:
     named by the error's items, or for a starved_thermal (which names only
     the pad and the zone) by rc.nets_starving_thermals, the new copper next
     to the starved pad (#979: haos-voice U301's under-field decouplers threw
-    the whole escape away). Returns (after, delta, rounds)."""
+    the whole escape away). With ESCAPE_TRIM an error that names new copper
+    by uuid costs only its culprit's items (pick_culprits, trim_culprits:
+    `paired` are the diff pair nets, the last to be picked); the round's
+    "cut" are the balls whose escape went with them. Returns (after, delta,
+    rounds)."""
     rounds: list[dict] = []
     for _ in range(ESCAPE_RIP_ROUNDS):
         after = drc()
@@ -567,20 +572,34 @@ def grade_and_rip(staged: Path, old_uuids: set[str], before: dict,
         mine = nets_with_new_copper(geom.BoardGeom.from_file(staged), old_uuids)
         fb, fa = faults_only(before), faults_only(after)
         bad = rc.nets_in_new_errors(fb, fa, mine)
+        culprits, beside = {}, set()
+        if ESCAPE_TRIM and bad:
+            new = _new_uuids(geom.BoardGeom.from_file(staged), old_uuids)
+            errs = new_error_items(fb, fa, new)
+            culprits = pick_culprits(errs, paired)
+            beside = {n for e in errs for n in e} - set(culprits)
+            bad = nets_in_unnamed_errors(fb, fa, mine, new)
         where = error_fields(fb, fa, bad, bgas) if bad else {}
         starving = rc.nets_starving_thermals(before, after, mine, staged,
-                                             old_uuids) - bad
+                                             old_uuids) - bad - set(culprits)
         if starving:
             where.update(starved_fields(before, after, starving, bgas))
-        if not where:
+        if not where and not culprits:
             break
-        rounds.append({"nets": sorted(where), "new_errors": delta["new"],
+        n_trim, cut = (trim_culprits(staged, old_uuids, culprits, bgas)
+                       if culprits else (0, {}))
+        rounds.append({"nets": sorted(set(where) | set(culprits)),
+                       "new_errors": delta["new"],
                        **({"starving_thermals": sorted(starving)}
                           if starving else {}),
+                       **({"trimmed": {n: len(u) for n, u in
+                                       sorted(culprits.items())},
+                           "kept_beside": sorted(beside),
+                           "cut": cut} if culprits else {}),
                        "fields": {n: sorted(f) if f else "all"
                                   for n, f in sorted(where.items())},
-                       "items_removed": rip_in_fields(staged, old_uuids, where,
-                                                      bgas)})
+                       "items_removed": n_trim + rip_in_fields(
+                           staged, old_uuids, where, bgas)})
     else:
         after = drc()
         delta = rc.drc_delta(before, after)
@@ -619,6 +638,272 @@ def rip_in_fields(staged: Path, old_uuids: set[str],
     if ops:
         rc.route_edit.apply_ops(staged, ops)
     return len(ops)
+
+
+# #trim: a new DRC error names its items by uuid, so the rip takes only
+# the copper that broke the rule. One clashing stub cost the whole net
+# before, and the net it clashed with lost its clean escape too
+# (linux-computer U100: 13 new errors ripped 4 whole nets; the uuids name
+# 2 culprits, /USBA_FLT_N's In1 run and /USBA_EN's via on C117's pad).
+# Per round: the errors' new items are grouped by net, the net in the
+# most errors is the culprit first (a tie goes to a net not in a diff
+# pair, then by name), and the nets beside it keep their copper. A ball
+# whose escape lost an item gives up the rest of it (a stub cut short is
+# no escape), and the net's new copper left joined to no pad goes too. A
+# net an error names with no uuid of new copper is ripped whole, as
+# before. After the rounds each cut ball is escaped again on its own
+# (reescape_cut), kept only when it adds no DRC error.
+ESCAPE_TRIM = True
+
+
+def _new_uuids(bg, old_uuids: set[str]) -> set[str]:
+    return {x.uuid for x in list(bg.tracks_of()) + list(bg.vias_of())
+            if x.uuid and x.uuid not in old_uuids}
+
+
+def new_error_items(before: dict, after: dict,
+                    new_uuids: set[str]) -> list[dict[str, set[str]]]:
+    """For each ERROR of a check type that grew and names new copper by
+    uuid: {net: the new items of that net it names}."""
+    grown = set(rc.drc_delta(before, after)["new"])
+    out = []
+    for v in after["violations"]:
+        if v.get("severity") != "error" or v.get("check") not in grown:
+            continue
+        hit: dict[str, set[str]] = {}
+        for it in v.get("items", []):
+            u = it.get("uuid")
+            m = rc._ITEM_NET_RE.match(it.get("msg", ""))
+            if m and u in new_uuids:
+                hit.setdefault(m.group(1), set()).add(u)
+        if hit:
+            out.append(hit)
+    return out
+
+
+def nets_in_unnamed_errors(before: dict, after: dict, nets: set[str],
+                           new_uuids: set[str]) -> set[str]:
+    """rc.nets_in_new_errors over only the errors that name no new copper
+    by uuid (a board without uuids, a track the escape didn't lay): those
+    nets are still ripped whole in their fields."""
+    keep = [v for v in after["violations"]
+            if not any(it.get("uuid") in new_uuids
+                       for it in v.get("items", []))]
+    grown = set(rc.drc_delta(before, after)["new"])
+    out: set[str] = set()
+    for v in keep:
+        if v.get("severity") != "error" or v.get("check") not in grown:
+            continue
+        for it in v.get("items", []):
+            m = rc._ITEM_NET_RE.match(it.get("msg", ""))
+            if m and m.group(1) in nets:
+                out.add(m.group(1))
+    return out
+
+
+def pick_culprits(errors: list[dict[str, set[str]]],
+                  paired: set[str] = frozenset()) -> dict[str, set[str]]:
+    """The fewest nets whose new copper is in every error (greedy: the net
+    in the most errors still open first; a tie goes to a net not in a diff
+    pair, then by name): {net: every new item of it the errors name}."""
+    left, out = list(errors), {}
+    while left:
+        count: dict[str, int] = {}
+        for e in left:
+            for n in e:
+                count[n] = count.get(n, 0) + 1
+        net = min(count, key=lambda n: (-count[n], n in paired, n))
+        out[net] = set()
+        left = [e for e in left if net not in e]
+    for e in errors:
+        for n in out:
+            out[n] |= e.get(n, set())
+    return out
+
+
+def _island_new(bg, net: str, pad, old_uuids: set[str]) -> set[str]:
+    import pairlaunch
+    isl = pairlaunch.island(bg, net, pad)
+    return {x.uuid for x in isl.tracks + isl.vias
+            if x.uuid and x.uuid not in old_uuids}
+
+
+def trim_culprits(staged: Path, old_uuids: set[str],
+                  culprits: dict[str, set[str]],
+                  bgas: list) -> tuple[int, dict[str, dict[str, list[str]]]]:
+    """Remove each culprit's named items. A ball (of a field in `bgas`)
+    whose escape held one loses the rest of its new copper too, and the
+    net's new copper no longer joined to any of its pads goes. Returns
+    (items removed, {net: {ref: layers of the named tracks}}): the cut
+    balls."""
+    bg = geom.BoardGeom.from_file(staged)
+    refs = {b.ref for b in bgas}
+    by_uuid = {x.uuid: x for x in list(bg.tracks_of()) + list(bg.vias_of())
+               if x.uuid}
+    drop: set[str] = set()
+    cut: dict[str, dict[str, list[str]]] = {}
+    for net, named in sorted(culprits.items()):
+        drop |= named
+        layers = sorted({by_uuid[u].layer for u in named
+                         if u in by_uuid and hasattr(by_uuid[u], "layer")})
+        for pad in bg.pads_of(net=net):
+            if pad.ref not in refs:
+                continue
+            mine = _island_new(bg, net, pad, old_uuids)
+            if mine & named:
+                drop |= mine
+                cut.setdefault(net, {})[pad.ref] = layers
+    ops = [{"op": "remove", "uuid": u} for u in sorted(drop) if u in by_uuid]
+    if ops:
+        rc.route_edit.apply_ops(staged, ops)
+    bg = geom.BoardGeom.from_file(staged)
+    orphans = []
+    for net in sorted(culprits):
+        joined: set[str] = set()
+        for pad in bg.pads_of(net=net):
+            joined |= _island_new(bg, net, pad, old_uuids)
+        orphans += [x.uuid for x in list(bg.tracks_of(net))
+                    + list(bg.vias_of(net))
+                    if x.uuid and x.uuid not in old_uuids
+                    and x.uuid not in joined]
+    if orphans:
+        rc.route_edit.apply_ops(staged, [{"op": "remove", "uuid": u}
+                                         for u in orphans])
+    return len(ops) + len(orphans), cut
+
+
+def rip_balls(staged: Path, old_uuids: set[str], ref: str,
+              nets: list[str]) -> int:
+    """Remove the new copper joined to `ref`'s balls of `nets`."""
+    bg = geom.BoardGeom.from_file(staged)
+    drop: set[str] = set()
+    for net in nets:
+        for pad in bg.pads_of(net=net, ref=ref):
+            drop |= _island_new(bg, net, pad, old_uuids)
+    if drop:
+        rc.route_edit.apply_ops(staged, [{"op": "remove", "uuid": u}
+                                         for u in sorted(drop)])
+    return len(drop)
+
+
+def _escaped_here(staged: Path, old_uuids: set[str], ref: str,
+                  nets: list[str]) -> set[str]:
+    """The nets of `nets` whose ball at `ref` has new copper joined."""
+    bg = geom.BoardGeom.from_file(staged)
+    return {n for n in nets for pad in bg.pads_of(net=n, ref=ref)
+            if _island_new(bg, n, pad, old_uuids)}
+
+
+def reescape_tries(p: dict, clashed: list[str]) -> list[tuple[str, object]]:
+    """The re-escape tries for a cut ball, in order: KRT on the field's
+    layers without the ones the clash was on, KRT on all of them, a
+    dog-bone at the field's via, a dog-bone at the fab's fine via. The
+    balls' own layer is never taken off (every escape starts there)."""
+    ep, layers = p["ep"], p["layers"]
+    tries: list[tuple[str, object]] = []
+    clashed = [ly for ly in clashed if ly != p["bga"].layer]
+    off = [ly for ly in layers if ly not in clashed]
+    if off and off != layers:
+        tries.append(("krt without " + "+".join(clashed), off))
+    tries.append(("krt", layers))
+    tries.append(("dog-bone", (ep["via_size"], ep["via_drill"])))
+    fv = ep.get("fine_via") or ep.get("pad_via")
+    if fv and (fv["via_diameter"], fv["via_drill"]) != (ep["via_size"],
+                                                         ep["via_drill"]):
+        tries.append(("dog-bone fine via", (fv["via_diameter"],
+                                            fv["via_drill"])))
+    return tries
+
+
+def reescape_cut(ctx: dict, plans: list[dict], rounds: list[dict],
+                 old_uuids: set[str], drc, cur: dict) -> tuple[dict, dict]:
+    """Escape each ball the trim cut again, one at a time (a pair's two
+    balls together), through reescape_tries; a try is kept only when DRC
+    finds no error type grown over `cur` and every ball of it has copper,
+    else the board goes back. A diff pair is never left half escaped: when
+    one half was cut or ripped and can't come back, the other half's escape
+    goes too and the pair is one item of pairs_left. Returns (DRC of the
+    board now, {ref: {"reescaped": {net: how}, "not_reescaped": [nets],
+    "pairs_left": [[p, n]]}})."""
+    import padfanout
+    staged = ctx["staged"]
+    cut: dict[tuple[str, str], list[str]] = {}
+    for rd in rounds:
+        for net, at in rd.get("cut", {}).items():
+            for ref, layers in at.items():
+                cut.setdefault((ref, net), [])
+                cut[(ref, net)] = sorted(set(cut[(ref, net)]) | set(layers))
+    out: dict[str, dict] = {}
+    changed = False
+    for p in plans:
+        b, ref = p["bga"], p["bga"].ref
+        fact = {"reescaped": {}, "not_reescaped": [], "pairs_left": []}
+        pair_of = {x: pr for pr in p["pairs"] for x in pr}
+        done: set[str] = set()
+        for (r, net), clashed in sorted(cut.items()):
+            if r != ref or net in done:
+                continue
+            group = list(pair_of.get(net, [net]))
+            done |= set(group)
+            clashed = sorted({ly for n in group
+                              for ly in cut.get((ref, n), [])})
+            got = None
+            for i, (how, arg) in enumerate(reescape_tries(p, clashed)):
+                saved = staged.read_bytes()
+                rip_balls(staged, old_uuids, ref, group)
+                try:
+                    if how.startswith("krt"):
+                        fan_one(ctx, b, p["ep"], arg, nets=group,
+                                pairs=[group] if len(group) > 1 else None,
+                                pair_gap=p["pair_gap"] if len(group) > 1
+                                else None, tag=f"re{i}.{net.strip('/')}")
+                    else:
+                        bg = geom.BoardGeom.from_file(staged)
+                        fo = padfanout.Fanout(bg, width=p["ep"]["track_width"],
+                                              via=arg)
+                        ops, _ = fo.fan([f"{ref}.{pad.number}" for n in group
+                                         for pad in bg.pads_of(net=n, ref=ref)])
+                        if ops:
+                            rc.route_edit.apply_ops(staged, ops)
+                    ok = _escaped_here(staged, old_uuids, ref, group) \
+                        == set(group)
+                    if ok:
+                        now = drc()
+                        ok = not rc.drc_delta(cur, now)["new"]
+                except CheckError:
+                    ok = False
+                if ok:
+                    cur, got, changed = now, how, True
+                    break
+                staged.write_bytes(saved)
+                _keep_sidecars(staged, ctx["pristine"])
+            if got:
+                for n in group:
+                    fact["reescaped"][n] = got
+                continue
+            fact["not_reescaped"] += [n for n in group
+                                      if (ref, n) in cut]
+            if len(group) > 1:
+                if rip_balls(staged, old_uuids, ref, group):
+                    changed = True
+                fact["pairs_left"].append(group)
+        # a pair half the whole-net rip took: the other half goes too
+        ripped = {n for rd in rounds for n, f in rd.get("fields", {}).items()
+                  if f == "all" or ref in f}
+        for pr in p["pairs"]:
+            if list(pr) in fact["pairs_left"]:
+                continue
+            here = _escaped_here(staged, old_uuids, ref, list(pr))
+            if len(here) == 1 and set(pr) - here <= ripped | set(
+                    fact["not_reescaped"]):
+                rip_balls(staged, old_uuids, ref, sorted(here))
+                changed = True
+                fact["pairs_left"].append(list(pr))
+        if any(fact.values()):
+            out[ref] = fact
+    if changed:
+        cur = drc()
+    return cur, out
 
 
 # #1339 (gaps row 139): a fine-via field's inner balls are fenced in. The
@@ -1413,8 +1698,15 @@ def run(argv: list[str] | None = None):
             kc.run_drc(cli, staged, refill=True, save_board=True)
         return kc.run_drc(cli, staged, all_track_errors=True)
 
+    paired = {n for p in plans for pr in p["pairs"] for n in pr}
     after, delta, rounds = grade_and_rip(staged, old_uuids, before,
-                                         [p["bga"] for p in plans], drc)
+                                         [p["bga"] for p in plans], drc,
+                                         paired=paired)
+    redo: dict[str, dict] = {}
+    if ESCAPE_TRIM and (any(rd.get("cut") for rd in rounds) or paired and any(
+            rd.get("fields") for rd in rounds)):
+        after, redo = reescape_cut(ctx, plans, rounds, old_uuids, drc, after)
+        delta = {**rc.drc_delta(before, after), "rip_rounds": rounds}
     starved = unexplained_starving(before, after, delta, staged, old_uuids)
 
     bg1 = geom.BoardGeom.from_file(staged)
@@ -1431,8 +1723,13 @@ def run(argv: list[str] | None = None):
                      and region.intersects(x.poly)}
         ripped_here = {n for rd in rounds for n, f in rd["fields"].items()
                        if f == "all" or ref in f}
+        fact = redo.get(ref, {})
+        ripped_here = (ripped_here - set(fact.get("reescaped", {}))) | set(
+            fact.get("not_reescaped", [])) | {
+            n for pr in fact.get("pairs_left", []) for n in pr}
         r["kept_nets"] = len(kept_here)
         r["ripped_by_drc"] = sorted(ripped_here & own)
+        r.update({k: v for k, v in fact.items() if v})
         ripped_all = ripped_here
         lost = set(r["krt"].get("unescaped_nets", []) or [])
         left = sorted((lost | (ripped_all & own) | vip | r.pop("_lost"))

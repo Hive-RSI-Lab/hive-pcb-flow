@@ -831,7 +831,7 @@ def test_live_escape_kept_when_a_far_thermal_starves(tmp_path, monkeypatch):
     msg = STARVED.replace("C1", "C9")
     real = re_.grade_and_rip
 
-    def starving(staged, old_uuids, before, bgas, drc):
+    def starving(staged, old_uuids, before, bgas, drc, **kw):
         def drc2():
             rep = drc()
             rep["violations"].append(
@@ -953,33 +953,144 @@ def _faulted_run(tmp_path, monkeypatch, text, uid):
     return b, rd
 
 
-def test_live_fault_via_on_a_neighbours_pad_is_ripped(tmp_path, monkeypatch):
+def test_live_fault_via_on_a_neighbours_pad_is_trimmed(tmp_path, monkeypatch):
     """A2's dog-bone (/S0_1) run the wrong way: its stub from A2 (18.8, 13)
     to a via dropped on A1's pad (/S0_0, at 18, 13). DRC's short names the
-    via's and the stub's net; that net is ripped and left for the routers,
-    and the rest of the field keeps its escape. (A lone via on a pad is
-    not this fault: KiCad gives it the pad's net on load.)"""
+    via and the stub by uuid: only they go (#trim), A2's ball is cut and
+    escaped again on its own, and A1's clean escape stays (the whole of
+    /S0_1 was ripped before). (A lone via on a pad is not this fault:
+    KiCad gives it the pad's net on load.)"""
     uid, sid = UID % 901, UID % 903
     stub = ('  (segment (start 18.8 13) (end 18 13) (width 0.1) '
             f'(layer "F.Cu") (net "/S0_1") (uuid "{sid}"))\n')
     b, rd = _faulted_run(tmp_path, monkeypatch,
                          _via(18, 13, "/S0_1", uid, 0.5) + stub, uid)
-    assert "/S0_1" in rd["nets"] and len(rd["nets"]) <= 3
-    assert "/S0_1" in b["ripped_by_drc"] and "/S0_1" in b["left_for_routers"]
-    assert b["kept_nets"] >= 33
+    assert rd["nets"] == ["/S0_1"] and rd["trimmed"] == {"/S0_1": 2}
+    assert rd["kept_beside"] == ["/S0_0"] and rd["fields"] == {}
+    assert rd["cut"] == {"/S0_1": {"U1": ["F.Cu"]}}
+    assert b["reescaped"] == {"/S0_1": "krt"}
+    assert not b["ripped_by_drc"] and not b["left_for_routers"]
+    assert b["kept_nets"] == 36
 
 
-def test_live_fault_track_between_two_pads_is_ripped(tmp_path, monkeypatch):
+def test_live_fault_via_on_a_neighbours_pad_left_when_no_try_fits(
+        tmp_path, monkeypatch):
+    """The same fault when no re-escape fits (no tries): the cut ball keeps
+    nothing and is left for the routers; A1 still keeps its escape."""
+    monkeypatch.setattr(re_, "reescape_tries", lambda p, clashed: [])
+    uid, sid = UID % 901, UID % 903
+    stub = ('  (segment (start 18.8 13) (end 18 13) (width 0.1) '
+            f'(layer "F.Cu") (net "/S0_1") (uuid "{sid}"))\n')
+    b, rd = _faulted_run(tmp_path, monkeypatch,
+                         _via(18, 13, "/S0_1", uid, 0.5) + stub, uid)
+    assert b["not_reescaped"] == ["/S0_1"] and "reescaped" not in b
+    assert b["ripped_by_drc"] == ["/S0_1"]
+    assert b["left_for_routers"] == ["/S0_1"]
+    assert b["kept_nets"] == 35
+
+
+def test_live_fault_on_a_pair_half_leaves_the_pair_whole(tmp_path,
+                                                         monkeypatch):
+    """a03cb's rule: a diff pair is never left half escaped. /S0_1 and
+    /S0_2 as a pair, the planted fault on /S0_1, and no re-escape fits:
+    /S0_2's clean escape goes too and the pair is one item."""
+    monkeypatch.setattr(re_, "escape_pairs",
+                        lambda *a: ([["/S0_1", "/S0_2"]], None))
+    monkeypatch.setattr(re_, "reescape_tries", lambda p, clashed: [])
+    uid, sid = UID % 901, UID % 903
+    stub = ('  (segment (start 18.8 13) (end 18 13) (width 0.1) '
+            f'(layer "F.Cu") (net "/S0_1") (uuid "{sid}"))\n')
+    b, rd = _faulted_run(tmp_path, monkeypatch,
+                         _via(18, 13, "/S0_1", uid, 0.5) + stub, uid)
+    assert b["pairs_left"] == [["/S0_1", "/S0_2"]]
+    assert b["ripped_by_drc"] == ["/S0_1", "/S0_2"]
+    assert {"/S0_1", "/S0_2"} <= set(b["left_for_routers"])
+    assert b["kept_nets"] == 34
+
+
+def test_live_fault_track_between_two_pads_is_trimmed(tmp_path, monkeypatch):
     """A 0.3 mm /S5_5 track run down between A1 and A2 (0.45 mm apart edge
     to edge): 0.075 mm a side, under the field's 0.0889 floor. DRC names
-    the track's net; it is ripped and the rest of the field kept."""
+    the track by uuid; it alone goes (it joins no ball, so no ball is cut)
+    and /S5_5's own escape is kept with the rest of the field."""
     uid = UID % 902
     seg = ('  (segment (start 18.4 11.8) (end 18.4 13.0) (width 0.3) '
            f'(layer "F.Cu") (net "/S5_5") (uuid "{uid}"))\n')
     b, rd = _faulted_run(tmp_path, monkeypatch, seg, uid)
-    assert "/S5_5" in rd["nets"] and len(rd["nets"]) <= 3
+    assert rd["nets"] == ["/S5_5"] and rd["trimmed"] == {"/S5_5": 1}
+    assert rd["cut"] == {} and rd["items_removed"] == 1
+    assert not b["ripped_by_drc"] and not b.get("reescaped")
+    assert b["kept_nets"] == 36
+
+
+def test_trim_off_rips_the_whole_net_as_before(tmp_path, monkeypatch):
+    """ESCAPE_TRIM off: the old rip, the whole net in its field."""
+    monkeypatch.setattr(re_, "ESCAPE_TRIM", False)
+    uid = UID % 902
+    seg = ('  (segment (start 18.4 11.8) (end 18.4 13.0) (width 0.3) '
+           f'(layer "F.Cu") (net "/S5_5") (uuid "{uid}"))\n')
+    b, rd = _faulted_run(tmp_path, monkeypatch, seg, uid)
+    assert "/S5_5" in rd["nets"] and "trimmed" not in rd
     assert "/S5_5" in b["ripped_by_drc"]
     assert b["kept_nets"] >= 33
+
+
+def _err(*items):
+    return {"check": "clearance", "severity": "error",
+            "items": [{"msg": f"Track [{n}] on F.Cu", "uuid": u}
+                      for n, u in items]}
+
+
+def test_new_error_items_takes_only_new_copper_of_grown_checks():
+    before = {"violations": [_err(("/A", "o1"), ("/B", "o2"))]}
+    after = {"violations": [
+        _err(("/A", "o1"), ("/B", "o2")),
+        _err(("/A", "n1"), ("/B", "o2")),
+        _err(("/C", "n2"), ("/B", "n3")),
+        {**_err(("/D", "n4")), "severity": "warning"}]}
+    got = re_.new_error_items(before, after, {"n1", "n2", "n3", "n4"})
+    assert got == [{"/A": {"n1"}}, {"/C": {"n2"}, "/B": {"n3"}}]
+    # the error naming only old copper is the whole-rip path's
+    assert re_.nets_in_unnamed_errors(
+        before, after, {"/A", "/B"}, {"n1", "n2", "n3"}) == {"/A", "/B"}
+    assert re_.nets_in_unnamed_errors(
+        {"violations": []}, {"violations": after["violations"][1:3]},
+        {"/A", "/B", "/C"}, {"n1", "n2", "n3"}) == set()
+
+
+def test_pick_culprits_is_a_greedy_cover_that_spares_pairs():
+    """linux-computer U100's 13 errors in small: /FLT in 9, /POR in 8,
+    /SDQS_N in 1 (with /FLT), /EN alone in 4. The cover is /FLT and /EN;
+    /POR and the pair half keep their copper."""
+    errs = ([{"/FLT": {f"f{i}"}, "/POR": {f"p{i}"}} for i in range(8)]
+            + [{"/FLT": {"f8"}, "/SDQS_N": {"s"}}]
+            + [{"/EN": {"v"}}] * 4)
+    got = re_.pick_culprits(errs, {"/SDQS_N", "/SDQS_P"})
+    assert got == {"/FLT": {f"f{i}" for i in range(9)}, "/EN": {"v"}}
+    # a tie goes to the net not in a pair, then by name
+    tie = [{"/P": {"a"}, "/Z": {"b"}}]
+    assert set(re_.pick_culprits(tie, {"/P"})) == {"/Z"}
+    assert set(re_.pick_culprits(tie)) == {"/P"}
+    assert re_.pick_culprits([]) == {}
+
+
+def test_reescape_tries_order_and_the_ball_layer_stays():
+    class B:
+        layer = "F.Cu"
+    ep = {"via_size": 0.5, "via_drill": 0.2,
+          "pad_via": {"via_diameter": 0.25, "via_drill": 0.15}}
+    p = {"bga": B, "ep": ep, "layers": ["F.Cu", "In1.Cu", "B.Cu"]}
+    assert re_.reescape_tries(p, ["In1.Cu"]) == [
+        ("krt without In1.Cu", ["F.Cu", "B.Cu"]),
+        ("krt", ["F.Cu", "In1.Cu", "B.Cu"]),
+        ("dog-bone", (0.5, 0.2)), ("dog-bone fine via", (0.25, 0.15))]
+    # a clash on the balls' own layer can't be escaped around
+    assert [h for h, _ in re_.reescape_tries(p, ["F.Cu"])] == [
+        "krt", "dog-bone", "dog-bone fine via"]
+    ep2 = {"via_size": 0.25, "via_drill": 0.15,
+           "fine_via": {"via_diameter": 0.25, "via_drill": 0.15}}
+    assert [h for h, _ in re_.reescape_tries({**p, "ep": ep2}, [])] == [
+        "krt", "dog-bone"]
 
 
 # ---- #325: via-in-pad follows the fab's price for filled, capped vias
@@ -1157,18 +1268,19 @@ def test_breakout_vias_only_under_the_ring_limit():
     assert [x.uuid for x in re_.breakout_vias(v)] == ["u1"]
 
 
-def test_live_fault_fine_via_outside_the_courtyard_is_ripped(tmp_path,
+def test_live_fault_fine_via_outside_the_courtyard_is_trimmed(tmp_path,
                                                              monkeypatch):
     """The planted fault: a 0.25/0.15 via of /S5_5 dropped outside U1's
     courtyard, where the board's 0.45 mm via floor holds. The fine rule
-    must not reach it: DRC names /S5_5, it is ripped, the field kept."""
+    must not reach it: DRC names the via by uuid, it alone goes (#trim),
+    and /S5_5 keeps its escape with the field."""
     uid = UID % 904
     pcb, f, b = _fine_run(tmp_path, monkeypatch,
                           _via(28, 15, "/S5_5", uid, 0.25, 0.15))
     (rd, *_) = f["drc_delta"]["rip_rounds"]
-    assert "/S5_5" in rd["nets"] and len(rd["nets"]) <= 3
+    assert rd["nets"] == ["/S5_5"] and rd["trimmed"] == {"/S5_5": 1}
     assert f["drc_delta"]["new"] == {}
-    assert "/S5_5" in b["ripped_by_drc"]
+    assert not b["ripped_by_drc"]
     bg = geom.BoardGeom.from_file(pcb)
     assert uid not in {v.uuid for v in bg.vias_of()}
     assert b["kept_nets"] >= 29
