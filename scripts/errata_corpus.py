@@ -329,7 +329,7 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
             net = None
     else:
         sch = None
-    other = _other_rev(b, rev, empty)
+    other = _other_rev(b, rev, repo, empty)
     digest = hashlib.sha256(
         base.read_bytes() + b"\0" + str(repo / b[rev]["pcb"]).encode()
         + b"\0" + (net.read_bytes() if net else b"")
@@ -361,16 +361,18 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     return dest if status == "written" else base
 
 
-def _other_rev(b: dict, rev: str, empty: Path) -> dict:
+def _other_rev(b: dict, rev: str, repo: Path, empty: Path) -> dict:
     """partnum_backfill's --other-* arguments for the board's other
     revision (its pin-named board, checkout, netlist and schematic), and a
     key of their contents for _pcb's reuse stamp; {} when there is none or
-    it cannot be read."""
+    it cannot be read. The other checkout is found next to this one
+    (repo_dir's `<cache>/repos/`), wherever the run dir sits: abs_max_batch
+    keeps its own under `abs-max/<set>/work/`."""
     import hashlib
     orev = "rev_b" if rev == "rev_a" else "rev_a"
     if not (b.get(orev) or {}).get("pcb"):
         return {}
-    cache = empty.parent.parent.parent
+    cache = repo.parent.parent
     orepo = repo_dir(cache, b, orev)
     if not (orepo / b[orev]["pcb"]).is_file():
         return {}
