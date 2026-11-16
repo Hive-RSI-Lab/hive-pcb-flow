@@ -3,6 +3,7 @@
     pcb-flow frozen SUBCOMMAND [ARGS...]   the copy's own `bin/pcb-flow SUBCOMMAND`
                                            (test, test-slow, check-all, score, ...)
     pcb-flow frozen -- CMD [ARGS...]       any command, run in the copy
+    pcb-flow frozen --root DIR ...         freeze DIR instead of this checkout
 
 `pcb-flow test`, `test-slow`, `check-all` and `score` read the checkout while
 they run: pytest imports each test module when it reaches it, and the gates
@@ -37,6 +38,14 @@ passed on to it. The run exits with the command's status. What the command
 writes inside the copy goes with it, so this suits runs that read the tree,
 not ones meant to write into it.
 
+`--root DIR` (or `--root=DIR`) freezes DIR instead of the checkout this
+runner sits in: another checkout or worktree, such as an old commit whose own
+`pcb-flow` predates `frozen` (#1416). DIR is copied as described above, and a
+folder that is not a git checkout is copied whole. `SUBCOMMAND` runs the copy's
+own `bin/pcb-flow`; if DIR has none, the run says so and exits 2. The command
+runs in the copy of the working folder when that is inside DIR, otherwise in
+the copy's top folder, so `-- python scripts/x.py` reads DIR's script.
+
 Budget more time than a plain run. Making the copy takes under a second, but
 the run in it is slower: the full `pcb-flow test` took 1177 s frozen against
 997 s plain on the same tree (about a fifth more), so give `heavy timeout`
@@ -57,8 +66,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-USAGE = ("usage: pcb-flow frozen SUBCOMMAND [ARGS...]   (test, test-slow, check-all, score, ...)\n"
-         "       pcb-flow frozen -- CMD [ARGS...]       any command, in the copy")
+USAGE = ("usage: pcb-flow frozen [--root DIR] SUBCOMMAND [ARGS...]   (test, test-slow, check-all, score, ...)\n"
+         "       pcb-flow frozen [--root DIR] -- CMD [ARGS...]       any command, in the copy\n"
+         "       --root DIR freezes DIR (another checkout or worktree) instead of this one")
 
 
 # Git's own variables that point a git command at a repository, an index or a
@@ -288,12 +298,31 @@ def run(argv: list[str], root: Path = ROOT) -> int:
     if not argv or argv[0] in ("-h", "--help"):
         print(USAGE, file=sys.stderr if not argv else sys.stdout)
         return 2 if not argv else 0
+    given = None
+    if argv[0] == "--root" or argv[0].startswith("--root="):
+        if argv[0] == "--root":
+            given, argv = (argv[1] if len(argv) > 1 else ""), argv[2:]
+        else:
+            given, argv = argv[0][len("--root="):], argv[1:]
+        if not given or not Path(given).is_dir():
+            print(f"pcb-flow frozen: --root {given!r} is not a folder", file=sys.stderr)
+            return 2
+        # absolute but not resolved, so a linked path keeps its name and its
+        # paths in the arguments are repointed too (roots_of adds the resolved one)
+        root = Path(os.path.abspath(given))
+        if not argv:
+            print(USAGE, file=sys.stderr)
+            return 2
     raw = argv[0] == "--"
     if raw:
         argv = argv[1:]
         if not argv:
             print(USAGE, file=sys.stderr)
             return 2
+    elif given is not None and not (root / "bin" / "pcb-flow").is_file():
+        print(f"pcb-flow frozen: {root} has no bin/pcb-flow to run {argv[0]!r} with; "
+              f"use `--root DIR -- CMD`", file=sys.stderr)
+        return 2
     base = os.environ.get("TMPDIR") or tempfile.gettempdir()
     parent = Path(tempfile.mkdtemp(prefix="pcb-flow-frozen-", dir=base))
     copy = parent / root.name
@@ -329,6 +358,8 @@ def run(argv: list[str], root: Path = ROOT) -> int:
         new_cwd = Path(repoint(str(cwd), roots, str(copy)))
         if new_cwd != cwd and not new_cwd.is_dir():
             new_cwd = copy
+        if given is not None and new_cwd == cwd:
+            new_cwd = copy  # outside DIR: run at the copy's top, as if from DIR
         env["PWD"] = str(new_cwd)
         env["HWDE_FROZEN_FROM"] = str(root)
         what = f"{info['commit'][:12]}" if info["commit"] else "a tree with no git"

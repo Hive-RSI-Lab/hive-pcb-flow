@@ -31,6 +31,8 @@
 #                         untracked files included, so a run that waits in the
 #                         heavy queue judges the tree it was asked about
 #                         (bin/frozen.py); `frozen -- CMD` runs any command there
+#                         `frozen --root DIR ...` freezes DIR (another checkout,
+#                         an old commit's worktree) instead of this one
 #   pcb-flow publish <dir>    put a self-contained copy at <dir>/hwde (a warden
 #                         runs it into the Hive's tools folder, so a check
 #                         sandbox, which mounts only /work and /hive/tools,

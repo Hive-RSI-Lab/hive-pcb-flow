@@ -328,3 +328,99 @@ def test_sigint_to_the_runner_alone_reaches_the_command(checkout):
         raise
     assert p.returncode == 128 + signal.SIGINT
     assert list(tmp.iterdir()) == []
+
+
+# --- --root DIR (#1416): freeze another checkout, such as an old commit whose
+# own pcb-flow predates `frozen`. The runner is this repo's bin/frozen.py.
+
+def start_root(cwd: Path, side: Path, tmp: Path, args: list[str], **env: str) -> subprocess.Popen:
+    e = {**os.environ, "TMPDIR": str(tmp), "FROZEN_SIDE": str(side), "PWD": str(cwd), **env}
+    e.pop("HWDE_FROZEN_FROM", None)
+    return subprocess.Popen([sys.executable, str(ROOT / "bin" / "frozen.py"), *args],
+                            cwd=cwd, env=e, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+@pytest.fixture
+def old_checkout(checkout):
+    """The checkout as an old commit: no bin/frozen.py, committed that way."""
+    repo, side, tmp = checkout
+    git(repo, "rm", "-q", "bin/frozen.py")
+    git(repo, "commit", "-q", "-m", "before frozen")
+    return repo, side, tmp
+
+
+def test_root_freezes_another_checkout_from_outside_it(old_checkout, tmp_path):
+    """Planted: the other checkout drifts while the job waits; run from outside
+    it, the job runs at the copy's top and sees the tree it was queued with."""
+    repo, side, tmp = old_checkout
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    head = git(repo, "rev-parse", "HEAD")
+    p = start_root(elsewhere, side, tmp, ["--root", str(repo), "--", "bin/show",
+                                          f"{repo}/a.txt"])
+    wait_ready(p, side)
+    (repo / "a.txt").write_text("changed while waiting")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "while waiting")
+    rc, seen, err = finish(p, side)
+    assert rc == 0, err
+    copy = seen["here"]
+    assert copy.endswith("/mod") and copy != str(repo)
+    assert seen["cwd"] == copy and seen["pwd"] == copy
+    assert seen["args"] == [f"{copy}/a.txt"]
+    assert seen["a"] == "queued" and seen["head"] == head
+    assert seen["from"] == str(repo)
+    assert f"{repo} at {head[:12]}" in err
+    assert list(tmp.iterdir()) == []
+    assert (repo / "a.txt").read_text() == "changed while waiting"
+
+
+def test_root_equals_form_runs_dirs_own_pcb_flow_from_a_subfolder(old_checkout):
+    repo, side, tmp = old_checkout
+    p = start_root(repo / "sub", side, tmp, [f"--root={repo}", "test", "-k", "x"],
+                   FROZEN_RC="5")
+    wait_ready(p, side)
+    rc, seen, err = finish(p, side)
+    assert rc == 5, err
+    copy = seen["here"]
+    assert seen["argv0"] == f"{copy}/bin/show"  # DIR's pcb-flow, not this repo's
+    assert seen["args"] == ["test", "-k", "x"]
+    assert seen["cwd"] == f"{copy}/sub"  # inside DIR: mapped into the copy
+
+
+def test_root_relative_path_is_taken_from_the_working_folder(old_checkout):
+    repo, side, tmp = old_checkout
+    p = start_root(repo.parent, side, tmp, ["--root", repo.name, "--", "bin/show"])
+    wait_ready(p, side)
+    rc, seen, err = finish(p, side)
+    assert rc == 0, err
+    assert seen["from"] == str(repo) and seen["a"] == "queued"
+
+
+def test_root_without_pcb_flow_refuses_a_subcommand_but_runs_a_command(tmp_path):
+    tree = tmp_path / "plain"
+    tree.mkdir()
+    (tree / "f.txt").write_text("here")
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    env = {**os.environ, "TMPDIR": str(tmp)}
+    runner = [sys.executable, str(ROOT / "bin" / "frozen.py"), "--root", str(tree)]
+    cp = subprocess.run([*runner, "test"], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert cp.returncode == 2 and "has no bin/pcb-flow" in cp.stderr
+    cp = subprocess.run([*runner, "--", "sh", "-c", 'cat f.txt; [ "$PWD" != "' + str(tree) + '" ]'],
+                        cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stderr
+    assert cp.stdout == "here"
+    assert list(tmp.iterdir()) == []
+
+
+@pytest.mark.parametrize("args", [["--root"], ["--root", "/nonexistent/x", "--", "true"],
+                                  ["--root="], ["--root", "."], ["--root", ".", "--"]])
+def test_root_usage_errors(args, tmp_path):
+    cp = subprocess.run([sys.executable, str(ROOT / "bin" / "frozen.py"), *args],
+                        cwd=tmp_path, env={**os.environ, "TMPDIR": str(tmp_path)},
+                        capture_output=True, text=True)
+    assert cp.returncode == 2, cp.stderr
+    assert "usage: pcb-flow frozen" in cp.stderr or "is not a folder" in cp.stderr
+    assert [p for p in tmp_path.iterdir()] == []
