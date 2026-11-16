@@ -37,7 +37,9 @@ interface, and asks of each the questions Johnson's and Bogatin's rules ask:
     in high_speed (check_return_path reports those itself). Its findings keep
     check_return_path's kinds (corridor_void, missing_return_via, ...) so
     their remediations reach the fixer; a corridor_void counts only where
-    the trace's centreline crosses the gap MIN_CROSSING_MM or more.
+    the trace's centreline crosses the gap MIN_CROSSING_MM or more. A net
+    with a z0_ohm target over a hatched plane also gets check_return_path's
+    hatch_impedance estimate, or its not_judged reason (#1010).
  6. CROSSTALK (si_crosstalk). Each fast net is an aggressor to every other
     signal net running beside it on the same layer within CROSSTALK_GAP_H x
     the dielectric height. Along the aggressor every SAMPLE_MM the nearest
@@ -631,6 +633,11 @@ def run(argv=None):
         if tline and net not in declared_hs and lm.planar:
             entry = {"net": net, "t_rise_ns": spec["t_rise_ns"],
                      "reference": spec.get("reference", "GND")}
+            if spec.get("z0_ohm"):
+                # over a hatch, check_return_path estimates the Z0 the
+                # solid-plane line model above cannot see (#1010)
+                entry.update(z0_ohm=spec["z0_ohm"], z0_tol_pct=float(
+                    spec.get("z0_tol_pct", Z_TOL_PCT_SE)))
             try:
                 vs, rp = check_return_path.check_net(bg, entry, check_return_path.K_DEFAULT)
             except CheckError:
@@ -645,6 +652,8 @@ def run(argv=None):
                 v.update(si_class=spec["class"])
             violations.extend(vs)
             facts["return_via_radius_mm"] = rp and rp.get("return_via_radius_mm")
+            if rp and spec.get("z0_ohm"):
+                not_judged.extend(rp.get("not_judged", []))
 
         # 6. crosstalk from this net
         if spec.get("aggressor", True):
