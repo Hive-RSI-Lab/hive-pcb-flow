@@ -145,6 +145,20 @@ def repoint(value: str, roots: list[str], copy: str) -> str:
 def roots_of(root: Path) -> list[str]:
     """The checkout's path as given and as resolved, longest first."""
     rs = {str(root), str(root.resolve()), os.path.abspath(str(root))}
+    # The shell's own name for it when it reached the checkout through a
+    # link: $PWD keeps the link, getcwd() and this file resolve it.
+    pwd = os.environ.get("PWD", "")
+    if os.path.isabs(pwd):
+        try:
+            rel = Path(pwd).resolve().relative_to(root.resolve())
+        except (ValueError, OSError):
+            rel = None
+        if rel is not None:
+            alias = Path(pwd)
+            for _ in rel.parts:
+                alias = alias.parent
+            if alias.resolve() == root.resolve():
+                rs.add(str(alias))
     return sorted(rs, key=len, reverse=True)
 
 

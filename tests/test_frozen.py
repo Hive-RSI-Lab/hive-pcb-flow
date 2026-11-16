@@ -207,3 +207,18 @@ def test_usage():
     cp = subprocess.run([sys.executable, str(ROOT / "bin" / "frozen.py")],
                         capture_output=True, text=True)
     assert cp.returncode == 2 and "usage: pcb-flow frozen" in cp.stderr
+
+
+def test_a_linked_path_to_the_checkout_is_repointed_too(checkout, tmp_path):
+    """A shell that reached the checkout through a link keeps the link's name
+    in $PWD and in the paths it passes; those point into the copy as well."""
+    repo, side, tmp = checkout
+    link = tmp_path / "link"
+    link.symlink_to(repo)
+    p = start(repo, side, tmp, ["--", "../bin/show", f"{link}/a.txt"], cwd=link / "sub",
+              PWD=str(link / "sub"))
+    wait_ready(p, side)
+    rc, seen, err = finish(p, side)
+    assert rc == 0, err
+    assert seen["args"] == [f"{seen['here']}/a.txt"]
+    assert seen["pwd"] == f"{seen['here']}/sub"
