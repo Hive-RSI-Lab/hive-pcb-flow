@@ -17,7 +17,10 @@ match, no reading. A part with none of these is left out.
 
 For each part: its LCSC listing (cached), the datasheet that listing names
 (or, for a part reference/datasheet_urls.yaml names, the maker's datasheet
-it gives: the listing names none, or one the fetcher refuses; #815),
+it gives: the listing names none, or one the fetcher refuses; #815; else,
+when the listing names none, the one scripts/lib/dsresolve.py finds by
+maker, cached under resolved/, with where it came from in the report's
+`datasheet_from` and a named miss in its `resolver`),
 fetched as `datasheet_extract.fetch_datasheet` fetches one (a file judged
 suspect is not read), the text of its absolute-maximum pages and its
 pin-description pages, and one model reading of them (READER_MODEL, the
@@ -51,7 +54,7 @@ the cache that holds the set's checkouts):
                      line, source_pdf with the URL and sha256. errata_corpus
                      passes this folder to check_ratings as --extractions.
   report.json        per part: what was kept and why the rest was not
-  pdfs/, listings/, reads/   the cache: a part is read again only when its
+  pdfs/, listings/, resolved/, reads/   the cache: a part is read again only when its
                      PDF, the prompt or the model changes.
 Standard output is counts only, never a part or a board: a scorer can run
 this on a holdout round and hand the counts on.
@@ -250,6 +253,39 @@ def maker_datasheet(mpn: str | None, table: Path | None = None) -> dict | None:
     return None
 
 
+def resolved(mpn: str, brand: str | None, out: Path, name: str,
+             resolve=None) -> dict:
+    """dsresolve.resolve for a part whose listing names no datasheet, cached
+    under resolved/ (keyed by the resolver's version, its maker table, the
+    MPN and the brand). A found PDF lands where read_part reads it, with
+    its fetch record beside it. A miss is cached too, unless a host stalled
+    (it may answer next time)."""
+    import dsresolve
+    if not (mpn or "").strip():
+        return {"miss": "maker not known", "why": "no MPN to go by"}
+    key = hashlib.sha256(json.dumps(
+        [dsresolve.VERSION, dsresolve.table_sha(), mpn, brand or ""]
+    ).encode()).hexdigest()
+    f = out / "resolved" / f"{name}.json"
+    pdf = out / "pdfs" / f"{name}.pdf"
+    if f.is_file():
+        c = json.loads(f.read_text(encoding="utf-8"))
+        if c.get("key") == key and (c["found"].get("miss") or pdf.is_file()):
+            return c["found"]
+    found = (resolve or dsresolve.resolve)(mpn, brand, pdf)
+    if found.get("url"):
+        _write(out / "pdfs" / f"{name}.json", found["got"])
+    if found.get("url") or not any(
+            t["kind"] in ("stalled", "skipped") for t in found.get("tried") or []):
+        _write(f, {"key": key, "found": found})
+    return found
+
+
+def _tried(found: dict) -> str:
+    return "; ".join(f"{t['url']}: {t['kind']} {t.get('why') or ''}".strip()
+                     for t in found.get("tried") or [])
+
+
 # --- one part ------------------------------------------------------------------
 
 def _norm(s: str) -> str:
@@ -435,7 +471,14 @@ def read_part(key: str, on_boards: list[dict], out: Path,
     elif err is not None:
         return {**rep, "status": "no listing", "why": str(err)[:200]}
     if not hit.get("datasheet"):
-        return {**rep, "status": "no listing with a datasheet URL"}
+        found = resolved(mpn, hit.get("brand"), out, name)
+        if not found.get("url"):
+            return {**rep, "status": "no listing with a datasheet URL",
+                    "resolver": found.get("miss"),
+                    "why": str(found.get("why") or _tried(found))[:300]}
+        hit.update(datasheet=found["url"],
+                   brand=hit.get("brand") or found["maker"])
+        rep["datasheet_from"] = found["via"]
     lcsc = hit.get("lcsc") or ""
     pkg = hit.get("package") or ""
     rep.update(mpn=mpn, lcsc=lcsc, package=pkg)
