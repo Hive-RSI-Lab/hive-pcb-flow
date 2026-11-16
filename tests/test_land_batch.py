@@ -316,6 +316,100 @@ def test_the_maker_table_supplies_the_datasheet_the_listing_lacks(
     assert "https://maker.example.com/so8x.pdf" in ext["source_pdf"]
 
 
+# ------------------------------------------------- parts keyed by Value
+
+def _by_value(ref, value):
+    return {**_board_part(ref, 8, ""), "value": value}
+
+
+def _value_rows(store, value, rows):
+    f = store / "listings" / "value" / f"{value}.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(rows))
+
+
+SO8X_ROW = {"lcsc": "C999008", "mpn": "SO8X", "brand": "Acme",
+            "package": "SOIC-8", "datasheet": "https://example.com/SO8X.pdf"}
+
+
+def test_a_part_keyed_by_its_value_is_read_and_found_by_it(stand_ins, tmp_path):
+    """#1406 planted fault and quiet twin: a part with only its Value, named
+    by one JLC listing, is read; fp_verify finds that record by the Value
+    and catches U9 and U10 numbered from the bottom view, while U7, placed
+    right, fits."""
+    out, store, reader, calls, _, _ = stand_ins
+    _value_rows(store, "SO8X", [SO8X_ROW, {**SO8X_ROW, "lcsc": "C999009"}])
+    rep = lb.read_part("mpn:SO8X", [_by_value("U7", "SO8X")], out, store, reader)
+    assert rep["status"] == "kept" and rep["keyed_by"] == "value"
+    assert rep["lcsc"] == "C999008"
+    assert (out / "ext" / "SO8X.json").is_file()
+
+    text = (FP_BOARD / "placed.kicad_pcb").read_text(encoding="utf-8")
+    text = text.replace('(property "LCSC" "C999008"', '(property "Note" "x"')
+    head, *fps = text.split("\n\t(footprint ")
+    fps = [fp.replace('(property "Value" ""', '(property "Value" "SO8X"')
+           if '(property "Note" "x"' in fp else fp for fp in fps]
+    pcb = tmp_path / "v.kicad_pcb"
+    pcb.write_text("\n\t(footprint ".join([head, *fps]), encoding="utf-8")
+    code, fp = _run_fp(tmp_path, pcb, out / "ext")
+    by = {p["ref"]: p for p in fp["parts"]}
+    bad = {v["refs"][0]: v["hint"] for v in fp["violations"]}
+    assert code == 1
+    assert bad["U9"] == bad["U10"] == "bottom_view_numbering"
+    assert by["U7"]["pad_numbering"]["fit"] is True and "U7" not in bad
+    assert by["U9"]["found_by"] == "value"
+    assert by["U9"]["record"].endswith("SO8X.json")
+
+
+def test_a_value_no_one_source_names_is_left_out(stand_ins, tmp_path,
+                                                 monkeypatch):
+    """#1406: no exact listing, listings in two packages, or two maker-table
+    entries: left out with the reason, nothing read. One maker-table entry
+    is enough on its own."""
+    out, store, reader, calls, _, _ = stand_ins
+    t = tmp_path / "datasheet_urls.yaml"
+    t.write_text("version: 1\nparts: []\n")
+    monkeypatch.setattr(lb.amb, "DATASHEET_URLS", t)
+    board = [_by_value("U7", "SO8X")]
+
+    _value_rows(store, "SO8X", [])
+    rep = lb.read_part("mpn:SO8X", board, out, store, reader)
+    assert rep["status"] == "not one listing for its Value"
+    assert "no JLC listing" in rep["why"]
+
+    _value_rows(store, "SO8X", [SO8X_ROW, {**SO8X_ROW, "lcsc": "C999009",
+                                           "package": "SOP-8"}])
+    rep = lb.read_part("mpn:SO8X", board, out, store, reader)
+    assert rep["status"] == "not one listing for its Value"
+    assert "in 2 packages" in rep["why"]
+
+    entry = ("  - mpns: [SO8X]\n    brand: Maker Inc\n    package: SOIC-8\n"
+             "    url: https://maker.example.com/{}.pdf\n")
+    t.write_text("version: 1\nparts:\n" + entry.format("a") + entry.format("b"))
+    rep = lb.read_part("mpn:SO8X", board, out, store, reader)
+    assert "names it in 2 entries" in rep["why"]
+    assert calls == [] and not (out / "ext" / "SO8X.json").exists()
+
+    t.write_text("version: 1\nparts:\n" + entry.format("a"))
+    rep = lb.read_part("mpn:SO8X", board, out, store, reader)
+    assert rep["status"] == "kept"
+    assert rep["datasheet_from"] == "reference/datasheet_urls.yaml"
+
+
+def test_a_part_with_an_mpn_somewhere_keeps_the_mpn_listing(stand_ins):
+    """#1406: when any board gives the part an MPN, its listing is the MPN
+    search's, as before; the Value's rule is not applied."""
+    out, store, reader, _, _, _ = stand_ins
+    f = store / "listings" / "mpn" / "SO8X.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(SO8X_ROW))
+    _value_rows(store, "SO8X", [])     # would leave it out if consulted
+    rep = lb.read_part("mpn:SO8X", [_by_value("U7", "SO8X"),
+                                    {**_by_value("U8", ""), "mpn": "SO8X"}],
+                       out, store, reader)
+    assert rep["status"] == "kept" and "keyed_by" not in rep
+
+
 # ------------------------------------------------- what fp_verify is given
 
 def test_errata_corpus_passes_the_sets_folder_to_fp_verify(tmp_path):
