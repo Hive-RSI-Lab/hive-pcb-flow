@@ -618,7 +618,8 @@ def test_route_probe_out_of_heap_is_a_clean_error(tmp_path, monkeypatch):
                         classmethod(lambda cls, f: type(
                             "BG", (), {"zones_of": lambda self: []})()))
     for name in ("_auto_power_layers", "_dsn_net_rules", "_dsn_layer_widths",
-                 "_dsn_hole_rules", "_dsn_merge_wires", "_dsn_barriers"):
+                 "_dsn_hole_rules", "_dsn_merge_wires", "_dsn_barriers",
+                 "_export_dsn"):
         monkeypatch.setattr(route_auto, name, lambda *a, **k: [])
     monkeypatch.setattr(routelib, "run_freerouting", lambda *a, **k: {
         "oom": True, "heap_mb": 512, "rc": 3, "timed_out": False})

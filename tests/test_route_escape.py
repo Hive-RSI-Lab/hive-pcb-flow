@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -53,8 +54,13 @@ def _pad(num, x, y, net, size, shape="circle", w=None):
 
 
 def _fp(ref, x, y, pads, half, rot=0):
+    # A fixed UUID per ref: without one KiCad draws a random UUID per load
+    # and saves footprints sorted by it, so every route_escape/route_auto
+    # save would shuffle the footprint order a bench routes in (#1412).
     hx, hy = half
+    fid = uuid.uuid5(uuid.NAMESPACE_URL, f"pcb-flow-test/{ref}")
     return (f'  (footprint "t:{ref}" (layer "F.Cu") (at {x} {y} {rot})\n'
+            f'    (uuid "{fid}")\n'
             f'    (property "Reference" "{ref}" (at 0 0 0) (layer "F.SilkS"))\n'
             f'    (fp_rect (start {-hx} {-hy}) (end {hx} {hy}) '
             f'(stroke (width 0.05)) (fill no) (layer "F.CrtYd"))\n'
@@ -123,6 +129,16 @@ def _qfn(n_side=8, pitch=0.5) -> str:
             k += 1
             pads.append(_pad(str(k), x, y, f"/Q{k}", 0.25))
     return _fp("U9", 32.0, 32.0, "".join(pads), (3, 3))
+
+
+def test_synthetic_footprints_carry_a_fixed_uuid_per_ref():
+    # #1412: a fixed UUID keeps the footprint order of a saved bench board
+    ids = {r: _fp(r, 0, 0, "", (1, 1)).split('(uuid "')[1].split('"')[0]
+           for r in ("U1", "U2", "J1", "J2", "C1")}
+    assert ids["U1"] == _fp("U1", 5, 5, "", (2, 2)).split('(uuid "')[1][:36]
+    assert len(set(ids.values())) == len(ids)
+    for v in ids.values():
+        assert str(uuid.UUID(v)) == v
 
 
 # ============================================================ detection
