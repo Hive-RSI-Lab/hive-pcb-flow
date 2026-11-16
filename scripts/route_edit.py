@@ -18,7 +18,7 @@ Contract:
                      # key left out takes the default on a new via and keeps
                      # its value on a via already there ({} only enables)
               [filled: bool]   # filling + capping, as set_via_fill (#1147)
-    remove    {uuid}                         # track, via or zone; absent=noop
+    remove    {uuid, [patches]}              # track, via or zone; absent=noop
                      # a track's teardrops go with it (#1144): see below
     set_net   {uuid, net}                            # worker-level (renet)
     set_via_fill {uuid, filled}                      # filling + capping
@@ -157,6 +157,14 @@ kept track's), through a remove_teardrop {net, layer, at} the driver adds
 lays stays. Drops of tracks other ops move (set_point, move_via) are not
 looked at: refill for those.
 
+Patches (#1145): a PATCH_<net> zone (zone_patch) that held a via of its
+net before the edit and holds none after it (the vias the list removes,
+moves or renets; the ones it adds count) is named in the result of the op
+that took its last via: "patches_left": [{uuid, name, layer}]. A remove or
+rip with "patches": true takes those zones with it instead
+("patches_removed"). A patch that still holds a via of its net, kept or
+added, is left alone.
+
 Zone fills are NOT refreshed here: adding/removing copper stales any pour it
 crosses. Callers that touch plane layers must refill afterwards
 (kicad-cli pcb drc --refill-zones --save-board; kc.run_drc(refill=True)).
@@ -188,7 +196,7 @@ OP_FIELDS = {  # op -> (required, optional)
     "add_track": ({"start", "end", "width", "layer", "net"}, set()),
     "add_via": ({"at", "size", "drill", "net"},
                 {"kind", "top", "bot", "teardrops", "filled"}),
-    "remove": ({"uuid"}, set()),
+    "remove": ({"uuid"}, {"patches"}),
     "set_net": ({"uuid", "net"}, set()),
     "set_via_fill": ({"uuid", "filled"}, set()),
     "set_point": ({"uuid", "which", "to"}, set()),
@@ -197,7 +205,7 @@ SELECT_KEYS = {"net", "layer", "kind", "region", "at", "radius", "touch",
                "pads", "uuid_prefix"}
 SCOPE_KEYS = {"net", "pads", "at", "region", "uuid_prefix"}
 ECO_FIELDS = {  # selector ops, resolved by the driver into OP_FIELDS ops
-    "rip": (set(), SELECT_KEYS),
+    "rip": (set(), SELECT_KEYS | {"patches"}),
     "renet": ({"to"}, SELECT_KEYS),
     "add_path": ({"points", "width", "layer", "net"}, set()),
     "rename_net": ({"from", "to"}, set()),
@@ -279,6 +287,8 @@ def validate_ops(doc: dict) -> list[dict]:
             raise CheckError(f"ops[{i}]: fill_vias selects vias only")
         if "filled" in op and not isinstance(op["filled"], bool):
             raise CheckError(f"ops[{i}]: filled must be true or false")
+        if "patches" in op and not isinstance(op["patches"], bool):
+            raise CheckError(f"ops[{i}]: patches must be true or false")
         if "drag" in op and not isinstance(op["drag"], bool):
             raise CheckError(f"ops[{i}]: drag must be true or false")
         if kind == "join_end" and "radius" in op \
@@ -784,6 +794,57 @@ def _point(xy):
     return Point(xy)
 
 
+def _patches_left(bg, flat: list[dict]) -> list[tuple[int, object]]:
+    """(index in flat of the op that took its last via, zone) for each
+    PATCH_<net> zone that holds a via of its net now and none after the
+    list (#1145). A via is held when its copper meets the zone's outline on
+    one of the zone's layers; the list's removes, set_point at (move_via)
+    and set_net (renet) take vias out, its add_vias put them in. A zone the
+    list itself removes is skipped."""
+    from shapely.geometry import Point, Polygon
+
+    pats = [z for z in bg.zones_of() if z.outline
+            and z.name == f"PATCH_{z.net}"]
+    if not pats:
+        return []
+    vias = {v.uuid: v for v in bg.vias_of() if v.uuid}
+    gone = {op["uuid"] for op in flat if op["op"] == "remove"}
+    took: dict[str, int] = {}       # via uuid -> first op that changed it
+    moved: dict[str, dict] = {}     # via uuid -> its net / centre after
+    after = []                      # (net, disc) of the vias after the list
+    for j, op in enumerate(flat):
+        u = op.get("uuid")
+        if u in vias and op["op"] in ("remove", "set_net", "set_point"):
+            took.setdefault(u, j)
+            if op["op"] == "set_net":
+                moved.setdefault(u, {})["net"] = op["net"]
+            elif op["op"] == "set_point" and op["which"] == "at":
+                moved.setdefault(u, {})["at"] = tuple(op["to"])
+        if op["op"] == "add_via":
+            after.append((op["net"], Point(op["at"]).buffer(op["size"] / 2)))
+    for u, v in vias.items():
+        if u in gone:
+            continue
+        m = moved.get(u, {})
+        after.append((m.get("net", v.net), v.poly if "at" not in m else
+                      Point(m["at"]).buffer(v.diameter / 2)))
+    out = []
+    for z in pats:
+        if z.uuid and z.uuid in gone:
+            continue
+        ring = Polygon(z.outline)
+        ring = ring if ring.is_valid else ring.buffer(0)
+        held = [u for u, v in vias.items() if v.net == z.net
+                and any(v.spans(ly) for ly in z.layers)
+                and ring.intersects(v.poly)]
+        if not any(u in took for u in held):
+            continue
+        if any(n == z.net and ring.intersects(d) for n, d in after):
+            continue
+        out.append((min(took[u] for u in held if u in took), z))
+    return out
+
+
 def _close(a: tuple[float, float], b) -> bool:
     return abs(a[0] - b[0]) <= POS_TOL and abs(a[1] - b[1]) <= POS_TOL
 
@@ -984,7 +1045,13 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
     guards: dict = {}
     flat, spans = resolve_ops(bg, ops, guards)
     drop_by = _drops_left(pcb, bg, flat)
-    flat = flat + [op for _, op in drop_by]
+    own = {j: n for n, span in enumerate(spans) for j in span}
+    stale = _patches_left(bg, flat)
+    take = [z.uuid for j, z in stale
+            if z.uuid and ops[own[j]].get("patches")]
+    n0 = len(flat)
+    flat = flat + [op for _, op in drop_by] \
+        + [{"op": "remove", "uuid": u} for u in take]
 
     cli = env.find_kicad_cli()
     bp = env.find_kicad_python(cli) if cli else None
@@ -1027,12 +1094,15 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
             os.replace(staged, pcb)
         out = [_fold(op, [worker[j] for j in span], [flat[j] for j in span])
                for op, span in zip(ops, spans)]
-        base = len(flat) - len(drop_by)
         for k, (j, _) in enumerate(drop_by):
-            if worker[base + k]["status"] != "removed":
+            if worker[n0 + k]["status"] != "removed":
                 continue
-            r = out[next(n for n, span in enumerate(spans) if j in span)]
+            r = out[own[j]]
             r["teardrops_removed"] = r.get("teardrops_removed", 0) + 1
+        for j, z in stale:
+            key = "patches_removed" if z.uuid in take else "patches_left"
+            out[own[j]].setdefault(key, []).append(
+                {"uuid": z.uuid, "name": z.name, "layer": z.layers[0]})
         return out
     finally:
         shutil.rmtree(stage, ignore_errors=True)
