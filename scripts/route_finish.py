@@ -1979,29 +1979,54 @@ def too_close_via(gr: Grid, path: list, rules: Rules) -> tuple | None:
     """(k, cell) of a layer change this path makes too near its own last one,
     where merge_close_vias couldn't help, or None. The search can't see this:
     one net's vias don't block each other while it runs, and DRC would take the
-    whole route out afterwards (#784)."""
-    if not rules.spans or any(q[2] == -1 for q in path):
+    whole route out afterwards (#784). A build with no HDI spans checks its
+    through vias against the board's hole_to_hole (#1531: two /A3_0 vias
+    0.57 mm apart with one In1 hop between them)."""
+    if any(q[2] == -1 for q in path):
         return None
     path = _merged(gr, path, rules)
+    lim = rules.span_hole_to_hole if rules.spans else rules.hole_to_hole
     vias = []
     for (i, j, k), (i2, j2, k2) in zip(path, path[1:]):
         if k != k2:
-            sp = span_for(gr, k, k2, j * gr.nx + i)
+            sp = span_for(gr, k, k2, j * gr.nx + i) if rules.spans else None
             drill = sp.drill if sp else gr.via[1]
             for x, y, d in vias:
                 gap = math.dist((x, y), (i, j)) * gr.g - (d + drill) / 2
-                if (x, y) != (i, j) \
-                        and gap < rules.span_hole_to_hole + rules.margin:
+                if (x, y) != (i, j) and gap < lim + rules.margin:
                     return k, j * gr.nx + i
             vias.append((i, j, drill))
     return None
 
 
 def _merged(gr: Grid, path: list, rules: Rules) -> list:
-    """path_to_ops' own merge of an HDI route's close vias."""
-    return merge_close_vias(
-        path, (SAME_NET_HOLE_MM + rules.via_floor[1]) / gr.g,
-        lambda run, k2: _can_move_run(gr, run, k2))
+    """path_to_ops' own merge of a route's close vias. A through via joins
+    every layer, so a run between two of them moves to the next layer when
+    that layer is open along it (#1531)."""
+    if rules.spans:
+        return merge_close_vias(
+            path, (SAME_NET_HOLE_MM + rules.via_floor[1]) / gr.g,
+            lambda run, k2: _can_move_run(gr, run, k2))
+    return _drop_bounces(merge_close_vias(
+        path, (rules.hole_to_hole + gr.via[1]) / gr.g,
+        lambda run, k2: not any(gr.blk[k2][y * gr.nx + x]
+                                for x, y, _ in run)))
+
+
+def _drop_bounces(path: list) -> list:
+    """A merged hop that lands back on the layer it left is a layer change
+    there and straight back: a via joining one layer, which DRC calls
+    via_dangling. Drop the round trip."""
+    out: list = []
+    for q in path:
+        if len(out) >= 2 and out[-1][:2] == out[-2][:2] == q[:2] \
+                and out[-2][2] == q[2] != out[-1][2]:
+            out.pop()
+            continue
+        if out and out[-1] == q:
+            continue
+        out.append(q)
+    return out
 
 
 def _straights(gr: Grid, run: list, width: float) -> list:
@@ -2028,8 +2053,7 @@ def path_to_ops(gr: Grid, path, net: str, width: float, rules: Rules) -> list:
     """Grid path -> route_edit ops: one track per straight run, a via at
     every layer change and at a plane drop (k = -1). A layer change on an HDI
     build takes the span the search priced it at (#477)."""
-    if rules.spans:
-        path = _merged(gr, path, rules)
+    path = _merged(gr, path, rules)
     ops = []
     vias = []
     runs: list[list] = []
@@ -3028,8 +3052,25 @@ def _island_guard(staged, rip_file, rip_start, rip_base, cur, kept_any,
 
 def _sweep_dangling(cli, staged, nets, cur, *, parity, refill, facts):
     """Ripping a segment out of another net leaves the rest of its old path
-    hanging: remove the free-ended tracks and vias of the nets touched (the
-    route_cleanup dangling pass), kept only if DRC holds."""
+    hanging: trim the free-ended tracks and vias of the nets touched back
+    to their last joint (route_cleanup's dangling pass), kept only if DRC
+    holds."""
+    n, cur = sweep_dangling(cli, staged, nets, cur, parity=parity,
+                            refill=refill, facts=facts)
+    facts["dangling_removed"] = n
+    return cur
+
+
+def sweep_dangling(cli, staged, nets, cur, *, parity, refill, facts,
+                   protect=(), key="dangling"):
+    """Remove the free-ended tracks and vias of `nets` and cut back the
+    tracks a later route joins on their body (route_cleanup.find_dangling
+    with trims, #1531). Locked copper and `protect` uuids stay as anchors.
+    Kept only if DRC holds: no more unconnected items and no error type
+    grows. When the unconnected count grows, the nets that grew keep their
+    copper and the rest is tried once more. Returns (items changed, drc);
+    facts[key + "_nets_kept"] names the nets left alone, facts[key +
+    "_error"] a failed edit."""
     import route_cleanup
     import route_edit
     import shutil
@@ -3038,6 +3079,8 @@ def _sweep_dangling(cli, staged, nets, cur, *, parity, refill, facts):
     segs, vias = route_cleanup.parse_items(staged, bg.copper_layers)[:2]
     pads = [route_cleanup.PadItem(p.net, tuple(p.layers), p.center, p.poly)
             for p in bg.pads_of()]
+    arcs = tuple((t.net, t.layer, t.shape, t.width) for t in bg.tracks_of()
+                 if len(t.shape.coords) > 2 and t.net in nets)
     cache: dict = {}
 
     def fillfn(net, layer):
@@ -3048,37 +3091,52 @@ def _sweep_dangling(cli, staged, nets, cur, *, parity, refill, facts):
     segs = [x for x in segs if x.net in nets]
     vias = [x for x in vias if x.net in nets]
     # #664: a locked stub stays; with no uuid it is an anchor only
-    keep_locked = locked_uuids(bg)
-    segs = [dataclasses.replace(x, uuid=None) if x.uuid in keep_locked
+    keep = locked_uuids(bg) | set(protect)
+    segs = [dataclasses.replace(x, uuid=None) if x.uuid in keep
             else x for x in segs]
-    vias = [dataclasses.replace(x, uuid=None) if x.uuid in keep_locked
+    vias = [dataclasses.replace(x, uuid=None) if x.uuid in keep
             else x for x in vias]
-    gone_s, gone_v = route_cleanup.find_dangling(segs, vias, pads, fillfn)
-    if not gone_s and not gone_v:
-        return cur
-    keep = staged.with_name("predangle_maze_" + staged.name)
-    shutil.copy2(staged, keep)
-    try:
-        route_edit.apply_ops(staged, [{"op": "remove", "uuid": u}
-                                      for u in gone_s + gone_v])
+    trims: dict = {}
+    gone_s, gone_v = route_cleanup.find_dangling(segs, vias, pads, fillfn,
+                                                 arcs, trims=trims)
+    net_of = {x.uuid: x.net for x in segs + vias if x.uuid}
+    ops = ([{"op": "remove", "uuid": u} for u in gone_s + gone_v]
+           + route_cleanup.trim_ops(segs, trims))
+    if not ops:
+        return 0, cur
+    back = staged.with_name("predangle_" + key + "_" + staged.name)
+    shutil.copy2(staged, back)
+    b_un = unconnected_by_net(cur)
+    b_err = err_counts(cur)
+
+    def attempt(todo):
+        shutil.copy2(back, staged)
+        route_edit.apply_ops(staged, todo)
         if refill:
             kc.run_drc(cli, staged, refill=True, save_board=True)
-        after = kc.run_drc(cli, staged, parity=parity, all_track_errors=True)
-        b_err, a_err = err_counts(cur), err_counts(after)
-        if sum(unconnected_by_net(after).values()) > sum(
-                unconnected_by_net(cur).values()) or any(
-                v > b_err.get(k, 0) for k, v in a_err.items()):
-            shutil.copy2(keep, staged)
-            facts["dangling_removed"] = 0
-            return cur
-        facts["dangling_removed"] = len(gone_s) + len(gone_v)
-        return after
+        return kc.run_drc(cli, staged, parity=parity, all_track_errors=True)
+
+    try:
+        after = attempt(ops)
+        a_un = unconnected_by_net(after)
+        grew = sorted(n for n in a_un if a_un[n] > b_un.get(n, 0))
+        if grew and sum(a_un.values()) > sum(b_un.values()):
+            ops = [o for o in ops if net_of[o["uuid"]] not in set(grew)]
+            facts[key + "_nets_kept"] = grew
+            after = attempt(ops) if ops else cur
+        a_err = err_counts(after)
+        if not ops or sum(unconnected_by_net(after).values()) > sum(
+                b_un.values()) or any(v > b_err.get(k, 0)
+                                      for k, v in a_err.items()):
+            shutil.copy2(back, staged)
+            return 0, cur
+        return len({o["uuid"] for o in ops}), after
     except CheckError as exc:
-        shutil.copy2(keep, staged)
-        facts["dangling_error"] = str(exc)[:200]
-        return cur
+        shutil.copy2(back, staged)
+        facts[key + "_error"] = str(exc)[:200]
+        return 0, cur
     finally:
-        keep.unlink(missing_ok=True)
+        back.unlink(missing_ok=True)
 
 
 RIP_CHECKS = {"shorting_items", "clearance", "tracks_crossing",

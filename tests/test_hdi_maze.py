@@ -256,3 +256,29 @@ def test_too_close_via_names_a_route_crowding_its_own_vias():
     assert rf.too_close_via(gr, far, rules) is None
     stacked = [(0, 0, 0), (1, 0, 0), (1, 0, 1), (1, 0, 0), (4, 1, 0)]
     assert rf.too_close_via(gr, stacked, rules) is None
+
+
+def test_through_via_route_merges_its_close_layer_changes():
+    """#1531: on a board with no HDI spans the maze took /A3_0 down a through
+    via, one In1 hop, and a second through via 0.57 mm away: a hole_to_hole
+    warning. Both layer changes now happen at the first via and the hop
+    rides the next layer; where that layer is shut along the hop, the
+    spacing check names the second via so the search goes round it."""
+    rules = SimpleNamespace(spans=[], hole_to_hole=0.25, margin=0.02)
+    # 0.1 mm cells, 0.3 mm drill: vias 0.2 mm apart are 0.1 mm hole to hole
+    hop = [(0, 0, 0), (1, 0, 0), (1, 0, 1), (2, 0, 1), (3, 0, 1),
+           (3, 0, 0), (4, 0, 0), (4, 1, 0)]
+    gr = _small_grid((set(), set()))
+    # two layers: the hop lands back on layer 0, so no via is left at all
+    assert rf._merged(gr, hop, rules) == [
+        (0, 0, 0), (1, 0, 0), (2, 0, 0), (3, 0, 0), (4, 0, 0), (4, 1, 0)]
+    assert rf.too_close_via(gr, hop, rules) is None
+    assert not [o for o in rf.path_to_ops(gr, hop, "N", 0.2, rules)
+                if o["op"] == "add_via"]
+    # layer 0 walled under the hop: nothing moves and the check names the
+    # second via, (3, 0) on layer 1, cell 3
+    shut = _small_grid(({2}, set()))
+    assert rf._merged(shut, hop, rules) == hop
+    assert rf.too_close_via(shut, hop, rules) == (1, 3)
+    far = [(0, 0, 0), (0, 0, 1), (4, 1, 1), (4, 1, 0)]
+    assert rf.too_close_via(shut, far, rules) is None

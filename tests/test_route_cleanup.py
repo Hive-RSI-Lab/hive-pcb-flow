@@ -782,3 +782,68 @@ def test_cleanup_acceptance_blinky2(dirty_board, tmp_path):
     tr = bg1.tracks_of(net=net, layer="F.Cu")
     assert len(tr) == n_before + 1          # 2 legs -> 2 short legs + diagonal
     assert sum(t.length for t in tr) < len_before - 0.05  # corner got shorter
+
+
+# ============================================================ #1531: stub trim
+
+def _escape(routed: bool):
+    """A ball's escape: a pad, an F.Cu dog-bone to a via, an In2.Cu stub out
+    of the ball field. routed: the maze later carried the net on from the
+    stub's end, through a second via to the connector pad."""
+    pads = [PD((0, 0)), PD((6, 0), layers=("F.Cu",))]
+    segs = [S("dog", (0, 0), (1, 0)),
+            S("stub", (1, 0), (3, 0), layer="In2.Cu")]
+    vias = [V("v1", (1, 0), layers=("F.Cu", "In2.Cu", "B.Cu"))]
+    if routed:
+        segs += [S("run", (3, 0), (5, 0), layer="In2.Cu"),
+                 S("tail", (5, 0), (6, 0))]
+        vias += [V("v2", (5, 0), layers=("F.Cu", "In2.Cu", "B.Cu"))]
+    return segs, vias, pads
+
+
+def test_failed_escape_stub_is_trimmed_back_to_the_pad():
+    """#1531 planted fault: the maze never reached this stub, so the stub,
+    its via and the dog-bone all go; the pad is left bare, as before the
+    escape."""
+    segs, vias, pads = _escape(routed=False)
+    trims: dict = {}
+    gone_s, gone_v = rcl.find_dangling(segs, vias, pads, EMPTY, trims=trims)
+    assert sorted(gone_s) == ["dog", "stub"]
+    assert gone_v == ["v1"]
+    assert trims == {}
+
+
+def test_escape_stub_a_routed_track_joins_is_kept():
+    """#1531 quiet twin: the same stub, but a routed track carries on from
+    its end. Nothing on the route is free, so nothing goes or moves."""
+    segs, vias, pads = _escape(routed=True)
+    trims: dict = {}
+    assert rcl.find_dangling(segs, vias, pads, EMPTY, trims=trims) == ([], [])
+    assert trims == {}
+
+
+def test_t_joined_track_is_cut_back_to_its_joint():
+    """#1531: a maze route that ends on the middle of an old track leaves the
+    old track's far end dangling. Removing the old track whole would cut
+    the new route off its pad; it is cut back to the joint instead."""
+    pads = [PD((0, 0)), PD((5, 3))]
+    segs = [S("old", (0, 0), (10, 0)), S("new", (5, 3), (5, 0))]
+    trims: dict = {}
+    assert rcl.find_dangling(segs, [], pads, EMPTY, trims=trims) == ([], [])
+    assert trims == {"old": ((0, 0), (5.0, 0.0))}
+    assert rcl.trim_ops(segs, trims) == [
+        {"op": "set_point", "uuid": "old", "which": "end", "to": [5.0, 0.0]}]
+    # without trims (the old caller) the whole track goes, and the new
+    # route after it
+    assert sorted(rcl.find_dangling(segs, [], pads, EMPTY)[0]) == [
+        "new", "old"]
+
+
+def test_free_track_with_no_joint_on_it_still_goes_whole():
+    """A trim needs a joint on the body: a track with one end on a pad and
+    nothing along it is removed whole, as without trims."""
+    pads = [PD((0, 0))]
+    segs = [S("s", (0, 0), (4, 0))]
+    trims: dict = {}
+    assert rcl.find_dangling(segs, [], pads, EMPTY, trims=trims)[0] == ["s"]
+    assert trims == {}

@@ -46,7 +46,11 @@ dog-bone, so the finishes route it from the bare pad (row 129); if the
 finished board is worse than the routed one before the drop, the drop is
 undone (facts.escape_drops; --keep-escapes skips it). When it is kept, a
 dropped ball the finishes still left unrouted gets its escape back if the
-DRC grade is no worse (escape_drops.given_back, #1374).
+DRC grade is no worse (escape_drops.given_back, #1374) - with --keep-stubs
+only. By default, after the finishes every free-ended track and via of a
+routed net (a failed escape stub, the old path a rip-up left, the tail past
+a joint a later route made on its body) is trimmed back to its pad or joint,
+kept only if the DRC holds (facts.stub_trim, #1531).
 
 Freerouting's own success signal is NEVER trusted (LEARNINGS [freerouting]):
 completion comes from the log's unrouted counts and the gate is kicad-cli DRC.
@@ -56,7 +60,7 @@ Contract:
       [--power-layers auto|"In1.Cu,In2.Cu"|none] [--max-rungs N]
       [--timeout-s S] [--work-dir DIR] [--out-report r.json] [--tries N]
       [--probe [--probe-passes N]] [--no-krt-finish] [--no-maze-finish]
-      [--keep-escapes]
+      [--keep-escapes] [--keep-stubs]
   Freerouting runs single-threaded and sequential, so one board file routes
   the same way every time; a rebuilt board (fresh uuids, another DSN order)
   may not. --tries N also routes N-1 shuffled-order DSNs at the best rung,
@@ -1242,6 +1246,11 @@ def run(argv: list[str] | None = None):
                     help="keep every BGA dog-bone, even one the route left "
                          "cut off (default: such a ball's escape is dropped "
                          "before the finishes, row 129)")
+    ap.add_argument("--keep-stubs", action="store_true",
+                    help="keep free-ended tracks and vias after the finishes "
+                         "and give a dropped ball that stayed unrouted its "
+                         "escape back (default: they are trimmed back to "
+                         "the pad or joint, #1531)")
     ap.add_argument("--finish-plane-nets", action="store_true",
                     help="let the KRT finish route nets a filled zone "
                          "carries (default: left to the maze finish's "
@@ -1578,10 +1587,25 @@ def run(argv: list[str] | None = None):
                     kc.run_drc(cli, staged, refill=True, save_board=True)
                 return kc.run_drc(cli, staged, parity=sch.is_file(),
                                   all_track_errors=True)
-            back, drc = _escapes_back(staged, snap, drops, drc, _regrade,
-                                      work / "pre_escape_back.kicad_pcb")
+            back = []
+            if args.keep_stubs:
+                back, drc = _escapes_back(staged, snap, drops, drc, _regrade,
+                                          work / "pre_escape_back.kicad_pcb")
             if back:
                 escape_drops["given_back"] = back
+    # 5d. stub trim (#1531): a failed escape stub and its via, the old path
+    # a rip-up left behind, the tail past a joint a later route made: cut
+    # back to the pad or joint on every routed net, kept only if DRC holds.
+    stub_trim = None
+    if not args.keep_stubs:
+        import route_finish
+        stub_trim = {}
+        n, drc = route_finish.sweep_dangling(
+            cli, staged, routable - plane_skip, drc, parity=sch.is_file(),
+            refill=has_zones, facts=stub_trim,
+            protect=_protect_uuids(pre, geom.BoardGeom.from_file(staged)),
+            key="stub")
+        stub_trim["items"] = n
     if not fr_ok and not (finish_facts and finish_facts.get("kept")):
         if _all_timed_out(rungs):
             return _timeout_report(
@@ -1647,6 +1671,7 @@ def run(argv: list[str] | None = None):
             "ses_import_check": ses_check,
             "maze_finish": maze_facts,
             "escape_drops": escape_drops,
+            "stub_trim": stub_trim,
             "teardrops_restored": teardrops_restored,
             "teardrop_necks": td_necks,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),

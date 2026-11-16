@@ -315,12 +315,23 @@ def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol,
     On a DRC-clean board that cannot join across a real gap (centerline
     distance of legally separated copper >= (w1+w2)/2 + clearance > every
     reach used here)."""
+    hit_a, hit_b, both = _seg_ends(seg, segs, vias, pads, fillfn, arcs, tol)
+    if hit_a and hit_b:
+        return False
+    return not (both and bridges
+                and _bridges(seg, segs, vias, pads, fillfn, arcs, tol))
+
+
+def _seg_ends(seg: Seg, segs, vias, pads, fillfn, arcs, tol):
+    """(hit_a, hit_b, both) under _seg_free's rule: whether each end of
+    `seg` touches other same-net copper, and whether a track or arc
+    touched both ends (KiCad's nearer-end case)."""
     half = seg.width / 2.0
     pa, pb = Point(seg.a), Point(seg.b)
     hit_a = _fill_touches(fillfn, seg.net, seg.layer, seg.a, half + tol)
     hit_b = _fill_touches(fillfn, seg.net, seg.layer, seg.b, half + tol)
     if hit_a and hit_b:
-        return False
+        return True, True, False
     both = False                           # a track/arc touched both ends
 
     def track(da, db, reach, ends) -> bool:
@@ -343,12 +354,12 @@ def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol,
             continue
         if track(_pt_seg_dist(seg.a, o.a, o.b), _pt_seg_dist(seg.b, o.a, o.b),
                  (seg.width + o.width) / 2.0, (o.a, o.b)):
-            return False
+            return True, True, both
     for net, layer, line, aw in arcs:
         if net == seg.net and layer == seg.layer and track(
                 line.distance(pa), line.distance(pb), (seg.width + aw) / 2.0,
                 (line.coords[0], line.coords[-1])):
-            return False
+            return True, True, both
     for v in vias:
         if v.net == seg.net and seg.layer in v.layers:
             r = v.size / 2.0 + half + tol
@@ -358,10 +369,72 @@ def _seg_free(seg: Seg, segs, vias, pads, fillfn, arcs, tol,
         if pd.net == seg.net and seg.layer in pd.layers:
             hit_a = hit_a or pd.poly.distance(pa) <= half + tol
             hit_b = hit_b or pd.poly.distance(pb) <= half + tol
-    if hit_a and hit_b:
-        return False
-    return not (both and bridges
-                and _bridges(seg, segs, vias, pads, fillfn, arcs, tol))
+    return hit_a, hit_b, both
+
+
+TRIM_MIN = 0.02     # mm: a cut-back stub shorter than this goes whole
+
+
+def _trim_span(seg: Seg, segs, vias, pads, arcs, tol, hit_a, hit_b):
+    """The part of a free-ended `seg` that still carries current, as new
+    (a, b) end points, or None when nothing on it is worth keeping.
+
+    A maze route that ends on the middle of an old track makes a T: the
+    old track's far end then dangles past the joint, and removing the whole
+    track cuts the new route off (#1531). KiCad joins two items when an
+    anchor of one (a track or arc end, a via or pad centre) lies in the
+    other's copper, so each same-net anchor inside `seg`'s copper, away
+    from its ends, is a joint on its body. The span kept runs from the
+    touching end (or the first joint, when neither end touches) to the
+    farthest joint. Fill is not a joint here: a zone joins a track only
+    through the track's own ends."""
+    half = seg.width / 2.0
+    length = seg.length
+    if length <= TRIM_MIN:
+        return None
+    dx, dy = seg.b[0] - seg.a[0], seg.b[1] - seg.a[1]
+    ts: list[float] = []
+
+    def anchor(p, reach):
+        t = ((p[0] - seg.a[0]) * dx + (p[1] - seg.a[1]) * dy) / length ** 2
+        if 0.0 <= t <= 1.0 and _pt_seg_dist(p, seg.a, seg.b) <= reach:
+            ts.append(t)
+
+    for o in segs:
+        if o is not seg and o.net == seg.net and o.layer == seg.layer \
+                and o.uuid != seg.uuid:
+            for e in (o.a, o.b):
+                anchor(e, half + tol)
+    for net, layer, line, aw in arcs:
+        if net == seg.net and layer == seg.layer:
+            for e in (line.coords[0], line.coords[-1]):
+                anchor(e, half + tol)
+    for v in vias:
+        if v.net == seg.net and seg.layer in v.layers:
+            anchor(v.at, half + tol)
+    for pd in pads:
+        if pd.net == seg.net and seg.layer in pd.layers:
+            anchor(pd.center, half + tol)
+    if hit_a:
+        ts.append(0.0)
+    if hit_b:
+        ts.append(1.0)
+    if not ts:
+        return None
+    lo, hi = min(ts), max(ts)
+    if (hi - lo) * length < TRIM_MIN:
+        return None
+    if lo * length <= tol and (1.0 - hi) * length <= tol:
+        return None                 # nothing to cut: the old rule decides
+
+    def at(t):
+        if t <= 0.0:
+            return seg.a
+        if t >= 1.0:
+            return seg.b
+        return (round(seg.a[0] + t * dx, 6), round(seg.a[1] + t * dy, 6))
+    return at(lo if lo * length > tol else 0.0), \
+        at(hi if (1.0 - hi) * length > tol else 1.0)
 
 
 def _body(a, b):
@@ -452,29 +525,77 @@ def _via_keep(v: ViaItem, segs, pads, fillfn, tol, vias=()) -> bool:
 
 
 def find_dangling(segs, vias, pads, fillfn, arcs=(), tol=TOL,
-                  cap=DANGLING_CAP) -> tuple[list[str], list[str]]:
+                  cap=DANGLING_CAP, trims: dict | None = None
+                  ) -> tuple[list[str], list[str]]:
     """Fixpoint removal of free-ended segments/vias. Returns uuid lists
     (segments, vias) in removal order. Items without a uuid are anchors only
-    (they can never be removed)."""
+    (they can never be removed).
+
+    With a `trims` dict, a free segment that other copper joins on its body
+    (a T: `_trim_span`) is cut back to its last joint instead of removed;
+    trims[uuid] = (a, b), its new start and end. Without one (the default)
+    every free segment goes whole, as before."""
     alive_s = list(segs)
     alive_v = list(vias)
     gone_s: list[str] = []
     gone_v: list[str] = []
     for _ in range(cap):
-        drop_s = [s for s in alive_s if s.uuid and _seg_free(
-            s, alive_s, alive_v, pads, fillfn, arcs, tol)]
+        drop_s, cut = [], {}
+        for s in alive_s:
+            if not s.uuid:
+                continue
+            hit_a, hit_b, both = _seg_ends(s, alive_s, alive_v, pads, fillfn,
+                                           arcs, tol)
+            if hit_a and hit_b or (both and _bridges(
+                    s, alive_s, alive_v, pads, fillfn, arcs, tol)):
+                continue
+            span = None if trims is None or both else _trim_span(
+                s, alive_s, alive_v, pads, arcs, tol, hit_a, hit_b)
+            if span is None:
+                drop_s.append(s)
+            else:
+                cut[id(s)] = span
         drop_v = [v for v in alive_v
                   if v.uuid and not _via_keep(v, alive_s, pads, fillfn, tol,
                                               alive_v)]
-        if not drop_s and not drop_v:
+        if not drop_s and not drop_v and not cut:
             break
         ds = {id(x) for x in drop_s}
         dv = {id(x) for x in drop_v}
-        alive_s = [s for s in alive_s if id(s) not in ds]
+        nxt = []
+        for s in alive_s:
+            if id(s) in ds:
+                continue
+            if id(s) in cut:
+                a, b = cut[id(s)]
+                s = Seg(s.uuid, s.net, s.layer, s.width, a, b)
+                trims[s.uuid] = (a, b)
+            nxt.append(s)
+        alive_s = nxt
         alive_v = [v for v in alive_v if id(v) not in dv]
         gone_s += sorted(s.uuid for s in drop_s)
         gone_v += sorted(v.uuid for v in drop_v)
+        if trims is not None:
+            for s in drop_s:
+                trims.pop(s.uuid, None)
     return gone_s, gone_v
+
+
+def trim_ops(segs, trims: dict) -> list[dict]:
+    """route_edit set_point ops for find_dangling's `trims`: each moved end
+    of each cut-back segment (#1531)."""
+    by = {s.uuid: s for s in segs if s.uuid}
+    ops = []
+    for u in sorted(trims):
+        a, b = trims[u]
+        s = by[u]
+        if tuple(a) != tuple(s.a):
+            ops.append({"op": "set_point", "uuid": u, "which": "start",
+                        "to": [a[0], a[1]]})
+        if tuple(b) != tuple(s.b):
+            ops.append({"op": "set_point", "uuid": u, "which": "end",
+                        "to": [b[0], b[1]]})
+    return ops
 
 
 # ============================================================ pass 2: loops
