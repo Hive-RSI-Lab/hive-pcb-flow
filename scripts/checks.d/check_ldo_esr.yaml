@@ -1,0 +1,10 @@
+# check_ldo_esr (#356): an ESR-compensated linear regulator's (LM1117,
+# AMS1117) output capacitors against the ESR window and minimum its
+# datasheet states: an all-ceramic bank, no output capacitor, or too little
+# tantalum. reference/ldo_output_cap.yaml holds the parts; constraints.json
+# may declare a capacitor's dielectric and ESR (ldo_caps).
+name: check_ldo_esr
+needs: []
+args: []
+optional:
+  constraints: [--constraints, "{constraints}"]

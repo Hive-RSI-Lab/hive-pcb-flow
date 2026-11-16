@@ -1,0 +1,66 @@
+# The output capacitor an ESR-compensated linear regulator needs, read by
+# check_ldo_esr (#356). Every number is copied from the document named in
+# `source`, with its page and the line quoted. Add a row only from a
+# datasheet in hand, never from memory. The knowledge record
+# reference/knowledge/records/linear-regulator-1117-output-cap-esr-window.yaml
+# carries the reasoning; this table carries only what the check judges.
+#
+# match: a regex tried against the part's Value and MPN fields
+#   (case-insensitive).
+# out_pins: {footprint regex: [pad numbers]}, the output pads when the
+#   footprint has no pin functions. Taken from the datasheet's pin table.
+# cout_min_uf: the least output capacitance, and the dielectric it is
+#   stated for (cout_min_dielectric).
+# esr_ohm: {min, max}, the output capacitor's ESR window, or null when the
+#   datasheet gives none.
+# esr_source: `spec` when the window is a guaranteed limit, `guidance` when
+#   the datasheet says the section it sits in is not part of the
+#   specification. A guidance window gives errors only where a second source
+#   backs it (ceramic_note below); otherwise warnings.
+# verified: true means the datasheet was re-read for this row.
+regulators:
+  - match: '^LM1117'
+    mpn: LM1117
+    out_pins: {'SOT-?223': ['2', '4']}
+    cout_min_uf: 10
+    cout_min_dielectric: tantalum
+    esr_ohm: {min: 0.3, max: 22}
+    esr_source: guidance
+    source: >-
+      TI LM1117 datasheet SNOS412Q, revised January 2023 (sha256
+      35892f3a8673fae91fe0c925b7be54b5d5dc3f7f8b67d1b4b5e00e4bfb0253d4).
+      p. 15, 9.2.2.1.3: "The minimum output capacitance required by the
+      LM1117 is 10 µF, if a tantalum capacitor is used", "The ESR of the
+      output capacitor should range between 0.3 Ω to 22 Ω". p. 14: section 9
+      "is not part of the TI component specification". p. 3, Table 6-1: pin 2
+      and the tab are VOUT on SOT-223.
+    verified: true
+  - match: '^AMS1117'
+    mpn: AMS1117
+    out_pins: {'SOT-?223': ['2', '4']}
+    cout_min_uf: 22
+    cout_min_dielectric: tantalum
+    esr_ohm: null
+    esr_source: null
+    source: >-
+      Advanced Monolithic Systems AMS1117 datasheet (sha256
+      189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0).
+      p. 4, Stability: "requires the use of an output capacitor as part of
+      the device frequency compensation", "The addition of 22µF solid
+      tantalum on the output will ensure stability for all operating
+      conditions", "Without bypassing the adjustment terminal smaller
+      capacitors can be used with equally good results" (no ESR bound
+      anywhere in the datasheet). p. 3: every ripple-rejection row is at
+      "COUT = 22µF Tantalum". p. 1: pin 2 and the tab are VOUT.
+    verified: true
+# Why an all-ceramic output fails an ESR-compensated LDO: the second source
+# that backs LM1117's 0.3 ohm floor for ceramics of 1 uF and up.
+ceramic_note:
+  min_uf: 1.0
+  source: >-
+    TI AN-1482 SNVA167A, revised April 2013 (sha256
+    30ea0a571b2218e9c9fe8f327ec97ca8f63679c52c14d4b541e641906b017a24).
+    p. 5, section 6: "for capacitance values greater than 1 uF, the value of
+    ESR is usually in the range of a few milliohms at high frequencies",
+    which "makes them unsuitable for use with LDO's, which were designed to
+    rely on the output capacitor's ESR for the loop compensation zero".

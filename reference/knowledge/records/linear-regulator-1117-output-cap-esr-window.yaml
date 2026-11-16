@@ -6,7 +6,7 @@ applies:
   interfaces: []
   parts: [AMS1117, AMS1117-3.3, LM1117]
 rule:
-  enforced_by: null
+  enforced_by: check_ldo_esr.py
   cout_min_uf: 10
   cout_min_dielectric: tantalum
   cout_esr_min_ohm: 0.3
