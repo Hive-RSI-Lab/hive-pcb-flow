@@ -77,6 +77,7 @@ FIXER_HINTS = {
     "rating_datasheet_suspect": "parts", "rating_datasheet_unassessed": "parts",
     "rating_no_datasheet_read": "parts",
     "rating_listing_disagrees": "parts",
+    "rating_over_clamp": "schematic",
     # sim gate (sim_run.py) - a failed bound is a schematic-value defect;
     # engine/measure trouble needs triage, not a copper fixer
     "sim_bound_fail": "schematic", "sim_measure_missing": "review",

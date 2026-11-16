@@ -142,7 +142,8 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
     },
     "voltages": {
         "required": {"net": "str", "voltage": "num"},
-        "optional": {"min": "num"},
+        # check_ratings (#500): a clamp on the rail bounds what a part sees
+        "optional": {"min": "num", "clamp_v": "num", "breakdown_v": "num"},
     },
     # check_ratings (#1006): a connector pin's signal level where the
     # net carries no voltage (an off-board interface)

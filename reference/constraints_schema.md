@@ -360,8 +360,14 @@ Consumers per key (script -> phase):
   // min (optional): the lowest the rail runs at (a USB-PD VBUS at its
   // lowest allowed contract, a battery at cut-off); sim_board re-runs its
   // DC scenarios there and judges MOSFET on-state drive (mosfet_underdrive).
+  // clamp_v (optional): what a surge can drive the rail to, the clamping
+  // voltage of what holds it (a TVS's VC at its pulse current); breakdown_v
+  // (optional): the highest it sits at with no clamp current (the TVS's
+  // V(BR) max). check_ratings judges every part on the rail against them
+  // (rating_over_clamp), ahead of any TVS it finds on the rail (#500).
   "voltages": [{"net": "HV_BUS", "voltage": 48},
-               {"net": "VBUS", "voltage": 21, "min": 9}],
+               {"net": "VBUS", "voltage": 21, "min": 9,
+                "breakdown_v": 26.9, "clamp_v": 35.5}],
   // pin_modes (sim_board): how its io scenarios treat an IC pin, by refdes
   // and pin number or function name. io/output/gpio: driven low and high;
   // od: an open-drain status line; analog/adc/input/nc: never driven (an

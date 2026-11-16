@@ -171,6 +171,15 @@ Findings (kind = violation `kind`, remediations under reference/remediations/):
    rating check read: `datasheet` (an extracted part is never judged on its
    listing), or `none` when no pin met a known rail. Every comparison is in
    facts `listing_comparison`.
+ - rating_over_clamp (warning): on a rail of known voltage that a
+   unidirectional TVS holds to ground (or a constraints `voltages` entry's
+   clamp_v, with breakdown_v), a part's rating judged at the TVS's breakdown
+   max (`level` breakdown: no surge current yet) and at its clamping voltage
+   (`level` clamp: a surge at its rated peak pulse current), not the nominal
+   (#500). The TVS's numbers come from its extraction's V(BR)/VC rows, its
+   listing's clamping voltage, else its part number's family in
+   reference/diode_vr.yaml. Facts `clamped_rails` names each rail, its clamp
+   and the parts judged on it.
 Sources and verified/disputed tags: docs/ingest/safety-components.md.
 A pin on a net of unknown voltage is not a finding (counted in facts); a
 supply pin on one is named in not_judged by rail, since nothing compared it
@@ -1846,6 +1855,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                  scenario=f"{conn['ref']} reversed")
     diode_forward_findings(board, bom_by_lcsc, exts, netfns, volts, vsrc,
                            emit)
+    clamped = clamp_findings(board, exts, bom_by_lcsc, netfns, volts, vsrc,
+                             constraints, diodes, emit)
     amb = ambient(constraints, cons_dir)
     before_fuses = dict(checked_by_ref)
     fuse_facts = fuse_findings(board, bom_by_lcsc, volts, vsrc, currents,
@@ -1930,6 +1941,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
              "pins_by_position": by_position,
              "pins_by_number_why": position_not_used,
              "reversed_inputs": reversed_inputs,
+             "clamped_rails": clamped,
              "pins_on_unknown_nets": unknown_net_pins,
              "not_judged": [
                  f"{net}: no known voltage, so {len(pins)} supply pin(s) were "
@@ -3311,6 +3323,216 @@ def clamp_kind(bom: dict | None) -> tuple[str | None, bool]:
         re.match(r"^(?:SMBJ|SMAJ|SMCJ|SMDJ|P4SMA|P6SMB|P6KE|1\.5KE)"
                  r"[\d.]+CA\b", mpn, re.I))
     return kind, bi
+
+
+def _tvs_text_clamps(ext: dict | None) -> dict:
+    """{vbr, vc} (each where printed) from a TVS extraction's free-text
+    rows: the top of its V(BR) breakdown row and its VC clamping row."""
+    got: dict[str, float] = {}
+    for row in (ext or {}).get("abs_max") or []:
+        kind, scale = unit_kind(str(row.get("unit") or ""))
+        if kind != "voltage":
+            continue
+        p = str(row.get("param") or "").upper()
+        key = "vbr" if re.search(r"\bV\s*\(?BR\)?|BREAKDOWN", p) else \
+            "vc" if re.search(r"\bVC\b|CLAMPING VOLTAGE", p) else None
+        nums = [float(x) * scale for x in
+                re.findall(r"\d+(?:\.\d+)?", str(row.get("value")))]
+        if key and nums:
+            got[key] = max(got.get(key, 0.0), max(nums))
+    return {k: v for k, v in got.items() if v > 0}
+
+
+def tvs_clamps(b: dict, ext: dict | None, bom: dict | None) -> dict | None:
+    """{vbr, vc, src} for a unidirectional TVS: vbr the top of its breakdown
+    range (where it may start to conduct, with no surge current: the most a
+    rail it guards sits at), vc its clamping voltage at its rated peak pulse
+    current (what a surge drives the rail to). Each from, in order: the
+    extraction's V(BR)/VC rows, the parts.json Clamping Voltage attribute
+    (LCSC's "Voltage - Breakdown" is the range's bottom, so never vbr), then
+    its part number's row in diode_vr.yaml (mpn_clamp). None for a part that
+    is not a unidirectional TVS or has neither number (#500)."""
+    kind, bi = clamp_kind(bom or {"mpn": b.get("mpn") or b.get("value")})
+    if kind is None and ext:
+        kind, bi = clamp_kind({"mpn": ext.get("mpn")})
+    if kind != "TVS" or bi:
+        return None
+    got = {k: (v, "datasheet extraction")
+           for k, v in _tvs_text_clamps(ext).items()}
+    for a in (bom or {}).get("attributes") or []:
+        if "vc" not in got and re.search(r"clamping voltage",
+                                         str(a.get("name") or ""), re.I):
+            m = re.search(r"(\d+(?:\.\d+)?)\s*V", str(a.get("value") or ""))
+            if m:
+                got["vc"] = (float(m.group(1)),
+                             f"parts.json {a.get('name')} = {a.get('value')}")
+    for pn in (b.get("mpn"), (bom or {}).get("mpn"), b.get("value"),
+               (ext or {}).get("mpn")):
+        if "vbr" in got and "vc" in got:
+            break
+        if (row := diode_vr.mpn_clamp(pn or "")) and not row["bi"]:
+            src = f"part number {pn}: {row['family']} ({row['cite']})"
+            got.setdefault("vbr", (row["vbr"], src))
+            got.setdefault("vc", (row["vc"], src))
+    if not got:
+        return None
+    return {"vbr": got.get("vbr", (None,))[0], "vc": got.get("vc", (None,))[0],
+            "src": "; ".join(dict.fromkeys(s for _, s in got.values()))}
+
+
+def rail_clamps(board: list[dict], exts: dict, bom_by_lcsc: dict,
+                netfns: dict, volts: dict, vsrc: dict,
+                constraints: dict | None) -> dict[str, dict]:
+    """{rail: {vbr, vc, by, src}} for each rail of known positive voltage a
+    clamp holds (#500): a constraints `voltages` entry's clamp_v (and
+    breakdown_v), else the unidirectional TVS (tvs_clamps) whose cathode
+    sits on the rail and anode on a 0 V net; with several, the lowest of
+    each number. A rail whose clamp is not above its own voltage is left
+    out: that is the TVS's own rating, judged as a diode."""
+    out: dict[str, dict] = {}
+    for b in board:
+        if not re.match(r"^D\d", b["ref"]):
+            continue
+        ext = exts.get(b["lcsc"])
+        tvs = tvs_clamps(b, ext, bom_by_lcsc.get(b["lcsc"]))
+        dp = diode_pads(b, ext, netfns) if tvs else None
+        if not dp:
+            continue
+        rail, gnd = b["pads"][dp["k"]], b["pads"][dp["a"]]
+        v = volts.get(rail)
+        if v is None or v <= 0 or vsrc.get(rail) == "pull-up" or not (
+                volts.get(gnd) == 0 or is_ground(base_net(gnd))):
+            continue
+        cur = out.setdefault(rail, {"vbr": None, "vc": None, "by": [],
+                                    "src": []})
+        for k in ("vbr", "vc"):
+            if tvs[k] is not None and (cur[k] is None or tvs[k] < cur[k]):
+                cur[k] = tvs[k]
+        cur["by"].append(b["ref"])
+        cur["src"].append(f"{b['ref']}: {tvs['src']}")
+    for e in (constraints or {}).get("voltages") or []:
+        net = e.get("net")
+        if e.get("clamp_v") is None or volts.get(net) is None:
+            continue
+        out[net] = {"vbr": None if e.get("breakdown_v") is None
+                    else float(e["breakdown_v"]),
+                    "vc": float(e["clamp_v"]), "by": ["constraints"],
+                    "src": ["constraints voltages clamp_v"]}
+    for net in list(out):
+        c = out[net]
+        if c["vbr"] is not None and c["vc"] is not None and c["vc"] < c["vbr"]:
+            c["vc"] = c["vbr"]
+        if max(x for x in (c["vbr"], c["vc"], 0.0) if x is not None) \
+                <= volts[net] + EPS:
+            del out[net]
+    return out
+
+
+def clamp_findings(board: list[dict], exts: dict, bom_by_lcsc: dict,
+                   netfns: dict, volts: dict, vsrc: dict,
+                   constraints: dict | None, diodes: dict, emit) -> dict:
+    """rating_over_clamp (#500): on a rail a TVS clamps, each part's voltage
+    rating is judged at the TVS's breakdown max (no clamp current yet) and at
+    its clamping voltage (a surge), not at the rail's nominal. Rated: an
+    extracted part's pins on the rail by their absolute-max voltage rows
+    (from ground, or from a named pin on a known net); an unextracted 2-net
+    part by its voltage-rated attribute or a capacitor's voltage code; a
+    diode by its reverse rating. The clamps themselves, and a part the
+    nominal already breaks (rating_over_voltage says so), are not judged.
+    Returns facts: {rail: {vbr, vc, by, src, judged}}."""
+    clamps = rail_clamps(board, exts, bom_by_lcsc, netfns, volts, vsrc,
+                         constraints)
+    if not clamps:
+        return {}
+    for c in clamps.values():
+        c["judged"] = []
+
+    def judge(ref, net, rating, src, vref, nominal, pin, what):
+        c = clamps[net]
+        if rating <= nominal + EPS:
+            return  # the rail itself breaks it: rating_over_voltage
+        c["judged"].append(pin or ref)
+        for level, top in (("breakdown", c["vbr"]), ("clamp", c["vc"])):
+            if top is None or top - vref <= rating + EPS:
+                continue
+            why = ("before it conducts, with no surge current: its breakdown "
+                   "max" if level == "breakdown" else
+                   "in a surge, at its rated peak pulse current: its clamping "
+                   "voltage")
+            emit("rating_over_clamp", "warning", ref, net,
+                 f"{what} is rated {_fmt(rating)} V [{src}] on {net} "
+                 f"({_fmt(nominal)} V nominal), which {', '.join(c['by'])} "
+                 f"lets reach {_fmt(top - vref)} V {why} "
+                 f"[{'; '.join(c['src'])}]",
+                 pin=pin, net_v=top - vref, limit_v=rating, rating=src,
+                 level=level, clamp=c["by"])
+            return
+
+    for b in sorted(board, key=lambda x: x["ref"]):
+        ref, pads = b["ref"], b["pads"]
+        on = sorted({n for n in pads.values() if n in clamps})
+        if not on or any(ref in c["by"] for c in clamps.values()):
+            continue
+        ext = exts.get(b["lcsc"])
+        bom = bom_by_lcsc.get(b["lcsc"])
+        if re.match(r"^(?:D|U|TVS|ESD)\d", ref) and (
+                (clamp_kind(bom)[0] if bom else None)
+                or clamp_kind({"mpn": b.get("mpn") or b.get("value")})[0]
+                or clamp_kind({"mpn": (ext or {}).get("mpn")})[0]):
+            continue  # a clamp in its own right
+        if ext is not None:
+            ratings = part_ratings(ext)
+            pinout = ext.get("pinout") or []
+            idx = pin_index(pinout)
+            for pin, net in sorted(pads.items()):
+                if net not in clamps:
+                    continue
+                p = next((q for q in pinout if q["pin"] == pin), None)
+                if p is None or p["type"] in ("ground", "nc"):
+                    continue
+                best = None
+                for r in ratings.get(pin, {}).get(("voltage", "abs"), []):
+                    if not isinstance(r["hi"], float) or r["hi"] <= 0:
+                        continue
+                    if r["ref"]:
+                        vs = [volts.get(pads.get(h["pin"]))
+                              for h in idx.get(str(r["ref"]).upper()) or []]
+                        vs = [x for x in vs if x is not None]
+                        if not vs:
+                            continue
+                        vref = min(vs)
+                    else:
+                        vref = 0.0
+                    if best is None or r["hi"] + vref < best[0] + best[1]:
+                        best = (r["hi"], vref, r["src"])
+                if best:
+                    judge(ref, net, best[0], best[2], best[1],
+                          volts[net] - best[1], f"{ref}.{pin}",
+                          f"{ref}.{pin} ({p['name']})")
+            continue
+        dio = diodes.get(ref)
+        if dio:
+            k, a = pads[dio["k"]], pads[dio["a"]]
+            if k in clamps and volts.get(a) is not None:
+                judge(ref, k, dio["vr"], dio["src"], volts[a],
+                      volts[k] - volts[a], f"{ref}.{dio['k']}",
+                      f"{ref} (reverse, cathode on {k})")
+            continue
+        nets = sorted(set(pads.values()))
+        if len(nets) != 2:
+            continue
+        rated, src = bom_volts(bom), "parts.json"
+        if rated is None and (code := cap_code_rating(b, bom)):
+            rated, src = code
+        if rated is None:
+            continue
+        net = on[0]
+        other = nets[1] if nets[0] == net else nets[0]
+        if other in clamps or volts.get(other) is None:
+            continue
+        judge(ref, net, rated, src, volts[other], volts[net] - volts[other],
+              None, ref)
+    return clamps
 
 
 FWD_MIN = 0.5    # V: a forward bias past this conducts in any silicon diode

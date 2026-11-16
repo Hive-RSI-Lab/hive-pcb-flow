@@ -4084,3 +4084,126 @@ def test_a_combined_fb_vout_pad_name_is_read_as_fb(tmp_path, rail, bad):
     p = _run(_net_ws(tmp_path, [_r("R1", rail, "FB_DIV", "100k"), _bot()],
                      ext=ext))
     assert (len(_out_errs(p)) == 1) == bad
+
+
+# ------------------------------------------------- ratings over a TVS (#500)
+
+BUS_DRIVER = {"mpn": "TEST-DRV", "pinout": [
+    {"pin": "1", "name": "VM", "type": "power_in"},
+    {"pin": "2", "name": "GND", "type": "ground"},
+    {"pin": "3", "name": "VDRAIN", "type": "power_in"}],
+    "abs_max": [{"param": "VM supply", "value": "-0.3~80", "unit": "V"}],
+    "pin_ratings": [
+        {"pins": ["VM"], "kind": "voltage", "level": "abs_max",
+         "min": -0.3, "max": 80, "source": "seeded VM row"},
+        {"pins": ["VDRAIN"], "kind": "voltage", "level": "abs_max",
+         "min": -0.3, "max": 102, "source": "seeded VDRAIN row"}]}
+
+
+def _cap_bom(lcsc, volts):
+    return {"lcsc": lcsc, "mpn": f"CAP-{lcsc}", "attributes": [
+        {"name": "Voltage Rated", "value": f"{volts}V"}]}
+
+
+def _bus_ws(tmp_path, tvs_mpn="SMCJ58A", rail="+56V", tvs_attrs=None,
+            tvs_ext=None, cap_v=63):
+    """The #500 bus: a TVS (cathode pad 1 on the rail, anode on GND), a
+    capacitor rated cap_v and a driver whose VM pin is rated 80 V."""
+    fps = [("C1", "C11", {"1": rail, "2": "GND"}),
+           ("U1", "C12", {"1": rail, "2": "GND", "3": rail})]
+    bom = [_cap_bom("C11", cap_v)]
+    parts = {"C12": BUS_DRIVER}
+    if tvs_mpn:
+        fps.append(("D1", "C10", {"1": rail, "2": "GND"}, "Diode_SMD:D_SMC"))
+        bom.append({"lcsc": "C10", "mpn": tvs_mpn,
+                    "attributes": tvs_attrs or []})
+        if tvs_ext:
+            parts["C10"] = tvs_ext
+    return _ws(tmp_path, fps, parts, bom)
+
+
+def _clamp_hits(p):
+    return sorted((v["refs"][0], v["pin"], v["level"], v["net_v"],
+                   v["limit_v"]) for v in p["violations"]
+                  if v["kind"] == "rating_over_clamp")
+
+
+def test_tvs_on_bus_judges_parts_at_breakdown_and_clamp(tmp_path):
+    """The issue's known answer: SMCJ58A (71.2 V breakdown max, 93 V
+    clamp) on a 56 V bus breaks a 63 V capacitor before it conducts and
+    an 80 V supply pin in a surge; a 102 V pin holds."""
+    p = _run(_bus_ws(tmp_path))
+    assert _clamp_hits(p) == [("C1", None, "breakdown", 71.2, 63.0),
+                              ("U1", "U1.1", "clamp", 93.0, 80.0)]
+    for v in p["violations"]:
+        if v["kind"] == "rating_over_clamp":
+            assert v["severity"] == "warning" and v["clamp"] == ["D1"]
+            assert "SMCJ58A" in v["msg"] and "Vishay" in v["msg"]
+    rail = p["clamped_rails"]["+56V"]
+    assert (rail["vbr"], rail["vc"], rail["by"]) == (71.2, 93.0, ["D1"])
+    assert rail["judged"] == ["C1", "U1.1", "U1.3"]
+
+
+def test_no_tvs_no_clamp_finding(tmp_path):
+    p = _run(_bus_ws(tmp_path, tvs_mpn=None))
+    assert _clamp_hits(p) == [] and p["clamped_rails"] == {}
+
+
+def test_bidirectional_tvs_is_not_read_as_a_clamp(tmp_path):
+    p = _run(_bus_ws(tmp_path, tvs_mpn="SMCJ58CA"))
+    assert _clamp_hits(p) == [] and p["clamped_rails"] == {}
+
+
+def test_a_part_the_nominal_breaks_is_left_to_over_voltage(tmp_path):
+    p = _run(_bus_ws(tmp_path, cap_v=50))
+    assert [h[0] for h in _clamp_hits(p)] == ["U1"]
+    assert any(v["kind"] == "rating_over_voltage" and v["refs"] == ["C1"]
+               for v in p["violations"])
+
+
+def test_tvs_extraction_rows_win_over_its_part_number(tmp_path):
+    """A free-text V(BR)/VC extraction is read before the family table."""
+    ext = {"mpn": "SMCJ58A", "pinout": [
+        {"pin": "1", "name": "K", "type": "passive"},
+        {"pin": "2", "name": "A", "type": "passive"}], "abs_max": [
+        {"param": "VBR breakdown voltage at IT, min to max",
+         "value": "64.4 to 62.0", "unit": "V"},
+        {"param": "VC maximum clamping voltage at IPP", "value": 78,
+         "unit": "V"}]}
+    p = _run(_bus_ws(tmp_path, tvs_ext=ext))
+    assert _clamp_hits(p) == [("C1", None, "breakdown", 64.4, 63.0)]
+    assert "datasheet extraction" in p["clamped_rails"]["+56V"]["src"][0]
+
+
+def test_listing_breakdown_is_not_the_clamp_top(tmp_path):
+    """LCSC's "Voltage - Breakdown" is the range's bottom: never the
+    breakdown max. Its "Clamping Voltage" is read as VC."""
+    attrs = [{"name": "Voltage - Breakdown (Min)", "value": "64.4V"},
+             {"name": "Clamping Voltage", "value": "90V"}]
+    p = _run(_bus_ws(tmp_path, tvs_mpn="TVS-NO-FAMILY-58", tvs_attrs=attrs))
+    rail = p["clamped_rails"]["+56V"]   # no family row: vc only
+    assert (rail["vbr"], rail["vc"]) == (None, 90.0)
+    assert [h[:3] for h in _clamp_hits(p)] == [("C1", None, "clamp"),
+                                               ("U1", "U1.1", "clamp")]
+    p = _run(_bus_ws(tmp_path / "b", tvs_attrs=attrs))
+    rail = p["clamped_rails"]["+56V"]
+    assert (rail["vbr"], rail["vc"]) == (71.2, 90.0)
+
+
+def test_constraints_clamp_v_states_the_clamp(tmp_path):
+    ws = _bus_ws(tmp_path, tvs_mpn=None, rail="+12V", cap_v=16)
+    cons = _cons(tmp_path, voltages=[
+        {"net": "+12V", "voltage": 12, "clamp_v": 20, "breakdown_v": 15}])
+    p = _run(ws, cons)
+    assert _clamp_hits(p) == [("C1", None, "clamp", 20.0, 16.0)]
+    assert p["clamped_rails"]["+12V"]["by"] == ["constraints"]
+
+
+def test_mpn_clamp_reads_the_family_row():
+    import diode_vr
+    r = diode_vr.mpn_clamp("SMCJ58A")
+    assert (r["vbr"], r["vc"], r["bi"]) == (71.2, 93.0, False)
+    assert "88394" in r["cite"]
+    assert diode_vr.mpn_clamp("SMCJ58CA")["bi"] is True
+    assert diode_vr.mpn_clamp("SS14") is None
+    assert diode_vr.mpn_clamp("") is None

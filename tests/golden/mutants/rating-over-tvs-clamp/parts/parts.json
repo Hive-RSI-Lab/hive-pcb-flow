@@ -1,0 +1,18 @@
+{
+  "parts": [
+    {
+      "ref_prefix_hint": "C",
+      "mpn": "C-TEST-6V3",
+      "lcsc": "C990867",
+      "value": "10uF",
+      "package": "0805",
+      "attributes": [
+        {
+          "name": "Voltage Rated",
+          "value": "6.3V"
+        }
+      ],
+      "role": "C5 +3V3 bulk"
+    }
+  ]
+}
