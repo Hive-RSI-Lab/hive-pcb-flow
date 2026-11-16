@@ -72,6 +72,29 @@ _COPPER_EXT_RE = re.compile(r"\.(?:(gtl)|(gbl)|g(\d+))$", re.I)
 # (an Altium import keeps "Top Solder", "Bottom Overlay"...): o = overlay
 # (silk), s = solder mask, p = paste; t/b = top/bottom
 _SIDE_EXT_RE = re.compile(r"\.g([tb])([osp])$", re.I)
+# Other names for the same layers (#1410), tried only on files the names above
+# leave unclaimed, so a set they already read reads the same: KiCad's own
+# layer names with the dot kept (`-F.Cu.gbr`, `-Edge.Cuts.gbr`, KiCad 5's
+# `-F.SilkS.gbr`), and the JLC plugin's (`-CuTop.gbr`, `-CuIn1.gbr`,
+# `-SilkBottom.gbr`, `-EdgeCuts.gbr`). Missing them left the outline empty, so
+# every edge-distance check was skipped on 7 of 33 training sets.
+_ALT_RE = re.compile(
+    r"-(?:(?P<side>[FB])[._](?P<kind>Cu|Mask|Paste|SilkS|Silkscreen)"
+    r"|In(?P<inner>\d+)[._]Cu"
+    r"|(?P<jkind>Cu|Mask|Paste|Silk)(?P<jside>Top|Bottom)"
+    r"|CuIn(?P<jinner>\d+)"
+    r"|(?P<edge>Edge[._]?Cuts))"
+    r"\.(?:gbr|gbx|gtl|gbl|g\d+|gto|gbo|gts|gbs|gtp|gbp|gm1|gko)$", re.I)
+_ALT_KIND = {"cu": "copper", "mask": "mask", "paste": "paste",
+             "silks": "silk", "silkscreen": "silk", "silk": "silk"}
+# A file no name claims may still say what it is: Gerber X2's
+# `%TF.FileFunction,...*%` header (KiCad writes it unless told not to).
+_FILE_FUNCTION_RE = re.compile(rb"TF\.FileFunction,([A-Za-z]+)((?:,[^*%,]+)*)")
+_GERBER_EXT_RE = re.compile(r"\.(gbr|gbx|ger|pho)$", re.I)
+# Last resort for the outline, by extension alone: .gm1 (KiCad's and Altium's
+# Protel name for the board outline layer) and .gko (Eagle's and the fab
+# houses' "keep-out"/outline). Only when nothing above names an outline.
+_EDGE_EXT_RE = re.compile(r"\.(gm1|gko)$", re.I)
 
 
 def _layer_key(token: str) -> str:
@@ -409,32 +432,108 @@ class FabStack:
         self._scan()
 
     def _scan(self) -> None:
+        unclaimed: list[Path] = []
         for p in sorted(self.dir.iterdir()):
             if not p.is_file():
                 continue
-            n = p.name
-            if (m := _COPPER_RE.search(n)):
-                self.copper_files[_layer_key(m.group(1))] = p
-            elif (m := _SILK_RE.search(n)):
-                self.silk_files[m.group(1)] = p
-            elif (m := _MASK_RE.search(n)):
-                self.mask_files[m.group(1)] = p
-            elif (m := _PASTE_RE.search(n)):
-                self.paste_files[m.group(1)] = p
-            elif _EDGE_RE.search(n):
-                self.edge_file = p
-            elif _DRILL_RE.search(n) and not n.lower().endswith(".gbrjob"):
-                (self.backdrill_files if is_backdrill(p)
-                 else self.drill_files).append(p)
-            elif (m := _COPPER_EXT_RE.search(n)):
-                key = ("F.Cu" if m.group(1) else "B.Cu" if m.group(2)
-                       else f"In{int(m.group(3))}.Cu")
-                self.copper_files.setdefault(key, p)
-            elif (m := _SIDE_EXT_RE.search(n)):
-                side = "F" if m.group(1).lower() == "t" else "B"
-                kind = {"o": self.silk_files, "s": self.mask_files,
-                        "p": self.paste_files}[m.group(2).lower()]
-                kind.setdefault(side, p)
+            if not self._scan_kicad_name(p):
+                unclaimed.append(p)
+        # Later passes only fill what is still empty (#1410).
+        rest = [p for p in unclaimed if not self._scan_alt_name(p)]
+        rest = [p for p in rest if not self._scan_file_function(p)]
+        if self.edge_file is None:
+            self.edge_file = next(
+                (p for p in rest if _EDGE_EXT_RE.search(p.name)), None)
+
+    def _put(self, kind: str, key: str, p: Path) -> bool:
+        if kind == "edge":
+            if self.edge_file is not None:
+                return False
+            self.edge_file = p
+            return True
+        files = {"copper": self.copper_files, "silk": self.silk_files,
+                 "mask": self.mask_files, "paste": self.paste_files}[kind]
+        if key in files:
+            return False
+        files[key] = p
+        return True
+
+    def _scan_alt_name(self, p: Path) -> bool:
+        m = _ALT_RE.search(p.name)
+        if not m:
+            return False
+        if m["edge"]:
+            return self._put("edge", "", p)
+        if m["inner"] or m["jinner"]:
+            return self._put("copper", f"In{int(m['inner'] or m['jinner'])}.Cu",
+                             p)
+        if m["side"]:
+            kind, side = _ALT_KIND[m["kind"].lower()], m["side"].upper()
+        else:
+            kind = _ALT_KIND[m["jkind"].lower()]
+            side = "F" if m["jside"].lower() == "top" else "B"
+        return self._put(kind, f"{side}.Cu" if kind == "copper" else side, p)
+
+    def _scan_file_function(self, p: Path) -> bool:
+        """Claim a gerber by its X2 FileFunction header. Copper,L<n>,Inr is
+        In<n-1>.Cu: KiCad numbers L1 = F.Cu and the inner layers from L2."""
+        if not _GERBER_EXT_RE.search(p.name):
+            return False
+        try:
+            with p.open("rb") as fh:
+                head = fh.read(4096)
+        except OSError:
+            return False
+        m = _FILE_FUNCTION_RE.search(head)
+        if not m:
+            return False
+        func = m.group(1).decode().lower()
+        args = [a.strip().lower() for a in m.group(2).decode(
+            errors="replace").split(",") if a.strip()]
+        if func == "profile":
+            return self._put("edge", "", p)
+        side = ("F" if "top" in args else "B" if "bot" in args else None)
+        if func == "copper":
+            if side:
+                return self._put("copper", f"{side}.Cu", p)
+            lay = next((a for a in args if re.fullmatch(r"l\d+", a)), None)
+            if "inr" in args and lay and int(lay[1:]) > 1:
+                return self._put("copper", f"In{int(lay[1:]) - 1}.Cu", p)
+            return False
+        kind = {"legend": "silk", "soldermask": "mask",
+                "paste": "paste"}.get(func)
+        if kind and side:
+            return self._put(kind, side, p)
+        return False
+
+    def _scan_kicad_name(self, p: Path) -> bool:
+        """The original single pass; False = the file is not claimed."""
+        n = p.name
+        if (m := _COPPER_RE.search(n)):
+            self.copper_files[_layer_key(m.group(1))] = p
+        elif (m := _SILK_RE.search(n)):
+            self.silk_files[m.group(1)] = p
+        elif (m := _MASK_RE.search(n)):
+            self.mask_files[m.group(1)] = p
+        elif (m := _PASTE_RE.search(n)):
+            self.paste_files[m.group(1)] = p
+        elif _EDGE_RE.search(n):
+            self.edge_file = p
+        elif _DRILL_RE.search(n) and not n.lower().endswith(".gbrjob"):
+            (self.backdrill_files if is_backdrill(p)
+             else self.drill_files).append(p)
+        elif (m := _COPPER_EXT_RE.search(n)):
+            key = ("F.Cu" if m.group(1) else "B.Cu" if m.group(2)
+                   else f"In{int(m.group(3))}.Cu")
+            self.copper_files.setdefault(key, p)
+        elif (m := _SIDE_EXT_RE.search(n)):
+            side = "F" if m.group(1).lower() == "t" else "B"
+            kind = {"o": self.silk_files, "s": self.mask_files,
+                    "p": self.paste_files}[m.group(2).lower()]
+            kind.setdefault(side, p)
+        else:
+            return False
+        return True
 
     # ------------------------------------------------------------ accessors
     def _get(self, path: Path | None, name: str) -> LayerGeom | None:

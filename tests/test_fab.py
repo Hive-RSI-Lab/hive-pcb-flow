@@ -295,6 +295,113 @@ def test_gerblib_classifies_layers(tmp_path):
     assert fab.edge_file is not None and len(fab.drill_files) == 1
 
 
+# #1410: the same 2-layer set under each naming family. A hot flash 0.05 mm
+# inside the left edge has to fire copper_to_edge whatever the files are called.
+_KICAD_NAMES = {"F.Cu": "e-F_Cu.gtl", "B.Cu": "e-B_Cu.gbl",
+                "F.Silk": "e-F_Silkscreen.gto", "B.Silk": "e-B_Silkscreen.gbo",
+                "F.Mask": "e-F_Mask.gts", "B.Mask": "e-B_Mask.gbs",
+                "Edge": "e-Edge_Cuts.gm1"}
+_DOTTED_NAMES = {"F.Cu": "e-F.Cu.gbr", "B.Cu": "e-B.Cu.gbr",
+                 "F.Silk": "e-F.SilkS.gbr", "B.Silk": "e-B.SilkS.gbr",
+                 "F.Mask": "e-F.Mask.gbr", "B.Mask": "e-B.Mask.gbr",
+                 "Edge": "e-Edge.Cuts.gbr"}
+_JLC_NAMES = {"F.Cu": "e-CuTop.gbr", "B.Cu": "e-CuBottom.gbr",
+              "F.Silk": "e-SilkTop.gbr", "B.Silk": "e-SilkBottom.gbr",
+              "F.Mask": "e-MaskTop.gbr", "B.Mask": "e-MaskBottom.gbr",
+              "Edge": "e-EdgeCuts.gbr"}
+_X2_FUNCTION = {"F.Cu": "Copper,L1,Top", "B.Cu": "Copper,L2,Bot",
+                "F.Silk": "Legend,Top", "B.Silk": "Legend,Bot",
+                "F.Mask": "Soldermask,Top", "B.Mask": "Soldermask,Bot",
+                "Edge": "Profile,NP"}
+
+
+def _named_set(d: Path, names: dict, x2: bool = False):
+    d.mkdir()
+    for layer, name in names.items():
+        kw = {}
+        if layer == "F.Cu":
+            kw["flashes"] = [(0.6, 0.35, 10.0)]     # pad edge 0.05 mm in
+        if layer == "Edge":
+            kw["traces"] = [(0.1, 0.0, 0.0, 20.0, 0.0),
+                            (0.1, 20.0, 0.0, 20.0, 20.0),
+                            (0.1, 20.0, 20.0, 0.0, 20.0),
+                            (0.1, 0.0, 20.0, 0.0, 0.0)]
+        write_gerber(d / name, **kw)
+        if x2:
+            p = d / name
+            p.write_text(f"%TF.FileFunction,{_X2_FUNCTION[layer]}*%\n"
+                         + p.read_text(encoding="utf-8"), encoding="utf-8")
+    write_drill(d / "e.drl")
+    return gerblib.open_fab(d)
+
+
+def _named_set_findings(fab) -> list:
+    vios: list = []
+    dfm_check.check_outline(fab, vios)
+    dfm_check.check_copper_to_edge(fab, RULES_2L, vios)
+    return [v["kind"] for v in vios]
+
+
+@pytest.mark.parametrize("names,x2", [
+    (_DOTTED_NAMES, False), (_JLC_NAMES, False),
+    ({k: f"e-layer{i}.gbr" for i, k in enumerate(_KICAD_NAMES)}, True)],
+    ids=["kicad-dotted", "jlc-plugin", "x2-header-only"])
+def test_gerblib_reads_other_layer_names_like_kicads(tmp_path, names, x2):
+    """Planted: on main none of these sets had an edge file (or copper), the
+    outline was empty and copper_to_edge never ran. Quiet twin: the KiCad
+    underscore set gives the same layers and the same single finding."""
+    twin = _named_set(tmp_path / "kicad", _KICAD_NAMES)
+    fab = _named_set(tmp_path / "other", names, x2=x2)
+    for f in (twin, fab):
+        assert f.copper_layer_names() == ["F.Cu", "B.Cu"]
+        assert set(f.silk_files) == set(f.mask_files) == {"F", "B"}
+        assert f.edge_file is not None
+        assert f.outline.area == pytest.approx(400.0, abs=0.01)
+    assert _named_set_findings(fab) == _named_set_findings(twin) == ["dfm_copper_to_edge"]
+
+
+def test_gerblib_kicad_names_win_over_other_names(tmp_path):
+    """The later passes only fill empty slots: a set the KiCad names already
+    read keeps the same files when an odd-named one sits beside it."""
+    d = tmp_path / "both"
+    d.mkdir()
+    write_gerber(d / "a-F.Cu.gbr")                 # sorts first
+    write_gerber(d / "b-F_Cu.gtl")
+    write_gerber(d / "a-EdgeCuts.gbr")
+    write_gerber(d / "b-Edge_Cuts.gm1")
+    p = d / "c-outline.gbr"
+    write_gerber(p)
+    p.write_text("%TF.FileFunction,Profile,NP*%\n"
+                 + p.read_text(encoding="utf-8"), encoding="utf-8")
+    fab = gerblib.open_fab(d)
+    assert fab.copper_files["F.Cu"].name == "b-F_Cu.gtl"
+    assert fab.edge_file.name == "b-Edge_Cuts.gm1"
+
+
+def test_gerblib_inner_copper_from_other_names(tmp_path):
+    d = tmp_path / "inner"
+    d.mkdir()
+    for name in ("x-CuIn1.gbr", "y-In2.Cu.gbr"):
+        write_gerber(d / name)
+    p = d / "z-l3.gbr"
+    write_gerber(p)
+    p.write_text("%TF.FileFunction,Copper,L4,Inr*%\n"
+                 + p.read_text(encoding="utf-8"), encoding="utf-8")
+    fab = gerblib.open_fab(d)
+    assert {k: v.name for k, v in fab.copper_files.items()} == {
+        "In1.Cu": "x-CuIn1.gbr", "In2.Cu": "y-In2.Cu.gbr",
+        "In3.Cu": "z-l3.gbr"}
+
+
+def test_gerblib_outline_by_extension_only_when_nothing_names_one(tmp_path):
+    d = tmp_path / "gko"
+    d.mkdir()
+    write_gerber(d / "board.GKO")
+    assert gerblib.open_fab(d).edge_file.name == "board.GKO"
+    write_gerber(d / "board-Edge_Cuts.gbr")
+    assert gerblib.open_fab(d).edge_file.name == "board-Edge_Cuts.gbr"
+
+
 def test_gerblib_copper_layer_physical_order():
     names = {"B.Cu": 1, "In2.Cu": 2, "F.Cu": 3, "In1.Cu": 4}
 

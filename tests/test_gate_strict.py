@@ -1158,6 +1158,31 @@ def test_dfm_open_outline_is_visible_and_fails_strict(tmp_path):
     assert "copper_to_edge" in strict["error"]
 
 
+def test_dfm_unrecognised_edge_file_says_so_not_open_outline(tmp_path):
+    """#1410: an edge file whose name and header nobody recognises is a
+    different fault from an outline that will not close, and the skip
+    reason says which one it is. The quiet twin is the intact set above."""
+    import dfm_check
+    gdir = tmp_path / "gerbers"
+    shutil.copytree(PD_GERBERS, gdir)
+    edge = gdir / "pd-trigger-Edge_Cuts.gm1"
+    body = [ln for ln in edge.read_text(encoding="utf-8").splitlines()
+            if "FileFunction" not in ln]
+    (gdir / "pd-trigger-board-shape.txt").write_text(
+        "\n".join(body) + "\n", encoding="utf-8")
+    edge.unlink()
+    payload = dfm_check.run(PD_PCB, fab_dir=gdir, polarity=False)
+    reason = payload["coverage"]["skipped_error"]["copper_to_edge"]
+    assert reason == "no Edge.Cuts Gerber recognised in the set"
+    assert not any(v.get("kind") == "dfm_open_outline"
+                   for v in payload["violations"])
+    open_dir = _tampered_gerbers(tmp_path / "open")
+    reason = dfm_check.run(PD_PCB, fab_dir=open_dir, polarity=False)[
+        "coverage"]["skipped_error"]["copper_to_edge"]
+    assert reason == ("Edge.Cuts (pd-trigger-Edge_Cuts.gm1) does not form "
+                      "a closed outline")
+
+
 # ----------------------------------------------- release gates (gates.yaml)
 
 def test_release_gates_are_strict():
