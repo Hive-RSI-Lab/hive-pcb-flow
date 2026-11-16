@@ -107,16 +107,47 @@ def test_text_far_from_any_connector_is_ignored():
 @pytest.mark.parametrize("word,net", [
     ("+12", "+12V"), ("12V", "/pwr/+12V"), ("3V3", "+3.3V"), ("3.3", "+3V3"),
     ("G", "GND"), ("0V", "GND"), ("~{RST}", "/RST"),
-    ("CLK", "/SWCLK")])
+    ("CLK", "/SWCLK"), ("-5V_DIV", "MIN5V_DIV"), ("-12", "NEG12V"),
+    ("M5V", "-5V"), ("-3V3", "/MIN3V3"), ("M1", "/M1")])
 def test_names(word, net):
     assert cs._names(word, net)
 
 
 @pytest.mark.parametrize("word,net", [
     ("5V", "+3V3"), ("CK", "/SWCLK"), ("GND", "Net-(C2-Pad1)"),
-    ("CLK", "unconnected-(J1-Pad2)"), ("RX", "/TX")])
+    ("CLK", "unconnected-(J1-Pad2)"), ("RX", "/TX"),
+    ("-5V_DIV", "5V_DIV"), ("5V_DIV", "MIN5V_DIV"), ("-5V", "+5V"),
+    ("5V", "M5V"), ("12", "NEG12V")])
 def test_does_not_name(word, net):
     assert not cs._names(word, net)
+
+
+def _zxdiag():
+    """J202 as on zxdiag-v10 (#1456): a row along x at 2.54 mm, pins 9-14,
+    the three divided rails on 10-12 and 13-14 not connected."""
+    nets = ["ZXA10", "5V_DIV", "12V_DIV", "MIN5V_DIV",
+            "unconnected-(J202-Pad13)", "unconnected-(J202-Pad14)"]
+    return _Board([_Pad("J202", str(9 + i), n, 113.31 + 2.54 * i, 138.56)
+                   for i, n in enumerate(nets)])
+
+
+def _slanted(word, pin_x):
+    """A label at 30 degrees, left-justified, starting just above its pin
+    and running up and on over the next ones, as zxdiag's are."""
+    return _text(word, pin_x - 0.09, 136.62, angle=30.0, just=(-1, 0))
+
+
+def test_zxdiag_minus_label_by_its_own_pin_is_quiet():
+    # the false finding of #1456: "-5V_DIV" starts at pin 12 (MIN5V_DIV)
+    labels = [_slanted(w, 113.31 + 2.54 * i)
+              for i, w in [(1, "5V_DIV"), (2, "12V_DIV"), (3, "-5V_DIV")]]
+    assert cs.check_label_nets(_zxdiag(), labels) == []
+
+
+def test_zxdiag_minus_label_on_the_plus_rail_fires():
+    # planted: "-5V_DIV" starts at pin 10 (5V_DIV), two pins off
+    v = cs.check_label_nets(_zxdiag(), [_slanted("-5V_DIV", 115.85)])
+    assert [(h["pin"], h["named_pin"]) for h in v] == [("10", "12")]
 
 
 def test_parse_silk_takes_a_kicad6_footprints_ref_from_fp_text():

@@ -617,12 +617,21 @@ PIN_LABEL_MM = 1.5    # a one-word pin label sits this close to its pin's pad
 ROW_ACROSS_MM = 1.0   # pads within this of one line (across it) are one row
 
 
+NEG_RAIL = re.compile(r"(?:(?:-|MIN|NEG)(?=\d+(?:\.\d+)?V?(?:\d|_|$))"
+                      r"|M(?=\d+(?:\.\d+)?V(?:\d|_|$)))")  # M1 is a motor
+
+
 def _norm(name: str | None) -> str:
     """A net name or a silk word in one spelling: the last path part, upper
     case, no leading +, no ~{} or overbar marks, GND for any ground word, and
-    a voltage as N.NV (3V3, 3.3, +3.3V -> 3.3V; 12, +12V -> 12V)."""
+    a voltage as N.NV (3V3, 3.3, +3.3V -> 3.3V; 12, +12V -> 12V). A negative
+    rail keeps its sign as a leading - whichever way it is spelt (#1456):
+    -5V, MIN5V, NEG5V and M5V are all -5V, so -5V_DIV is MIN5V_DIV."""
     n = (name or "").rsplit("/", 1)[-1].strip().upper()
     n = re.sub(r"[~{}]", "", n).lstrip("+")
+    m = NEG_RAIL.match(n)
+    if m:
+        return "-" + _norm(n[m.end():])
     if n in GND_NAMES:
         return "GND"
     m = re.fullmatch(r"(\d+)V(\d+)", n)
@@ -650,6 +659,8 @@ def _names(token: str, net: str | None) -> bool:
     if t == n:
         return True
     short, long_ = sorted((t, n), key=len)
+    if long_ == "-" + short:
+        return False                         # 5V_DIV is not -5V_DIV (#1456)
     return len(short) >= 3 and long_.endswith(short)
 
 
@@ -838,13 +849,31 @@ def _columns(s, g, conns, pairs):
         form=form, lines=len(pairs), pins=len(pads))
 
 
+def _pin_end(s, pads) -> Point:
+    """Where a one-word label points at its pin: the middle of its box (the
+    anchor can be either end, by justification), but for slanted text the
+    end of the word nearer the pads. A label at 30 degrees leaves its pin
+    and runs on over the next one, so its middle sits by the wrong pin
+    (#1456, zxdiag-v10 J202)."""
+    c = s.geom.centroid
+    a = (s.angle or 0.0) % 90.0
+    if a < 1.0 or a > 89.0:
+        return c
+    sx = s.size[0] or 1.0
+    half = (len(s.text.strip()) * CHAR_W * sx + s.thickness) / 2.0
+    r = math.radians(s.angle)
+    dx, dy = half * math.cos(r), -half * math.sin(r)
+    ends = [Point(c.x - dx, c.y - dy), Point(c.x + dx, c.y + dy)]
+    return min(ends, key=lambda e: min(e.distance(p.poly) for p in pads))
+
+
 def _single(s, ref, pads, word):
     if not word or " " in word:
         return None
     hits = [p for p in pads if _names(word, p.net)]
     if not hits:
         return None
-    pt = s.geom.centroid     # the anchor can be the text's end (justify)
+    pt = _pin_end(s, pads)
     near = min(pads, key=lambda p: pt.distance(Point(p.center)))
     if near in hits or _names(word, near.net):
         return None
