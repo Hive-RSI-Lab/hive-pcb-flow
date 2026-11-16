@@ -35,11 +35,15 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 import threading
 from pathlib import Path
 from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
+for _p in (HERE, HERE.parent):        # lib/ and scripts/: its lazy imports
+    if str(_p) not in sys.path:         # (datasheet_extract) under python -I
+        sys.path.insert(0, str(_p))
 MAKERS = HERE.parent.parent / "reference" / "datasheet_makers.yaml"
 
 # Bump when a change here can change a result: cached results are keyed by it.
