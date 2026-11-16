@@ -33,7 +33,7 @@ import netlist_audit  # noqa: E402
 import signal_domains  # noqa: E402
 
 KINDS = ("polarity_", "idle_pull_asserted", "io_domain_",
-         "latch_enable_held")
+         "latch_enable_held", "latch_enable_polarity")
 
 HC_ROW = {"mpn": "SN74HC245", "match": r"^(SN)?74HC\d", "pintypes": "input",
           "vin_max_vdd": 0.0, "vih": 3.15, "vih_vdd": 4.5,
@@ -365,6 +365,67 @@ def test_other_pins_of_a_latch_are_not_its_enable():
     # a 573's ~OE tied low is the usual always-driving strap
     assert _audit(*_latch("74HC573", "~{OE}", "GND"))[0] == []
     assert _audit(*_latch("74HC595", "SRCLK", "mcu"))[0] == []
+
+# --------------------------------------------------- latch_enable_polarity
+
+def _drive(value, func, drv, inverter=False, drv_type="output"):
+    """U1 (VALUE) with its latch pin FUNC on net LATCH, driven by U3 (a
+    CPLD that also has a ~{RD} output) through its pin DRV; with INVERTER
+    the line goes through U4 (74HC04) pin 1 in, pin 2 out."""
+    comps = {"U1": value, "U3": "XC9572", "U4": "74HC04"}
+    nets = _rails(("U1", "20", "+3V3", "VCC"), ("U1", "10", "GND", "GND"),
+                  ("U3", "1", "+3V3", "VCC"))
+    nets["RD_N"] = [_m("U3", "3", "~{RD}", "output")]
+    src = _m("U3", "2", drv, drv_type)
+    pin = _m("U1", "11", func, "input")
+    if inverter:
+        nets["STB_N"] = [src, _m("U4", "1", "1A", "input")]
+        nets["LATCH"] = [pin, _m("U4", "2", "1Y", "output")]
+    else:
+        nets["LATCH"] = [pin, src]
+    return comps, nets
+
+
+def test_an_active_low_select_into_a_transparent_high_enable_is_a_fault():
+    hits, facts = _audit(*_drive("74HC573", "LE", "~{CS}"))
+    assert _kinds(hits) == [("latch_enable_polarity", "error", ["U1"])]
+    assert "asserts low" in hits[0]["msg"]
+    assert facts["latch_drive_checked"] == 1
+
+
+def test_the_same_select_through_an_inverter_is_quiet():
+    hits, facts = _audit(*_drive("74HC573", "LE", "~{CS}", inverter=True))
+    assert hits == []
+    assert facts["latch_drive_checked"] == 1
+
+
+def test_a_matching_level_or_a_port_pin_driver_is_quiet():
+    assert _audit(*_drive("74HC573", "LE", "ALE"))[0] == []
+    assert _audit(*_drive("74HC259", "~{LE}", "~{WR}"))[0] == []
+    assert _audit(*_drive("74HC573", "LE", "GPIO5", drv_type="bidirectional"))[0] == []
+    assert _audit(*_drive("74HC273", "LE", "Q0"))[0] == []
+
+
+def test_a_plain_strobe_into_an_active_low_load_is_a_fault():
+    hits, _ = _audit(*_drive("74HC165", "~{PL}", "STB"))
+    assert _kinds(hits) == [("latch_enable_polarity", "error", ["U1"])]
+
+
+def test_an_edge_storage_clock_is_not_judged_for_polarity():
+    hits, facts = _audit(*_drive("74HC595", "RCLK", "~{CS}"))
+    assert hits == []
+    assert facts["latch_drive_checked"] == 0
+
+
+def test_a_driver_of_unknown_level_is_not_judged():
+    comps, nets = _drive("74HC573", "LE", "1")
+    nets["LATCH"] = [nets["LATCH"][0], _m("J1", "1", "1", "passive")]
+    comps["J1"] = "Conn_01x02"
+    hits, facts = _audit(comps, nets)
+    assert hits == []
+    nj = facts["not_judged"]
+    assert any("latch_enable_polarity on LATCH" in x for x in nj), nj
+
 
 # ---------------------------------------------------------- io domain
 
