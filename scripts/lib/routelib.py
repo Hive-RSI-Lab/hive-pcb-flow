@@ -1808,6 +1808,15 @@ def _shuffle_children(text: str, scan: str, head: str, child: str,
                       rng) -> str:
     """Shuffle the order of the `(child ...)` children of the first
     `(head ...)` section; every other child keeps its place."""
+    return _reorder_children(text, scan, head, child,
+                             lambda order, _blocks: rng.shuffle(order))
+
+
+def _reorder_children(text: str, scan: str, head: str, child: str,
+                      reorder) -> str:
+    """Reorder the `(child ...)` children of the first `(head ...)` section;
+    every other child keeps its place. reorder(order, blocks) permutes the
+    index list `order` in place (blocks: the children's text)."""
     m = re.search(r"\(" + head + r"[\s)]", _quote_mask(scan))
     if not m:
         return text
@@ -1818,7 +1827,7 @@ def _shuffle_children(text: str, scan: str, head: str, child: str,
         return text
     blocks = [text[s:e] for s, e in spans]
     order = list(range(len(blocks)))
-    rng.shuffle(order)
+    reorder(order, blocks)
     out, pos = [], 0
     for (s, e), k in zip(spans, order):
         out.append(text[pos:s])
@@ -1827,6 +1836,47 @@ def _shuffle_children(text: str, scan: str, head: str, child: str,
     out.append(text[pos:])
     return "".join(out)
 
+
+_DSN_NET_NAME_RE = re.compile(r'\(net\s+("(?:[^"\\]|\\.)*"|[^\s()]+)')
+
+
+def dsn_sort_nets(dsn_text: str) -> str:
+    """The same design with its network nets in name order. KiCad numbers
+    nets in the order it meets them as it loads the board, which follows
+    the footprint order, and the DSN lists nets by number; Freerouting
+    takes them in file order (see dsn_shuffle). With the export's
+    sort_refs (route_swig) and dsn_sort_wiring this makes the DSN
+    independent of the board's footprint order (#1412). Unparseable input
+    comes back unchanged."""
+    def by_name(order, blocks):
+        def key(k):
+            m = _DSN_NET_NAME_RE.match(blocks[k])
+            return (m.group(1).strip('"') if m else "", k)
+        order.sort(key=key)
+    try:
+        return _reorder_children(dsn_text, _parser_blanked(dsn_text),
+                                 "network", "net", by_name)
+    except CheckError:
+        return dsn_text
+
+
+
+def dsn_sort_wiring(dsn_text: str) -> str:
+    """The same design with its pre-routed wiring in text order: wires
+    among the wires' places and vias among the vias'. KiCad exports tracks
+    in board order, which is the order a step added them (route_escape
+    fans each BGA out in footprint order), and Freerouting reads them in
+    file order (#1412). Unparseable input comes back unchanged."""
+    def by_text(order, blocks):
+        order.sort(key=lambda k: (blocks[k], k))
+    try:
+        out = dsn_text
+        for child in ("wire", "via"):
+            out = _reorder_children(out, _parser_blanked(out), "wiring",
+                                    child, by_text)
+        return out
+    except CheckError:
+        return dsn_text
 
 def dsn_shuffle(dsn_text: str, seed: int) -> str:
     """The same design with its placement components and network nets in a

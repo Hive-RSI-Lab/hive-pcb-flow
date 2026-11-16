@@ -16,8 +16,10 @@ file has {"ok": false, ...} when possible). Nothing is saved on failure.
 
 job JSON: {"verb": ..., "result": out.json, ...} with verbs:
 
-  export_dsn: {"board": pcb, "dsn": out.dsn, "layer_types": {"In1.Cu": "power"}}
-      Specctra DSN export. wx asserts suppressed (export wedges headless on a
+  export_dsn: {"board": pcb, "dsn": out.dsn, "layer_types": {"In1.Cu": "power"},
+               "sort_refs": true}
+      Specctra DSN export. sort_refs (optional) puts footprints in reference
+      order first, so the DSN does not follow the board's file order (#1412). wx asserts suppressed (export wedges headless on a
       courtyard-polygon wxASSERT otherwise). layer_types (optional) sets
       LT_POWER/LT_SIGNAL per layer BEFORE export (DSN "(type power)" drives
       Freerouting's plane rules; auto-detection does not exist) - transient,
@@ -151,12 +153,33 @@ def _set_layer_types(board, layer_types):
         board.SetLayerType(_layer_id(board, lname), kinds[kind])
 
 
+def _sort_footprints(board):
+    """Put the board's footprints in reference order (transient: the
+    export verb never saves). KiCad keeps footprints in file order on load
+    and saves them sorted by UUID, and a footprint written without a UUID
+    gets a random one each load, so the order is arbitrary. The DSN follows
+    it: components, and the name of the image footprints of one shape
+    share (the first one met), and Freerouting's result follows the DSN
+    (#1412)."""
+    fps = sorted(board.Footprints(), key=lambda f: (f.GetReference(),
+                                                    str(f.m_Uuid.AsString())))
+    for fp in fps:
+        board.Remove(fp)
+    import pcbnew
+    append = pcbnew.ADD_MODE_APPEND  # the default INSERT puts each in front
+    for fp in fps:
+        fp.thisown = 0
+        board.AddNative(fp, append)
+
+
 def verb_export_dsn(job):
     import pcbnew
 
     _wx_quiet()
     board = pcbnew.LoadBoard(job["board"])
     _set_layer_types(board, job.get("layer_types"))
+    if job.get("sort_refs"):
+        _sort_footprints(board)
     ok = pcbnew.ExportSpecctraDSN(board, job["dsn"])
     if not ok:
         raise RuntimeError("ExportSpecctraDSN returned False")

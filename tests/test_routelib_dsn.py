@@ -147,3 +147,25 @@ def test_unparseable_input_is_returned_unchanged():
                 "(wire (polygon F.Cu 0  1000 0  2000 0  2000 100))"):
         text = _dsn(_wire("0 0  1000 0"), bad)
         assert merge(text) == (text, 0), bad
+
+
+def test_dsn_sort_wiring_lists_the_same_copper_in_one_order():
+    # #1412: KiCad exports tracks in the order a step added them
+    # (route_escape fans each BGA out in footprint order)
+    w1 = _wire("0 0  100 0", "/A")
+    w2 = _wire("500 0  600 0", "/B")
+    w3 = _wire("900 0  950 0", "/C")
+    via1 = '(via "Via[0-1]_600:300_um" 100 0 (net /A)(type protect))'
+    via2 = '(via "Via[0-1]_600:300_um" 600 0 (net /B)(type protect))'
+    a = _dsn(w3, via2, w1, via1, w2)
+    b = _dsn(w1, via1, w2, via2, w3)
+    sa, sb = routelib.dsn_sort_wiring(a), routelib.dsn_sort_wiring(b)
+    assert a != b and sa == sb
+    assert sorted(sa.splitlines()) == sorted(a.splitlines())
+    assert routelib.dsn_sort_wiring(sa) == sa
+    lines = sa.splitlines()
+    # wires stay in the wires' places, vias in the vias'
+    heads = [ln.split()[0] for ln in lines[lines.index("  (wiring") + 1:-2]]
+    assert heads == ["(wire", "(via", "(wire", "(via", "(wire"]
+    assert routelib.dsn_sort_wiring("(pcb x") == "(pcb x"
+    assert routelib.dsn_sort_wiring(_dsn(w1)) == _dsn(w1)

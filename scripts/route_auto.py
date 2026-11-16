@@ -3,7 +3,8 @@
 Flow (all on a STAGED copy in the work dir; the real board is swapped only on
 success): refill zones (a stale/unfilled pour exports wrong) -> Specctra DSN
 export via the SWIG worker (wx-suppressed; plane layers marked LT_POWER so the
-DSN carries "(type power)") -> Freerouting CLI over an escalation ladder
+DSN carries "(type power)"; footprints by reference and nets by name, so the
+board's file order does not steer Freerouting, _export_dsn, #1412) -> Freerouting CLI over an escalation ladder
 (the DSN first carries each net's .kicad_dru width/clearance floor as its own
 class, routelib.dsn_apply_net_rules, the board's hole rules the export
 drops, _dsn_hole_rules, the layers a DRU `disallow track` rule bans a net
@@ -121,6 +122,24 @@ def _stage_board(pcb: Path, work: Path) -> Path:
     return staged
 
 
+def _export_dsn(bp: Path, staged: Path, dsn: Path, power_layers, work: Path):
+    """Specctra export of the staged board, in an order that depends on the
+    design alone: footprints by reference (route_swig sort_refs) and nets
+    by name (routelib.dsn_sort_nets), pre-routed wiring by text
+    (routelib.dsn_sort_wiring). KiCad saves footprints sorted by
+    UUID, and footprints written without one get a random UUID per load,
+    so file order is arbitrary; Freerouting's result follows the DSN
+    order, so without this the same board routed differently per save
+    (#1412). --tries still shuffles from this base."""
+    routelib.run_worker(bp, {
+        "verb": "export_dsn", "board": str(staged), "dsn": str(dsn),
+        "layer_types": {ly: "power" for ly in power_layers},
+        "sort_refs": True}, work)
+    text = dsn.read_text(encoding="utf-8")
+    dsn.write_text(routelib.dsn_sort_wiring(routelib.dsn_sort_nets(text)),
+                   encoding="utf-8")
+
+
 def _dsn_net_rules(staged: Path, dsn: Path) -> list[str]:
     """Write the staged board's per-net .kicad_dru track_width/clearance
     floors into the exported DSN; returns the nets given their own class."""
@@ -183,10 +202,14 @@ def _dsn_track_bans(staged: Path, dsn: Path, bg: geom.BoardGeom) -> list[dict]:
 
 def _dsn_merge_wires(dsn: Path) -> int:
     """Join the exported DSN's split pre-routed wires (Freerouting 2.2.4
-    overflows its stack on them); returns the wires folded together."""
+    overflows its stack on them); returns the wires folded together. The
+    joined wires are sorted again (routelib.dsn_sort_wiring): a joined
+    wire takes the place of one of its pieces, so two exports of one board
+    that list the pieces in other orders would list the same wires in
+    other orders (#1412)."""
     text, merged = routelib.dsn_merge_wires(dsn.read_text(encoding="utf-8"))
     if merged:
-        dsn.write_text(text, encoding="utf-8")
+        dsn.write_text(routelib.dsn_sort_wiring(text), encoding="utf-8")
     return merged
 
 
@@ -602,9 +625,7 @@ def route_probe(pcb: Path, *, passes: int = 4, timeout_s: int = 180,
         kc.run_drc(cli, staged, refill=True, save_board=True)
         bg = geom.BoardGeom.from_file(staged)  # power layers need fresh fills
     dsn, ses = work / "probe.dsn", work / "probe.ses"
-    routelib.run_worker(bp, {
-        "verb": "export_dsn", "board": str(staged), "dsn": str(dsn),
-        "layer_types": {ly: "power" for ly in _auto_power_layers(bg)}}, work)
+    _export_dsn(bp, staged, dsn, _auto_power_layers(bg), work)
     _dsn_net_rules(staged, dsn)
     _dsn_layer_widths(staged, dsn)
     _dsn_track_bans(staged, dsn, bg)
@@ -1083,9 +1104,7 @@ def run(argv: list[str] | None = None):
     else:
         power_layers = [s.strip() for s in args.power_layers.split(",") if s.strip()]
     dsn = work / (pcb.stem + ".dsn")
-    routelib.run_worker(bp, {
-        "verb": "export_dsn", "board": str(staged), "dsn": str(dsn),
-        "layer_types": {ly: "power" for ly in power_layers}}, work)
+    _export_dsn(bp, staged, dsn, power_layers, work)
     dsn_net_rules = _dsn_net_rules(staged, dsn)
     dsn_layer_widths = _dsn_layer_widths(staged, dsn)
     dsn_track_bans = _dsn_track_bans(staged, dsn, bg)

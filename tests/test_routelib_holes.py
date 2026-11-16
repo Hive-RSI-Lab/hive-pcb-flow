@@ -157,7 +157,48 @@ def test_npth_keepouts_rotated_slot_and_no_holes():
 
 
 def test_dsn_shuffle_reorders_components_and_nets_only():
-    dsn = DSN.replace("  (network\n", """  (placement
+    dsn = _three_nets()
+    outs = {routelib.dsn_shuffle(dsn, s) for s in range(1, 8)}
+    assert len(outs) > 1                         # the seed matters
+    assert routelib.dsn_shuffle(dsn, 3) == routelib.dsn_shuffle(dsn, 3)
+    for out in outs:
+        assert sorted(out.splitlines()) == sorted(dsn.splitlines())
+        # classes stay after the nets, sections stay in place
+        assert out.index("(class kicad_default") > out.index('(net "C(1)"')
+        assert out.index("(placement") < out.index("(network")
+    assert routelib.dsn_shuffle("(pcb x", 1) == "(pcb x"
+
+
+def _net_names(text):
+    return re.findall(r'^    \(net ("[^"]*"|\S+)', text, re.M)
+
+
+def test_dsn_sort_nets_puts_nets_in_name_order_whatever_the_load_order():
+    # #1412: KiCad numbers nets in load order, so the same board saved
+    # with its footprints in another order exports its nets in another
+    # order, and Freerouting routes them in another order
+    dsn = _three_nets()
+    scrambled = dsn.replace("    (net A\n      (pins R1-1 R2-1)\n    )\n", "")
+    scrambled = scrambled.replace(
+        "    (class kicad_default",
+        "    (net A\n      (pins R1-1 R2-1)\n    )\n    (class kicad_default")
+    assert _net_names(scrambled) == ["B", '"C(1)"', "A"]
+    out = routelib.dsn_sort_nets(scrambled)
+    assert _net_names(out) == ["A", "B", '"C(1)"']
+    assert out == routelib.dsn_sort_nets(dsn)
+    assert routelib.dsn_sort_nets(out) == out    # idempotent
+    # the class stays after the nets, components keep their order
+    assert out.index("(class kicad_default") > out.index('(net "C(1)"')
+    assert out.index("R_A") < out.index("R_B") < out.index("R_C")
+    for s in range(1, 8):
+        shuffled = routelib.dsn_shuffle(dsn, s)
+        assert _net_names(routelib.dsn_sort_nets(shuffled)) == \
+            ["A", "B", '"C(1)"']
+    assert routelib.dsn_sort_nets("(pcb x") == "(pcb x"
+
+
+def _three_nets():
+    return DSN.replace("  (network\n", """  (placement
     (component R_A
       (place R1 0 0 front 0)
     )
@@ -179,15 +220,6 @@ def test_dsn_shuffle_reorders_components_and_nets_only():
       (pins R3-2 R1-2)
     )
 """)
-    outs = {routelib.dsn_shuffle(dsn, s) for s in range(1, 8)}
-    assert len(outs) > 1                         # the seed matters
-    assert routelib.dsn_shuffle(dsn, 3) == routelib.dsn_shuffle(dsn, 3)
-    for out in outs:
-        assert sorted(out.splitlines()) == sorted(dsn.splitlines())
-        # classes stay after the nets, sections stay in place
-        assert out.index("(class kicad_default") > out.index('(net "C(1)"')
-        assert out.index("(placement") < out.index("(network")
-    assert routelib.dsn_shuffle("(pcb x", 1) == "(pcb x"
 
 
 def test_edge_keepouts_band_every_edge_on_every_layer():
