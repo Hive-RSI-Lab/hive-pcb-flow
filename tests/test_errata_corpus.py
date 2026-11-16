@@ -844,11 +844,22 @@ def test_errata_ratings_adds_only_each_rated_parts_source(tmp_path, monkeypatch)
     rated_from: one source per part it rated (verified, listed or failed)."""
     import errata_ratings
     import check_ratings
+    import checklib
     monkeypatch.setenv("HWDE_LEDGER_WRITE", "0")
+    # the two runs may stamp different seconds (#1352): make every stamp
+    # differ, so a compare that reads the clock fails here every time
+    stamp, tick = checklib.stamp, iter(range(10 ** 6))
+
+    def ticking(payload, input_path):
+        out = stamp(payload, input_path)
+        out["generated_at"] = f"tick {next(tick)}"
+        return out
+    monkeypatch.setattr(checklib, "stamp", ticking)
     pcb = ROOT / "tests" / "fixtures" / "ratings" / "overvolt" / "kicad" / "board.kicad_pcb"
     mine, _ = errata_ratings.run(["--pcb", str(pcb)])
     theirs, _ = check_ratings.run(["--pcb", str(pcb)])
     rated = mine.pop("rated_from")
+    assert mine.pop("generated_at") != theirs.pop("generated_at")
     assert json.loads(json.dumps(mine)) == json.loads(json.dumps(theirs))
     counts = theirs["ledger_counts"]["rating"]
     assert len(rated) == counts["verified"] + counts["listed"] + counts["failed"] > 0
