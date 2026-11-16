@@ -422,6 +422,35 @@ def test_a_walled_in_pad_rips_the_signal_track_in_the_way(tmp_path):
     assert job["vias"] == 0 or len(rip) == 1        # one layer crossed
 
 
+def test_a_pad_walled_in_by_five_nets_waits_for_a_wider_rip(tmp_path):
+    """#1374 (the 6-layer bench's U2 /B5_2, boxed in by six nets): five
+    signal walls on both layers are one more than the default rip budget,
+    so the job fails with rip_over_budget 5; a budget of 6 routes it,
+    ripping all five. Quiet twin: when one wall is a net never ripped no
+    budget frees it, and no rip_over_budget is set."""
+    body = _pad("U1", 5, 15, "SIG") + _pad("U2", 25, 15, "SIG")
+    walls = [f"W{i}" for i in range(5)]
+    for i, w in enumerate(walls):
+        x = 11 + 2 * i
+        body += _seg(x, 0.1, x, 29.9, 0.25, "F.Cu", w, f"u-{w}f")
+        body += _seg(x, 0.1, x, 29.9, 0.25, "B.Cu", w, f"u-{w}b")
+    pcb = _board(tmp_path, body)
+    pairs = [_pair("SIG", (5, 15), (25, 15))]
+    _, jobs = _plan(pcb, pairs, rip_board=True, ripped_out=[])
+    assert jobs[0]["status"] == "failed"
+    assert jobs[0]["rip_refused"] == walls
+    assert jobs[0]["rip_over_budget"] == 5
+    rip: list = []
+    _, jobs = _plan(pcb, pairs, rip_board=True, ripped_out=rip,
+                    rip_board_nets=6)
+    assert jobs[0]["status"] == "routed"
+    assert jobs[0]["ripped_nets"] == walls
+    _, jobs = _plan(pcb, pairs, rip_board=True, ripped_out=[],
+                    rip_board_nets=6, keep_nets_extra={"W2"})
+    assert jobs[0]["status"] == "failed"
+    assert "rip_over_budget" not in jobs[0]
+
+
 def test_power_and_pour_copper_is_never_ripped(tmp_path):
     body = _pad("U1", 5, 15, "+3V3") + _pad("U2", 25, 15, "+3V3")
     # SIG carries a .kicad_dru width rule: sized by rule, never ripped

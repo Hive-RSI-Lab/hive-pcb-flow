@@ -35,14 +35,17 @@ the neck width and keeps it only inside its neck zone, #937), then route_finish'
 vias DRC names in a short/clearance/crossing error and routes them again,
 then whatever DRC still reports unconnected - grid A* at the board's own
 rules, pour pieces joined by a via, walled-in pads freed by ripping the
-fewest signal nets in the way - kept only if the board ends better
-(--no-maze-finish skips it).
+fewest signal nets in the way (at most 4; once more with 6 when a pad
+needs that many, facts.maze_finish.wide_rip) - kept only if the board ends
+better (--no-maze-finish skips it).
 
 Before those finishes, a BGA ball the route left cut off on its own escape
 dog-bone (its net unrouted, its island reaching no other pad) loses the
 dog-bone, so the finishes route it from the bare pad (row 129); if the
 finished board is worse than the routed one before the drop, the drop is
-undone (facts.escape_drops; --keep-escapes skips it).
+undone (facts.escape_drops; --keep-escapes skips it). When it is kept, a
+dropped ball the finishes still left unrouted gets its escape back if the
+DRC grade is no worse (escape_drops.given_back, #1374).
 
 Freerouting's own success signal is NEVER trusted (LEARNINGS [freerouting]):
 completion comes from the log's unrouted counts and the gate is kicad-cli DRC.
@@ -848,6 +851,59 @@ def _maze_no_rip_retry(maze) -> dict:
     return facts
 
 
+WIDE_RIP_NETS = 6
+
+
+def _maze_wide_rip(maze, facts: dict) -> dict | None:
+    """maze(rip_board, rip_nets) as in _maze_no_rip_retry. A connection
+    walled in by more nets than route_finish rips at once (4) fails with
+    rip_over_budget; when the maze's last pass leaves one that needs at
+    most WIDE_RIP_NETS, the maze runs once more with that budget on the
+    board as it stands (finish_staged keeps a pass only if fewer stay
+    unconnected and no error type grows). The 6-layer bench's U2 /B5_2,
+    an edge ball boxed in by six nets of the escaped field, routed with
+    six and all six routed again: 3 unconnected to 2. None when no
+    connection asks for it."""
+    passes = facts.get("passes") or []
+    need = [c["rip_over_budget"] for c in (passes[-1].get("connections")
+                                           or [] if passes else [])
+            if c.get("status") != "routed" and c.get("rip_over_budget")]
+    if not need or min(need) > WIDE_RIP_NETS:
+        return None
+    return maze(True, WIDE_RIP_NETS)
+
+
+def _grade(drc: dict) -> tuple[int, int]:
+    return len(_drc_unrouted(drc)), sum(_err_counts(drc).values())
+
+
+def _escapes_back(staged: Path, snap: Path, drops: list[dict], drc: dict,
+                  regrade, spare: Path) -> tuple[list[dict], dict]:
+    """#1374: the escape drop is kept or undone for the whole batch, so a
+    ball the finishes still could not route lost its escape for good when
+    the drop helped the others (the 6-layer bench's U2 /B5_2, 14 to 3
+    unconnected). Each such ball's dropped copper is copied back from the
+    snapshot taken before the drop, one ball at a time, and kept only if
+    the DRC grade (unrouted nets, errors) is no worse: the ball keeps its
+    stub for a later pass or a hand join. regrade() refills and re-runs
+    the DRC of staged; spare holds staged while a ball is tried. Returns
+    the balls given back and the DRC after."""
+    back = []
+    for d in drops:
+        if d["net"] not in _drc_unrouted(drc):
+            continue
+        shutil.copy2(staged, spare)
+        route_edit.apply_ops(staged, [{"op": "copy_from", "pcb": str(snap),
+                                       "uuid_prefix": list(d["uuids"])}])
+        after = regrade()
+        if _grade(after) <= _grade(drc):
+            drc = after
+            back.append({k: d[k] for k in ("ref", "ball", "net")})
+        else:
+            shutil.copy2(spare, staged)
+    return back, drc
+
+
 def _ball_islands(bg, net: str) -> list[dict]:
     """The net's tracks, vias and pads grouped into copper islands (same
     layer and touching), each {"pads": [(ref, number)], "uuids": [...]}."""
@@ -1280,11 +1336,12 @@ def run(argv: list[str] | None = None):
                                         or _err_counts(drc)):
             import route_finish
 
-            def _maze(rip_board):
+            def _maze(rip_board, rip_nets=4):
                 sbg = geom.BoardGeom.from_file(staged)
                 return route_finish.finish_staged(
                     cli, staged, drc, parity=sch.is_file(), refill=has_zones,
                     rip_errors=True, rip_board=rip_board,
+                    rip_board_nets=rip_nets,
                     protect_uuids=_protect_uuids(pre, sbg),
                     layers=(",".join(ly for ly in bg.copper_layers
                                      if ly not in power_layers)
@@ -1294,6 +1351,17 @@ def run(argv: list[str] | None = None):
                 drc = maze_facts.pop("drc")
             else:
                 maze_facts.pop("drc", None)
+            wide = _maze_wide_rip(_maze, maze_facts) \
+                if _drc_unrouted(drc) else None
+            if wide is not None:
+                if wide.get("kept"):
+                    drc = wide.pop("drc")
+                else:
+                    wide.pop("drc", None)
+                maze_facts["wide_rip"] = {"rip_nets": WIDE_RIP_NETS, **{
+                    k: wide.get(k) for k in (
+                        "kept", "unconnected_before", "unconnected_after",
+                        "rip_split_undone")}}
 
         return drc, finish_facts, maze_facts
 
@@ -1311,6 +1379,16 @@ def run(argv: list[str] | None = None):
                                          "errors": grade[1]}
             drc, finish_facts, maze_facts = _finishes(snap_drc)
             escape_drops["unrouted_after_undo"] = len(_drc_unrouted(drc))
+        else:
+            def _regrade():
+                if has_zones:
+                    kc.run_drc(cli, staged, refill=True, save_board=True)
+                return kc.run_drc(cli, staged, parity=sch.is_file(),
+                                  all_track_errors=True)
+            back, drc = _escapes_back(staged, snap, drops, drc, _regrade,
+                                      work / "pre_escape_back.kicad_pcb")
+            if back:
+                escape_drops["given_back"] = back
     if not fr_ok and not (finish_facts and finish_facts.get("kept")):
         if _all_timed_out(rungs):
             return _timeout_report(

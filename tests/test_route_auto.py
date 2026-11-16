@@ -26,6 +26,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS / "lib"))
 import env  # noqa: E402
 import geom  # noqa: E402
+import kc  # noqa: E402
 import route_auto  # noqa: E402
 import route_edit  # noqa: E402
 import routelib  # noqa: E402
@@ -885,6 +886,114 @@ def test_escape_drop_keeps_an_enclosed_fine_balls_escape(tmp_path):
     assert esc(0.5, 2, 2, "c3") == []
     assert [d["ball"] for d in esc(0.5, 1, 1, "b2")] == ["B2"]
     assert [d["ball"] for d in esc(0.8, 2, 2, "c3w")] == ["C3"]
+
+
+def test_maze_wide_rip_runs_when_a_pad_needs_up_to_six_nets():
+    """#1374: the maze's last pass left U2 /B5_2 refused for the count
+    (rip_over_budget 6): the maze runs once more with a budget of 6. Quiet
+    twins: a refusal over 6, one not about the count (a never-ripped net),
+    a connection that routed, and a refusal only in an earlier pass start
+    nothing."""
+    calls = []
+
+    def maze(rip_board, rip_nets=4):
+        calls.append((rip_board, rip_nets))
+        return {"kept": True, "unconnected_after": 2}
+
+    def facts(*last, earlier=()):
+        return {"passes": [{"connections": list(earlier)},
+                           {"connections": list(last)}]}
+    b52 = {"net": "/B5_2", "status": "failed", "rip_over_budget": 6,
+           "rip_refused": ["/B3_4", "/B4_2", "/B4_3", "/B5_1", "/B5_3",
+                           "/B5_4"]}
+    gate = {"net": "/B2_1", "status": "failed"}
+    got = route_auto._maze_wide_rip(maze, facts(gate, b52))
+    assert got == {"kept": True, "unconnected_after": 2}
+    assert calls == [(True, route_auto.WIDE_RIP_NETS)] == [(True, 6)]
+    calls.clear()
+    for f in (facts(gate, dict(b52, rip_over_budget=7)),
+              facts(gate, {"net": "/X", "status": "failed",
+                           "rip_refused": ["GND"]}),
+              facts(dict(b52, status="routed")),
+              facts(gate, earlier=[b52]), {}):
+        assert route_auto._maze_wide_rip(maze, f) is None
+    assert calls == []
+
+
+def _snap(tmp_path):
+    """_escaped's dog-bone with a 0.5/0.2 via, the board's own rule (0.45
+    breaks its 0.15 annular ring): the copy taken before the drop."""
+    from test_route_escape import _via, board
+    dog = (_seg(18, 13, 18.4, 13.4, "/S0_0", "esc-s")
+           + _via(18.4, 13.4, "/S0_0", "esc-v", size=0.5))
+    return board(tmp_path, extra=dog, name="snap")
+
+
+def _dropped(tmp_path, extra="", name="d"):
+    """_escaped's board after the drop: /S0_0's ball bare."""
+    from test_route_escape import board
+    return board(tmp_path, extra=extra, name=name)
+
+
+def _drc_live():
+    cli = env.find_kicad_cli()
+    if cli is None:
+        pytest.skip("kicad-cli not installed")
+    return cli
+
+
+def test_escapes_back_returns_an_unrouted_balls_dog_bone(tmp_path):
+    """#1374, planted fault: the drop took /S0_0's dog-bone and the
+    finishes left /S0_0 unrouted: its stub and via come back from the
+    snapshot (same places, net and size), the grade no worse."""
+    cli = _drc_live()
+    snap = _snap(tmp_path)
+    staged = _dropped(tmp_path)
+    drc = kc.run_drc(cli, staged, all_track_errors=True)
+    drops = [{"ref": "U1", "ball": "A1", "net": "/S0_0",
+              "uuids": ["esc-s", "esc-v"]}]
+    back, after = route_auto._escapes_back(
+        staged, snap, drops, drc,
+        lambda: kc.run_drc(cli, staged, all_track_errors=True),
+        tmp_path / "spare.kicad_pcb")
+    assert back == [{"ref": "U1", "ball": "A1", "net": "/S0_0"}]
+    assert route_auto._grade(after) <= route_auto._grade(drc)
+    bg = geom.BoardGeom.from_file(staged)
+    assert [(round(v.at[0], 3), round(v.at[1], 3)) for v in
+            bg.vias_of(net="/S0_0")] == [(18.4, 13.4)]
+    assert [[tuple(round(c, 3) for c in xy) for xy in t.shape.coords]
+            for t in bg.tracks_of(net="/S0_0")] == [[(18, 13), (18.4, 13.4)]]
+
+
+def test_escapes_back_leaves_a_routed_or_blocked_ball_bare(tmp_path):
+    """Quiet twins: a dropped ball whose net routed gets nothing back, and
+    one whose via would now sit too close to another net's track (a /S5_5
+    track on In1.Cu 0.02 mm from it) stays bare: the board is as it was."""
+    cli = _drc_live()
+    snap = _snap(tmp_path)
+    drops = [{"ref": "U1", "ball": "A1", "net": "/S0_0",
+              "uuids": ["esc-s", "esc-v"]}]
+    staged = _dropped(tmp_path)
+    before = staged.read_text()
+    drc = kc.run_drc(cli, staged, all_track_errors=True)
+    routed = dict(drc, violations=[
+        v for v in drc["violations"]
+        if not (v.get("source") == "unconnected" and v.get("net") == "/S0_0")])
+    back, _ = route_auto._escapes_back(
+        staged, snap, drops, routed, lambda: pytest.fail("no DRC needed"),
+        tmp_path / "spare.kicad_pcb")
+    assert back == [] and staged.read_text() == before
+    staged = _dropped(tmp_path, _seg(17.0, 13.72, 19.8, 13.72, "/S5_5",
+                                     "block", layer="In1.Cu"), name="blk")
+    before = staged.read_text()
+    drc = kc.run_drc(cli, staged, all_track_errors=True)
+    assert "/S0_0" in route_auto._drc_unrouted(drc)
+    back, after = route_auto._escapes_back(
+        staged, snap, drops, drc,
+        lambda: kc.run_drc(cli, staged, all_track_errors=True),
+        tmp_path / "spare.kicad_pcb")
+    assert back == [] and after is drc
+    assert staged.read_text() == before
 
 
 def test_drop_pre_forgets_only_the_dropped_copper(tmp_path):

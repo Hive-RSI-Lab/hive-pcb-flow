@@ -2014,6 +2014,10 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                 fixed = sorted(nt for nt in nets if nt in keep_nets)
                 if fixed or len(nets) > rip_board_nets:
                     job["rip_refused"] = fixed or sorted(nets)
+                    if not fixed:
+                        # only the count stopped it: a wider budget may
+                        # free the ball (route_auto's wide-rip retry)
+                        job["rip_over_budget"] = len(nets)
                 else:
                     obs.hidden.update(board_rip)
                     obs.added = [it for it in obs.added if it.conn not in own]
@@ -2139,6 +2143,7 @@ def _one_pass(cli, staged, drc, opts, *, parity, refill, log):
     jobs = plan_routes(bg, rules, pairs, lays, grid=opts["grid"],
                        margin=opts["margin"], max_conns=opts["max_conns"],
                        rip_board=opts["rip_board"], ripped_out=rip, log=log,
+                       rip_board_nets=opts["rip_board_nets"],
                        skip=opts["skip"], keep_nets_extra=opts["keep_nets"],
                        deadline=opts["deadline"], on_try=opts["on_try"],
                        max_nodes=opts["max_nodes"],
@@ -2201,7 +2206,7 @@ def finish_staged(cli: Path, staged: Path, drc: dict, *, nets=None,
                   refill: bool = True, dry_run: bool = False,
                   passes: int = 6, rip_errors: bool = False,
                   rip_board: bool = True, keep_nets: set | None = None,
-                  log=None, skip_conns=None,
+                  log=None, skip_conns=None, rip_board_nets: int = 4,
                   deadline: float | None = None, on_try=None,
                   max_nodes: int = 3_000_000,
                   search_weight: float = 1.0,
@@ -2215,14 +2220,19 @@ def finish_staged(cli: Path, staged: Path, drc: dict, *, nets=None,
     rip_errors takes out the tracks and vias DRC names in a copper error,
     but never one in protect_uuids (the caller's copper from before
     routing, #655); facts "ripped_items" and "protected_kept" list both by
-    net and position."""
+    net and position.
+
+    rip_board_nets: the most other nets one walled-in connection may rip
+    (rip_board); a connection refused only for the count carries
+    rip_over_budget, the count it needed."""
     import shutil
 
     opts = dict(nets=set(nets) if nets else None, layers=layers, grid=grid,
                 margin=margin, min_width=min_width,
                 clearance_margin=clearance_margin, via_size=via_size,
                 via_drill=via_drill, max_conns=max_conns,
-                rip_board=rip_board, drc_s=0.0, deadline=deadline,
+                rip_board=rip_board, rip_board_nets=rip_board_nets,
+                drc_s=0.0, deadline=deadline,
                 skip=None if skip_conns is None else set(skip_conns),
                 keep_nets=keep_nets, on_try=on_try, max_nodes=max_nodes,
                 search_weight=search_weight,
@@ -2240,7 +2250,7 @@ def finish_staged(cli: Path, staged: Path, drc: dict, *, nets=None,
         jobs = plan_routes(bg, rules, unconnected_pairs(drc, opts["nets"]),
                            lays, grid=grid, margin=margin,
                            max_conns=max_conns, rip_board=rip_board, log=log,
-                           skip=opts["skip"], keep_nets_extra=keep_nets,
+                           rip_board_nets=rip_board_nets, skip=opts["skip"], keep_nets_extra=keep_nets,
                            max_nodes=max_nodes, search_weight=search_weight)
         facts.update(kept=False, rules=_rules_facts(rules), layers=lays,
                      connections=jobs,
