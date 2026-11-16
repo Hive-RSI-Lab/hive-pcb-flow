@@ -76,6 +76,7 @@ _INTAKE = "materializes a whole KiCad project through intake"
 SLOW = {
     "tests/test_zone_patch.py::test_live_drop_and_rebuild_the_patches_on_a_copy_of_core": _TOOLS,
     "tests/test_zone_patch.py::test_live_via_array_on_a_copy_of_core": _TOOLS,
+    "tests/test_route_edit_patches.py::test_live_rip_names_then_takes_the_patch": _TOOLS,
     "tests/test_necks.py::test_live_freerouting_neckdown_passes_the_neck_rule": _TOOLS,
     "tests/test_fr_fixed_overlap.py::test_live_route_along_a_fixed_stub_finishes_and_keeps_the_stub": _TOOLS,
     "tests/test_xvfb_noreset.py::test_live_kicad_starts_at_once_all_come_up": "starts KiCad's python 8 times at once, each on its own Xvfb",
