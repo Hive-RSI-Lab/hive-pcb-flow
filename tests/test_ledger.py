@@ -574,3 +574,124 @@ def test_cli_set_pinout_still_refused_without_an_extraction(ws, capsys):
     """A pinout has no listing to rest on: the part's own PDF is what it means."""
     _rating_ws(ws)
     assert _set(ws) == 2
+
+
+# ------ #791: rating/pinout/footprint facts of refs the board no longer relies on
+
+def _stale_ws(ws):
+    """An older ledger: J7 and NT1 (now board_feature) and U9 (now DNP) kept
+    the facts written while they were bought parts; U8's rating was checked
+    by hand and outranks anything a table says (as on hdi-bga U104/U105)."""
+    pj = ws / "parts" / "parts.json"
+    d = json.loads(pj.read_text(encoding="utf-8"))
+    d["parts"] += [
+        {"refdes": ["J7"], "value": "pads", "assembly_class": "board_feature"},
+        {"refdes": ["NT1"], "value": "net tie",
+         "assembly_class": "board_feature"},
+        {"refdes": ["U9"], "lcsc": "C84681", "value": "CH340C",
+         "assembly_class": "dnp"}]
+    pj.write_text(json.dumps(d), encoding="utf-8")
+    facts = {}
+    for ref in ("J7", "NT1", "U9"):
+        for kind in ledgerlib.REF_KINDS:
+            facts[ledgerlib.key(ref, kind)] = {
+                "subject": ref, "kind": kind, "status": "unknown", "value": "",
+                "source": "", "refs": [ref], "lcsc": "", "checked_at": None,
+                "by": None}
+    facts["U9/footprint"].update(status="verified", by="cpl_verify",
+                                 source="C84681 model")
+    facts["U8/rating"] = {"subject": "U8", "kind": "rating",
+                          "status": "verified", "by": "hand",
+                          "value": "VCC 5 V within 6 V abs max",
+                          "source": "CH340 datasheet v3B p.6",
+                          "lcsc": "C84681", "checked_at": "2026-11-01T00:00:00+00:00"}
+    facts["J7/pinout"].update(status="verified", by="hand",
+                              source="drawing of the pads, by hand")
+    ledgerlib.path(ws).write_text(json.dumps(
+        {"schema": 1, "facts": facts}), encoding="utf-8")
+    return facts
+
+
+STALE = sorted(["J7/rating", "J7/footprint", "NT1/rating", "NT1/pinout",
+                "NT1/footprint", "U9/rating", "U9/pinout", "U9/footprint"])
+
+
+def test_stale_facts_of_unbought_refs_are_orphans_and_never_count(ws):
+    _stale_ws(ws)
+    orph = ledgerlib.orphans(ws)
+    assert sorted(orph) == STALE
+    rep = ledgerlib.report(ws)
+    assert sorted(o["key"] for o in rep["orphaned"]) == STALE
+    assert not [r for r in rep["facts"] if r["subject"] in ("J7", "NT1", "U9")]
+    assert not [b for b in ledgerlib.blockers(ws)
+                if any(r in b for r in ("J7", "NT1", "U9,", "U9 "))]
+
+
+def test_any_write_drops_stale_ref_facts_and_says_so_once(ws, capsys):
+    _stale_ws(ws)
+    ledgerlib.put(ws, [{"subject": "U8", "kind": "pinout",
+                        "status": "unknown"}], "check_ratings")
+    err = capsys.readouterr().err
+    assert err.count("stale") == 1
+    assert "8" in err and "J7/rating" in err
+    keys = set(ledgerlib.load(ws)["facts"])
+    assert not keys & set(STALE)
+    ledgerlib.put(ws, [], "check_ratings")                # nothing left to say
+    assert "stale" not in capsys.readouterr().err
+    assert ledgerlib.orphans(ws) == {}
+
+
+def test_hand_verified_facts_survive_a_write_untouched(ws):
+    before = _stale_ws(ws)
+    ledgerlib.put(ws, [], "check_ratings")
+    ledgerlib.prune(ws, apply=True)
+    after = ledgerlib.load(ws)["facts"]
+    # a real bought part's hand check: kept byte for byte, still verified
+    assert after["U8/rating"] == before["U8/rating"]
+    rows = {r["key"]: r for r in ledgerlib.report(ws)["facts"]}
+    assert rows["U8/rating"]["status"] == "verified"
+    # a hand-set fact about a board feature is not relied on, so it is not
+    # evidence, but nobody's hand record is thrown away
+    assert after["J7/pinout"] == before["J7/pinout"]
+    assert "J7/pinout" not in ledgerlib.orphans(ws)
+
+
+def test_check_ratings_keeps_a_hand_verified_rating_over_its_own(ws):
+    """check_ratings' write path holds a hand-verified rating (#429)."""
+    import check_ratings
+    _stale_ws(ws)
+    (ws / "kicad").mkdir()
+    pcb = ws / "kicad" / "core.kicad_pcb"
+    pcb.write_text("(kicad_pcb (version 20240108))", encoding="utf-8")
+    check_ratings.run(["--pcb", str(pcb)])
+    data = ledgerlib.load(ws)
+    assert data.get("updated")                  # its write happened ...
+    assert not set(data["facts"]) & set(STALE)  # ... and dropped the stale
+    f = data["facts"]["U8/rating"]
+    assert f["by"] == "hand" and f["status"] == "verified"
+    assert f["source"] == "CH340 datasheet v3B p.6"
+
+
+def test_a_connector_with_no_datasheet_is_unjudged_with_the_reason():
+    """No extraction and no rated listing: no pinout or rating is made up for
+    it; both facts stay unknown (unjudged) and say what is missing."""
+    import check_ratings
+    b = {"ref": "J3", "lcsc": "C2040", "footprint": "Conn:PinHeader_1x04",
+         "nums": ["1", "2", "3", "4"], "fns": {},
+         "pads": {"1": "+5V", "2": "GND", "3": "SDA", "4": "SCL"}}
+    vios, unrated = [], []
+
+    def emit(kind, sev, ref, net, msg, **kw):
+        vios.append({"kind": kind, "severity": sev, "refs": [ref],
+                     "msg": msg})
+    judged = check_ratings._check_unextracted(
+        b, {"lcsc": "C2040", "attributes": {}}, {"+5V": 5.0, "GND": 0.0},
+        emit, unrated)
+    assert judged is None          # no tier: nothing was compared
+    facts = {f["kind"]: f for f in check_ratings.ledger_facts(
+        [b], {}, vios, {}, {"C2040": {"lcsc": "C2040"}})}
+    for kind in ("rating", "pinout"):
+        f = facts[kind]
+        assert f["status"] == "unknown", f
+        assert "datasheet" in f["value"], f
+        assert not f.get("source") and "rated_from" not in f, f

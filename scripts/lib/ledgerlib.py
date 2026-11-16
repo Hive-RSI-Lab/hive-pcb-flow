@@ -48,7 +48,15 @@ otherwise unbought line) get no `(no LCSC: REF)` facts; a real part with no
 code gets one (`stock`, unknown: "no LCSC code"), which blocks. Recording
 stock (`record_stock`, so stock_check and bom_cpl's live run) also prunes the
 orphaned facts (`prune`): a gone part, a placeholder that gained a code, a
-vendor no longer chosen.
+vendor no longer chosen, and (#791) a rating, pinout or footprint fact about a
+ref the board no longer relies on: an unbought line or a hole, test point or
+fiducial, from a ledger written before those stopped being expected. Every
+write (`put`) drops the ones it did not just record and says so once on
+stderr. A fact set by hand
+(ledger.py set) is never dropped that way, only ignored: not expected, so it
+counts for nothing. A connector with no datasheet extraction and no rated
+listing gets no made-up pinout or rating: both read `unknown` (unjudged) with
+the reason, and block.
 A fact expected but never written reads `unknown`. A recorded fact reads
 `unknown` again when it went stale: stock older than STOCK_MAX_AGE_H, or a
 fact about a refdes whose LCSC code has since changed.
@@ -75,6 +83,7 @@ import datetime as _dt
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 LEDGER = "ledger.json"
@@ -307,7 +316,17 @@ def put(ws: Path, facts: list[dict], by: str) -> Path | None:
         ent["checked_at"] = f.get("checked_at") or ts
         ent["by"] = by
         data["facts"][key(f["subject"], f["kind"])] = ent
-    for k, e in expected(ws).items():
+    exp = expected(ws)
+    written = {key(f["subject"], f["kind"]) for f in facts}
+    stale = [k for k in _stale(data["facts"], exp, _class_of(ws))
+             if k not in written]       # what this write records, it keeps
+    if stale:
+        for k in stale:
+            del data["facts"][k]
+        print(f"ledger: dropped {len(stale)} stale fact(s) about refs the "
+              f"board no longer relies on (unbought or hole/test point/"
+              f"fiducial): {', '.join(stale)}", file=sys.stderr)
+    for k, e in exp.items():
         data["facts"].setdefault(k, {**e, "status": "unknown", "value": "",
                                      "source": "", "checked_at": None,
                                      "by": None})
@@ -434,21 +453,39 @@ def present_subjects(ws: Path) -> set[str]:
     return out
 
 
+# The checks that write ref facts (and None: put()'s unknown placeholder). A
+# fact any other writer set (ledger.py set: "hand") is kept even where it is
+# no longer relied on: ignored, never thrown away.
+CHECKERS = (None, "check_ratings", "cpl_verify")
+
+
+def _stale(facts: dict, exp: dict, cls: dict[str, str]) -> list[str]:
+    """Keys of rating/pinout/footprint facts about a ref still on the board
+    that it no longer relies on: an unbought line (dnp, board_feature,
+    customer_supplied) or a hole, test point or fiducial, as old ledgers
+    recorded them before #789/#791. Only unknowns and checkers' facts."""
+    out = []
+    for k, f in facts.items():
+        subj = f.get("subject") or k.rsplit("/", 1)[0]
+        relied_on = not (cls.get(subj) in UNBOUGHT or NO_CODE_REF.match(subj))
+        if k in exp or f.get("kind") not in REF_KINDS or relied_on:
+            continue
+        if f.get("status") == "unknown" or f.get("by") in CHECKERS:
+            out.append(k)
+    return sorted(out)
+
+
 def orphans(ws: Path) -> dict[str, dict]:
     """key -> fact, for facts whose subject (refdes, LCSC code or vendor) is
-    no longer on the board: a swapped or removed part's leftovers."""
+    no longer on the board, a swapped or removed part's leftovers, and the
+    stale ref facts of a ref the board no longer relies on (`_stale`)."""
     present = present_subjects(ws)
     exp = expected(ws)
-    out = {}
-    for k, f in load(ws)["facts"].items():
-        subj = f.get("subject") or k.rsplit("/", 1)[0]
-        # a hole, test point or fiducial's unknown rating/footprint fact from
-        # before #789: the part is present, the fact is no longer expected
-        stale = (k not in exp and NO_CODE_REF.match(subj)
-                 and f.get("kind") in REF_KINDS and f.get("status") == "unknown")
-        if subj not in present or stale:
-            out[k] = f
-    return out
+    facts = load(ws)["facts"]
+    stale = set(_stale(facts, exp, _class_of(ws)))
+    return {k: f for k, f in facts.items()
+            if k in stale or (f.get("subject") or k.rsplit("/", 1)[0])
+            not in present}
 
 
 def prune(ws: Path, apply: bool = False) -> list[str]:

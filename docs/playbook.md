@@ -272,7 +272,11 @@ the gaps; `ledger.py set ... --source` records one you checked yourself (`--forc
 over a suspect datasheet). Facts about a part that left the board
 (swapped or removed refdes or LCSC code) show as `orphaned` in the report and
 in `attest build`, never count as evidence; `ledger.py prune --workspace <ws>`
-lists them, `--apply` deletes them.
+lists them, `--apply` deletes them. So do a check's rating, pinout or footprint
+facts about a ref the board no longer buys (a DNP, board_feature or
+customer_supplied line, or a hole, test point or fiducial), and every ledger
+write drops those itself, naming them once on stderr; a fact set by hand is
+kept, only ignored (#791).
 Release refuses while any fact is failed or unknown. A listed fact passes and
 `attest` names it, with a `rating_no_datasheet_read` warning saying how to read
 the datasheet. Where a part has both, a listing that differs from the datasheet
