@@ -165,6 +165,10 @@ def stand_ins(tmp_path, monkeypatch):
         "package": "SOT-23-5", "datasheet": "https://example.com/ldo.pdf"}))
     monkeypatch.setattr(amb.parts_enrich, "cache_dir", lambda: lst)
 
+    def offline(mpn, out):              # no search: read_part as before #1521
+        raise RuntimeError("no JLC search in tests")
+    monkeypatch.setattr(amb, "search_rows", offline)
+
     def fetch(url, dest, mpn=None, transport=None, domains=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"%PDF-1.4 stand-in")
@@ -351,6 +355,125 @@ def test_a_resolver_miss_is_named_and_a_stall_is_asked_again(
         assert rep["status"] == "no listing with a datasheet URL"
         assert rep["resolver"] == "not found" and "ti.com/x.pdf" in rep["why"]
     assert len(asked) == 2 and calls == []     # the stall was not cached
+
+
+VALUE_PADS = {"1": "+5V", "2": "GND", "3": "+5V", "5": "+3V3"}
+NEAR_ROW = {"lcsc": "C1234", "mpn": "74AHCT1G125GW", "brand": "Nexperia",
+            "package": "SOT-353", "category": "Buffers"}
+
+
+def _no_datasheet(monkeypatch, rows, miss="not found", kind="absent"):
+    """A Value-keyed part with no listing URL, the search rows given, and
+    the resolver missing (kind 'stalled' for a host that stalled)."""
+    import dsresolve
+    monkeypatch.setattr(amb, "find_listing", lambda key, out: {})
+    monkeypatch.setattr(amb, "search_rows", lambda mpn, out: rows)
+    monkeypatch.setattr(dsresolve, "resolve", lambda mpn, brand, dest: {
+        "maker": "Nexperia", "miss": miss,
+        "tried": [{"url": "https://www.nexperia.com/x.pdf", "kind": kind,
+                   "why": "HTTP 404"}]})
+
+
+def test_a_value_with_no_exact_listing_is_named_as_land_names_it(
+        stand_ins, monkeypatch):
+    """#1521 planted fault: a Value no search row is exactly, the maker's
+    site missing, is 'not one listing for its Value' with the nearest MPN,
+    the label land gives it; nothing is read."""
+    out, reader, calls = stand_ins
+    _no_datasheet(monkeypatch, [NEAR_ROW])
+    board = _fp("U1", VALUE_PADS, value="74AHCT1G125DB")
+    rep = amb.read_part("mpn:74AHCT1G125DB", [board], out, reader)
+    assert rep["status"] == "not one listing for its Value", rep
+    assert rep["keyed_by"] == "value" and rep["resolver"] == "not found"
+    assert rep["why"] == ("no JLC listing has exactly that MPN; nearest: "
+                          "74AHCT1G125GW (C1234, SOT-353)")
+    assert calls == []
+    _no_datasheet(monkeypatch, [])
+    rep = amb.read_part("mpn:74AHCT1G125DB", [board], out, reader)
+    assert rep["why"] == "no JLC listing has exactly that MPN, nor one near it"
+
+
+def test_the_old_labels_stay_where_the_value_rule_does_not_hold(
+        stand_ins, monkeypatch):
+    """#1521 quiet twins: an exact row with no URL, an MPN field (not a
+    Value), a stalled maker site and a failed search keep their labels."""
+    out, reader, calls = stand_ins
+    exact = {**NEAR_ROW, "mpn": "74ahct1g125db", "lcsc": "C9"}
+    by_value = _fp("U1", VALUE_PADS, value="74AHCT1G125DB")
+    by_field = _fp("U1", VALUE_PADS, mpn="74AHCT1G125DB")
+    key = "mpn:74AHCT1G125DB"
+    _no_datasheet(monkeypatch, [NEAR_ROW, exact])
+    assert amb.read_part(key, [by_value], out, reader)["status"] \
+        == "no listing with a datasheet URL"
+    _no_datasheet(monkeypatch, [NEAR_ROW])
+    assert amb.read_part(key, [by_field], out, reader)["status"] \
+        == "no listing with a datasheet URL"
+    assert amb.read_part(key, [by_value, by_field], out, reader)["status"] \
+        == "no listing with a datasheet URL"
+    shutil.rmtree(out / "resolved")     # misses are cached; a stall is not
+    _no_datasheet(monkeypatch, [NEAR_ROW], miss="stalled", kind="stalled")
+    assert amb.read_part(key, [by_value], out, reader)["status"] \
+        == "datasheet site stalled, not judged"
+
+    _no_datasheet(monkeypatch, [NEAR_ROW])
+
+    def down(mpn, out):
+        raise RuntimeError("JLC parts search unreachable")
+    monkeypatch.setattr(amb, "search_rows", down)
+    assert amb.read_part(key, [by_value], out, reader)["status"] \
+        == "no listing with a datasheet URL"
+    assert calls == []
+
+
+def test_a_value_the_resolver_finds_is_still_read(stand_ins, monkeypatch):
+    """#1521 quiet twin: no exact row, but the maker's site has it: read."""
+    import dsresolve
+    out, reader, calls = stand_ins
+    _no_datasheet(monkeypatch, [NEAR_ROW])
+    url = "https://www.ti.com/lit/ds/symlink/testldo.pdf"
+
+    def resolve(mpn, brand, dest):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 stand-in")
+        return {"maker": "Texas Instruments", "url": url, "via": "pattern",
+                "got": {"url": url, "status": "fetched", "file": str(dest)},
+                "tried": []}
+    monkeypatch.setattr(dsresolve, "resolve", resolve)
+    board = _fp("U1", VALUE_PADS, value="TESTLDO")
+    rep = amb.read_part("mpn:TESTLDO", [board], out, reader)
+    assert rep["status"] == "kept" and len(calls) == 1
+
+
+ARDUINO = {"lcsc": "C20627271", "mpn": "ABX00027", "brand": "Arduino",
+           "package": "-", "category": "Development Boards & Kits"}
+
+
+def test_a_part_listed_only_as_a_dev_board_is_left_out(stand_ins, monkeypatch):
+    """#1521 planted fault: ABX00027's one exact row is a Development
+    Boards & Kits listing: 'left out: a board', no resolver, nothing read."""
+    import dsresolve
+    out, reader, calls = stand_ins
+    _no_datasheet(monkeypatch, [ARDUINO])
+    monkeypatch.setattr(dsresolve, "resolve",
+                        lambda *a: pytest.fail("a board was resolved"))
+    board = _fp("U1", VALUE_PADS, value="ABX00027")
+    rep = amb.read_part("mpn:ABX00027", [board], out, reader)
+    assert rep["status"] == "left out: a board"
+    assert rep["why"] == ("its JLC listing (C20627271, Arduino) is under "
+                          "Development Boards & Kits")
+    assert calls == []
+
+
+def test_a_chip_beside_a_board_or_near_boards_stays_an_ic():
+    """#1521 quiet twins: a board row beside the chip's, or boards whose
+    MPN only starts with it (RP2040-Zero), leave the part an IC."""
+    chip = {"lcsc": "C2040", "mpn": "RP2040", "category": "Microcontrollers"}
+    board = {"lcsc": "C5", "mpn": "RP2040", "category": amb.BOARD_CATEGORY}
+    near = {"lcsc": "C6", "mpn": "RP2040-Zero", "category": amb.BOARD_CATEGORY}
+    assert amb.a_board("RP2040", [chip, board]) is None
+    assert amb.a_board("RP2040", [near]) is None
+    assert amb.a_board("RP2040", []) is None
+    assert amb.a_board("rp2040", [board, near])
 
 
 def test_an_exposed_pad_is_the_boards_pad_after_the_last_pin(stand_ins):

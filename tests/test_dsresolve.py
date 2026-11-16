@@ -40,6 +40,10 @@ def _serve(pages: dict):
 def _fresh_breaker(monkeypatch):
     dsresolve._DEAD.clear()
     monkeypatch.setattr(dsresolve, "_sleep", SLEPT.append)  # no real backoff
+
+    def offline(code):
+        raise AssertionError(f"LCSC page {code} asked for in a test")
+    monkeypatch.setattr(dsresolve, "lcsc_page", offline)
     SLEPT.clear()
     yield
     dsresolve._DEAD.clear()
@@ -309,3 +313,97 @@ def test_a_404_is_not_retried(tmp_path):
                             transport=transport, search=lambda q: [])
     assert got["miss"] == "not found" and SLEPT == [], got
     assert len(asked) == len(set(asked))
+
+
+# --- #1520: LCSC's mirror after the maker's host stalls twice ----------------
+SHEET = "https://datasheet.lcsc.com/datasheet/pdf/{}.pdf?productCode={}"
+
+
+def _page(sheets: dict, asked: list):
+    """A stand-in for LCSC's live product page: `sheets` maps a product code
+    to the HTML it serves."""
+    def page(code):
+        asked.append(code)
+        return sheets.get(code, "<html>no sheet</html>")
+    return page
+
+
+def _product_html(code: str, sheet: str) -> str:
+    """A product page as LCSC serves it: its certificate, a related
+    product's sheet, and its own sheet."""
+    return (f'<a href="https://datasheet.lcsc.com/certification/rohs/'
+            f'030fa2248f0ae1184de9ec04fd5926b8.pdf">RoHS</a>'
+            f'<a href="{SHEET.format("4d1dc0782382f0eb", "C45066865")}">x</a>'
+            f'<script type="application/ld+json">{{"url": "{sheet}"}}</script>')
+
+
+@pytest.mark.parametrize("mpn,listing,code", [
+    ("LPS35HW", "LPS35HWTR", "C19632285"),          # ST's packing code TR
+    ("STM32C051C8T6", "STM32C051C8T6", "C45870050"),  # the part itself
+])
+def test_after_a_maker_stall_lcscs_mirror_of_the_part_is_taken(
+        tmp_path, mpn, listing, code):
+    """Quiet twin: st.com stalls twice; LCSC lists the part (or the part on
+    a reel) with no datasheet; its live product page names the sheet for
+    its own code, which is fetched, checked and marked."""
+    sheet = SHEET.format("9b42a1ad2bb8093d956a0f7fe9a716a0", code)
+    url = ST.format(mpn.lower())
+    transport, asked = _flaky({sheet: _sheet(mpn)}, {url: 2})
+    hits = [{"lcsc": code, "mpn": listing, "brand": "STMicroelectronics",
+             "datasheet": ""}]
+    pages_asked: list = []
+    got = dsresolve.resolve(
+        mpn, "STMicroelectronics", tmp_path / "p.pdf", transport=transport,
+        search=lambda q: hits,
+        page=_page({code: _product_html(code, sheet)}, pages_asked))
+    assert got["url"] == sheet, got
+    assert got["via"].startswith(dsresolve.MIRROR_VIA)
+    assert f"{code} {listing}" in got["via"]
+    assert pages_asked == [code] and asked[:2] == [url, url]
+
+
+def test_a_grade_variant_is_never_the_mirror(tmp_path):
+    """Planted fault: analog.com stalls twice; LCSC lists AD724 only as
+    AD724JRZ (J a grade, R a package: another part) under ADI's brand, and
+    its page names a sheet. Not used: still stalled, its page not read."""
+    sheet = SHEET.format("3ad362b6a92eca5246d457ae073feb28", "C650728")
+    url = ("https://www.analog.com/media/en/technical-documentation/"
+           "data-sheets/AD724.pdf")
+    transport, asked = _flaky({sheet: _sheet("AD724")}, {url: 2})
+    hits = [{"lcsc": "C650728", "mpn": "AD724JRZ", "brand": "Analog Devices",
+             "datasheet": ""}]
+    pages_asked: list = []
+    got = dsresolve.resolve(
+        "AD724", "Analog Devices", tmp_path / "p.pdf", transport=transport,
+        search=lambda q: hits,
+        page=_page({"C650728": _product_html("C650728", sheet)}, pages_asked))
+    assert got["miss"] == "stalled" and "url" not in got, got
+    assert pages_asked == [] and sheet not in asked
+    assert any("AD724JRZ" in t["why"] and "(mirror)" in t["url"]
+               for t in got["tried"])
+
+
+def test_the_mirror_wants_its_own_codes_sheet_and_a_maker_stall(tmp_path):
+    """A page naming only another product's sheet gives nothing; and a
+    maker site that answers (404, no stall) never sends a part to the
+    mirror at all."""
+    code, url = "C19632285", ST.format("lps35hw")
+    hits = [{"lcsc": code, "mpn": "LPS35HWTR", "brand": "STMicroelectronics",
+             "datasheet": ""}]
+    other = SHEET.format("4d1dc0782382f0eb", "C45066872")
+    transport, asked = _flaky({other: _sheet("LPS35HW")}, {url: 2})
+    got = dsresolve.resolve(
+        "LPS35HW", "STMicroelectronics", tmp_path / "p.pdf",
+        transport=transport, search=lambda q: hits,
+        page=_page({code: _product_html(code, other).replace(other, "")
+                    + f'<a href="{other}">'}, []))
+    assert got["miss"] == "stalled" and other not in asked, got
+    assert any(t["kind"] == "absent" and code in t["why"] for t in got["tried"])
+
+    dsresolve._DEAD.clear()
+    pages_asked: list = []
+    got = dsresolve.resolve(
+        "LPS35HW", "STMicroelectronics", tmp_path / "p.pdf",
+        transport=_serve({}), search=lambda q: hits,
+        page=_page({}, pages_asked))
+    assert got["miss"] == "not found" and pages_asked == [], got

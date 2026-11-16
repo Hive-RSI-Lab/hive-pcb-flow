@@ -250,3 +250,58 @@ def symbol_index(kicad_sym_path: str | Path) -> list[dict]:
                     "footprint": props.get("Footprint", ""),
                     "reference": props.get("Reference", "")})
     return out
+
+
+def unit_pins(sym_node) -> dict[int, list[tuple[str, float, float]]]:
+    """{unit: [(pin number, x, y)]} of one top-level (symbol ...) node, from
+    its NAME_<unit>_<body style> sub-symbols. Unit 0 holds the pins every
+    unit shares (KiCad draws them on each); the De Morgan body (style 2)
+    repeats style 1's pins and is skipped. A symbol with no sub-symbols
+    (an `extends` alias) gives {}: resolve it to its parent first."""
+    out: dict[int, list[tuple[str, float, float]]] = {}
+    for sub in sym_node[1:] if _is_node(sym_node) else []:
+        if not (_is_node(sub) and _head(sub) == "symbol" and len(sub) > 1):
+            continue
+        parts = str(_tok(sub[1])).rsplit("_", 2)
+        if len(parts) != 3 or not (parts[1].isdigit() and parts[2].isdigit()):
+            continue
+        unit, style = int(parts[1]), int(parts[2])
+        if style > 1:
+            continue
+        pins = out.setdefault(unit, [])
+        for pin in sub[1:]:
+            if not (_is_node(pin) and _head(pin) == "pin"):
+                continue
+            num, at = _kid(pin, "number"), _kid(pin, "at")
+            xy = _nums(at)[:2] if at is not None else [0.0, 0.0]
+            pins.append((str(_tok(num[1])) if num is not None and len(num) > 1
+                         else "", *xy))
+    return out
+
+
+def symbol_units(kicad_sym_path: str | Path) -> dict[str, dict[int, list[str]]]:
+    """{symbol name: {unit: [pin numbers]}} for every top-level symbol in a
+    .kicad_sym library drawn as two or more units (an `extends` alias takes
+    its parent's units). A board that places only unit 1 of one leaves the
+    other units' pins out of the netlist (#378)."""
+    root = _symbol_lib_root(kicad_sym_path)
+    if root is None:
+        return {}
+    nodes, parent = {}, {}
+    for child in root[1:]:
+        if _is_node(child) and _head(child) == "symbol" and len(child) > 1:
+            name = str(_tok(child[1]))
+            nodes[name] = child
+            ext = _kid(child, "extends")
+            if ext is not None and len(ext) > 1:
+                parent[name] = str(_tok(ext[1]))
+    out = {}
+    for name in nodes:
+        base, hops = name, 0
+        while base in parent and hops < 8:
+            base, hops = parent[base], hops + 1
+        units = {u: [p[0] for p in pins]
+                 for u, pins in unit_pins(nodes.get(base)).items()}
+        if len([u for u in units if u > 0]) > 1:
+            out[name] = units
+    return out

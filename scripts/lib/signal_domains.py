@@ -34,6 +34,13 @@ Active level (polarity):
    driving pin's, turned over through a traced 74x04/14/00/02 gate; a
    port, GPIO or register output is set by firmware and quiet; a driver
    of unknown level is not_judged. Edge pins (595 RCLK) aren't judged.
+ - drive_level_mismatch: a control output of one kind whose level is
+   known (~{ALERT}, ~{INT}, ~{FAULT}, PG) reaching a control input of
+   another kind (EN, RESET, RUN, CS) directly, through a buffer, or
+   through a gate in _GATES (74x00/02/04/08/14/32/86, 1G singles, CD40xx)
+   traced input to output, so it asserts at the wrong level or under the
+   wrong combination (an AND where the input needs any one of its
+   sources). A gate the table doesn't know is not_judged.
 
 A pin's active level comes from its name: KiCad's overbar ~{X}, a
 leading ~ or /, a # or * suffix, an N, _N, _B or _L suffix, a lowercase n
@@ -957,6 +964,349 @@ def latch_drive_levels(nets, comps, comp_pins, rails, h):
             yield {"rule": "latch_enable_polarity", "net": net, "pin": m,
                    "stem": stem, "want": want, "got": lv, "why": why,
                    "by_name": why.startswith("no pin drives")}
+    yield {"checked": checked}
+
+
+# ------------------------------------------- a control input's driver level
+
+# a logic gate: (part pattern, function, {output pin: input pins}). A
+# 14-pin quad gate (00, 08, 32, 86, 132) has Y on 3/6/8/11, a quad NOR
+# (02) on 1/4/10/13, a hex inverter or buffer (04, 14, 07, 17) pairs
+# 1-2, 3-4...; a single gate in SOT-23-5 (1G00/08/32/86/02) takes A 1,
+# B 2, Y 4, a single inverter or buffer A 2, Y 4. CD4000 gates share the
+# quad pinout (4011 NAND, 4001 NOR, 4081 AND, 4071 OR, 4070 XOR) and the
+# 4069 the hex one. A pin named 1A/1B/1Y (or A1, Y) is read by its name
+# before the table.
+_QUAD = {"3": ("1", "2"), "6": ("4", "5"), "8": ("9", "10"),
+         "11": ("12", "13")}
+_QUAD_NOR = {"1": ("2", "3"), "4": ("5", "6"), "10": ("8", "9"),
+             "13": ("11", "12")}
+_HEX = {"2": ("1",), "4": ("3",), "6": ("5",), "8": ("9",), "10": ("11",),
+        "12": ("13",)}
+_SOT_2IN = {"4": ("1", "2")}
+_SOT_1IN = {"4": ("2",)}
+_GATES = [(re.compile(p, re.I), f, mp) for p, f, mp in (
+    (r"74\w*?1G(?:U04|04|06|14)", "not", _SOT_1IN),
+    (r"74\w*?1G(?:07|17|34|125|126)", "buf", _SOT_1IN),
+    (r"74\w*?1G(?:00|132)", "nand", _SOT_2IN),
+    (r"74\w*?1G08", "and", _SOT_2IN),
+    (r"74\w*?1G32", "or", _SOT_2IN),
+    (r"74\w*?1G86", "xor", _SOT_2IN),
+    (r"74\w*?1G02", "nor", _SOT_2IN),
+    (r"74[A-Z]*(?:U04|04|05|06|14)(?:[A-Z]{1,4}\d?)?\b", "not", _HEX),
+    (r"74[A-Z]*(?:07|17|34)(?:[A-Z]{1,4}\d?)?\b", "buf", _HEX),
+    (r"74[A-Z]*(?:00|132)(?:[A-Z]{1,4}\d?)?\b", "nand", _QUAD),
+    (r"74[A-Z]*08(?:[A-Z]{1,4}\d?)?\b", "and", _QUAD),
+    (r"74[A-Z]*32(?:[A-Z]{1,4}\d?)?\b", "or", _QUAD),
+    (r"74[A-Z]*86(?:[A-Z]{1,4}\d?)?\b", "xor", _QUAD),
+    (r"74[A-Z]*02(?:[A-Z]{1,4}\d?)?\b", "nor", _QUAD_NOR),
+    (r"\b(?:CD|HEF|MC1)4011", "nand", _QUAD),
+    (r"\b(?:CD|HEF|MC1)4001", "nor", _QUAD),
+    (r"\b(?:CD|HEF|MC1)4081", "and", _QUAD),
+    (r"\b(?:CD|HEF|MC1)4071", "or", _QUAD),
+    (r"\b(?:CD|HEF|MC1)4070", "xor", _QUAD),
+    (r"\b(?:CD|HEF|MC1)40(?:69|49)", "not", _HEX),
+)]
+# any other small logic part: a gate whose function the table doesn't know
+_GATE_LIKE = re.compile(
+    r"74\w*?(?:[123]G\w+|(?<![0-9])(?:0\d|1[0-1]|2[0-7]|3[0-3]|8[6-9]|"
+    r"13[2-3]|266|4002|4075|4078)(?:[A-Z]{1,4}\d?)?\b)|"
+    r"\b(?:CD|HEF|MC1)40(?:0[12]|1[12]|2[35]|4[89]|50|6[89]|7[0-8]|8[12])",
+    re.I)
+# the kinds a driver's level means something for: 'run' (a reset,
+# enable or power-good: the level at which the part runs) and 'irq' (an
+# interrupt or alert: the level at which it asserts); a select through
+# a gate keeps its own
+_CROSS_TARGETS = {"enable", "reset", "select"}
+_OUT_TYPES = {"output", "open_collector", "open_emitter", "tri_state"}
+
+
+def _gate_of(comp):
+    val = f"{comp.get('value') or ''} {(comp.get('libsource') or ('', ''))[1]}"
+    for pat, func, pins in _GATES:
+        if pat.search(val):
+            return func, pins
+    if _GATE_LIKE.search(val):
+        return "unknown", {}
+    return None
+
+
+def _gate_inputs(ref, pnum, func_name, pins, nets, comp_pins):
+    """The input pins feeding gate output PNUM: by the pins' own channel
+    names (1Y <- 1A 1B, Y <- A B), else the package table."""
+    f = re.sub(r"~\{([^}]*)\}", r"\1", func_name or "").upper().strip()
+    m = re.fullmatch(r"(\d*)Y(\d*)", f)
+    if m:
+        ch = m.group(1) or m.group(2)
+        found = []
+        for p, net in comp_pins.get(ref, {}).items():
+            x = next((y for y in nets.get(net, []) if y["ref"] == ref
+                      and y["pin"] == p), {})
+            g = re.sub(r"~\{([^}]*)\}", r"\1",
+                       x.get("pinfunction") or "").upper().strip()
+            if re.fullmatch(rf"{ch}[A-D]|[A-D]{ch}", g) if ch else \
+                    re.fullmatch(r"[A-D]", g):
+                found.append(p)
+        if found:
+            return tuple(sorted(found))
+    return pins.get(pnum)
+
+
+def _drv_pin(m, comps, nets, comp_pins):
+    """A driving pin's own meaning: ('known', dom, kind, level, why),
+    ('data', why) for one firmware sets, or ('none', why)."""
+    ref = m["ref"]
+    comp = comps.get(ref, {})
+    func = m.get("pinfunction") or ""
+    segs = _segments(func)
+    if any(_GPIO.match(re.sub(r"\s+", "", n).upper()) for n, _ in segs):
+        return ("data", f"{ref} {func} is a port pin firmware sets")
+    full = name_level_full(func)
+    if full is not None:
+        kind, level, marked = full
+        if kind in _STROBE_KINDS and not marked and \
+                not _barred(ref, nets, comp_pins):
+            return ("none", f"{ref} {func} is drawn plain")
+        dom = "run" if kind in _GROUP else kind
+        if dom not in ("run", "irq", "select"):
+            return ("none", f"{ref} {func} is a {kind} line")
+        if dom == "run":
+            lv = _sense({"kind": kind, "level": level})[1]
+        else:
+            lv = level
+        return ("known", dom, kind, lv,
+                f"{ref} ({comp.get('value')}) {func} (pin {m['pin']}) "
+                f"asserts {level}")
+    u = re.sub(r"~\{([^}]*)\}", r"\1", func).strip().upper()
+    if not u or _DATA_OUT.match(u):
+        return ("data", f"{ref} {func or 'pin ' + m['pin']} is a data "
+                f"output")
+    return ("none", f"{ref} {func} has no active level in its name")
+
+
+def _flip(lv):
+    return "high" if lv == "low" else "low"
+
+
+def _trace(net, skip, ctx, depth, seen):
+    """What the line NET carries, from its drivers: ('known', {dom, kind,
+    level, mode, gate, why}), ('data', why), ('nj', why) when a gate on
+    the way isn't known, or ('none', why)."""
+    nets, comps, comp_pins, rails, h, groups = ctx
+    if net in rails or h["is_ground"](net):
+        return ("rail", "high" if net in rails else "low")
+    root = groups.get(net, net)
+    if root in seen or depth > 4:
+        return ("none", "a loop or a deep chain of gates")
+    seen = seen | {root}
+    known, data, nj, none = [], [], [], []
+    for n, ms in nets.items():
+        if groups.get(n, n) != root:
+            continue
+        for m in ms:
+            ref = m["ref"]
+            if ref in skip or h["part_kind"](ref) in ("R", "C", "L"):
+                continue
+            if h["base_type"](m.get("pintype")) not in _OUT_TYPES | {
+                    "bidirectional"}:
+                continue
+            comp = comps.get(ref, {})
+            gate = _gate_of(comp)
+            if gate is not None:
+                r = _through_gate(m, gate, ctx, depth, seen)
+            elif _PASS.search(f"{comp.get('value') or ''}"):
+                continue
+            elif h["base_type"](m.get("pintype")) == "bidirectional":
+                r = _drv_pin(m, comps, nets, comp_pins)
+                if r[0] == "known":
+                    r = ("none", "a two-way pin")
+            else:
+                r = _drv_pin(m, comps, nets, comp_pins)
+                if r[0] == "known":
+                    r = ("known", {"dom": r[1], "kind": r[2], "level": r[3],
+                                   "mode": "one", "gate": False,
+                                   "why": r[4]})
+            {"known": known, "data": data, "nj": nj}.get(
+                r[0], none).append(r)
+    if data:
+        return data[0]
+    if known:
+        if len({(k[1]["dom"], k[1]["level"]) for k in known}) == 1 and \
+                not nj:
+            if len(known) == 1:
+                return known[0]
+            d = dict(known[0][1])
+            d["mode"] = "wired"
+            d["gate"] = any(k[1]["gate"] for k in known)
+            d["why"] = "; ".join(k[1]["why"] for k in known)
+            return ("known", d)
+        return ("none", "its drivers assert at different levels")
+    if nj:
+        return nj[0]
+    return none[0] if none else ("none", "nothing drives it")
+
+
+def _through_gate(m, gate, ctx, depth, seen):
+    nets, comps, comp_pins, rails, h, groups = ctx
+    ref = m["ref"]
+    func, pins = gate
+    val = comps.get(ref, {}).get("value")
+    tag = f"{ref} ({val})"
+    if func == "unknown":
+        return ("nj", f"{tag} is a gate whose function the table doesn't "
+                f"know")
+    ins = _gate_inputs(ref, m["pin"], m.get("pinfunction"), pins, nets,
+                       comp_pins)
+    if not ins:
+        return ("nj", f"{tag} pin {m['pin']}: which inputs feed it isn't "
+                f"known")
+    lines = []
+    for p in ins:
+        n = comp_pins.get(ref, {}).get(p)
+        if n is None:
+            return ("nj", f"{tag} input pin {p} isn't connected")
+        if n not in lines:
+            lines.append(n)
+    res = [_trace(n, {ref}, ctx, depth + 1, seen) for n in lines]
+    # a rail on an input: the gate's non-controlling value is a pass,
+    # an XOR's high input an inversion; its controlling value fixes the
+    # output, nothing to follow
+    live, flip = [], False
+    for r in res:
+        if r[0] != "rail":
+            live.append(r)
+            continue
+        if func == "xor":
+            flip ^= r[1] == "high"
+        elif (func in ("and", "nand")) != (r[1] == "high"):
+            return ("none", f"{tag} has an input tied to its controlling "
+                    f"level")
+    if not live:
+        return ("none", f"{tag} has only rails on its inputs")
+    for r in live:
+        if r[0] != "known":
+            return r
+    ks = [r[1] for r in live]
+    if len({k["dom"] for k in ks}) != 1 or \
+            len({k["level"] for k in ks}) != 1:
+        return ("nj", f"{tag} combines lines of different kinds or "
+                f"levels")
+    if func == "xor" and len(ks) > 1:
+        return ("nj", f"{tag} is an XOR of two control lines")
+    lv = ks[0]["level"]
+    if len(ks) == 1:
+        mode = ks[0]["mode"]
+    else:
+        if any(k["mode"] not in ("one", "wired") for k in ks) and \
+                len({k["mode"] for k in ks}) != 1:
+            return ("nj", f"{tag} combines lines asserting on any and on "
+                    f"all of their inputs")
+        if func in ("and", "nand"):
+            mode = "all" if lv == "high" else "any"
+        elif func in ("or", "nor"):
+            mode = "any" if lv == "high" else "all"
+        else:
+            mode = ks[0]["mode"]
+        inner = {k["mode"] for k in ks} - {"one", "wired"}
+        if inner and inner != {mode}:
+            return ("nj", f"{tag} combines lines asserting on any and on "
+                    f"all of their inputs the other way")
+    if func in ("not", "nand", "nor"):
+        lv, how = _flip(lv), "inverted by"
+    else:
+        how = "kept by"
+    if flip:
+        lv, how = _flip(lv), "inverted by"
+    name = {"not": "an inverter", "buf": "a buffer", "nand": "a NAND",
+            "nor": "a NOR", "and": "an AND", "or": "an OR",
+            "xor": "an XOR"}[func]
+    why = "; ".join(k["why"] for k in ks)
+    return ("known", {"dom": ks[0]["dom"], "kind": ks[0]["kind"],
+                      "level": lv, "mode": mode, "gate": True,
+                      "gates": [f"{tag} {name}"] + [
+                          g for k in ks for g in k.get("gates", [])],
+                      "why": f"{why}, {how} {tag} ({name})"})
+
+
+def drive_levels(nets, comps, comp_pins, rails, h):
+    """Yield drive_level_mismatch findings: a control input (an enable,
+    reset or select whose name says its level) driven by a line of known
+    level that means the other thing: a driver of another kind (an
+    interrupt or alert into an enable, reset or select), or any driver
+    reached through a gate (an inverter, buffer, NAND, NOR, AND, OR, XOR
+    with a rail on its other input). A gate that combines lines the
+    wrong way (asserts on all of its inputs where the input needs any)
+    is one too. {'not_judged': msg} for a gate the table doesn't know;
+    the last item is {'checked': n}."""
+    groups, _how = _joined_groups(nets, comps, comp_pins, rails,
+                                  h["parse_value"], h["part_kind"],
+                                  h["is_ground"])
+    ctx = (nets, comps, comp_pins, rails, h, groups)
+    careful = set()
+    for ms in nets.values():
+        for m in ms:
+            full = name_level_full(m.get("pinfunction") or "")
+            if full and full[0] in _STROBE_KINDS and full[2]:
+                careful.add(m["ref"])
+    checked = 0
+    for net, ms in sorted(nets.items()):
+        if net in rails or h["is_ground"](net) or \
+                net.startswith("unconnected-"):
+            continue
+        for m in ms:
+            if h["base_type"](m.get("pintype")) != "input":
+                continue
+            ref = m["ref"]
+            if h["part_kind"](ref) in ("R", "C", "L"):
+                continue
+            comp = comps.get(ref, {})
+            if _gate_of(comp) is not None or _PASS.search(
+                    f"{comp.get('value') or ''}"):
+                continue
+            full = name_level_full(m.get("pinfunction") or "")
+            if full is None or full[0] not in _CROSS_TARGETS:
+                continue
+            kind, level, marked = full
+            if kind in _STROBE_KINDS and not marked and ref not in careful:
+                continue
+            r = _trace(net, {ref}, ctx, 0, frozenset())
+            if r[0] == "nj":
+                checked += 1
+                yield {"not_judged":
+                       f"drive_level_mismatch on {net}: {ref} "
+                       f"({comp.get('value')}) {m.get('pinfunction')} "
+                       f"(pin {m['pin']}) asserts {level}, and the line "
+                       f"driving it goes through logic whose level isn't "
+                       f"known ({r[1]})"}
+                continue
+            if r[0] != "known":
+                continue
+            d = r[1]
+            if d["dom"] == "run":
+                if _GROUP.get(kind) != "run":
+                    continue
+                if not d["gate"]:
+                    continue        # polarity_mismatch's pair
+                want = _sense({"kind": kind, "level": level})[1]
+                need = "all"
+            elif d["dom"] == "irq":
+                want, need = level, "any"
+            else:                   # a select, only through a gate
+                if kind != d["dom"] or not d["gate"]:
+                    continue
+                want, need = level, None
+            checked += 1
+            bad_level = d["level"] != want
+            bad_mode = need is not None and d["mode"] in ("any", "all") \
+                and d["mode"] != need
+            if not bad_level and not bad_mode:
+                continue
+            yield {"rule": "drive_level_mismatch", "net": net, "pin": m,
+                   "kind": kind, "level": level, "dom": d["dom"],
+                   "drv_kind": d["kind"], "want": want, "got": d["level"],
+                   "mode": d["mode"], "need": need,
+                   "bad_level": bad_level, "gate": d["gate"],
+                   "why": d["why"]}
     yield {"checked": checked}
 
 

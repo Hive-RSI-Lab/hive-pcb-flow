@@ -43,7 +43,9 @@ listing that names no datasheet goes to the resolver like any other: a
 "JLCPCB Assembly" listing (JLC's own, for a consigned part) names no
 maker, so the MPN's family decides it (ESP32-C3-WROOM-02: Espressif).
 Anything else leaves it out with the reason. fp_verify then finds its
-record by the Value on one exact match only.
+record by the Value on one exact match only. A board soldered on as a
+module is left out as abs_max_batch leaves it ("left out: a board",
+#1521: every exact JLC row under Development Boards & Kits).
 
 For each part: the datasheet's pin-drawing pages (a page whose text says
 "top view" or "bottom view", those that also name the pins first) and its
@@ -269,8 +271,8 @@ def value_listing(value: str, store: Path, table: Path | None = None,
     with no datasheet, for fetch_pages's resolver to find the maker's (a
     brand in NOT_MAKERS dropped, so the MPN's family names the maker). No
     row at all: the why names the nearest MPN the search found
-    (`nearest`), and the part stays unread. The search's rows are cached
-    under listings/value-hits/."""
+    (`abs_max_batch.nearest`), and the part stays unread. The search's
+    rows are cached under listings/value-hits/ (`abs_max_batch.search_rows`)."""
     import yaml
     from mpn_decode import norm
     doc = yaml.safe_load((table or amb.DATASHEET_URLS).read_text(encoding="utf-8"))
@@ -280,17 +282,7 @@ def value_listing(value: str, store: Path, table: Path | None = None,
         return None, f"reference/datasheet_urls.yaml names it in {len(ents)} entries"
     if ents:
         return {"mpn": value}, ""
-    f = store / "listings" / "value-hits" / f"{amb.ext_name('mpn:' + value)}.json"
-    if f.is_file():
-        hits = json.loads(f.read_text(encoding="utf-8"))
-    else:
-        partslib = datasheet_extract._lib("partslib")
-        got, _ = partslib.live_search(value, page_size=25)
-        if not got and not partslib.endpoint_reachable():
-            raise partslib.PartsError("JLC parts search unreachable")
-        hits = [partslib.normalize(h) for h in got]
-        f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(hits, ensure_ascii=False), encoding="utf-8")
+    hits = amb.search_rows(value, store)
     exact = [h for h in hits if norm(h.get("mpn")) == norm(value)]
     # a module's fit-code rows only when no row is the module itself: an
     # exact row with no datasheet goes to the resolver for the maker's
@@ -305,11 +297,7 @@ def value_listing(value: str, store: Path, table: Path | None = None,
             or [{**h, "brand": "" if h.get("brand") in NOT_MAKERS else h.get("brand")}
                 for h in by_code(exact or reel)])
     if not rows:
-        near = nearest(value, hits)
-        return None, ("no JLC listing has exactly that MPN; nearest: "
-                      f"{near['mpn']} ({near.get('lcsc') or 'no LCSC code'}, "
-                      f"{near.get('package') or 'no package'})" if near else
-                      "no JLC listing has exactly that MPN, nor one near it")
+        return None, amb.no_exact_why(value, hits)
     pkgs = sorted({norm(r.get("package") or "") for r in rows})
     if len(pkgs) == 1:
         return rows[0], ""
@@ -411,28 +399,6 @@ def by_footprint(rows: list[dict], footprints: list[tuple[str, int]]
     if not fit:
         return [], f"its footprint fits none of them ({names(groups.values())})"
     return [], f"its footprint fits more than one ({names(fit)})"
-
-
-def nearest(value: str, hits: list[dict]) -> dict | None:
-    """The search row whose MPN shares the longest start with the Value
-    (case and spaces aside), at least half of it and four characters; the
-    shorter MPN, then the lower LCSC code, on a tie. None when none does."""
-    from mpn_decode import norm
-    v = norm(value)
-
-    def common(m: str) -> int:
-        n = 0
-        while n < min(len(m), len(v)) and m[n] == v[n]:
-            n += 1
-        return n
-    best = sorted(((common(norm(h.get("mpn"))), h) for h in hits
-                   if h.get("mpn")),
-                  key=lambda t: (-t[0], len(t[1]["mpn"]),
-                                 len(t[1].get("lcsc") or ""),
-                                 t[1].get("lcsc") or ""))
-    if best and best[0][0] >= max(4, (len(v) + 1) // 2):
-        return best[0][1]
-    return None
 
 
 # --- pages -----------------------------------------------------------------------
@@ -625,6 +591,14 @@ def fetch_pages(key: str, on_boards: list[dict], store: Path, rep: dict
     elif err is not None:
         return None, {**rep, "status": "no listing", "why": str(err)[:200]}
     if not hit.get("datasheet"):
+        # a board soldered on as a module, as abs_max_batch leaves it (#1521)
+        try:
+            board = key.startswith("mpn:") and amb.a_board(
+                mpn, amb.search_rows(mpn, store))
+        except Exception:  # noqa: BLE001 - no search: an IC, as before
+            board = None
+        if board:
+            return None, {**rep, "status": "left out: a board", "why": board}
         # abs_max_batch's resolver and its cache (#815, #1406): one lookup
         # by maker serves both batches
         found = amb.resolved(mpn, hit.get("brand"), store, name)

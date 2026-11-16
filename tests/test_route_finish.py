@@ -1003,3 +1003,71 @@ def test_pair_rules_resolve_the_last_rule_that_holds(tmp_path):
     # a via is no track: the waiver names no type, so it holds for one too
     via = rf.Probe("SIG", "via", (), {"F.Cu", "B.Cu"})
     assert pr.value(via, gnd)[0] == 0.15
+
+
+# ------------------------- #1484: a BGA escape's courtyard clearance rule
+
+COURT_DRU = """(version 1)
+(rule "aiee_bga_escape_U1"
+	(constraint clearance (min 0.1000mm))
+	(condition "A.intersectsCourtyard('U1') || B.intersectsCourtyard('U1')")
+)
+"""
+
+
+def _slot_part(ref, x, y, gap):
+    """SIG pad 1 boxed in by GND walls, a `gap` slot out of the right wall,
+    all on a 4 x 4 courtyard."""
+    walls = [(0, -0.6, 2.6, 0.3), (0, 0.6, 2.6, 0.3), (-1.15, 0, 0.3, 1.5)]
+    h = (1.5 - gap) / 2
+    walls += [(1.15, -(gap + h) / 2, 0.3, h), (1.15, (gap + h) / 2, 0.3, h)]
+    pads = '    (pad "1" smd rect (at 0 0) (size 0.3 0.3) (layers "F.Cu")' \
+        ' (net "SIG"))\n'
+    pads += "".join(
+        f'    (pad "{n}" smd rect (at {wx} {wy}) (size {sx} {sy})'
+        f' (layers "F.Cu") (net "GND"))\n'
+        for n, (wx, wy, sx, sy) in enumerate(walls, start=2))
+    return (f'  (footprint "t:{ref}" (layer "F.Cu") (at {x} {y})\n'
+            f'    (property "Reference" "{ref}" (at 0 0 0))\n'
+            '    (fp_rect (start -2 -2) (end 2 2)'
+            ' (stroke (width 0.05)) (layer "F.CrtYd"))\n'
+            + pads + "  )\n")
+
+
+def _slot_plan(tmp_path, dru):
+    # 0.2 + 2 * 0.12 = 0.44 fits the 0.5 slot; 0.2 + 2 * 0.22 does not
+    pcb = _board(tmp_path, _slot_part("U1", 10, 15, 0.5)
+                 + _pad("U2", 17, 15, "SIG", size=0.5), dru=dru)
+    bg = geom.BoardGeom.from_file(pcb)
+    rules = rf.board_rules(pcb, bg)
+    pair = _pair("SIG", (10, 15), (17, 15))
+    return bg, rf.plan_routes(bg, rules, [pair], ["F.Cu"],
+                              grid=0.05, margin=4), rules
+
+
+def test_without_the_courtyard_rule_the_slot_is_shut(tmp_path):
+    _, jobs, _ = _slot_plan(tmp_path, "(version 1)\n")
+    assert jobs[0]["status"] != "routed"
+
+
+def test_a_bga_escape_courtyard_rule_routes_through_the_slot(tmp_path):
+    """#1484: the BGA escape's 0.1 mm courtyard rule on a signal net with no
+    HV rating, which the maze held at the 0.2 netclass, so U1's ring-2 balls
+    stayed unrouted; #682's per-item rules read it."""
+    bg, jobs, _ = _slot_plan(tmp_path, COURT_DRU)
+    job = jobs[0]
+    assert job["status"] == "routed", job
+    gnd = [p.poly for p in bg.pads_of("GND", "F.Cu")]
+    near = min(LineString([op["start"], op["end"]]).buffer(
+        op["width"] / 2).distance(g) for op in _tracks(job) for g in gnd)
+    assert 0.1 <= near < 0.2
+    route_edit.validate_ops({"version": 1, "ops": job["ops"]})
+
+
+def test_rules_facts_with_a_courtyard_rule_are_json(tmp_path):
+    """#1501: a Rules carrying #682's PairRules still writes a JSON report;
+    route_auto lost a 19-minute route to this at the very end."""
+    _, _, rules = _slot_plan(tmp_path, COURT_DRU)
+    assert rules.pair is not None
+    facts = json.loads(json.dumps(rf._rules_facts(rules)))
+    assert facts["pair"] == ["aiee_bga_escape_U1"]

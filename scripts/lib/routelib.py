@@ -1583,6 +1583,202 @@ def dsn_class_clearances(dsn_text: str) -> list[float]:
             re.finditer(r"\(clearance\s+([\d.]+)\s*\)", dsn_text)]
 
 
+def dsn_net_class_clearances(dsn_text: str) -> dict[str, float]:
+    """{net: um} - the clearance each net's DSN class rule sets (a net in
+    no class with its own clearance is left out)."""
+    blank = _parser_blanked(dsn_text)
+    scan = _quote_mask(blank)
+    out: dict[str, float] = {}
+    for m in re.finditer(r"\(class\s+", scan):
+        end = _sexp_end(blank, m.start())
+        body = scan[m.end():end - 1]
+        c = re.search(r"\(clearance\s+([\d.]+)\s*\)", body)
+        if not c:
+            continue
+        head = body.find("(")
+        names = dsn_text[m.end():m.end() + (head if head >= 0 else len(body))]
+        toks = [_dsn_unq(t) for t in _DSN_TOKEN_RE.findall(names)]
+        for net in toks[1:]:
+            out[net] = float(c.group(1))
+    return out
+
+
+def _dsn_unq(tok: str) -> str:
+    return tok[1:-1] if len(tok) >= 2 and tok[0] == tok[-1] == '"' else tok
+
+
+def _dsn_shrunk_shape(shape: str, d: float) -> str | None:
+    """One padstack `(shape (...))` with its copper pulled in by d um on
+    every side, or None for a form it can't shrink (polygon, too small)."""
+    m = re.match(r"\(shape\s*\(\s*(circle|rect|path)\s+(\S+)\s+([^()]*)\)",
+                 shape)
+    if not m:
+        return None
+    kind, layer = m.group(1), m.group(2)
+    try:
+        nums = [float(v) for v in m.group(3).split()]
+    except ValueError:
+        return None
+    if kind == "circle" and nums and nums[0] > 2 * d:
+        nums[0] -= 2 * d
+    elif kind == "rect" and len(nums) == 4:
+        x1, y1, x2, y2 = (min(nums[0], nums[2]), min(nums[1], nums[3]),
+                          max(nums[0], nums[2]), max(nums[1], nums[3]))
+        if x2 - x1 <= 2 * d or y2 - y1 <= 2 * d:
+            return None
+        nums = [x1 + d, y1 + d, x2 - d, y2 - d]
+    elif kind == "path" and nums and nums[0] > 2 * d:
+        nums[0] -= 2 * d
+    else:
+        return None
+    return (f"(shape ({kind} {layer} "
+            f"{' '.join(f'{v:g}' for v in nums)}))")
+
+
+def dsn_shrink_part_pads(dsn_text: str, shrink_um: dict[str, float],
+                         keep_nets: set[str] | frozenset = frozenset()
+                         ) -> tuple[str, dict]:
+    """Give Freerouting a part's own, smaller pads where the board holds
+    copper nearer to that part than the class clearance: a KiCad rule
+    `(condition "A.intersectsCourtyard('U1') || ...")` with a lower
+    clearance never reaches the DSN, so Freerouting keeps the class's
+    clearance from every ball and finds no 0.2 mm track through a 0.45 mm
+    BGA street (#1512). Each pad of the part is pulled in by d um a side,
+    so the class clearance from the smaller pad is (class - d) from the real
+    one, which the rule allows. The part's image is cloned under its own
+    name (another part sharing the image keeps its pads) and its place
+    moved to the clone. A pin on a net in keep_nets keeps its pad (a net
+    holding more than the class wants it from everything). The SES import
+    finds footprints by reference, so nothing is undone after routing.
+    Returns (text, {ref: {"shrink_um", "image", "pads"}}); only a um DSN
+    is handled."""
+    if not shrink_um or not re.search(r"\(resolution\s+um\s+\d+\)",
+                                       dsn_text) \
+            or not re.search(r"\(unit\s+um\)", dsn_text):
+        return dsn_text, {}
+    blank = _parser_blanked(dsn_text)
+    scan = _quote_mask(blank)
+    tok = r'("[^"]*"|[^\s()]+)'
+
+    pin_net: dict[str, str] = {}
+    for m in re.finditer(r"\(net\s+" + tok, scan):
+        end = _sexp_end(blank, m.start())
+        net = _dsn_unq(dsn_text[m.start(1):m.end(1)])
+        pm = re.search(r"\(pins\s+([^()]*)\)", scan[m.start():end])
+        if not pm:
+            continue
+        body = dsn_text[m.start() + pm.start(1):m.start() + pm.end(1)]
+        for p in _DSN_TOKEN_RE.findall(body):
+            pin_net[_dsn_unq(p)] = net
+
+    comps = []          # (start, end, image token, [(place start, end, ref)])
+    for m in re.finditer(r"\(component\s+" + tok, scan):
+        end = _sexp_end(blank, m.start())
+        places = []
+        for p in re.finditer(r"\(place\s+" + tok, scan[m.start():end]):
+            ps = m.start() + p.start()
+            places.append((ps, _sexp_end(blank, ps),
+                           _dsn_unq(dsn_text[m.start() + p.start(1):
+                                             m.start() + p.end(1)])))
+        comps.append((m.start(), end, dsn_text[m.start(1):m.end(1)], places))
+
+    images = {}
+    for m in re.finditer(r"\(image\s+" + tok, scan):
+        images[_dsn_unq(dsn_text[m.start(1):m.end(1)])] = \
+            (m.start(), _sexp_end(blank, m.start()))
+    stacks = {}
+    for m in re.finditer(r"\(padstack\s+" + tok, scan):
+        stacks[_dsn_unq(dsn_text[m.start(1):m.end(1)])] = \
+            (m.start(), _sexp_end(blank, m.start()))
+
+    edits: list[tuple[int, int, str]] = []
+    new_stacks: dict[str, str] = {}
+    facts: dict = {}
+    for ref, d in sorted(shrink_um.items()):
+        if d <= 0:
+            continue
+        hit = next(((c, pl) for c in comps for pl in c[3] if pl[2] == ref),
+                    None)
+        if hit is None:
+            continue
+        comp, place = hit
+        img_name = _dsn_unq(comp[2])
+        if img_name not in images:
+            continue
+        i0, i1 = images[img_name]
+        block, bscan = dsn_text[i0:i1], scan[i0:i1]
+        out, pos, pads = [], 0, 0
+        for pm in re.finditer(r"\(pin\s+" + tok, bscan):
+            pend = _sexp_end(blank, i0 + pm.start()) - i0
+            rest = re.sub(r"\(rotate[^()]*\)", lambda r: " " * len(r[0]),
+                          bscan[pm.end(1):pend - 1])
+            idm = _DSN_TOKEN_RE.search(rest)
+            if not idm:
+                continue
+            pin_id = _dsn_unq(block[pm.end(1) + idm.start():
+                                    pm.end(1) + idm.end()])
+            if pin_net.get(f"{ref}-{pin_id}") in keep_nets:
+                continue
+            stack = _dsn_unq(block[pm.start(1):pm.end(1)])
+            if stack not in stacks:
+                continue
+            new = f"{stack}_cy{d:g}"
+            if new not in new_stacks:
+                s0, s1 = stacks[stack]
+                sblock = dsn_text[s0:s1]
+                shapes = [(s.start(), _sexp_end(_parser_blanked(sblock),
+                                                s.start()))
+                          for s in re.finditer(r"\(shape\b",
+                                               _quote_mask(sblock))]
+                shrunk = [_dsn_shrunk_shape(sblock[a:b], d)
+                          for a, b in shapes]
+                if not shapes or any(s is None for s in shrunk):
+                    new_stacks[new] = ""
+                else:
+                    body = sblock
+                    for (a, b), s in reversed(list(zip(shapes, shrunk))):
+                        body = body[:a] + s + body[b:]
+                    hm = re.match(r"\(padstack\s+" + tok, body)
+                    new_stacks[new] = (f'\n    (padstack "{new}"'
+                                       + body[hm.end():])
+            if not new_stacks[new]:
+                continue
+            out.append(block[pos:pm.start(1)])
+            out.append(f'"{new}"')
+            pos = pm.end(1)
+            pads += 1
+        if not pads:
+            continue
+        out.append(block[pos:])
+        clone = "".join(out)
+        new_img = f"{img_name}_cy_{ref}"
+        hm = re.match(r"\(image\s+" + tok, clone)
+        clone = f'(image "{new_img}"' + clone[hm.end():]
+        edits.append((i1, i1, "\n    " + clone))
+        c0, c1, ctok, places = comp
+        if len(places) == 1:
+            m = re.match(r"\(component\s+" + tok, dsn_text[c0:c1])
+            edits.append((c0 + m.start(1), c0 + m.end(1), f'"{new_img}"'))
+        else:
+            ptxt = dsn_text[place[0]:place[1]]
+            ls = dsn_text.rfind("\n", 0, place[0])
+            edits.append((ls if ls > c0 else place[0], place[1], ""))
+            edits.append((c1, c1, f'\n    (component "{new_img}"\n      '
+                                  f'{ptxt}\n    )'))
+        facts[ref] = {"shrink_um": d, "image": new_img, "pads": pads}
+    if not edits:
+        return dsn_text, {}
+    last = max(e for _, e in stacks.values()) if stacks else None
+    if last is None:
+        return dsn_text, {}
+    add = "".join(t for t in new_stacks.values() if t)
+    edits.append((last, last, add))
+    out_text = dsn_text
+    for a, b, t in sorted(edits, key=lambda e: (e[0], e[1]), reverse=True):
+        out_text = out_text[:a] + t + out_text[b:]
+    return out_text, facts
+
+
 def dsn_layer_names(dsn_text: str) -> list[str]:
     """Copper layers of a DSN, in stack order."""
     scan = _parser_blanked(dsn_text)

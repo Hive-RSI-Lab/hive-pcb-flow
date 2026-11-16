@@ -13,7 +13,12 @@ manufacturer part number or a part number in Value, and no extraction in hwde's 
 else by its Value when that reads as a part number (#815; check_ratings
 reads the extraction back under it). An MPN's listing comes from an
 exact-MPN search of JLC's catalogue, cached under listings/mpn/; no exact
-match, no reading. A part with none of these is left out.
+match, no reading. A part with none of these is left out. So is a board
+soldered on as a module (#1521): an MPN whose exact JLC rows are all
+listed under Development Boards & Kits ("left out: a board"). A part
+keyed by its Value that no JLC row names exactly, and that the maker
+resolver below can't place either, is reported as land_batch reports it:
+"not one listing for its Value", with the nearest MPN the search found.
 
 For each part: its LCSC listing (cached), the datasheet that listing names
 (or, for a part reference/datasheet_urls.yaml names, the maker's datasheet
@@ -233,6 +238,73 @@ def find_listing(key: str, out: Path) -> dict | None:
     f.write_text(json.dumps(hits[0] if hits else {}, ensure_ascii=False),
                  encoding="utf-8")
     return hits[0] if hits else None
+
+
+# JLC's category for a development board or kit (#1521): a board soldered
+# on as a module (ABX00027, an Arduino Nano Every), not an IC with pins to
+# rate or number.
+BOARD_CATEGORY = "Development Boards & Kits"
+
+
+def search_rows(mpn: str, out: Path) -> list[dict]:
+    """Every row of a JLC search for the MPN, normalized, cached under
+    listings/value-hits/ (land_batch.value_listing reads the same file)."""
+    f = out / "listings" / "value-hits" / f"{ext_name('mpn:' + mpn)}.json"
+    if f.is_file():
+        return json.loads(f.read_text(encoding="utf-8"))
+    partslib = datasheet_extract._lib("partslib")
+    got, _ = partslib.live_search(mpn, page_size=25)
+    if not got and not partslib.endpoint_reachable():
+        raise partslib.PartsError("JLC parts search unreachable")
+    hits = [partslib.normalize(h) for h in got]
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(hits, ensure_ascii=False), encoding="utf-8")
+    return hits
+
+
+def nearest(value: str, hits: list[dict]) -> dict | None:
+    """The search row whose MPN shares the longest start with the Value
+    (case and spaces aside), at least half of it and four characters; the
+    shorter MPN, then the lower LCSC code, on a tie. None when none does."""
+    from mpn_decode import norm
+    v = norm(value)
+
+    def common(m: str) -> int:
+        n = 0
+        while n < min(len(m), len(v)) and m[n] == v[n]:
+            n += 1
+        return n
+    best = sorted(((common(norm(h.get("mpn"))), h) for h in hits
+                   if h.get("mpn")),
+                  key=lambda t: (-t[0], len(t[1]["mpn"]),
+                                 len(t[1].get("lcsc") or ""),
+                                 t[1].get("lcsc") or ""))
+    if best and best[0][0] >= max(4, (len(v) + 1) // 2):
+        return best[0][1]
+    return None
+
+
+def no_exact_why(value: str, hits: list[dict]) -> str:
+    """Why a Value has no listing (#1444): no row is exactly it, and the
+    nearest MPN the search found, if one is near."""
+    near = nearest(value, hits)
+    return ("no JLC listing has exactly that MPN; nearest: "
+            f"{near['mpn']} ({near.get('lcsc') or 'no LCSC code'}, "
+            f"{near.get('package') or 'no package'})" if near else
+            "no JLC listing has exactly that MPN, nor one near it")
+
+
+def a_board(mpn: str, hits: list[dict]) -> str | None:
+    """Why the part is a board, not an IC (#1521): every row whose MPN is
+    exactly it (case and spaces aside) is listed under BOARD_CATEGORY, and
+    there is one. None otherwise: a board's row beside a chip's, or near
+    rows only (RP2040-Zero is not RP2040), leave the part an IC."""
+    from mpn_decode import norm
+    exact = [h for h in hits if norm(h.get("mpn")) == norm(mpn)]
+    if not exact or any(h.get("category") != BOARD_CATEGORY for h in exact):
+        return None
+    return (f"its JLC listing ({', '.join(h.get('lcsc') or '?' for h in exact)}, "
+            f"{exact[0].get('brand') or 'no brand'}) is under {BOARD_CATEGORY}")
 
 
 DATASHEET_URLS = HERE.parent / "reference" / "datasheet_urls.yaml"
@@ -471,12 +543,30 @@ def read_part(key: str, on_boards: list[dict], out: Path,
     elif err is not None:
         return {**rep, "status": "no listing", "why": str(err)[:200]}
     if not hit.get("datasheet"):
+        from mpn_decode import norm
+        try:
+            rows = search_rows(mpn, out) if key.startswith("mpn:") else None
+        except Exception:  # noqa: BLE001 - no search, no relabel: as before
+            rows = None
+        board = a_board(mpn, rows or [])
+        if board:
+            return {**rep, "status": "left out: a board", "why": board}
         found = resolved(mpn, hit.get("brand"), out, name)
         if not found.get("url"):
             # a maker site that stalled twice may have had it: not judged (#1480)
-            return {**rep, "status": "datasheet site stalled, not judged"
-                    if found.get("miss") == "stalled" else
-                    "no listing with a datasheet URL",
+            if found.get("miss") == "stalled":
+                return {**rep, "status": "datasheet site stalled, not judged",
+                        "resolver": "stalled",
+                        "why": str(found.get("why") or _tried(found))[:300]}
+            if rows is not None and all(keyed_by_value(p) for p in on_boards) \
+                    and not any(norm(h.get("mpn")) == norm(mpn) for h in rows):
+                # named as land_batch names it (#1521): no row is the
+                # Value, so no maker could be known from one; nothing read
+                return {**rep, "keyed_by": "value",
+                        "status": "not one listing for its Value",
+                        "resolver": found.get("miss"),
+                        "why": no_exact_why(mpn, rows)}
+            return {**rep, "status": "no listing with a datasheet URL",
                     "resolver": found.get("miss"),
                     "why": str(found.get("why") or _tried(found))[:300]}
         hit.update(datasheet=found["url"],
