@@ -401,3 +401,60 @@ def test_a_malformed_mount_height_is_an_error(tmp_path):
                 {"height_mm": 5}):
         with pytest.raises(cmf.checklib.CheckError):
             cmf.mount_heights({"mechanical": {"mount_heights": {"J1": bad}}})
+
+
+# ------------------------------------------- Kelvin sense tabs (#612)
+
+def _kelvin_board(tmp_path, model_path, tab_layers='"F.Cu"'):
+    """An 0805-ish Kelvin resistor: two soldered terminals and two sense
+    tabs beside them. KiCad's R_0805_Kelvin draws the tabs as bare copper
+    under the mask (layers F.Cu only): no lead lands there."""
+    pcb = tmp_path / "k.kicad_pcb"
+    pad = '(pad "{n}" smd rect (at {x} {y}) (size {w} {h}) (layers {L}))'
+    pads = [pad.format(n=1, x=-1.45, y=0, w=0.9, h=1.7, L='"F.Cu" "F.Paste" "F.Mask"'),
+            pad.format(n=2, x=1.45, y=0, w=0.9, h=1.7, L='"F.Cu" "F.Paste" "F.Mask"'),
+            pad.format(n=3, x=-1.45, y=-1.1, w=0.5, h=0.4, L=tab_layers),
+            pad.format(n=4, x=1.45, y=-1.1, w=0.5, h=0.4, L=tab_layers)]
+    pcb.write_text(f"""(kicad_pcb (version 20241229) (generator "t")
+ (general (thickness 1.6))
+ (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+ (gr_rect (start 90 90) (end 110 110) (layer "Edge.Cuts") (stroke (width 0.1)))
+ (footprint "t:R_Kelvin" (layer "F.Cu") (at 100 100)
+  (property "Reference" "R1" (at 0 -3 0))
+  {chr(10).join("  " + p for p in pads)}
+  (model "{model_path}" (offset (xyz 0 0 0)) (scale (xyz 1 1 1))
+   (rotate (xyz 0 0 0)))
+ )
+)
+""", encoding="utf-8")
+    return pcb
+
+
+def _fp(pcb):
+    return next(k for k in cmf.sexpdata.loads(pcb.read_text())
+                if isinstance(k, list) and cmf._tok(k[0]) == "footprint")
+
+
+def test_bare_copper_sense_tabs_are_not_fitted(tmp_path):
+    """Planted: the chip's model sits on its two soldered terminals; the
+    bare sense tabs beside them used to pull the fit off them and report a
+    model_offset on a correct part (slid 0.45 mm onto the tabs)."""
+    wrl = _wrl(tmp_path / "chip.wrl", CHIP)
+    pcb = _kelvin_board(tmp_path, wrl)
+    payload, _ = cmf.run(["--pcb", str(pcb)])
+    assert payload["checked"] == 1 and payload["violations"] == []
+    assert [n for n, _, _ in cmf._pads(_fp(pcb), 0.0)] == ["1", "2"]
+
+
+def test_a_sense_tab_with_paste_is_still_a_pad(tmp_path):
+    """Twin: tabs opened for paste and mask are pads a lead lands on; and
+    with bare tabs a model off its terminals is still found."""
+    wrl = _wrl(tmp_path / "chip.wrl", CHIP)
+    pasted = _kelvin_board(tmp_path, wrl, '"F.Cu" "F.Paste" "F.Mask"')
+    assert [n for n, _, _ in cmf._pads(_fp(pasted), 0.0)] == ["1", "2", "3", "4"]
+    masked = _kelvin_board(tmp_path, wrl, '"F.Cu" "F.Mask"')
+    assert [n for n, _, _ in cmf._pads(_fp(masked), 0.0)] == ["1", "2", "3", "4"]
+    bare = cmf._pads(_fp(_kelvin_board(tmp_path, wrl)), 0.0)
+    found = cmf.fit_model(_mesh(tmp_path, CHIP), (0.6, 0.0, 0.0), ONE, Z,
+                          False, bare)
+    assert _kinds(found) == ["model_offset"]
