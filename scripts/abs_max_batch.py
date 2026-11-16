@@ -15,7 +15,9 @@ reads the extraction back under it). An MPN's listing comes from an
 exact-MPN search of JLC's catalogue, cached under listings/mpn/; no exact
 match, no reading. A part with none of these is left out.
 
-For each part: its LCSC listing (cached), the datasheet that listing names,
+For each part: its LCSC listing (cached), the datasheet that listing names
+(or, for a part reference/datasheet_urls.yaml names, the maker's datasheet
+it gives: the listing names none, or one the fetcher refuses; #815),
 fetched as `datasheet_extract.fetch_datasheet` fetches one (a file judged
 suspect is not read), the text of its absolute-maximum pages and its
 pin-description pages, and one model reading of them (READER_MODEL, the
@@ -32,7 +34,9 @@ A deterministic check then keeps only what the PDF shows (`verify`):
    Voltage") is the part's one power_in pin, and only when it has one;
  - the pinout agrees with every board the part sits on (check_ratings'
    own pinout_fact: every pad a pin, and named alike where the board names
-   them). Where the board names no pin, the nets must agree instead
+   them; a pin the reader calls "EP" leaves the pinout for the
+   extraction's exposed_pad, so the board's pad one past the last pin
+   matches it). Where the board names no pin, the nets must agree instead
    (`nets_agree`): every ground pin on a ground net, at least one, and no
    power input on one.
 A part that fails the pinout checks is left out whole. A row that fails is
@@ -82,7 +86,7 @@ MIN_PADS = 3
 ABS_KEY = "absolute maximum"
 PIN_KEYS = ("pin configuration", "pin description", "pin function",
             "pin assignment", "pinout", "pin out", "terminal function",
-            "pin no", "pin name")
+            "pin no", "pin name", "pin connection")
 MAX_PIN_PAGES = 4
 PAGE_CHARS = 7000
 WORKERS = 4
@@ -228,6 +232,24 @@ def find_listing(key: str, out: Path) -> dict | None:
     return hits[0] if hits else None
 
 
+DATASHEET_URLS = HERE.parent / "reference" / "datasheet_urls.yaml"
+
+
+def maker_datasheet(mpn: str | None, table: Path | None = None) -> dict | None:
+    """The entry of reference/datasheet_urls.yaml that names this MPN (case
+    and spaces aside), or None: the maker's datasheet for a part whose
+    listing names none, or one the fetcher refuses (#815)."""
+    from mpn_decode import norm
+    if not (mpn or "").strip():
+        return None
+    import yaml
+    doc = yaml.safe_load((table or DATASHEET_URLS).read_text(encoding="utf-8"))
+    for e in (doc or {}).get("parts") or []:
+        if norm(mpn) in {norm(m) for m in e.get("mpns") or []}:
+            return e
+    return None
+
+
 # --- one part ------------------------------------------------------------------
 
 def _norm(s: str) -> str:
@@ -346,6 +368,23 @@ def verify(reading: dict, pages: list[dict], abs_pages: set[int],
     return out_pins, rows, why
 
 
+def split_exposed_pad(pinout: list[dict], rows: list[dict]
+                      ) -> tuple[list[dict], list[dict], dict | None]:
+    """(pinout, rows, exposed_pad). The reader names an exposed pad pin "EP"
+    (PROMPT); boards number it one past the last pin. check_ratings'
+    pinout_fact takes that pad when the extraction says it has an exposed
+    pad, so the pad leaves the pinout for the library's exposed_pad field,
+    and a row that names a pin no longer in the pinout goes with it."""
+    ep = [p for p in pinout if p["pin"].upper() == "EP"]
+    if not ep:
+        return pinout, rows, None
+    rest = [p for p in pinout if p["pin"].upper() != "EP"]
+    left = {p["name"].upper() for p in rest}
+    rows = [r for r in rows if all(
+        n.upper() in left for n in r["pins"] + ([r["ref"]] if r.get("ref") else []))]
+    return rest, rows, {"present": True, "connect_to": ep[0]["name"]}
+
+
 def nets_agree(b: dict, pinout: list[dict], why: str) -> tuple[str, str]:
     """When the board names a pin unlike the datasheet (MISO / DO), the
     pinout stands if the nets agree with it: every ground pin on the board's
@@ -383,18 +422,31 @@ def read_part(key: str, on_boards: list[dict], out: Path,
     rep: dict = {"key": key, "boards": len(on_boards)}
     name = ext_name(key)
     try:
-        hit = find_listing(key, out)
+        hit, err = find_listing(key, out), None
     except Exception as exc:  # noqa: BLE001 - counted, not fatal
-        return {**rep, "status": "no listing", "why": str(exc)[:200]}
-    if not hit or not hit.get("datasheet"):
+        hit, err = None, exc
+    hit = dict(hit or {})
+    mpn = key[4:] if key.startswith("mpn:") else hit.get("mpn") or ""
+    maker = maker_datasheet(mpn) or maker_datasheet(hit.get("mpn"))
+    if maker:
+        hit.update(datasheet=maker["url"], brand=maker["brand"],
+                   package=maker["package"])
+        rep["datasheet_from"] = "reference/datasheet_urls.yaml"
+    elif err is not None:
+        return {**rep, "status": "no listing", "why": str(err)[:200]}
+    if not hit.get("datasheet"):
         return {**rep, "status": "no listing with a datasheet URL"}
     lcsc = hit.get("lcsc") or ""
-    mpn = key[4:] if key.startswith("mpn:") else hit.get("mpn") or ""
     pkg = hit.get("package") or ""
     rep.update(mpn=mpn, lcsc=lcsc, package=pkg)
     pdf = out / "pdfs" / f"{name}.pdf"
     meta = out / "pdfs" / f"{name}.json"
-    if not (pdf.is_file() and meta.is_file()):
+    fix = datasheet_extract._lib("partslib").fix_datasheet_url
+    if not (pdf.is_file() and meta.is_file()) or json.loads(
+            meta.read_text(encoding="utf-8")).get("url") != fix(hit["datasheet"]):
+        # not fetched yet, or fetched from another URL (a table entry added
+        # since, or the listing's URL changed): fetch the one wanted now
+        pdf.unlink(missing_ok=True)
         got = datasheet_extract.fetch_datasheet(hit["datasheet"], pdf, mpn=mpn)
         meta.parent.mkdir(parents=True, exist_ok=True)
         meta.write_text(json.dumps(got, indent=1), encoding="utf-8")
@@ -432,8 +484,9 @@ def read_part(key: str, on_boards: list[dict], out: Path,
     rep.update(rows_read=len(reading.get("ratings") or []), dropped=why)
     if not pinout:
         return {**rep, "status": "pinout not confirmed"}
+    pinout, rows, ep = split_exposed_pad(pinout, rows)
     ext = {"mpn": mpn, **({"lcsc": lcsc} if lcsc else {}), "package": pkg,
-           "pinout": pinout}
+           "pinout": pinout, **({"exposed_pad": ep} if ep else {})}
     for b in on_boards:
         st, val = check_ratings.pinout_fact(b, ext)
         if st == "unknown":
