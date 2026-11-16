@@ -192,6 +192,12 @@ VGS_SPEC_TOL_V = 0.05
 
 # ------------------------------------------------------------------ board
 
+PORT_ALT = re.compile(r"^(P[A-K]\d{1,2})-(\w+)$")
+# a port pin whose alternate is the chip's reset (STM32 PG10-NRST): reset
+# by default, so not driven as a GPIO
+RESET_ALT = re.compile(r"^N?(RST|RESET)$")
+
+
 def norm_fn(fn: str, pin: str) -> list[str]:
     """EasyEDA-style 'EN_3' on pin 3 -> ['EN']; '~{RESET}' -> ['RESET'];
     'CFG2/SCL_2' -> ['CFG2', 'SCL']. Upper-case alternatives."""
@@ -199,7 +205,13 @@ def norm_fn(fn: str, pin: str) -> list[str]:
     if s.endswith(f"_{pin}"):
         s = s[: -len(pin) - 1]
     s = s.replace("~{", "").replace("}", "")
-    return [a.strip().upper() for a in s.split("/") if a.strip()]
+    out = []
+    for a in (a.strip().upper() for a in s.split("/")):
+        # STM32 symbols name a pin with its alternate after a '-':
+        # PC14-OSC32_IN, PB8-BOOT0 are the port pin and that function (#465)
+        m = PORT_ALT.match(a)
+        out += [m.group(1), m.group(2)] if m else [a] if a else []
+    return out
 
 
 def load_board(net_path: Path) -> dict:
@@ -774,7 +786,8 @@ def pin_role(c: dict, pin: str, p: dict, modes: dict | None
     fns = p["fn"]
     if any(OPEN_DRAIN_FN.match(f) for f in fns):
         return "od", "status name"
-    gp = any(GPIO_FN.match(f) for f in fns)
+    gp = any(GPIO_FN.match(f) for f in fns) \
+        and not any(RESET_ALT.match(f) for f in fns)
     soc = not gp and any(SOC_PAD_FN.match(f) and not SOC_NOT_IO.match(f)
                          for f in fns)
     if not (gp or soc):
