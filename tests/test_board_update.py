@@ -1168,6 +1168,232 @@ def test_swap_clash_reads_netclass_assignments(tmp_path):
                if info["gap_mm"] > 0.1524)
 
 
+# #1275: what KiCad 10.0.6's DRC holds C5's pads to, case by case. C5 sits
+# 0.1895 and 0.233 mm from two /CFG2 tracks and 0.54 mm from a /CFG3 one;
+# pad 1 (/VDD) spans x 27.2..28.0, y 30.75..31.65.
+_C5_P1 = '''		(pad "1" smd rect
+			(at -0.7 0)
+			(size 0.8 0.9)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net "/VDD")
+'''
+_C5_P2 = _C5_P1.replace('"1"', '"2"').replace("-0.7", "0.7") \
+    .replace("/VDD", "GND")
+_C5_AT = '''		(at 28.3 31.2)
+		(descr "100nF (104) ±10% 50V")'''
+_HOLE_VIA = ('\t(via (at 27.6 32.15) (size 0.6) (drill 0.3) '
+             '(layers "F.Cu" "B.Cu") (net "GND") '
+             '(uuid "00000000-0000-0000-0000-00000000c576"))\n')
+
+
+def _drc_rule(name, cons, mm, cond=None, layer=None) -> str:
+    return (f'(rule "{name}"\n' + (f"\t(layer {layer})\n" if layer else "")
+            + f"\t(constraint {cons} (min {mm}mm))\n"
+            + (f'\t(condition "{cond}")\n' if cond else "") + ")\n")
+
+
+_ISO = ("aiee_iso_x_outer", "clearance", 0.5)
+_ISO_AB = "(A.NetName == '/VDD' || A.NetName == 'GND') && (B.NetName == '/CFG2')"
+_ISO_BA = "(A.NetName == '/CFG2') && (B.NetName == '/VDD' || B.NetName == 'GND')"
+_LOCAL01 = {"pad1": "(clearance 0.1)", "pad2": "(clearance 0.1)"}
+_LOCAL03 = {"pad1": "(clearance 0.3)", "pad2": "(clearance 0.3)"}
+
+
+def _hv(net: str, mm: float):
+    def edit(proj):
+        ns = proj["net_settings"]
+        ns["classes"].append(dict(ns["classes"][0], name="HV", clearance=mm,
+                                  priority=0))
+        ns["netclass_patterns"].append({"netclass": "HV", "pattern": net})
+    return edit
+
+
+def _setup(**rules):
+    def edit(proj):
+        proj["board"]["design_settings"]["rules"].update(rules)
+    return edit
+
+
+# name -> (board edits, {(other net, clearance mm, rule)} swap_clash_details
+# finds, whether kicad-cli DRC flags the same other-net pairs)
+_C5_CASES = {
+    "base": ({}, set(), True),
+    # a pad's own clearance, or its footprint's, replaces every netclass,
+    # rule and barrier, up or down; the pad's beats the footprint's
+    "pad03": (_LOCAL03, {("/CFG2", 0.3, "pad clearance")}, True),
+    "fp03": ({"fp": "(clearance 0.3)"},
+             {("/CFG2", 0.3, "pad clearance")}, True),
+    "pad03_rule07": (dict(_LOCAL03, rules=_drc_rule(
+        "cfg3", "clearance", 0.7, "A.NetName == '/CFG3'")),
+        {("/CFG2", 0.3, "pad clearance")}, True),
+    "pad03_class07": (dict(_LOCAL03, pro=_hv("/CFG3", 0.7)),
+                      {("/CFG2", 0.3, "pad clearance")}, True),
+    "rule07": ({"rules": _drc_rule("cfg3", "clearance", 0.7,
+                                   "A.NetName == '/CFG3'")},
+               {("/CFG3", 0.7, "net /CFG3")}, True),
+    "pad01_rule03": (dict(_LOCAL01, rules=_drc_rule(
+        "cfg2", "clearance", 0.3, "A.NetName == '/CFG2'")), set(), True),
+    "fp03_pad01": (dict(_LOCAL01, fp="(clearance 0.3)"), set(), True),
+    "dru25": ({"rules": _drc_rule("f25", "clearance", 0.25)},
+              {("/CFG2", 0.25, "board floor")}, True),
+    "dru25_pad01": (dict(_LOCAL01, rules=_drc_rule("f25", "clearance",
+                                                   0.25)), set(), True),
+    # only the board setup's minimum floors a pad's own clearance
+    "min25_pad01": (dict(_LOCAL01, pro=_setup(min_clearance=0.25)),
+                    {("/CFG2", 0.25, "board minimum")}, True),
+    # physical_clearance holds whatever the pad sets
+    "phys_cfg2": ({"rules": _drc_rule("phys", "physical_clearance", 0.3,
+                                      "A.NetName == '/CFG2'")},
+                  {("/CFG2", 0.3, "rule phys")}, True),
+    "phys_cfg2_pad01": (dict(_LOCAL01, rules=_drc_rule(
+        "phys", "physical_clearance", 0.3, "A.NetName == '/CFG2'")),
+        {("/CFG2", 0.3, "rule phys")}, True),
+    # held to every net; KiCad names one violation per item, here C5's
+    # pads against their own nets' copper, so DRC is not compared
+    "phys03": ({"rules": _drc_rule("phys", "physical_clearance", 0.3)},
+               {("/CFG2", 0.3, "rule phys")}, False),
+    # an isolation barrier, in either A/B order; a pad's own clearance
+    # replaces it
+    "iso": ({"rules": _drc_rule(*_ISO, _ISO_AB, "outer")},
+            {("/CFG2", 0.5, "isolation barrier")}, True),
+    "iso_rev": ({"rules": _drc_rule(*_ISO, _ISO_BA, "outer")},
+                {("/CFG2", 0.5, "isolation barrier")}, True),
+    "iso_pad01": (dict(_LOCAL01, rules=_drc_rule(*_ISO, _ISO_AB, "outer")),
+                  set(), True),
+    # a later, lower rule overrides the barrier in KiCad; the barrier is
+    # still held here (conservative)
+    "iso_rule_lower": ({"rules": _drc_rule(*_ISO, _ISO_AB, "outer")
+                        + _drc_rule("cfg2lo", "clearance", 0.12,
+                                    "A.NetName == '/CFG2'")},
+                       {("/CFG2", 0.5, "isolation barrier")}, False),
+    # a GND via 0.2 mm below pad 1: its drill 0.35 mm off the pad
+    "hole": ({"extra": _HOLE_VIA, "pro": _setup(min_hole_clearance=0.5)},
+             {("GND", 0.5, "board hole clearance")}, True),
+    "hole_ok": ({"extra": _HOLE_VIA, "pro": _setup(min_hole_clearance=0.3)},
+                set(), True),
+    "hole_pad01": ({"extra": _HOLE_VIA, "pad1": "(clearance 0.1)",
+                    "pro": _setup(min_hole_clearance=0.5)},
+                   {("GND", 0.5, "board hole clearance")}, True),
+    "hole_pad03": ({"extra": _HOLE_VIA, "pad1": "(clearance 0.3)",
+                    "pro": _setup(min_hole_clearance=0.1)},
+                   {("GND", 0.3, "pad clearance"),
+                    ("/CFG2", 0.3, "pad clearance")}, True),
+    "hole_rule": ({"extra": _HOLE_VIA, "pro": _setup(min_hole_clearance=0.1),
+                   "rules": _drc_rule("hc", "hole_clearance", 0.5,
+                                      "A.NetName == 'GND'")},
+                  {("GND", 0.5, "rule hc")}, True),
+}
+
+
+def _c5_case(tmp_path: Path, name: str, pad1="", pad2="", fp="", rules="",
+             pro=None, extra="") -> Path:
+    """PD_PCB staged in tmp_path/name with C5's pads given text pad1 and
+    pad2, its footprint fp, the .kicad_dru rules, the .kicad_pro edited
+    by pro, and extra items on the board."""
+    (tmp_path / name).mkdir()
+    pcb = _stage(tmp_path / name, PD_PCB)
+    t = pcb.read_text(encoding="utf-8")
+    assert _C5_P1 in t and _C5_P2 in t and _C5_AT in t
+    if pad1:
+        t = t.replace(_C5_P1, _C5_P1 + f"\t\t\t{pad1}\n")
+    if pad2:
+        t = t.replace(_C5_P2, _C5_P2 + f"\t\t\t{pad2}\n")
+    if fp:
+        t = t.replace(_C5_AT, _C5_AT + f"\n\t\t{fp}")
+    if extra:
+        i = t.rstrip().rfind(")")
+        t = t[:i] + extra + t[i:]
+    pcb.write_text(t, encoding="utf-8")
+    dru = pcb.with_suffix(".kicad_dru")
+    dru.write_text(dru.read_text(encoding="utf-8") + rules, encoding="utf-8")
+    if pro:
+        p = pcb.with_suffix(".kicad_pro")
+        proj = json.loads(p.read_text(encoding="utf-8"))
+        pro(proj)
+        p.write_text(json.dumps(proj), encoding="utf-8")
+    return pcb
+
+
+def _c5_found(pcb: Path) -> set:
+    bg = geom.BoardGeom.from_file(pcb)
+    found = bu.swap_clash_details(bg, "C5", bg.pads_of(ref="C5"), pcb)
+    for _, info in found:
+        assert info["gap_mm"] < info["clearance_mm"], info
+    return {(it.net, info["clearance_mm"], info["rule"]) for it, info in found}
+
+
+def test_pad_clearance_read():
+    """geom.Pad.clearance: the pad's own (clearance), else its
+    footprint's, else None."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    assert {p.clearance for p in bg.pads_of(ref="C5")} == {None}
+
+
+@pytest.mark.parametrize("name", sorted(_C5_CASES))
+def test_swap_clash_holds_what_kicad_holds(tmp_path, name):
+    """#1275: a pad's or footprint's own clearance, physical_clearance,
+    hole clearance and isolation barriers, each as KiCad 10.0.6's DRC
+    holds C5's pads to them (test_swap_clash_matches_kicad_drc checks
+    the cases against kicad-cli)."""
+    edits, want, _ = _C5_CASES[name]
+    pcb = _c5_case(tmp_path, name, **edits)
+    if "pad1" in edits or "fp" in edits:
+        own = {p.number: p.clearance
+               for p in geom.BoardGeom.from_file(pcb).pads_of(ref="C5")}
+        assert own["1"] == float(
+            (edits.get("pad1") or edits["fp"]).split()[1].rstrip(")"))
+    assert _c5_found(pcb) == want
+
+
+def test_swap_clash_old_pad_with_another_own_clearance(tmp_path):
+    """The copper an old pad held is left alone only where it set the same
+    own clearance as the new pad: a swap that gives C5's pads 0.3 mm still
+    rips the /CFG2 track 0.19 mm off, and one that keeps 0.3 mm does not."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    old = bg.pads_of(ref="C5")
+    new = [dataclasses.replace(p, clearance=0.3) for p in old]
+    found = bu.swap_clash_details(bg, "C5", new, PD_PCB, old_pads=old)
+    assert {(it.net, info["rule"]) for it, info in found} \
+        == {("/CFG2", "pad clearance")}
+    assert bu.swap_clash_details(bg, "C5", new, PD_PCB, old_pads=new) == []
+
+
+@pytest.mark.smoke
+def test_swap_clash_matches_kicad_drc(tmp_path):
+    """The _C5_CASES kicad-cli DRC agrees on: the other nets it flags
+    against C5's pads, at the clearance it names, are what
+    swap_clash_details finds."""
+    import re
+
+    import env
+    cli = env.find_kicad_cli()
+    if cli is None:
+        pytest.skip("kicad-cli not installed")
+    item = re.compile(r"^(Pad \S+|Track|Via) \[([^\]]*)\]( of C5)?")
+    for name, (edits, want, compare) in sorted(_C5_CASES.items()):
+        if not compare:
+            continue
+        pcb = _c5_case(tmp_path, name, **edits)
+        out = pcb.with_suffix(".json")
+        subprocess.run([str(cli), "pcb", "drc", "--format", "json",
+                        "--severity-all", "--all-track-errors", "-o",
+                        str(out), str(pcb)],
+                       check=True, capture_output=True, timeout=300)
+        flagged = set()
+        for v in json.loads(out.read_text())["violations"]:
+            if v["type"] not in ("clearance", "hole_clearance"):
+                continue
+            ms = [item.match(i["description"]) for i in v["items"]]
+            if None in ms or len(ms) != 2 or \
+                    [bool(m[3]) for m in ms].count(True) != 1:
+                continue
+            pad, other = sorted(ms, key=lambda m: not m[3])
+            if pad[2] != other[2]:
+                mm = re.search(r"clearance ([\d.]+) mm", v["description"])
+                flagged.add((other[2], float(mm[1])))
+        assert flagged == {(n, c) for n, c, _ in want}, name
+
+
 def test_swap_clash_leaves_copper_the_old_pad_held(tmp_path):
     """Copper the board already held as close to the old pad is not the
     swap's to rip (#1146); a new pad's own clash still is."""

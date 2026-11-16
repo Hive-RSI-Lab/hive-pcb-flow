@@ -114,6 +114,8 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import fnmatch
+import json
 import math
 import os
 import re
@@ -384,6 +386,9 @@ def placed_pads(bg, mod_path: Path, ref: str, place: dict,
     def name(t) -> str:
         return str(t.value() if isinstance(t, sexpdata.Symbol) else t)
 
+    # the footprint's own clearance, which its pads take where they set
+    # none (#1275)
+    fp_th = {"clearance": geom._num_of(root, "clearance")}
     for pad in geom._kids(root, "pad"):
         pad = copy.deepcopy(pad)
         at = geom._kid(pad, "at")
@@ -406,7 +411,7 @@ def placed_pads(bg, mod_path: Path, ref: str, place: dict,
                 o[2] = -o[2]
         at[1:] = [lx, ly, a + deg]
         geom.BoardGeom._add_pad(sink, pad, float(place["x"]),
-                                float(place["y"]), deg, ref)
+                                float(place["y"]), deg, ref, fp_th)
     return [dataclasses.replace(p, net=nets.get(p.number) or None)
             for p in sink._pads]
 
@@ -475,6 +480,29 @@ def swap_keeps_copper(bg, ref: str, new_pads: list,
     return None
 
 
+def _board_minimums(pcb: Path) -> tuple[float, float]:
+    """(minimum clearance, minimum hole clearance) of the board setup in
+    the .kicad_pro beside pcb: KiCad's 0 and route_cleanup's hole default
+    where it sets none. A pad's own clearance is floored by the first only;
+    no netclass or rule reaches below it (kicad-cli DRC, #1275)."""
+    import route_cleanup  # noqa: PLC0415 - heavy, lazy
+    least, hole = 0.0, route_cleanup.KICAD_HOLE_CLEARANCE
+    try:
+        proj = json.loads(pcb.with_suffix(".kicad_pro").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return least, hole
+    rules = proj
+    for key in ("board", "design_settings", "rules"):
+        rules = rules.get(key) if isinstance(rules, dict) else None
+    rules = rules if isinstance(rules, dict) else {}
+    if isinstance(rules.get("min_clearance"), (int, float)):
+        least = float(rules["min_clearance"])
+    if isinstance(rules.get("min_hole_clearance"), (int, float)):
+        hole = float(rules["min_hole_clearance"])
+    return least, hole
+
+
 def _rule_layer_ok(layer: str | None, ly: str) -> bool:
     """Whether a .kicad_dru rule's (layer ...) clause takes in copper layer
     ly: outer is F.Cu and B.Cu, inner the In*.Cu layers, a copper layer's
@@ -533,7 +561,17 @@ def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
     (dru_condition_scoped), or a NetName test, read per pair as KiCad
     reads it (case-insensitive, wildcards, ||) where the per-net reading
     takes each name literally and leaves out a rule held to a courtyard
-    (#924).
+    (#924). Where the new pad sets its own clearance (geom.Pad.clearance,
+    the pad's or its footprint's), that is the clearance instead, floored
+    only by the board setup's minimum: KiCad 10's DRC lets it override
+    every netclass and clearance rule, up or down. Then, for both, the
+    largest physical_clearance rule that may hold for the pair. A pair
+    across one of rules_gen's isolation barriers (routelib.dru_barriers,
+    either net on either side) is held to the barrier as to a rule. A via's
+    drill and the pad's copper, and the pad's drill and the item's copper,
+    are held to the hole clearance: the board setup's, raised by a
+    hole_clearance rule that may hold; no pad clearance lowers it (#1275,
+    each checked with kicad-cli DRC).
 
     A footprint test reads the board as the update leaves it: model (a
     placelib.PlaceModel of pcb, by default loaded from pcb) without the
@@ -552,8 +590,8 @@ def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
     already came at least as close to the item, and every clearance rule
     that reads more of an item than its type and net (_dru_reads) answers
     the same, and knowingly, for the old pad on the board before the
-    update as for the new pad after it: the old pad needed the same
-    clearance, so copper the board held next to it is not this swap's to
+    update as for the new pad after it, and the two set the same own
+    clearance: the old pad needed the same clearance, so copper the board held next to it is not this swap's to
     rip. Where the two net names differ (an open pad's unconnected-* name
     against no net) the per-net clearance must match too, and every
     clearance rule must answer the same. Such pairs go into kept (when a
@@ -564,21 +602,35 @@ def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
 
     per_net, floor, *_ = route_cleanup._rules_clearance(
         pcb, sorted(set(bg.nets)), scoped=False)
+    least, hole_least = _board_minimums(pcb)
     try:
         text = pcb.with_suffix(".kicad_dru").read_text(encoding="utf-8")
     except OSError:
         text = ""
     rules, compared, every = [], [], []
+    phys: list = []     # physical_clearance rules, every one
+    holes: list = []    # hole_clearance rules, every one
     for r in rc.parse_dru_rules(text):
-        if r["constraint"] != "clearance":
+        if r["constraint"] not in ("clearance", "physical_clearance",
+                                   "hole_clearance"):
             continue
         tree = rc.parse_dru_condition(r["condition"])
-        if r["nets"] or rc.dru_condition_scoped(tree):
-            rules.append((r["min_mm"], r["layer"], tree, r["name"]))
+        row = (r["min_mm"], r["layer"], tree, r["name"])
+        if r["constraint"] == "physical_clearance":
+            phys.append(row)
+        elif r["constraint"] == "hole_clearance":
+            holes.append(row)
+        elif r["nets"] or rc.dru_condition_scoped(tree):
+            rules.append(row)
         every.append((r["layer"], tree))
         if _dru_reads(tree) - _PAIR_READS:
             compared.append((r["layer"], tree))
-    rules.sort(key=lambda r: -r[0])
+    for group in (rules, phys, holes):
+        group.sort(key=lambda r: -r[0])
+    barriers = [(b["clearance_mm"], [g.lower() for g in b["a"]],
+                 [g.lower() for g in b["b"]])
+                for b in routelib.dru_barriers(text)]
+    barriers.sort(key=lambda b: -b[0])
     pending = set(pending) - {ref}
     held = {"model": model, "fps": new_fps}
 
@@ -685,19 +737,66 @@ def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
     before = world(None)
     after = world(placed)
 
-    def clr(n, it, ly: str) -> tuple[float, str]:
-        c, src = floor, "board floor"
-        for net in (n.net, it.net):
-            v = per_net.get(net or "")
-            if v is not None and v > c:
-                c, src = v, f"net {net}"
-        for mn, layer, tree, name in rules:
+    def first(group, c: float, n, it, ly: str):
+        """The largest min above c of a rule in group (sorted largest
+        first) that may hold for n, it on ly, as (min, name), or None."""
+        for mn, layer, tree, name in group:
             if mn <= c:
-                break
+                return None
             if _rule_layer_ok(layer, ly) and \
                     rc.dru_rule_may_hold(tree, n, it, after):
-                return mn, f"rule {name}"
-        return c, src
+                return mn, name
+        return None
+
+    def crosses(a: list, b: list, x: str, y: str) -> bool:
+        return any(fnmatch.fnmatchcase(x, g) for g in a) and \
+            any(fnmatch.fnmatchcase(y, g) for g in b)
+
+    def clr(n, it, ly: str) -> tuple[float, str]:
+        """The copper clearance KiCad 10 holds n and it to on ly: a pad's
+        own clearance in place of every netclass and clearance rule,
+        floored by the board minimum; then any physical_clearance rule
+        above it (#1275)."""
+        if n.clearance is not None:
+            c, src = (n.clearance, "pad clearance") \
+                if n.clearance >= least else (least, "board minimum")
+        else:
+            c, src = floor, "board floor"
+            for net in (n.net, it.net):
+                v = per_net.get(net or "")
+                if v is not None and v > c:
+                    c, src = v, f"net {net}"
+            x, y = (n.net or "").lower(), (it.net or "").lower()
+            for mn, a, b in barriers:
+                if mn <= c:
+                    break
+                if x and y and (crosses(a, b, x, y) or crosses(a, b, y, x)):
+                    c, src = mn, "isolation barrier"
+                    break
+            got = first(rules, c, n, it, ly)
+            if got:
+                c, src = got[0], f"rule {got[1]}"
+        got = first(phys, c, n, it, ly)
+        return (got[0], f"rule {got[1]}") if got else (c, src)
+
+    def hole_clr(n, it, ly: str) -> tuple[float, str]:
+        """The hole clearance between n and it on ly: the board setup's,
+        raised by a hole_clearance rule; no pad clearance lowers it."""
+        got = first(holes, hole_least, n, it, ly)
+        return (got[0], f"rule {got[1]}") if got else \
+            (hole_least, "board hole clearance")
+
+    def hole_gap(p, it) -> float | None:
+        """The gap between a hole and the other one's copper: it's via
+        drill and p's copper, p's drill and it's copper, the less; None
+        when neither has a hole."""
+        gaps = []
+        if isinstance(it, geom.Via) and it.drill > 0:
+            gaps.append(p.poly.distance(
+                Point(it.at).buffer(it.drill / 2.0, quad_segs=16)))
+        if not p.drill_poly.is_empty:
+            gaps.append(it.poly.distance(p.drill_poly))
+        return min(gaps) if gaps else None
 
     def same(tree, p, n, it) -> bool:
         """Whether a rule's answer for old pad p is known and the same
@@ -706,10 +805,14 @@ def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
         return was is not None and \
             was == rc.dru_rule_holds(tree, n, it, after)
 
-    def old_held(n, it, ly: str, d: float) -> bool:
+    def old_held(n, it, ly: str, d: float, gap=None) -> bool:
+        gap = gap or (lambda p: it.poly.distance(p.poly))
         for p in old_pads or []:
             if p.number != n.number or not _nets_equal(p.net, n.net) or \
-                    not p.on(ly) or it.poly.distance(p.poly) > d + 1e-6:
+                    not p.on(ly) or p.clearance != n.clearance:
+                continue
+            g = gap(p)
+            if g is None or g > d + 1e-6:
                 continue
             # an open pad's net name churns (_nets_equal): where the names
             # differ, a rule or netclass that reads the name may not
@@ -725,7 +828,8 @@ def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
                 return True
         return False
 
-    top = rules[0][0] if rules else 0.0
+    top = max([0.0] + [g[0][0] for g in (rules, phys, holes, barriers) if g]
+              + [hole_least])
     items = bg.tracks_of() + bg.vias_of()
     worst: dict[int, tuple] = {}
     spared: dict[int, tuple] = {}
@@ -739,18 +843,26 @@ def swap_clash_details(bg, ref: str, new_pads: list, pcb: Path,
             if not lays:
                 continue
             d = it.poly.distance(n.poly)
-            if d >= max(floor, top, per_net.get(n.net or "", floor),
+            # a hole lies inside its own copper, so no hole gap is less
+            if d >= max(floor, top, n.clearance or 0.0,
+                        per_net.get(n.net or "", floor),
                         per_net.get(it.net or "", floor)) - 1e-6:
                 continue
+            dh = hole_gap(n, it)
             for ly in lays:
-                c, src = clr(n, it, ly)
-                if d >= c - 1e-6:
-                    continue
-                out = spared if old_held(n, it, ly, d) else worst
-                if id(it) not in out or c - d > out[id(it)][0]:
-                    out[id(it)] = (c - d, it, {
-                        "clearance_mm": round(c, 4), "gap_mm": round(d, 4),
-                        "pad": n.number, "rule": src})
+                checks = [(*clr(n, it, ly), d, None)]
+                if dh is not None:
+                    checks.append((*hole_clr(n, it, ly), dh,
+                                   lambda p, it=it: hole_gap(p, it)))
+                for c, src, g, gap in checks:
+                    if g >= c - 1e-6:
+                        continue
+                    out = spared if old_held(n, it, ly, g, gap) else worst
+                    if id(it) not in out or c - g > out[id(it)][0]:
+                        out[id(it)] = (c - g, it, {
+                            "clearance_mm": round(c, 4),
+                            "gap_mm": round(g, 4),
+                            "pad": n.number, "rule": src})
     if kept is not None:
         kept.extend((it, info) for k, (_, it, info) in spared.items()
                     if k not in worst)
