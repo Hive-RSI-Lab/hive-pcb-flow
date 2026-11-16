@@ -1,0 +1,33 @@
+{
+  "mpn": "SMF3.3A",
+  "lcsc": "C990866",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VRWM reverse standoff voltage",
+      "value": 3.3,
+      "unit": "V"
+    },
+    {
+      "param": "VBR breakdown voltage at IT = 1 mA, min to max",
+      "value": "3.6 to 4.0",
+      "unit": "V"
+    },
+    {
+      "param": "VC maximum clamping voltage at IPP",
+      "value": 7.3,
+      "unit": "V"
+    }
+  ]
+}

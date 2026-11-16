@@ -1302,12 +1302,19 @@ modes:
   shows: conducts at VBUS or clamps too high
   catch: VRWM > Vmax; Vclamp < downstream abs-max
   coverage:
-    script: '-'
-    rule: '-'
-    level: L0
+    script: check_ratings
+    rule: rating_over_clamp
+    level: L1
   target_level: L2
-  gap: none
-  hit_on: []
+  gap: warning only, and only the downstream half (#500). On a rail of known
+    voltage that a unidirectional TVS holds to ground, or a constraints
+    voltages entry gives a clamp_v, each part's rating is judged at the TVS's
+    breakdown max and at its clamping voltage; the numbers come from the TVS's
+    extraction, its listing's clamping voltage or its part number's family in
+    diode_vr.yaml, so a TVS with none of these, a bidirectional one or an ESD
+    array is not read
+  hit_on:
+  - bldc-drive
   sources:
   - '[17]'
 - id: PROT-03

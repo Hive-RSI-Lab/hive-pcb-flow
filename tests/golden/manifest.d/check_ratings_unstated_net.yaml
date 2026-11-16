@@ -88,3 +88,15 @@ mutants:
     expect:
       kind: rating_over_current
       ref: D1
+  rating-over-tvs-clamp:
+    board: blinky2
+    script: mutations/rating_over_tvs_clamp.py
+    check: check_ratings
+    defect: >-
+      SIDECAR fault + board edits: D1 becomes a unidirectional TVS across
+      +3V3 (#500) printing a 4.0 V breakdown top and a 7.3 V clamping
+      voltage; C5 on +3V3 is listed at 6.3 V, above the rail and the
+      breakdown but under what a surge drives the rail to
+    expect:
+      kind: rating_over_clamp
+      ref: C5
