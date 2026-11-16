@@ -7,14 +7,21 @@ datasheets' pin drawings, for fp_verify's board mode (#1288).
     land_batch.py --sealed N      holdout round N, sealed (scorers only)
 
 Which parts: every IC (refdes U, IC or VR) on either revision of a board in
-the set, in the BOM, with three or more pads on a net, and an LCSC code or a
-manufacturer part number (fp_verify finds a record by those, never by Value,
-so a part keyed by its Value is left out), whose hwde record does not
-already state its pad places or numbering direction (land_pattern.pads or
-numbering in reference/extractions). The listing and the datasheet are the
-ones abs_max_batch.py fetches, in the same cache (abs-max/<set>/listings,
-pdfs), the maker's datasheet too where reference/datasheet_urls.yaml names
-the part: a part is fetched once for both.
+the set, in the BOM, with three or more pads on a net, and an LCSC code, a
+manufacturer part number, or else a Value that reads as a part number
+(check_ratings.value_mpn), whose hwde record does not already state its pad
+places or numbering direction (land_pattern.pads or numbering in
+reference/extractions). The listing and the datasheet are the ones
+abs_max_batch.py fetches, in the same cache (abs-max/<set>/listings, pdfs),
+the maker's datasheet too where reference/datasheet_urls.yaml names the
+part: a part is fetched once for both.
+
+A part keyed only by its Value (#1406) is read only when one source names
+it unambiguously (`value_listing`): exactly one entry of
+reference/datasheet_urls.yaml, or else JLC listings whose MPN is exactly
+the Value, all of one package (the lowest LCSC code's datasheet is read).
+Anything else leaves it out with the reason. fp_verify then finds its
+record by the Value on one exact match only.
 
 For each part: the datasheet's pin-drawing pages (a page whose text says
 "top view" or "bottom view", those that also name the pins first) and its
@@ -196,9 +203,6 @@ def wanted_parts(boards: list[dict], cache: Path, work: Path) -> tuple[dict, Cou
                 if key is None:
                     skipped["no part number"] += 1
                     continue
-                if amb.keyed_by_value(p):
-                    skipped["keyed by Value (fp_verify reads no Value)"] += 1
-                    continue
                 names = {amb.ext_name(key).upper(),
                          (p.get("mpn") or "").strip().upper()} - {""}
                 rec = next((lib[n] for n in names if n in lib), None)
@@ -207,6 +211,46 @@ def wanted_parts(boards: list[dict], cache: Path, work: Path) -> tuple[dict, Cou
                 else:
                     parts.setdefault(key, []).append(p)
     return parts, skipped
+
+
+def value_listing(value: str, store: Path, table: Path | None = None
+                  ) -> tuple[dict | None, str]:
+    """(listing, "") for a part keyed only by its Value (#1406) when one
+    source names it unambiguously, else (None, why). The maker table first:
+    exactly one entry naming the Value (read_part then reads that entry's
+    datasheet), two or more is ambiguous. Else the JLC rows whose MPN is
+    exactly the Value (case and spaces aside) and that name a datasheet:
+    they must all give one package, and the lowest LCSC code's is kept.
+    The rows are cached under listings/value/."""
+    import yaml
+    from mpn_decode import norm
+    doc = yaml.safe_load((table or amb.DATASHEET_URLS).read_text(encoding="utf-8"))
+    ents = [e for e in (doc or {}).get("parts") or []
+            if norm(value) in {norm(m) for m in e.get("mpns") or []}]
+    if len(ents) > 1:
+        return None, f"reference/datasheet_urls.yaml names it in {len(ents)} entries"
+    if ents:
+        return {"mpn": value}, ""
+    f = store / "listings" / "value" / f"{amb.ext_name('mpn:' + value)}.json"
+    if f.is_file():
+        rows = json.loads(f.read_text(encoding="utf-8"))
+    else:
+        partslib = datasheet_extract._lib("partslib")
+        got, _ = partslib.live_search(value, page_size=25)
+        if not got and not partslib.endpoint_reachable():
+            raise partslib.PartsError("JLC parts search unreachable")
+        rows = sorted((h for h in map(partslib.normalize, got)
+                       if norm(h.get("mpn")) == norm(value) and h.get("datasheet")),
+                      key=lambda h: (len(h.get("lcsc") or ""), h.get("lcsc") or ""))
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    if not rows:
+        return None, "no JLC listing has exactly that MPN and a datasheet"
+    pkgs = sorted({norm(r.get("package") or "") for r in rows})
+    if len(pkgs) > 1:
+        return None, (f"{len(rows)} JLC listings have exactly that MPN, in "
+                      f"{len(pkgs)} packages")
+    return rows[0], ""
 
 
 # --- pages -----------------------------------------------------------------------
@@ -363,8 +407,17 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
     abs_max_batch's folder for the set (listings and PDFs shared)."""
     rep: dict = {"key": key, "boards": len(on_boards)}
     name = amb.ext_name(key)
+    by_value = all(amb.keyed_by_value(p) for p in on_boards)
+    if by_value:
+        rep["keyed_by"] = "value"
     try:
-        hit, err = amb.find_listing(key, store), None
+        if by_value:
+            hit, vwhy = value_listing(key[4:], store)
+            if hit is None:
+                return {**rep, "status": "not one listing for its Value", "why": vwhy}
+        else:
+            hit = amb.find_listing(key, store)
+        err = None
     except Exception as exc:  # noqa: BLE001 - counted, not fatal
         hit, err = None, exc
     hit = dict(hit or {})

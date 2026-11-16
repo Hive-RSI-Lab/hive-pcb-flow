@@ -112,3 +112,107 @@ def test_golden_mutant_and_its_quiet_twin(tmp_path):
                      "--parts", str(tmp_path / "parts"))
     assert code == 0 and rep["violations"] == []
     assert rep["judged"] == {"numbering": 1}
+
+
+def _value_keyed(tmp_path, value: str):
+    """placed.kicad_pcb with the three C999008 parts (U7 fits; U9 and U10
+    are numbered from the bottom view) given no LCSC number, only the Value
+    `value` (#1406)."""
+    text = (BOARD / "placed.kicad_pcb").read_text(encoding="utf-8")
+    head, *fps = text.split("\n\t(footprint ")
+    out = [head]
+    for fp in fps:
+        if '(property "LCSC" "C999008"' in fp:
+            fp = fp.replace('(property "LCSC" "C999008"', '(property "Note" "x"')
+            fp = fp.replace('(property "Value" ""', f'(property "Value" "{value}"')
+        out.append(fp)
+    pcb = tmp_path / "v.kicad_pcb"
+    pcb.write_text("\n\t(footprint ".join(out), encoding="utf-8")
+    return pcb
+
+
+def test_board_mode_finds_a_record_by_value_alone(tmp_path):
+    """#1406 planted fault and quiet twin: the record reached only through
+    the Value catches U9 and U10 numbered from the bottom view, and U7, the
+    same part placed right, fits."""
+    pcb = _value_keyed(tmp_path, "SO8X")
+    code, rep = _run(tmp_path, "--pcb", str(pcb), "--parts", str(BOARD / "parts"))
+    assert code == 1
+    by = {p["ref"]: p for p in rep["parts"]}
+    for ref in ("U7", "U9", "U10"):
+        assert by[ref]["found_by"] == "value", ref
+        assert by[ref]["record"].endswith("C999008.json"), ref
+    assert by["U7"]["pad_numbering"]["fit"] is True
+    assert "found_by" not in by["U1"]
+    bad = {v["refs"][0]: v["hint"] for v in rep["violations"]}
+    assert bad == {"U5": "bottom_view_numbering", "U6": "bottom_view_numbering",
+                   "U9": "bottom_view_numbering", "U10": "bottom_view_numbering"}
+
+
+def test_board_mode_value_lookup_is_exact_and_unique(tmp_path):
+    """#1406: a Value two records carry, or one no record carries exactly
+    (no prefix match), or one that is a component value, judges nothing,
+    and says why."""
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    rec = (BOARD / "parts" / "C999008.json").read_text(encoding="utf-8")
+    (parts / "C999008.json").write_text(rec, encoding="utf-8")
+    (parts / "SO8X.json").write_text(rec, encoding="utf-8")   # a second claim
+
+    code, rep = _run(tmp_path, "--pcb", str(_value_keyed(tmp_path, "so8x")),
+                     "--parts", str(parts))
+    by = {p["ref"]: p for p in rep["parts"]}
+    assert {v["refs"][0] for v in rep["violations"]} == {"U5", "U6"}
+    for ref in ("U7", "U9", "U10"):
+        assert by[ref]["pad_numbering"] is None and by[ref]["record"] is None
+        [why] = by[ref]["not_judged"]
+        assert "names 2 records (C999008.json, SO8X.json)" in why
+
+    # a record whose number only starts with the Value is not a match
+    longer = tmp_path / "longer"
+    longer.mkdir()
+    doc = json.loads(rec)
+    doc["mpn"] = "SO8XTR"
+    (longer / "SO8XTR.json").write_text(json.dumps(doc), encoding="utf-8")
+    for value, where, said in (
+            ("SO8X", longer, "no record named by its Value SO8X"),
+            ("SO8XA", BOARD / "parts", "no record named by its Value SO8XA"),
+            ("100nF", BOARD / "parts", "no record found by its LCSC number or MPN")):
+        code, rep = _run(tmp_path, "--pcb", str(_value_keyed(tmp_path, value)),
+                         "--parts", str(where))
+        by = {p["ref"]: p for p in rep["parts"]}
+        assert not {"U7", "U9", "U10"} & {v["refs"][0] for v in rep["violations"]}
+        assert said in by["U9"]["not_judged"][0], value
+
+
+def test_board_mode_value_never_overrides_a_part_number(tmp_path):
+    """#1406: a part with an MPN keeps the MPN lookup; its Value, even one
+    naming a record, is not read."""
+    pcb = _value_keyed(tmp_path, "SO8X")
+    text = pcb.read_text(encoding="utf-8").replace(
+        '(property "Note" "x"', '(property "MPN" "NOPE123"')
+    pcb.write_text(text, encoding="utf-8")
+    code, rep = _run(tmp_path, "--pcb", str(pcb), "--parts", str(BOARD / "parts"))
+    by = {p["ref"]: p for p in rep["parts"]}
+    assert code == 1    # U5 and U6 still caught through their own records
+    assert by["U9"]["record"] is None and "found_by" not in by["U9"]
+    assert "LCSC number or MPN" in by["U9"]["not_judged"][0]
+
+
+def test_board_mode_finds_a_record_by_its_lcsc_field(tmp_path):
+    """#1406: a record landed from a Value is named by its MPN (SO8X.json)
+    with the LCSC number only inside it; a board that gives just the LCSC
+    number still reaches it, so U9 and U10 are caught and U7 fits."""
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    doc = json.loads((BOARD / "parts" / "C999008.json").read_text(encoding="utf-8"))
+    doc["lcsc"] = "C999008"
+    (parts / "SO8X.json").write_text(json.dumps(doc), encoding="utf-8")
+    code, rep = _run(tmp_path, "--pcb", str(BOARD / "placed.kicad_pcb"),
+                     "--parts", str(parts))
+    by = {p["ref"]: p for p in rep["parts"]}
+    for ref in ("U7", "U9", "U10"):
+        assert by[ref]["record"].endswith("SO8X.json"), ref
+        assert "found_by" not in by[ref]
+    assert by["U7"]["pad_numbering"]["fit"] is True
+    assert {"U9", "U10"} <= {v["refs"][0] for v in rep["violations"]}

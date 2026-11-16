@@ -86,9 +86,13 @@ the pad-numbering checks on each footprint as placed. Each one is taken back to
 its library frame (at 0 0, front side: a bottom part's y and B./F. layers
 mirrored back, each pad's angle less the part's turn) and judged against the
 record its LCSC field (else --parts' lcsc, else its MPN) finds in --parts or
-hwde's extractions. Only pad_numbering / bga_numbering findings are kept, each
-at the part's board place with refs, side and footprint. `judged` counts the
-parts each record judged; `parts` says per part what record (or none) it got.
+hwde's extractions (by file name, or a record's mpn or lcsc field). A part
+with none of those is looked up by its Value when that reads as a part number,
+and only when exactly one record carries it as its name or mpn; else it is
+not_judged with the reason (#1406). Only pad_numbering / bga_numbering
+findings are kept, each at the part's board place with refs, side and
+footprint. `judged` counts the parts each record judged; `parts` says per
+part what record (or none) it got.
 
 Exit (SPEC section 6): 0 = no error-severity findings (warnings allowed),
 1 = one or more errors, 2 = unreadable footprint/JSON.
@@ -1123,8 +1127,9 @@ def library_copy(node, rot: float, bottom: bool):
 
 def _record_index(dirs: list[Path]) -> dict[str, Path]:
     """Record file by name stem (an LCSC number or MPN) and by its "mpn"
-    field, the first dir winning (the board's parts dir, then
-    reference/extractions)."""
+    and "lcsc" fields, the first dir winning (the board's parts dir, then
+    reference/extractions). A record landed from a Value (#1406) is named
+    by its MPN, and a board may give only the LCSC number."""
     idx: dict[str, Path] = {}
     for d in dirs:
         if not d.is_dir():
@@ -1137,8 +1142,37 @@ def _record_index(dirs: list[Path]) -> dict[str, Path]:
                 doc = checklib.load_json(f, f"record {f.name}")
             except checklib.CheckError:
                 continue
+            for k in ("mpn", "lcsc"):
+                if isinstance(doc, dict) and isinstance(doc.get(k), str) \
+                        and doc[k].strip():
+                    idx.setdefault(doc[k].strip().upper(), f)
+    return idx
+
+
+def _value_index(dirs: list[Path]) -> dict[str, list[Path]]:
+    """#1406: every record file under each name (file stem, and "mpn"
+    field), case aside, from the first dir that has the name: a Value names
+    a record only when exactly one file there carries it, so the files are
+    kept, not just the first."""
+    idx: dict[str, list[Path]] = {}
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        here: dict[str, list[Path]] = {}
+        for f in sorted(d.glob("*.json")):
+            if f.name == "parts.json":
+                continue
+            names = {f.stem.upper()}
+            try:
+                doc = checklib.load_json(f, f"record {f.name}")
+            except checklib.CheckError:
+                doc = None
             if isinstance(doc, dict) and isinstance(doc.get("mpn"), str):
-                idx.setdefault(doc["mpn"].strip().upper(), f)
+                names.add(doc["mpn"].strip().upper())
+            for n in names - {""}:
+                here.setdefault(n, []).append(f)
+        for n, fs in here.items():
+            idx.setdefault(n, fs)
     return idx
 
 
@@ -1147,14 +1181,20 @@ def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
     """The pad-numbering checks on each footprint placed in a .kicad_pcb
     (#1285): every copy taken back to its library form (a bottom one
     unflipped), its record found by LCSC number or MPN, and verify()'s
-    pad_numbering findings kept, under the placed reference and position."""
+    pad_numbering findings kept, under the placed reference and position.
+    A part with neither takes its record from its Value when that reads as
+    a part number and exactly one record file carries it as its name or
+    mpn (#1406); none, or two or more, leaves it not_judged and says so."""
     import tempfile
 
     import sexpdata
+    import check_ratings
     import matinglib
     tree = sexpdata.loads(Path(pcb).read_text(encoding="utf-8"))
     rows = matinglib.load_parts(parts)
-    idx = _record_index(([parts] if parts else []) + [EXTRACTIONS])
+    dirs = ([parts] if parts else []) + [EXTRACTIONS]
+    idx = _record_index(dirs)
+    vidx = _value_index(dirs)
     viols: list[dict] = []
     placed: list[dict] = []
     judged = Counter()
@@ -1177,6 +1217,20 @@ def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
                     str(row.get("lcsc") or ""), matinglib.part_mpn(props, row)]
             rec = next((idx[k.strip().upper()] for k in keys
                         if k and k.strip().upper() in idx), None)
+            # no LCSC number and no MPN: the Value, on one exact match only
+            value = "" if any((k or "").strip() for k in keys) else \
+                check_ratings.value_mpn({"value": props.get("Value")})
+            by_value = vidx.get(value.upper(), []) if value else []
+            if len(by_value) == 1:
+                rec = by_value[0]
+            no_rec = (
+                f"its Value {value} names {len(by_value)} records "
+                f"({', '.join(f.name for f in by_value)}); none is picked"
+                if len(by_value) > 1 else
+                f"no record named by its Value {value} (the parts dir, then "
+                "reference/extractions)" if value else
+                "no record found by its LCSC number or MPN (the parts dir, "
+                "then reference/extractions), and not a lettered ball grid")
             ds = checklib.load_json(rec, f"record {rec.name}") if rec else {}
             mod = Path(tmp) / f"{len(placed)}.kicad_mod"
             mod.write_text(sexpdata.dumps(library_copy(node, rot, bottom)),
@@ -1207,12 +1261,10 @@ def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
                 "ref": ref, "footprint": str(fpg._t(node[1])),
                 "side": "bottom" if bottom else "top",
                 "record": str(rec) if rec else None, "pad_numbering": num,
+                **({"found_by": "value"} if rec and value else {}),
                 "not_judged": ([n["why"] for n in facts["not_judged"]
                                 if n["check"] == "pad_numbering"] if rec
-                               else ["no record found by its LCSC number or "
-                                     "MPN (the parts dir, then "
-                                     "reference/extractions), and not a "
-                                     "lettered ball grid"] if not num
+                               else [no_rec] if not num
                                else []) or None})
     n = sum(judged.values())
     facts = {"placed": len(placed), "judged": dict(judged),
