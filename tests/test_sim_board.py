@@ -625,6 +625,71 @@ def test_pin_rating():
         "switch_node"
 
 
+# Shunt inputs ride the bus, not VS (#521): each pin form KiCad's own
+# symbols and boards use (Vin+ on INA226/233, bare + on INA240, per-channel
+# IN+2 on INA3221, SENSE1+ on PAC193x/195x, +IN on NCS21x) reads its own
+# rating; a control pin of the same part, or PAC194x (no row yet), does not.
+@pytest.mark.parametrize("value,fn,lim", [
+    ("INA3221AIRGVR", "IN+2", 26), ("INA3221", "IN3-", 26),
+    ("INA3221AIRGVR", "VPU", 26), ("INA3221AIRGVR", "SCL", None),
+    ("INA233AIDGSR", "VIN+", 36), ("INA233AIDGSR", "VBUS", 36),
+    ("INA226AIDGSR", "VIN-", 36), ("INA240A1D", "+", 80),
+    ("INA240A1D", "-", 80), ("INA4181A1", "IN2+", 26),
+    ("INA2180A1", "IN1-", 26), ("INA260AIPWR", "VIN+", 36),
+    ("INA234AIYBJR", "IN-", 28), ("PAC1934T-I/JQ", "SENSE1+", 32),
+    ("PAC1934T-I/JQ", "SENSE4-", 32), ("PAC1934T-I/JQ", "VDD", None),
+    ("INA200AIDR", "V_{IN+", 80), ("INA225AIDGSR", "IN+", 36),
+    ("INA253A1IPW", "IS-", 80), ("INA233AIDGSR", "SDA", None),
+    ("PAC1954T-E/4MX", "SENSE3+", 32), ("PAC1944T-E/4MX", "SENSE1+", None),
+    ("NCS210RSQT2G", "+IN", 26), ("NCV214RMUTAG", "-IN", 26),
+    ("NCS210RSQT2G", "REF", None),
+])
+def test_current_sense_pin_ratings(value, fn, lim):
+    table = sim_board.load_pin_ratings()
+    got, src = sim_board.pin_rating({"ref": "U1", "value": value},
+                                    {"fn": [fn]}, None, table)
+    assert got == lim, (value, fn, src)
+    if lim is not None:
+        assert "not re-read" not in src
+
+
+# An INA3221 on a 3.3 V VS measuring a 5 V rail is at spec (IN+/IN- to 26 V
+# regardless of VS); an INA219 on a 28 V rail is over its 26 V and flags.
+CSA_BOARD = [
+    ("U1", "INA3221AIRGVR", "VQFN-16", {
+        "3": ("+3V3", "VS"), "2": ("GND", "GND"),
+        "6": ("/SNS2_P", "IN+2"), "7": ("/SNS2_N", "IN-2")}),
+    ("R1", "0.01", "R_2512_6332Metric", {"1": ("+5V", ""),
+                                         "2": ("/SNS2_P", "")}),
+    ("R2", "0.01", "R_2512_6332Metric", {"1": ("/SNS2_P", ""),
+                                         "2": ("/SNS2_N", "")}),
+    ("R3", "10k", "R_0603_1608Metric", {"1": ("/SNS2_N", ""),
+                                        "2": ("GND", "")}),
+    ("U2", "INA219AIDCNR", "SOT-23-8", {
+        "4": ("+3V3", "VS"), "3": ("GND", "GND"),
+        "1": ("/SNS3_P", "IN+"), "2": ("/SNS3_N", "IN-")}),
+    ("R4", "0.01", "R_2512_6332Metric", {"1": ("+28V", ""),
+                                         "2": ("/SNS3_P", "")}),
+    ("R5", "0.01", "R_2512_6332Metric", {"1": ("/SNS3_P", ""),
+                                         "2": ("/SNS3_N", "")}),
+    ("R6", "10k", "R_0603_1608Metric", {"1": ("/SNS3_N", ""),
+                                        "2": ("GND", "")}),
+]
+
+
+def test_engine_current_sense_inputs(tmp_path, need_engine):
+    (tmp_path / "kicad").mkdir()
+    write_net(tmp_path / "kicad" / "c.net", CSA_BOARD)
+    out = tmp_path / "sim.json"
+    subprocess.run([sys.executable, str(SCRIPTS / "sim_board.py"),
+                    "--workspace", str(tmp_path), "--out", str(out)],
+                   capture_output=True, text=True, timeout=300)
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    hits = [v for v in rep["violations"] if v["kind"] == "input_above_supply"]
+    assert sorted(v["refs"][0] for v in hits) == ["U2", "U2"]
+    assert all(v["rating"] == 26 and "SBOS448" in json.dumps(v) for v in hits)
+
+
 def test_underdrive_at_rdson_vgs_is_at_spec():
     e = {"ref": "Q501", "type": "nmos", "roles": {"G": "/G"}}
     part = {"attrs": {"Vgs(th) max": "1V", "RDS(on)": "20mΩ@2.5V"}}
