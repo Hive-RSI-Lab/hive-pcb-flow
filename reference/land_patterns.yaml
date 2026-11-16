@@ -103,6 +103,16 @@ parts:
       3: [-1.3, 0.95]
       4: [1.3, 0.95]
       5: [1.3, -0.95]
+  - part: ALPS EC11E1834403 (EC11E vertical, push switch, No.5)
+    source: "ALPS EC11 series datasheet (LCSC C361165, 2017-09), printed p.278, drawing No.5 PC board mounting hole dimensions viewed from the insertion side: A C B at 2.5 pitch 7.5 below the shaft, D E 5 apart 7 above it, 5-ø1 holes; the 1.5x2.6 lug slots (12.5 apart) not checked"
+    match: '^EC11E1834403'
+    hole_mm: 1.0
+    pads:
+      A: [-2.5, 7.5]
+      C: [0, 7.5]
+      B: [2.5, 7.5]
+      D: [-2.5, -7.0]
+      E: [2.5, -7.0]
   # Package rows: `footprint` is a regex the whole footprint name (library
   # aside) must match; used when no part row matches. Generic lands from a
   # maker's chip/package table, for parts with no MPN to go by. A 2-pad land

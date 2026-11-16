@@ -227,6 +227,60 @@ def test_package_rows_judge_unnamed_chips_and_yield_to_a_part_row(tmp_path, stoc
     assert g.land_row(fp, pkg + [r]) is r  # a part row first, whatever the order
 
 
+EC11 = {"A": (-2.54, 7.25), "B": (2.54, 7.25), "C": (0.0, 7.25),
+        "D": (-2.54, -7.25), "E": (2.54, -7.25)}  # ultra-front SW4 as drawn
+
+
+def _ec11(ref, centres, value, drill=1.2, at=(50, 50)):
+    body = "".join(pad(k, x, y, 1.8, 1.8, drill=drill, kind="thru_hole", shape="circle")
+                   for k, (x, y) in centres.items())
+    return footprint(ref, "aiee:SW-TH_EC11E1820402", body, at=at,
+                     props={"Value": value, "LCSC Part": "C361165"})
+
+
+def _sev(pcb, stock, rows):
+    v, _, _ = g.check(pcb, stock=stock, rows=rows)
+    return sorted((x["refs"][0], x["kind"], x["severity"], x.get("result")) for x in v)
+
+
+def test_name_vs_part_judged_by_the_parts_geometry(tmp_path, stock):
+    rows = [r for r in g.load_land_patterns() if r["part"].startswith("ALPS EC11E1834403")]
+    assert rows
+    # planted: a footprint named for the EC11E1820402 whose push-switch
+    # pins sit 2 mm off the EC11E1834403's drawing: the land is not the part's
+    off = dict(EC11, D=(-2.54, -9.25), E=(2.54, -9.25))
+    pcb = board(tmp_path, _ec11("SW1", off, "EC11E1834403"))
+    assert _sev(pcb, stock, rows) == [
+        ("SW1", "fp_name_vs_part", "warning", "pads differ"),
+        ("SW1", "fp_pads_vs_drawing", "error", None)]
+    # quiet twin (ultra-front SW4): the No.4 and No.5 drawings share their
+    # hole pattern, the 2.54 grid copy of the 2.5 pitch drops each lead in
+    # its 1.2 mm hole: the name only differs; a family Value (EC11, core
+    # SW1) is no disagreement
+    pcb = board(tmp_path, _ec11("SW4", EC11, "EC11E1834403"),
+                _ec11("SW5", EC11, "EC11", at=(80, 50)))
+    assert _sev(pcb, stock, rows) == [("SW4", "fp_name_vs_part", "info", "name only")]
+    # the hole slack is the board's drill over the drawing's hole: drilled
+    # at the drawing's 1.0 mm the 0.04 mm pitch slip is a finding, and the
+    # name's disagreement with it a warning
+    pcb = board(tmp_path, _ec11("SW4", EC11, "EC11E1834403", drill=1.0))
+    assert _sev(pcb, stock, rows) == [("SW4", "fp_name_vs_part", "warning", "pads differ"),
+                                      ("SW4", "fp_pitch_vs_drawing", "error", None)]
+    # nothing of the part's own to judge the pads by: said, as info
+    pcb = board(tmp_path, _ec11("SW4", EC11, "EC11E1834403"))
+    assert _sev(pcb, stock, []) == [("SW4", "fp_name_vs_part", "info", "not judged")]
+
+
+def test_name_vs_part_tokens():
+    fp = lambda name, **f: g.FP("U1", f"x:{name}", "top", (0, 0), "F.Cu", f)
+    assert g.name_vs_part(fp("SW-TH_EC11E1820402", Value="EC11E1834403")) == (
+        "EC11E1820402", "EC11E1834403", "Value")
+    assert g.name_vs_part(fp("SW-TH_EC11E1820402", Value="EC11")) is None
+    assert g.name_vs_part(fp("TPS7A20_SOT-23-5", MPN="TPS7A2033PDBVR")) is None
+    assert g.name_vs_part(fp("SOIC-8_3.9x4.9mm_P1.27mm", Value="LM358")) is None
+    assert g.name_vs_part(fp("R0805", Value="10k 1% 0805")) is None
+
+
 def test_name_pitch_and_pins(tmp_path, stock):
     tight = {k: (x, y * 0.8) for k, (x, y) in SOIC.items()}  # 1.016 mm pitch
     seven = {k: v for k, v in SOIC.items() if k != "6"}

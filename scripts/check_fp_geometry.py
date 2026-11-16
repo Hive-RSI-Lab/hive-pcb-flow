@@ -64,9 +64,24 @@ Kinds (one per ref and source; the worst first):
                                     fact no library varies; a short row a
                                     step off stays inside the quarter-pitch
                                     pad tolerance above)
+                                    A drawing row that states its hole
+                                    (hole_mm) lets a drilled row whose every
+                                    pad lands within the slack of the
+                                    board's drill over that hole pass (a
+                                    2.54 mm grid copy of a 2.5 mm part)
   fp_pitch_vs_name         warning  no two pads at the pitch the name states
                                     (_P1.27mm, or EasyEDA's -P1.27-)
   fp_pins_vs_name          warning  pins the name counts are missing
+  fp_name_vs_part          warning  the footprint's name carries another part
+                           or info  number of the part's family than its MPN
+                                    or Value (EC11E1820402 for EC11E1834403;
+                                    a family name such as EC11 is not one):
+                                    a warning when its pads disagree with the
+                                    part's drawing, record or model; info
+                                    "name only" when they agree; info "not
+                                    judged" when none of those covers the
+                                    part (the stock footprint of the name is
+                                    the name's geometry, not the part's)
   fp_<x>_vs_record         fp_verify's severity: the part record's land
                                     against the pads, one per kind and ref,
                                     citing the record's datasheet and its
@@ -465,13 +480,13 @@ def pitch(centres: dict) -> float:
 
 
 def compare(ref: dict, got: dict, side: str, turns=(0,)) -> dict:
-    """{fit: True} or {fit: False, worst_mm, pad, permuted, tol}. `ref` and
+    """{fit: True, worst_mm, tol} or {fit: False, worst_mm, pad, permuted, tol}. `ref` and
     `got` are number -> centre over the same numbers."""
     tol = max(0.05, 0.25 * pitch(ref))
     best = min((_err(ref, got, f) + (f,) for f in _frames(side, turns)),
                key=lambda e: e[0])
     if best[0] <= tol:
-        return {"fit": True, "tol": tol}
+        return {"fit": True, "tol": tol, "worst_mm": round(best[0], 3)}
     permuted = len(ref) >= 2 and any(_set_fits(ref, got, f, tol)
                                      for f in _frames(side, turns))
     return {"fit": False, "worst_mm": round(best[0], 3), "pad": best[1],
@@ -1036,6 +1051,84 @@ def pitch_off(ref: dict, got: dict) -> tuple[float, float] | None:
     return r, b
 
 
+# the sources that hold the pads to the part itself (stock is the name's
+# footprint, not the part's)
+GEOMETRY = ("drawing", "record", "model")
+_MPN_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9]*\d[A-Za-z0-9]*")
+_NAME_FIELDS = ("MPN", "Manufacturer Part Number", "MFR Part", "Part Number",
+                "PartNumber", "Value")
+
+
+def _mpn_tokens(text: str) -> list[str]:
+    """Part-number-like tokens: a letter first, a digit in it, six or more
+    characters (EC11E1820402, TPS7A2033); package words (SOT, TH) and
+    sizes (3.9x4.9mm, P1.27) are not."""
+    return [t.upper() for t in _MPN_TOKEN.findall(text or "") if len(t) >= 6]
+
+
+def _common(a: str, b: str) -> str:
+    n = 0
+    while n < min(len(a), len(b)) and a[n] == b[n]:
+        n += 1
+    return a[:n]
+
+
+def name_vs_part(fp: FP) -> tuple[str, str, str] | None:
+    """(name token, part token, field) where the footprint's name (library
+    aside) carries a part number of the part's family that is not the
+    part's: the two share a prefix of four or more characters with a letter
+    and a digit in it (EC11E18...), and neither is the start of the other.
+    A family name (EC11) or the name's own part (TPS7A20 for TPS7A2033PDBVR)
+    is not a disagreement."""
+    names = _mpn_tokens(fp.name)
+    for k in _NAME_FIELDS:
+        for b in _mpn_tokens(fp.fields.get(k, "")):
+            for a in names:
+                c = _common(a, b)
+                if (len(c) >= 4 and re.search(r"[A-Z]", c) and re.search(r"\d", c)
+                        and not a.startswith(b) and not b.startswith(a)):
+                    return a, b, k
+    return None
+
+
+def name_finding(fp: FP, nm: tuple, geometry: list, found: list, add) -> None:
+    """fp_name_vs_part: the footprint is named for another part than its
+    field states. Its pads against the part's own geometry (drawing, record
+    or LCSC model) say whether the land is the part's: info "name only" when
+    they agree, a warning when they don't, info when nothing judged them."""
+    a, b, k = nm
+    said = f"its footprint name says {a} where its {k} says {b}"
+    bad = sorted({v["kind"] for v in found if v["severity"] != "info"
+                  and re.search(r"_vs_(drawing|record|model)$", v["kind"])})
+    if not geometry:
+        add(fp, "info", "fp_name_vs_part",
+            f"{said}, and no drawing, part record or LCSC model of {b} judged its "
+            f"pads: check the land against {b}'s datasheet",
+            name_part=a, part=b, field=k, result="not judged")
+    elif bad:
+        add(fp, "warning", "fp_name_vs_part",
+            f"{said}, and its pads disagree with {b}'s {geometry[0]} ({', '.join(bad)}): "
+            f"the footprint may be {a}'s land, not {b}'s. Fix: use {b}'s footprint",
+            name_part=a, part=b, field=k, result="pads differ", sources=geometry)
+    else:
+        add(fp, "info", "fp_name_vs_part",
+            f"{said}, but its pads agree with {b}'s {geometry[0]}: the name only differs",
+            name_part=a, part=b, field=k, result="name only", sources=geometry)
+
+
+def in_holes(fp: FP, common: set, row: dict, worst: float | None) -> bool:
+    """True when a drawing row states its hole (hole_mm), every pad it
+    covers is drilled, and the worst pad sits within the slack of the
+    board's smallest drill over that hole, half each side: a 2.54 mm grid
+    copy of a 2.5 mm pitch part whose leads still drop through (a pitch
+    finding there would be a units slip that harms nothing)."""
+    hole = row.get("hole_mm")
+    drills = [q.drill for q in fp.pads if q.number in common]
+    if not hole or worst is None or not drills or not all(drills):
+        return False
+    return worst <= (min(drills) - float(hole)) / 2
+
+
 def name_findings(fp: FP, centres: dict) -> list[tuple[str, str, dict]]:
     """(kind, msg, extra) from what the footprint's own name states."""
     out = []
@@ -1119,6 +1212,7 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
     fps = board_footprints(pcb)
     for fp in fps:
         got = _centres(fp.pads)
+        n0 = len(viols)
         uncached = False  # its LCSC model was looked for and is not cached
         rnote = {}  # its part record's file, and whether it judged or failed
 
@@ -1149,7 +1243,8 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                         f"against the land pattern of {row['part']} ({row['source']}): {how}. "
                         f"Fix: renumber or redraw the footprint to the drawing's top view",
                         drawing=row["source"], **{k: c[k] for k in ("worst_mm", "pad", "tol")})
-                elif off := pitch_off({k: ref[k] for k in common}, {k: got[k] for k in common}):
+                elif (off := pitch_off({k: ref[k] for k in common}, {k: got[k] for k in common})
+                      ) and not in_holes(fp, common, row, c["worst_mm"]):
                     add(fp, "error", "fp_pitch_vs_drawing",
                         f"its pads are {off[1]:.3f} mm apart along a row where the land "
                         f"pattern of {row['part']} ({row['source']}) has {off[0]:.3f} mm. "
@@ -1339,6 +1434,8 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                             f"its pads by number at any turn (tolerance {a['tol_mm']} mm): "
                             f"check the pitch, row spacing and pin 1 against the datasheet",
                             lcsc=lcsc)
+        if nm := name_vs_part(fp):
+            name_finding(fp, nm, [s for s in sources if s in GEOMETRY], viols[n0:], add)
         if skip and "record" not in sources:
             not_judged.setdefault(skip, []).append(fp.ref)
             note(sources, skip)
