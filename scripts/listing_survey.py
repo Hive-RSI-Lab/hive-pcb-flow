@@ -6,7 +6,9 @@ rating tier may stay non-blocking.
 Walks every `parts/parts.json` under the roots and compares each part that has an
 extraction beside it, with check_ratings.listing_comparisons. --sample adds the
 parts someone read by hand, one row per part (tests/fixtures/ratings/
-listing_sample.json); an extraction wins for a part in both. A part on several
+listing_sample.json); an extraction wins for a part in both, except that a
+hand-read supply row giving both the recommended top and the abs-max top
+replaces an extraction's supply comparison (see sample_rows). A part on several
 boards counts once. --corpus adds a datasheet corpus laid out as the errata
 corpus is (ext/<MPN>.json extractions, listings/<LCSC>.json LCSC listings): a
 listing joins the extraction that names its LCSC code, else its MPN. Give it
@@ -171,13 +173,27 @@ def corpus_rows(corpus: Path) -> tuple[list[dict], list[dict]]:
     return rows, skipped
 
 
+def judge_read(r: dict, tol: float = check_ratings.LISTING_TOL) -> str | None:
+    """A hand-read row's side: None when the listing agrees. A row with an
+    abs_max_v is a supply read both ways (#810): datasheet_v is the top of the
+    recommended range, and a listing may give either top, so it is `low` only
+    under the recommended top and `high` only over the abs-max top. An
+    extraction's supply comparison has the abs-max rows alone, so it can say
+    only `high`. Any other row is judged two-way against datasheet_v."""
+    lv, dv = r["listing_v"], r["datasheet_v"]
+    if lv < dv - tol * dv:
+        return "low"
+    if lv > (r.get("abs_max_v") or dv) * (1 + tol):
+        return "high"
+    return None
+
+
 def sample_rows(path: Path, tol: float = check_ratings.LISTING_TOL) -> list[dict]:
     """Hand-read rows, judged by the same tolerance as the finding."""
     out = []
     for r in json.loads(path.read_text(encoding="utf-8"))["parts"]:
-        agree = abs(r["listing_v"] - r["datasheet_v"]) <= tol * r["datasheet_v"]
-        out.append({**r, "how": "read", "agree": agree, "side": None if agree else
-                    "high" if r["listing_v"] > r["datasheet_v"] else "low"})
+        side = judge_read(r, tol)
+        out.append({**r, "how": "read", "agree": side is None, "side": side})
     return out
 
 
@@ -215,8 +231,12 @@ def main(argv: list[str] | None = None) -> int:
         rows += [r for r in more if r["lcsc"] not in have]
         skipped += [s for s in miss if s["lcsc"] not in have]
     if a.sample:
+        sample = sample_rows(a.sample)
+        both = {r["lcsc"] for r in sample
+                if r["rating"] == "supply" and r.get("abs_max_v")}
+        rows = [r for r in rows if r["lcsc"] not in both or r["rating"] != "supply"]
         have = {r["lcsc"] for r in rows}
-        rows += [r for r in sample_rows(a.sample) if r["lcsc"] not in have]
+        rows += [r for r in sample if r["lcsc"] not in have]
         skipped = [s for s in skipped if s["lcsc"] not in {r["lcsc"] for r in rows}]
     res = {"table": table(rows), "disagree": [r for r in rows if not r["agree"]],
            "not_compared": skipped, "parts": rows}
@@ -231,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
     for r in res["disagree"]:
         print(f"{r['side']:<5}{r['lcsc']} {r['mpn']} ({r['class']}): listing "
               f"{r['listing_v']:g} V, datasheet {r['datasheet_v']:g} V ({r['row']})")
+    sup = [r for r in rows if r["rating"] == "supply"]
+    print(f"supply: {len(sup)} parts, {sum(bool(r.get('abs_max_v')) for r in sup)} "
+          f"read both ways (only these can show a low listing)")
     print(f"not compared: {len(skipped)}")
     return 0
 

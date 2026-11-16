@@ -55,15 +55,44 @@ def _warnings(payload):
     return found
 
 
-def _answers(payload, *, before, after, warnings):
-    f = payload["facts"]
-    assert f["unconnected_before"] == before
-    assert f["unconnected_after"] == after
-    assert f["errors_after"] == {}
+# What the maze does on each fixture with --no-rip-board: the status counts of
+# each pass, then the answers. Exact, so a route lost fails as well as one
+# gained; test_maze_record_fails_on_a_lost_route keeps it so.
+MAZES = {
+    "tfbga54_0.8": dict(
+        passes=[{"routed": 54}], before=54, after=0,
+        warnings={"track_dangling": 31, "lib_footprint_issues": 2,
+                  "silk_over_copper": 2}),
+    "wlcsp49_0.4": dict(
+        passes=[{"routed": 42, "failed": 7}, {"routed": 3, "failed": 4},
+                {"failed": 4}],
+        before=49, after=4,
+        warnings={"track_dangling": 19, "silk_over_copper": 15,
+                  "lib_footprint_issues": 2}),
+    "fbga153_0.5": dict(
+        passes=[{"routed": 93, "failed": 60}, {"routed": 9, "failed": 51},
+                {"failed": 51}],
+        before=153, after=51,
+        warnings={"track_dangling": 111, "lib_footprint_issues": 2,
+                  "silk_over_copper": 2}),
+}
+
+
+def _kicad_version():
     ver = subprocess.run([str(env.find_kicad_cli()), "version"],
                          capture_output=True, text=True).stdout
-    if re.match(r"\d+\.\d+\.\d+", ver).group(0) == RECORDED:
-        assert _warnings(payload) == warnings
+    return re.match(r"\d+\.\d+\.\d+", ver).group(0)
+
+
+def _answers(payload, case, kicad):
+    """Assert the payload matches MAZES[case]; warnings only on RECORDED."""
+    want, f = MAZES[case], payload["facts"]
+    assert [p["by_status"] for p in f["passes"]] == want["passes"]
+    assert f["unconnected_before"] == want["before"]
+    assert f["unconnected_after"] == want["after"]
+    assert f["errors_after"] == {}
+    if kicad == RECORDED:
+        assert _warnings(payload) == want["warnings"]
 
 
 @pytest.mark.parametrize("case,nets", [
@@ -78,40 +107,60 @@ def test_live_fixture_starts_escaped_with_every_net_open(tmp_path, case, nets):
 def test_live_tfbga54_maze_finishes(tmp_path):
     _need_tools()
     payload = _maze(tmp_path, "tfbga54_0.8", "--no-rip-board")
-    assert [p["by_status"] for p in payload["facts"]["passes"]] == [{"routed": 54}]
-    _answers(payload, before=54, after=0, warnings={
-        "track_dangling": 31, "lib_footprint_issues": 2, "silk_over_copper": 2})
+    _answers(payload, "tfbga54_0.8", _kicad_version())
 
 
 @pytest.mark.smoke
-def test_live_wlcsp49_maze_stops_at_5_of_49(tmp_path):
-    """Smoke, not test-slow: 9 min on the loaded tower, one run. 89.8 % routed; pass
-    3 gains nothing, so the maze stops there. The 5 left are real work for the
-    escape or the router, not a goal. Before the maze kept its vias out of
-    their own net's SMD pads it was 41/1/0 routed and 7 left."""
+def test_live_wlcsp49_maze_stops_at_4_of_49(tmp_path):
+    """Smoke, not test-slow: 9 min on the loaded tower, one run. 91.8 % routed; pass
+    3 gains nothing, so the maze stops there. The 4 left are real work for the
+    escape or the router, not a goal. It was 41/3 routed and 5 left until
+    main's routing work of 2026-11 (#1403); before the maze kept its vias
+    out of their own net's SMD pads, 41/1/0 and 7 left."""
     _need_tools()
     payload = _maze(tmp_path, "wlcsp49_0.4", "--no-rip-board")
-    assert [p["by_status"] for p in payload["facts"]["passes"]] == [
-        {"routed": 41, "failed": 8},
-        {"routed": 3, "failed": 5},
-        {"failed": 5}]
-    _answers(payload, before=49, after=5, warnings={
-        "track_dangling": 20, "silk_over_copper": 15, "lib_footprint_issues": 2})
+    _answers(payload, "wlcsp49_0.4", _kicad_version())
 
 
 @pytest.mark.smoke
-def test_live_fbga153_maze_stops_at_62_of_153(tmp_path):
-    """Smoke, not test-slow: 55 min on the loaded tower, one run. 59.5 % routed;
-    pass 3 gains nothing, so the maze stops there. The 62 left are real work for
-    the escape or the router, not a goal."""
+def test_live_fbga153_maze_stops_at_51_of_153(tmp_path):
+    """Smoke, not test-slow: 55 min on the loaded tower, one run. 66.7 % routed;
+    pass 3 gains nothing, so the maze stops there. The 51 left are real work for
+    the escape or the router, not a goal. It was 85/6 routed and 62 left
+    until main's routing work of 2026-11 (#1403)."""
     _need_tools()
     payload = _maze(tmp_path, "fbga153_0.5", "--no-rip-board")
-    assert [p["by_status"] for p in payload["facts"]["passes"]] == [
-        {"routed": 85, "failed": 68},
-        {"failed": 62, "routed": 6},
-        {"failed": 62}]
-    _answers(payload, before=153, after=62, warnings={
-        "track_dangling": 122, "lib_footprint_issues": 2, "silk_over_copper": 2})
+    _answers(payload, "fbga153_0.5", _kicad_version())
+
+
+def _recorded_payload(case):
+    """A payload that is exactly MAZES[case]."""
+    want = MAZES[case]
+    return {"facts": {"passes": [{"by_status": dict(s)} for s in want["passes"]],
+                      "unconnected_before": want["before"],
+                      "unconnected_after": want["after"], "errors_after": {}},
+            "violations": [{"check": c, "severity": "warning"}
+                           for c, n in want["warnings"].items() for _ in range(n)]}
+
+
+@pytest.mark.parametrize("case", sorted(MAZES))
+def test_maze_record_fails_on_a_lost_route(case):
+    """#1403: the live maze tests are smoke, so a loosened record would go
+    unseen. The record itself passes; one route lost in pass 1, one more net
+    left at the end, or one DRC error each fail, on any KiCad."""
+    _answers(_recorded_payload(case), case, RECORDED)
+    lost = _recorded_payload(case)
+    first = lost["facts"]["passes"][0]["by_status"]
+    first["routed"] -= 1
+    first["failed"] = first.get("failed", 0) + 1
+    more_left = _recorded_payload(case)
+    more_left["facts"]["unconnected_after"] += 1
+    error = _recorded_payload(case)
+    error["facts"]["errors_after"] = {"clearance": 1}
+    for bad in (lost, more_left, error):
+        for kicad in (RECORDED, "9.0.0"):
+            with pytest.raises(AssertionError):
+                _answers(bad, case, kicad)
 
 
 def _stub_board(tracks):

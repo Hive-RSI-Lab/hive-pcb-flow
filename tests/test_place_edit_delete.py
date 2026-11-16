@@ -135,11 +135,25 @@ def test_fault_refused_board_byte_identical(board, ops, routed, msg):
 
 @pytest.mark.smoke
 def test_fault_rip_drc_still_finds_dangling_rolls_back(board, monkeypatch):
-    # with no extra rounds, R7's first-pass rip leaves the stub netconn
-    # cannot see (an end inside another track's body); DRC on the staged
-    # copy must catch it and keep the board as it was
+    # with no extra rounds, a first-pass rip that misses R7's 0.165 mm
+    # /HV_B stub must be caught by DRC on the staged copy, and the board
+    # kept as it was. netconn now finds that stub itself (#1336, rule b),
+    # so its old blind spot is planted: the stub is taken out of the
+    # planned rip and counted as anchored, as netconn used to count it
     import board_update
     monkeypatch.setattr(board_update, "DANGLE_ROUNDS", 0)
+    stub = "549ef761-0946-41c5-9e41-255922444433"
+    plan = board_update.plan_orphans
+
+    def missing_the_stub(bg, refs):
+        o = plan(bg, refs)
+        assert stub in {t.uuid for t in o["tracks"]}  # the plant bites
+        (t,) = [t for t in o["tracks"] if t.uuid == stub]
+        base = o["baselines"]["/HV_B"]
+        base = {**base, "t": base["t"] | {board_update._item_key_track(t)}}
+        return {**o, "tracks": [x for x in o["tracks"] if x.uuid != stub],
+                "baselines": {**o["baselines"], "/HV_B": base}}
+    monkeypatch.setattr(board_update, "plan_orphans", missing_the_stub)
     raw = board.read_bytes()
     with pytest.raises(CheckError, match=r"DRC dangling 0 -> 1 after "
                                          r"rip_dangling \(rolled back\)"):

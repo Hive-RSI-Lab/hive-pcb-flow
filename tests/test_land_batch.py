@@ -316,6 +316,53 @@ def test_the_maker_table_supplies_the_datasheet_the_listing_lacks(
     assert "https://maker.example.com/so8x.pdf" in ext["source_pdf"]
 
 
+def test_the_resolver_finds_the_datasheet_and_a_miss_is_named(
+        stand_ins, monkeypatch):
+    """abs_max_batch's resolver (dsresolve, PR 1401) serves this batch too:
+    a by-maker URL is read and cited, and cached so a second run asks
+    nobody; its twin, a part the resolver misses, is left out with the
+    resolver's reason and nothing read."""
+    import dsresolve
+    out, store, reader, calls, _, _ = stand_ins
+    lst = lb.amb.parts_enrich.cache_dir()
+    for code, mpn in (("C999008", "SO8X"), ("C999010", "SO8Y")):
+        (lst / f"{code}.json").write_text(json.dumps({
+            "lcsc": code, "mpn": mpn, "brand": "", "package": "SOIC-8",
+            "datasheet": ""}))
+    url = "https://www.ti.com/lit/ds/symlink/so8x.pdf"
+    asked = []
+
+    def resolve(mpn, brand, dest):
+        asked.append(mpn)
+        if mpn != "SO8X":
+            return {"maker": "Texas Instruments", "miss": "not found",
+                    "tried": [{"url": "https://www.ti.com/so8y.pdf",
+                               "kind": "absent", "why": "HTTP 404"}]}
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 SO8X")
+        return {"maker": "Texas Instruments", "url": url,
+                "via": "Texas Instruments URL pattern for SO8X",
+                "got": {"url": url, "status": "fetched", "file": str(dest)},
+                "tried": []}
+    monkeypatch.setattr(dsresolve, "resolve", resolve)
+    monkeypatch.setattr(datasheet_extract, "fetch_datasheet",
+                        lambda *a, **k: pytest.fail("fetched again"))
+    board = [_board_part("U7", 8, "C999008")]
+    rep = lb.read_part("C999008", board, out, store, reader)
+    assert rep["status"] == "kept", rep
+    assert rep["datasheet_from"] == "Texas Instruments URL pattern for SO8X"
+    assert "Texas Instruments" in calls[0]
+    ext = json.loads((out / "ext" / "C999008.json").read_text())
+    assert url in ext["source_pdf"]
+    assert lb.read_part("C999008", board, out, store, reader)["status"] == "kept"
+
+    rep = lb.read_part("C999010", [_board_part("U8", 8, "C999010")], out,
+                       store, reader)
+    assert rep["status"] == "no listing with a datasheet URL"
+    assert rep["resolver"] == "not found" and "so8y.pdf" in rep["why"]
+    assert asked == ["SO8X", "SO8Y"] and len(calls) == 1
+
+
 # ------------------------------------------------- parts keyed by Value
 
 def _by_value(ref, value):

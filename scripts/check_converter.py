@@ -16,6 +16,8 @@ rail's power entry current_a. Then:
          dI = Vin * D / (fsw * L)                          TI SLVA372D eq. 2
          Ipeak = dI / 2 + Iout / (1 - D)                   SLVA372D eq. 4
          Iout max = (Ilim(min) - dI / 2) * (1 - D)         SLVA372D eq. 3
+         with only a valley limit (a valley-mode boost):
+         Iout max = (Ivalley(min) + dI / 2) * (1 - D)      TI SLVSGK6B eq. 1
          RHP zero = Vout * (1 - D)^2 / (2 pi L Iout)
 
 Findings, all on the inductor and its IC:
@@ -25,7 +27,8 @@ Findings, all on the inductor and its IC:
   converter_overload      error: the stated load is more than the IC's
                           minimum switch current limit allows: the peak
                           limit, less half the ripple (and, for a buck, the
-                          valley limit plus half the ripple).
+                          valley limit plus half the ripple); with a valley
+                          limit only, the valley limit plus half the ripple.
   converter_isat_below_limit
                           warning: Isat is below the current limit the
                           datasheet names for it (reference/converter_
@@ -229,20 +232,33 @@ def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
                            f"for its current limits and minimum on-time")
         else:
             pk, vl = row.get("peak_limit_a") or {}, row.get("valley_limit_a") or {}
+            cap = None
             if iout is not None and pk.get("min") is not None:
                 cap = pk["min"] - ripple / 2
                 why = f"peak limit {pk['min']:g} A min less dI/2"
+                cite = f"{ref} eq. 3"
                 if topo == "boost":
                     cap *= 1 - duty
                     why = f"({why}) * (1 - D)"
                 elif vl.get("min") is not None and vl["min"] + ripple / 2 < cap:
                     cap = vl["min"] + ripple / 2
                     why = f"valley limit {vl['min']:g} A min plus dI/2"
+            elif iout is not None and vl.get("min") is not None:
+                # A valley-mode part states no peak limit: the switch
+                # current at the valley is Ilim, so the inductor's average
+                # is Ilim + dI/2 (TI SLVSGK6B eq. 1 for a boost).
+                cap = vl["min"] + ripple / 2
+                why = f"valley limit {vl['min']:g} A min plus dI/2"
+                cite = "TI SLVSGK6B eq. 1" if topo == "boost" else f"{ref} eq. 3"
+                if topo == "boost":
+                    cap *= 1 - duty
+                    why = f"({why}) * (1 - D)"
+            if cap is not None:
                 rec["iout_max_a"] = checklib.rnd(cap, 4)
                 if iout > cap:
                     add("converter_overload", "error",
                         f"the load {_fmt(iout)} is over the {_fmt(cap)} its "
-                        f"switch limit allows ({why}; {ref} eq. 3)",
+                        f"switch limit allows ({why}; {cite})",
                         iout_a=iout, iout_max_a=checklib.rnd(cap, 4))
             floor = row.get("isat_floor") or {}
             lim = (vl if floor.get("limit") == "valley" else pk)

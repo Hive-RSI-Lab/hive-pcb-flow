@@ -158,14 +158,18 @@ Findings (kind = violation `kind`, remediations under reference/remediations/):
    (R-REL-2). The ambient is constraints ambient_c, else the enclosure air
    check_thermal works out, else 25 C, said so in `ambient`.
  - rating_datasheet_suspect (warning): a part whose datasheet PDF is a host
-   placeholder or was judged suspect (index.json: cut off, no text layer, nothing
-   ties it to the MPN; #706). The PDFs on disk are judged when the index is read
+   placeholder or was judged suspect (index.json: cut off, or nothing ties it
+   to the MPN; #706). The PDFs on disk are judged when the index is read
    (#768). The ledger facts read from that PDF (the extraction's source_pdf
    says which one) are unknown, never verified; a rating that came from the
    distributor or a package table was not read from it and is untouched (#781).
  - rating_datasheet_unassessed (warning, one per board): parts whose datasheet
-   can't be judged here: an index.json entry with no PDF on disk, or a PDF with
-   no MPN to check it against. `datasheet_extract --fetch` gets the PDF (#755).
+   can't be judged here: an index.json entry with no PDF on disk, a PDF with
+   no MPN to check it against, or a PDF with nothing to check it by (a scan,
+   or one that prints no part number; status not_judged: no verdict either
+   way). `datasheet_extract --fetch` gets the PDF (#755); a not_judged one
+   takes a person's eye. Facts read from a not_judged PDF
+   are held back as from a suspect one.
  - rating_no_datasheet_read (warning, one per board): parts whose rating fact
    is `listed`, a number compared with no datasheet behind it (#781). It names
    the way to `verified`: `datasheet_extract --fetch`, then extraction.
@@ -1949,7 +1953,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         out[-1]["refs"] = sorted(unrated_passives)
     import datasheet_extract
     lcscs = {b["lcsc"] for b in board if b["lcsc"]}
-    suspect = datasheet_extract.suspect_datasheets(parts_dir, lcscs)
+    suspect = datasheet_extract.suspect_datasheets(parts_dir, lcscs,
+                                                   statuses=("suspect",))
     for lcsc, why in sorted(suspect.items()):
         refs = sorted(b["ref"] for b in board if b["lcsc"] == lcsc)
         emit("rating_datasheet_suspect", "warning", refs[0] if refs else None,
@@ -1965,16 +1970,20 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         emit("rating_datasheet_unassessed", "warning", refs[0], None,
              f"{len(unassessed)} part(s) have a datasheet that can't be judged "
              f"here ({', '.join(unassessed[:8])}"
-             f"{', ...' if len(unassessed) > 8 else ''}): no PDF on disk, or no "
-             "MPN to check it against, so it may be another part's. Run "
-             "`datasheet_extract --fetch <ws>`, which downloads and judges it",
+             f"{', ...' if len(unassessed) > 8 else ''}): no PDF on disk, no "
+             "MPN to check it against, or nothing to check it by (a scan, or "
+             "no part number printed), so it may be another part's and "
+             "nothing read from it counts as verified. Run "
+             "`datasheet_extract --fetch <ws>`, which downloads and judges it; "
+             "a not_judged one takes a check by eye",
              pins=refs)
         out[-1]["refs"] = refs
     # what an extraction was read from may be another part's PDF, off this
-    # board: it holds that fact back without being this board's to warn about
+    # board: it holds that fact back without being this board's to warn about.
+    # A not_judged PDF holds its facts back too, warned of as unassessed.
     read_from = {c: extraction_pdf(e, c) for c, e in exts.items()}
-    held_back = {**suspect, **datasheet_extract.suspect_datasheets(
-        parts_dir, set(read_from.values()) - lcscs)}
+    held_back = datasheet_extract.suspect_datasheets(
+        parts_dir, lcscs | set(read_from.values()))
     lfacts = ledger_facts(board, exts, out, checked_by_ref, bom_by_lcsc,
                           held_back, rated_by_ref)
     unread = sorted(f["subject"] for f in lfacts if f["kind"] == "rating"
@@ -3869,7 +3878,8 @@ def listing_findings(board: list[dict], exts: dict, bom_by_lcsc: dict,
         if not listing_ratings(bom_by_lcsc.get(lcsc)):
             continue
         if read_from.get(lcsc, lcsc) in held_back:
-            skipped[lcsc] = "suspect datasheet"
+            skipped[lcsc] = (f"{_doubt(held_back[read_from.get(lcsc, lcsc)])}"
+                             " datasheet")
             continue
         comps = listing_comparisons(bom_by_lcsc.get(lcsc), exts[lcsc])
         if not comps:
@@ -3995,6 +4005,16 @@ def why_nothing_judged(board: list[dict], exts: dict, vios: list[dict],
     return text, why
 
 
+def _doubt(why: str) -> str:
+    """What a held-back datasheet's reason makes it: one with nothing to judge
+    it by (a scan, or no part number printed) is not judged either way
+    (datasheet_extract.assess_pdf), the rest suspect."""
+    import datasheet_extract
+    return ("not judged" if why.startswith(
+        (*datasheet_extract.NOT_JUDGED_REASONS, "marked not_judged"))
+            else "suspect")
+
+
 def ledger_facts(board: list[dict], exts: dict, vios: list[dict],
                  checked: dict[str, int], bom_by_lcsc: dict,
                  suspect: dict[str, str] | None = None,
@@ -4041,7 +4061,7 @@ def ledger_facts(board: list[dict], exts: dict, vios: list[dict],
             st, val = "unknown", ("no pin of it sits on a net of known "
                                   "voltage" if b["pads"] else "no connected pad")
         if sus and st in ("verified", "listed") and "datasheet" in tiers:
-            st, val = "unknown", f"datasheet suspect, not verified: {sus}"
+            st, val = "unknown", f"datasheet {_doubt(sus)}, not verified: {sus}"
         fact = {"subject": ref, "kind": "rating", "status": st, "value": val,
                 "source": "", "lcsc": b["lcsc"]}
         if st != "unknown":
@@ -4053,7 +4073,7 @@ def ledger_facts(board: list[dict], exts: dict, vios: list[dict],
         out.append(fact)
         pst, pval = pinout_fact(b, ext)
         if sus and pst == "verified":
-            pst, pval = "unknown", f"datasheet suspect, not verified: {sus}"
+            pst, pval = "unknown", f"datasheet {_doubt(sus)}, not verified: {sus}"
         out.append({"subject": ref, "kind": "pinout", "status": pst,
                     "value": pval, "lcsc": b["lcsc"],
                     "source": src if pst != "unknown" else ""})

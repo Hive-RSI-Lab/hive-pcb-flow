@@ -1744,7 +1744,8 @@ def test_fp_verify_pairs_coverage_counts(tmp_path, capsys):
     code, payload = run_main(fp_verify, ["--pairs", str(pairs)], tmp_path, capsys)
     assert code == 0
     c = payload["coverage"]["pad_numbering"]
-    assert (c["judged"], c["not_judged"], payload["pairs"]) == (1, 1, 2)
+    # the bare record places no pin, but the SO8's direction is read (#1285)
+    assert (c["judged"], c["not_judged"], payload["pairs"]) == (2, 0, 2)
     assert payload["errors"] == []
     # a one-step shift on a judged pair is listed with its kind and message
     shifted = _numbered_fp(tmp_path / "b", "SO8s", [
@@ -2011,3 +2012,139 @@ def test_fp_verify_land_gap_carries_the_stated_gap(tmp_path, capsys):
     code, payload = _fpv(tmp_path, capsys, fp, _chip_ds(tmp_path, gap_mm=[0.8, 0.6]))
     gap, = [v for v in payload["violations"] if v["kind"] == "land_gap"]
     assert gap["stated_mm"] == [0.6, 0.8]
+
+
+# #1285: what #1286 had that main lacked, ported. A perimeter part's
+# numbering direction when nothing places its pins, numbering: cw_top, the
+# mirrored_footprint and numbers_differ causes, tied pins, and a bad
+# land_pattern.pads entry that warns instead of stopping the run.
+SO8_CW = {n: (x, -y) for n, (x, y) in SO8_PINS.items()}   # bottom-view numbering
+
+
+def _so8_fp(tmp_path, name="SOIC-8_3.9x4.9mm_P1.27mm", pins=SO8_PINS):
+    return _numbered_fp(tmp_path, name, [(n, x, y, 1.5, 0.6)
+                                         for n, (x, y) in pins.items()])
+
+
+def _found(payload, kind=None):
+    """The findings, less the missing courtyard every fixture here has."""
+    return [v for v in payload["violations"] if v["kind"] != "no_courtyard"
+            and (kind is None or v["kind"] == kind)]
+
+
+def _bare_ds(tmp_path, **land):
+    return write_ds(tmp_path, {"mpn": "B", "pinout": [], "land_pattern": {
+        "pad_count": 8, "pin1": "1", **land}})
+
+
+def test_fp_verify_direction_without_record_pads(tmp_path, capsys):
+    ds = _bare_ds(tmp_path)
+    code, payload = _fpv(tmp_path, capsys, _so8_fp(tmp_path), ds)
+    assert code == 0 and not _found(payload)
+    assert payload["pad_numbering"]["from"] == "direction"
+    assert payload["pad_numbering"]["direction"] == "ccw"
+    assert payload["coverage"]["pad_numbering"] == "judged"
+    # numbered from the bottom view: a warning, since the record says nothing
+    code, payload = _fpv(tmp_path, capsys, _so8_fp(tmp_path, pins=SO8_CW), ds)
+    v, = _found(payload)
+    assert (code, v["kind"], v["severity"]) == (
+        0, "pad_numbering_direction", "warning")
+    assert "cw_top" in v["msg"]
+    assert payload["pad_numbering"]["hint"] == "bottom_view_numbering"
+
+
+def test_fp_verify_direction_leaves_connectors_and_unknown_alone(tmp_path, capsys):
+    ds = _bare_ds(tmp_path)
+    for name in ("Conn_02x04_P1.27mm", "Mystery8"):
+        code, payload = _fpv(tmp_path, capsys,
+                             _so8_fp(tmp_path, name, SO8_CW), ds)
+        assert code == 0 and not _found(payload), name
+        assert payload["coverage"]["pad_numbering"] == "not_judged", name
+
+
+def test_fp_verify_direction_leaves_through_hole_alone(tmp_path, capsys):
+    ds = _bare_ds(tmp_path)
+    fp = tmp_path / "DIP-8_W7.62mm.kicad_mod"
+    fp.write_text('(footprint "DIP-8_W7.62mm" (layer "F.Cu") (attr through_hole)\n'
+                  + "\n".join(
+                      f'  (pad "{n}" thru_hole circle (at {x:g} {y:g}) '
+                      '(size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask"))'
+                      for n, (x, y) in SO8_CW.items()) + "\n)\n", encoding="utf-8")
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and not _found(payload)
+    assert payload["coverage"]["pad_numbering"] == "not_judged"
+
+
+def test_fp_verify_numbering_cw_top(tmp_path, capsys):
+    ds = _bare_ds(tmp_path, numbering="cw_top")
+    code, payload = _fpv(tmp_path, capsys, _so8_fp(tmp_path, pins=SO8_CW), ds)
+    assert code == 0 and not _found(payload)
+    assert payload["pad_numbering"]["fit"] is True
+    code, payload = _fpv(tmp_path, capsys, _so8_fp(tmp_path), ds)
+    v, = _found(payload, "pad_numbering")
+    assert (code, v["severity"], v["hint"]) == (1, "error", "numbers_differ")
+    # a numbering that is no choice warns and is read as unstated
+    ds = _bare_ds(tmp_path, numbering="clockwise")
+    code, payload = _fpv(tmp_path, capsys, _so8_fp(tmp_path), ds)
+    w, = _found(payload, "land_pattern_invalid")
+    assert code == 0 and w["severity"] == "warning"
+    assert payload["pad_numbering"]["from"] == "direction"
+
+
+def test_fp_verify_mirrored_footprint_and_numbers_differ(tmp_path, capsys):
+    # four pads no turn maps onto their mirror image: drawn mirrored,
+    # the pads fit the record only mirrored, not just their numbers
+    ell = {"1": (0, 0), "2": (3, 0), "3": (3, 1), "4": (0, 3)}
+    ds = write_ds(tmp_path, {"mpn": "Q4", "pinout": [], "land_pattern": {
+        "pad_count": 4, "pin1": "1",
+        "pads": [{"number": n, "at_mm": list(xy)} for n, xy in ell.items()]}})
+    fp = _numbered_fp(tmp_path, "Q4", [(n, -x, y, 0.4, 0.4)
+                                       for n, (x, y) in ell.items()])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    v, = _found(payload, "pad_numbering")
+    assert code == 1 and v["hint"] == "mirrored_footprint"
+    assert "fix the record instead" in v["msg"]
+    ds = _so8_ds(tmp_path)
+    # numbers no turn or mirror explains
+    shuffled = dict(zip(SO8_PINS, [SO8_PINS[k] for k in
+                                   ("1", "3", "2", "4", "5", "7", "6", "8")]))
+    fp = _numbered_fp(tmp_path, "SO8x", [(n, x, y, 1.5, 0.6)
+                                         for n, (x, y) in shuffled.items()])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    v, = _found(payload, "pad_numbering")
+    assert code == 1 and v["hint"] == "numbers_differ"
+
+
+@pytest.mark.parametrize("rec_pin,fp_pad,rule", [
+    ("EP", "4", "shared"), ("4", "9", "repeated"), ("4", "", "repeated")])
+def test_fp_verify_tied_pins_warn(tmp_path, capsys, rec_pin, fp_pad, rule):
+    # a small extra land just past pin 4, which the record calls rec_pin and
+    # the footprint numbers fp_pad
+    ds = _so8_ds(tmp_path, rows=5.0)
+    data = json.loads(ds.read_text(encoding="utf-8"))
+    # listed before pin 4's own entry, so a repeated 4 keeps its place
+    data["land_pattern"]["pads"].insert(3, {"number": rec_pin,
+                                            "at_mm": [-2.5, 2.9]})
+    data["land_pattern"]["pad_count"] = 9
+    ds.write_text(json.dumps(data), encoding="utf-8")
+    fp = _numbered_fp(tmp_path, "SO8X", [(n, x, y, 1.5, 0.6)
+                                         for n, (x, y) in SO8_PINS.items()]
+                      + [(fp_pad, -2.5, 2.9, 0.6, 0.6)])
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and payload["pad_numbering"]["fit"] is True
+    v, = _found(payload, "pad_numbering_tied")
+    assert v["severity"] == "warning" and v["rule"] == rule
+    assert rec_pin in v["msg"]
+
+
+@pytest.mark.parametrize("bad", [{"number": "1"}, {"number": "1", "at_mm": "0,0"},
+                                 {"at_mm": [0, 0]}, "1"])
+def test_fp_verify_bad_record_pad_warns_and_the_rest_runs(tmp_path, capsys, bad):
+    ds = _so8_ds(tmp_path)
+    data = json.loads(ds.read_text(encoding="utf-8"))
+    data["land_pattern"]["pads"][0] = bad
+    ds.write_text(json.dumps(data), encoding="utf-8")
+    code, payload = _fpv(tmp_path, capsys, _so8_fp(tmp_path, "SO8"), ds)
+    w, = _found(payload, "land_pattern_invalid")
+    assert code == 0 and w["severity"] == "warning"
+    assert payload["pad_numbering"]["fit"] is True

@@ -99,6 +99,14 @@ def test_hand_read_sample_holds_its_known_answers():
     assert rows["C3020560"]["agree"]
     # a part LCSC served another maker's PDF for is left out
     assert not {"C110775", "C865172", "C865592", "C2918511"} & set(rows)
+    # #810: supply rows read both ways. FT231X and FUSB302 list 5 V against a
+    # 5.5 V recommended top, 9 % under: inside the finding's tolerance.
+    raw = {p["lcsc"]: p for p in json.loads(SAMPLE.read_text())["parts"]}
+    both = [k for k, p in raw.items() if p.get("abs_max_v")]
+    assert len(both) == 47 and all(rows[k]["agree"] for k in both)
+    assert raw["C132159"]["listing_v"] == 5.0 and raw["C132159"]["datasheet_v"] == 5.5
+    # a PDF for another revision of the part is left out
+    assert "C492195" not in rows
 
 
 def test_a_corpus_listing_joins_its_extraction_by_lcsc_then_mpn(tmp_path):
@@ -122,3 +130,49 @@ def test_a_corpus_listing_joins_its_extraction_by_lcsc_then_mpn(tmp_path):
         ("C6049", "ic", True, "7e54baea5ee5")]
     assert [(s["lcsc"], s["why"]) for s in skipped] == [
         ("C9", "no voltage row in the extraction")]
+
+
+def test_a_supply_read_both_ways_shows_a_low_listing_only_under_the_recommended_top():
+    # #810: datasheet_v is the recommended top, abs_max_v the abs-max top
+    row = {"rating": "supply", "datasheet_v": 5.5, "abs_max_v": 6.5}
+    assert ls.judge_read({**row, "listing_v": 3.6}) == "low"
+    assert ls.judge_read({**row, "listing_v": 5.5}) is None
+    # a listing that gives the abs-max top (SPX3819: 16 V recommended, 20 V
+    # abs max) is not wrong, nor is anything between the two
+    assert ls.judge_read({**row, "listing_v": 6.5}) is None
+    assert ls.judge_read({**row, "listing_v": 6.0}) is None
+    assert ls.judge_read({**row, "listing_v": 7.5}) == "high"
+    # with no abs-max top a row is judged two-way, as before
+    assert ls.judge_read({"rating": "rated", "datasheet_v": 50, "listing_v": 63}) == "high"
+    assert ls.judge_read({"rating": "rated", "datasheet_v": 50, "listing_v": 54}) is None
+
+
+def test_a_supply_read_both_ways_replaces_the_extractions_one_way_comparison(
+        tmp_path, capsys):
+    corpus = tmp_path / "corpus"
+    (corpus / "ext").mkdir(parents=True)
+    (corpus / "listings").mkdir()
+    for lcsc, v in (("C1", "1.65V~3.6V"), ("C2", "1.65V~5.5V")):
+        (corpus / "ext" / f"{lcsc}.json").write_text(json.dumps(
+            {"lcsc": lcsc, "pin_ratings": [{"pins": ["VCC"], "kind": "voltage",
+                                            "max": 6.5, "source": "VCC abs max"}]}))
+        (corpus / "listings" / f"{lcsc}.json").write_text(json.dumps(
+            {"lcsc": lcsc, "mpn": lcsc, "description": "buffer IC",
+             "attributes": [{"name": "Voltage - Supply", "value": v}]}))
+    sample = tmp_path / "sample.json"
+    # C1's listing tops out at 3.6 V while the part runs to 5.5 V: the
+    # extraction alone (3.6 under 6.5 abs max) calls it agreed
+    sample.write_text(json.dumps({"parts": [
+        {"lcsc": "C1", "mpn": "C1", "class": "ic", "rating": "supply",
+         "listing_v": 3.6, "datasheet_v": 5.5, "abs_max_v": 6.5,
+         "row": "recommended VCC top", "datasheet": "C1"},
+        {"lcsc": "C2", "mpn": "C2", "class": "ic", "rating": "supply",
+         "listing_v": 5.5, "datasheet_v": 6.5, "row": "VCC abs max",
+         "datasheet": "C2"}]}))
+    assert ls.main(["--corpus", str(corpus), "--sample", str(sample), "--json"]) == 0
+    res = json.loads(capsys.readouterr().out)
+    got = {r["lcsc"]: (r["how"], r["side"]) for r in res["parts"]}
+    # a row without the recommended top does not displace the extraction
+    assert got == {"C1": ("read", "low"), "C2": ("extraction", None)}
+    assert ls.main(["--corpus", str(corpus), "--sample", str(sample)]) == 0
+    assert "supply: 2 parts, 1 read both ways" in capsys.readouterr().out

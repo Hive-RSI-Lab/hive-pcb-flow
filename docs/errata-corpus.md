@@ -262,6 +262,43 @@ into `reference/errata_corpus.yaml` and its members into the taxonomy.
 | flexgrid-v4-1: USBLC6 with pin 2 on VBUS and pin 5 on GND; the part has pin 2 GND, pin 5 VCC | SCH (pin function vs datasheet) | caught on rev A, gone on rev B (`netlist_audit` pin_role_net) | pin maps of common TVS arrays (USBLC6: pin 2 GND, pin 5 VBUS) in check_pinouts |
 | flexgrid-v4-2: 29 vias inside SMD pads that wick solder in reflow | DFM (via in pad) | caught on rev A, gone on rev B, since #1088 (`check_wicking` wick_via_in_pad) | Not an independent catch: check_wicking's via-in-pad rule (#475) is older than this round, but it joined the corpus runners (#1088) after this defect was read. 29 open vias in SMD pads on V4 as ordered (the erratum's 29), across 18 parts, and none on V4-2. |
 
+## Checks no defect here tests
+
+No defect in the training set is a footprint whose pads carry the wrong
+pin numbers, so the training corpus can't score fp_verify's pad numbering
+(#1102, #1285): its caught and missed counts say nothing about it. Its tests are synthetic (`tests/test_parts.py`,
+`tests/test_fp_verify_board.py`) and its sweep is the records' own land
+drawings against their KiCad footprints.
+
+What it catches:
+
+- pads numbered from the bottom view, read three ways: the record's land
+  drawing (`land_pattern.pads`) fits only the mirror image
+  (`bottom_view_numbering`); the pads themselves fit the drawing only
+  mirrored (`mirrored_footprint`); or, with no drawing, a perimeter
+  package (SOIC, QFP, QFN, SOT and the like) runs clockwise seen from the
+  top (`pad_numbering_direction`, a warning, an error when the record
+  says `numbering: ccw_top`);
+- numbers shifted one step round the body (`numbering_rotated`) or
+  shuffled (`numbers_differ`), and a counter-clockwise footprint for a
+  part the record numbers `cw_top`;
+- a ball grid numbered as its mirror image;
+- a pin the record places on a pad the footprint numbers otherwise, as a
+  warning to check (`pad_numbering_tied`: the record's EP on a tab the
+  footprint calls 2, or a pin the record lists twice).
+
+What it misses or leaves unjudged:
+
+- a part whose land is its own mirror image or turns onto itself (a row
+  of three, a ring numbered one step round its symmetry), and a drawing
+  the footprint's pads can't be placed on within 0.4 x the drawing's
+  closest pin spacing or half a pad: these go to `not_judged`;
+- connectors and through-hole parts with no drawing, whose direction
+  varies by maker;
+- a record copied wrongly from the datasheet: the check compares the
+  footprint with the record, so a record mirrored the same way as the
+  footprint passes both.
+
 ## Holdout round 1
 
 ### netscore-big: display-board-big v2.0 -> display-board-big v3.0

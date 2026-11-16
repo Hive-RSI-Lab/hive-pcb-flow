@@ -2653,7 +2653,10 @@ def run(pcb: Path, fab_dir: Path | None = None, copper_oz: float | None = None,
         if netlist_skipped:
             skipped_cov["netlist"] = netlist_skipped
         no_outline = fab.edge_file is None or fab.outline.is_empty
-        edge_reason = "Edge.Cuts missing or does not form a closed outline"
+        edge_reason = ("no Edge.Cuts Gerber recognised in the set"
+                       if fab.edge_file is None else
+                       f"Edge.Cuts ({fab.edge_file.name}) does not form "
+                       "a closed outline")
         if no_outline or "copper" in skip:
             skipped_cov["copper_to_edge"] = (
                 edge_reason if no_outline else "skipped via --skip")
