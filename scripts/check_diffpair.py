@@ -35,8 +35,16 @@ Per pair (from constraints.json["diff_pairs"], else auto-discovered by name):
    Each layer both fill reports its widths, gap and Zdiff (judged against
    impedance_ohm as above); a side narrower than its partner by more than
    max_width_imbalance_pct (default 10) over ZONE_IMBALANCE_MM is a
-   diffpair_width_imbalance error. Skew, uncoupled length, vias and phase
-   stay with tracks.
+   diffpair_width_imbalance error. Each strip's length is area / width,
+   taken only where that agrees with its outline (perimeter / 2 - width);
+   the sum per net gives diffpair_skew, the copper beyond coupling_max of
+   the partner, over the strip's width, diffpair_uncoupled, and the via
+   counts diffpair_via_asymmetry, at the track limits (#1000). A zone that
+   is not one strip (a pad, a pour, a stepped width) leaves skew and
+   uncoupled length not_judged with where; phase is always not_judged on a zone, which has
+   no drawn centreline. A MIXED pair, tracks into a zone strip and out,
+   closes its trunk through the strip at the strip's length and judges the
+   layer both nets fill as above.
 
 Why not raw length? Adding a meander to the SHORTER trace (the corpus
 diffpair-skew mutant does exactly this) barely moves the length skew but is a
@@ -444,8 +452,6 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
     p, n = spec.get("p"), spec.get("n")
     if p not in bg.nets or n not in bg.nets:
         raise CheckError(f"diff pair {p!r}/{n!r} not both on board")
-    max_skew = float(spec.get("max_skew_mm", MAX_SKEW_MM))
-    max_unc = float(spec.get("max_uncoupled_mm", MAX_UNCOUPLED_MM))
     factor = float(spec.get("coupling_factor", COUPLING_FACTOR))
 
     # A pair with an unrouted half cannot be coupling-checked (an empty geometry
@@ -467,6 +473,23 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
                                                       TERM_PAIR_MM)))
     lp, okp, unreach_p = trunk_length(bg, p, [pp for pp, nn in term])
     ln, okn, unreach_n = trunk_length(bg, n, [nn for pp, nn in term])
+    # A mixed pair (#1000): a trunk the tracks leave open may close through
+    # the net's own zone strip; it then counts the strip's length, or, when
+    # the zone is not one strip, closes with its length not judged.
+    through_zone, zone_why = [], []
+    for net, ok, side in ((p, okp, 0), (n, okn, 1)):
+        if ok or not bg.zones_of(net):
+            continue
+        r = zone_trunk_length(bg, net, [pair[side] for pair in term])
+        if r is None:
+            continue
+        through_zone.append(net)
+        if r[0] is None:
+            zone_why.append(r[2])
+        if net == p:
+            lp, okp, unreach_p = (r[0] if r[0] is not None else lp), True, []
+        else:
+            ln, okn, unreach_n = (r[0] if r[0] is not None else ln), True, []
     skew = abs(lp - ln)
 
     # nominal pitch drives the coupling threshold
@@ -477,12 +500,23 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
     coupling_max = max(factor * nom, nom + 0.5)
     unc_p, unc_n, stats = coupling_stats(bg, p, n, coupling_max,
                                          breakout_region(bg, p, n))
-    uncoupled = max(unc_p, unc_n)
+    # the part of a mixed pair drawn as zones on a layer both nets fill:
+    # judged per layer as a zone pair, its strips' uncoupled length added
+    zone_vs, zone_rows, zone_strips_, zone_unc_why = [], {}, {}, []
+    fp, fn = zone_fills(bg, p), zone_fills(bg, n)
+    if set(fp) & set(fn):
+        zone_vs, zone_rows, zone_strips_ = zone_layers(bg, spec, p, n, fp, fn,
+                                                       coupling_max)
+        _, _, zup, zun, zwhy = strips_measure(p, n, zone_strips_,
+                                              coupling_max)
+        unc_p += zup or 0.0
+        unc_n += zun or 0.0
+        if zup is None or zun is None:
+            zone_unc_why = zwhy or ["a side is wider than a strip"]
 
     eps = _pair_epsilon(bg, p, n)
     skew_ps = skew * math.sqrt(eps) / C_MM_PER_PS
 
-    vp, vn = len(bg.vias_of(p)), len(bg.vias_of(n))
     rep_pt = _rep_point(bg, p)
 
     violations: list[dict] = []
@@ -506,42 +540,21 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
                        "fallback_length_mm": checklib.rnd(length)}))
 
     sense = is_sense(spec)
-    if skew > max_skew and not sense:
-        violations.append(violation(
-            SCRIPT, "error" if skew > 2 * max_skew else "warning", rep_pt, None,
-            p, [], f"diff pair {p}/{n} length skew {skew:.2f} mm "
-            f"(~{skew_ps:.0f} ps, eps_r {eps:.1f}); limit {max_skew:.1f} mm",
-            SCRIPT, **{**common, "kind": "diffpair_skew",
-                       "skew_mm": checklib.rnd(skew),
-                       "skew_ps": checklib.rnd(skew_ps), "limit_mm": max_skew}))
-    if sense:
-        max_unc = float(spec.get("max_sense_uncoupled_mm", math.inf))
-    if uncoupled > max_unc:
-        who, uval = (p, unc_p) if unc_p >= unc_n else (n, unc_n)
-        violations.append(violation(
-            SCRIPT, "error", rep_pt, None, who, [],
-            f"diff pair {p}/{n} has {uval:.2f} mm of {who} running uncoupled "
-            f"(> {coupling_max:.2f} mm from its partner); limit {max_unc:.1f} mm",
-            SCRIPT, **{**common, "kind": "diffpair_uncoupled",
-                       "uncoupled_mm": checklib.rnd(uval),
-                       "uncoupled_p_mm": checklib.rnd(unc_p),
-                       "uncoupled_n_mm": checklib.rnd(unc_n),
-                       "coupling_max_mm": checklib.rnd(coupling_max),
-                       "limit_mm": max_unc}))
+    measured = not zone_why
+    violations += pair_rules(spec, p, n, lp if measured else None,
+                             ln if measured else None, unc_p, unc_n,
+                             coupling_max, eps, rep_pt, common)
     # Gap consistency is REPORTED (the spec's "gap deviation histogram") but is
     # not a gate: a legitimate pair fans out to > nominal gap at its pad
     # breakouts, which must not false-positive. The one-sided detour that a bad
     # gap would signal is already caught, with a clean pad-breakout margin, by
     # the uncoupled-length term above.
-    if abs(vp - vn) > int(spec.get("max_via_asym", 0)):
-        violations.append(violation(
-            SCRIPT, "warning", rep_pt, None, p, [],
-            f"diff pair {p}/{n} via count asymmetric: {p} has {vp}, {n} has {vn}",
-            SCRIPT, **{**common, "kind": "diffpair_via_asymmetry",
-                       "vias_p": vp, "vias_n": vn}))
+    vv, vp, vn = via_rule(bg, spec, p, n, rep_pt, common)
+    violations += vv
+    violations += zone_vs
 
     phase = None
-    if okp and okn and not sense:
+    if okp and okn and not sense and not through_zone:
         ph = pair_phase(bg, spec, term, coupling_max, eps)
         if ph is not None:
             phase = {"peak_mm": checklib.rnd(ph["peak_mm"]),
@@ -615,6 +628,22 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
              "coupling_max_mm": checklib.rnd(coupling_max),
              "vias_p": vp, "vias_n": vn, **stats, "impedance": zinfo,
              **({"phase": phase} if phase is not None else {})}
+    not_judged = []
+    if zone_why and not sense:
+        facts.pop("skew_mm")
+        facts.pop("skew_ps")
+        not_judged.append("skew: " + "; ".join(zone_why))
+    if zone_unc_why:
+        not_judged.append("uncoupled length: only the tracks' share is "
+                          "counted; " + "; ".join(zone_unc_why))
+    if through_zone:
+        facts["trunk_through_zone"] = through_zone
+        if not sense:
+            not_judged.append(PHASE_ZONES)
+    if zone_rows:
+        facts["zones"] = zone_rows
+    if not_judged:
+        facts["not_judged"] = not_judged
     return violations, facts
 
 
@@ -712,6 +741,10 @@ def layer_impedance(bg, p, n, coupling_max) -> dict:
 ZONE_IMBALANCE_PCT = 10.0     # a zone pair's sides may differ by this much
 ZONE_IMBALANCE_MM = 1.0       # over a stretch at least this long
 ZONE_RAY_MM = 5.0             # a cross-section this wide is a pour, not a strip
+STRIP_AGREE_MM = 0.5          # area/width and outline lengths of a strip agree
+STRIP_AGREE_PCT = 5.0         # to this much (the larger), else not a strip
+PHASE_ZONES = ("phase: a zone strip has no drawn centreline, so the running "
+               "skew along it is not measured")
 
 
 def zone_fills(bg, net) -> dict:
@@ -739,11 +772,103 @@ def _across(poly, at, d) -> float | None:
     return first[0].length
 
 
+def strip_width(poly, step=SAMPLE_MM) -> float | None:
+    """A zone strip's own width: the median, over boundary points every
+    step, of the ray along the inward normal across the copper. The end
+    caps' rays run along the strip and drop out of the median of a strip
+    longer than a few widths. None when no ray crosses (a pour)."""
+    ws = []
+    for ring in [poly.exterior, *poly.interiors]:
+        for i in range(int(ring.length / step)):
+            s = (i + 0.5) * step
+            a, b = ring.interpolate(s - 0.01), ring.interpolate(s + 0.01)
+            d = math.hypot(b.x - a.x, b.y - a.y)
+            if d <= 0:
+                continue
+            q = ring.interpolate(s)
+            nx, ny = -(b.y - a.y) / d, (b.x - a.x) / d
+            if not poly.contains(Point(q.x + nx * 1e-3, q.y + ny * 1e-3)):
+                nx, ny = -nx, -ny
+            w = _across(poly, (q.x, q.y), (nx, ny))
+            if w:
+                ws.append(w)
+    return statistics.median(ws) if ws else None
+
+
+def strip_length(poly) -> tuple[float | None, float | None, str]:
+    """(length, width, why) of one zone strip. A strip of constant width w
+    has area w*L and an outline 2L + 2w long, bends included, so area / w
+    is its centreline length when the two agree; when they do not (a pad,
+    a pour, a stepped width, a hole) the length is not one number: (None,
+    width, why)."""
+    w = strip_width(poly)
+    if not w:
+        return None, None, "wider than a strip"
+    a = poly.area / w
+    b = poly.length / 2 - w
+    if abs(a - b) > max(STRIP_AGREE_MM, STRIP_AGREE_PCT / 100 * max(a, b)):
+        return None, w, (f"not one width (area/width {a:.2f} mm, outline "
+                         f"{b:.2f} mm)")
+    return a, w, ""
+
+
+def _pieces(g):
+    return [x for x in getattr(g, "geoms", [g]) if x.geom_type == "Polygon"]
+
+
+def zone_strips(fill, partner, coupling_max) -> tuple[list, list]:
+    """([(piece, length, width)], [why]) for the pieces of one net's fill on
+    a layer that come within coupling_max of the partner's copper there:
+    the pair's own strips, not a pour of the same net elsewhere."""
+    out, bad = [], []
+    for poly in _pieces(fill):
+        if partner is None or partner.distance(poly) > coupling_max:
+            continue
+        L, w, why = strip_length(poly)
+        if L is None:
+            bad.append(why)
+        out.append((poly, L, w))
+    return out, bad
+
+
+def strip_uncoupled(strips, partner, w_partner, coupling_max) -> float:
+    """Length of a strip set farther than coupling_max (centre to centre,
+    as for tracks) from the partner: the area of its copper beyond
+    coupling_max - w_partner/2 of the partner's edge, over its width."""
+    far = partner.buffer(coupling_max - w_partner / 2)
+    return sum(poly.difference(far).area / w for poly, _L, w in strips if w)
+
+
+CROSS_MAX_DEG = 25.0          # a width ray within this of the edge's normal
+
+
+def _crosses(ring, s, d) -> bool:
+    """Whether the ray along d from arc length s of ring crosses the strip
+    (within CROSS_MAX_DEG of the edge's normal) rather than running along
+    it, as it does where a strip bends away from its partner (#1000)."""
+    a, b = ring.interpolate(s - 0.01), ring.interpolate(s + 0.01)
+    t = math.hypot(b.x - a.x, b.y - a.y)
+    if t <= 0:
+        return True
+    along = abs((b.x - a.x) * d[0] + (b.y - a.y) * d[1]) / t
+    return along < math.sin(math.radians(CROSS_MAX_DEG))
+
+
+def _ring_at(g, pt):
+    """(ring, arc length) of the boundary of g through pt."""
+    for poly in getattr(g, "geoms", [g]):
+        for ring in [poly.exterior, *poly.interiors]:
+            if ring.distance(pt) < 1e-6:
+                return ring, ring.project(pt)
+    return None, 0.0
+
+
 def zone_pair_samples(gp, gn, coupling_max, step=SAMPLE_MM) -> list[tuple]:
     """[(point, width_p, width_n, gap)] every step along the edge of P that
     faces N within coupling_max. The ray from N's nearest point across the
     gap gives the edge gap; carried on, the width of each strip at the same
-    spot, so the two sides are compared where they couple."""
+    spot, so the two sides are compared where they couple. A spot where the
+    ray runs along either edge (a bend away, a corner) is no width."""
     out = []
     for poly in getattr(gp, "geoms", [gp]):
         for ring in [poly.exterior, *poly.interiors]:
@@ -755,6 +880,11 @@ def zone_pair_samples(gp, gn, coupling_max, step=SAMPLE_MM) -> list[tuple]:
                     continue
                 r = nearest_points(q, gn)[1]
                 d = ((q.x - r.x) / g, (q.y - r.y) / g)
+                if not _crosses(ring, i * step, d):
+                    continue
+                rn, sn = _ring_at(gn, r)
+                if rn is not None and not _crosses(rn, sn, d):
+                    continue
                 wp = _across(gp, (q.x, q.y), d)
                 wn = _across(gn, (r.x, r.y), (-d[0], -d[1])) if wp else None
                 if wn:
@@ -781,17 +911,57 @@ def _imbalanced_stretch(samples, tol_pct, step=SAMPLE_MM):
     return len(best) * step, worst
 
 
-def zone_pair(bg, spec, p, n, fp, fn, coupling_max) -> tuple[list, dict]:
-    """A pair drawn as two zones (hw-lab zcoupon): width and gap sampled
-    along the coupled run on each layer both nets fill, Zdiff as drawn per
-    layer, and a side narrower than its partner over ZONE_IMBALANCE_MM.
-    Length skew, uncoupled length, vias and phase are for tracks."""
+def zone_trunk_length(bg, net, terminals):
+    """(length, zone_mm, why) of a trunk that runs through the net's own
+    zone strips (a mixed pair: tracks into a zone strip and out): the path
+    on netconn's graph with zones, each zone node it crosses counted at its
+    strip length. None when even that cannot connect the terminals; length
+    None, with why, when a zone on the path is not a strip."""
+    if len(terminals) < 2 or not bg.zones_of(net):
+        return None
+    g = netconn.build(bg, net, include_zones=True)
+    polys, j = {}, 0
+    for z in bg.zones_of(net):          # netconn's ("zone", j) numbering
+        for layer, ps in z.fills.items():
+            for poly in ps:
+                polys[("zone", j)] = (layer, poly)
+                j += 1
+    best = None
+    nodes = [netconn.pad_node(g, t) for t in terminals]
+    for i in range(len(nodes)):
+        for k in range(i + 1, len(nodes)):
+            r = netconn.shortest_path(g, nodes[i], nodes[k])
+            if r and (best is None or r[0] > best[0]):
+                best = r
+    if best is None:
+        return None
+    crossed = []
+    for u, v, _w, _e in best[1]:
+        for x in (u, v):
+            if x in polys and x not in crossed:
+                crossed.append(x)
+    extra = 0.0
+    for x in crossed:
+        layer, poly = polys[x]
+        L, _w, why = strip_length(poly)
+        if L is None:
+            return None, None, f"{net}'s trunk crosses a zone on {layer} {why}"
+        extra += L
+    return best[0] + extra, extra, ""
+
+
+def zone_layers(bg, spec, p, n, fp, fn, coupling_max):
+    """(violations, {layer: row}, strips) for each layer both nets fill: the
+    width and gap sampled along the coupled run, Zdiff as drawn, a side
+    narrower than its partner over ZONE_IMBALANCE_MM, and each net's strips
+    there (zone_strips) for length and uncoupled length."""
     violations: list[dict] = []
     common = dict(pair=[p, n], drawn_as="zones")
     target = None if is_sense(spec) else spec.get("impedance_ohm")
     tol = float(spec.get("impedance_tol_pct", IMPEDANCE_TOL_PCT))
     imb_pct = float(spec.get("max_width_imbalance_pct", ZONE_IMBALANCE_PCT))
     layers: dict[str, dict] = {}
+    strips: dict[str, tuple] = {}
     for lay in sorted(set(fp) & set(fn)):
         smp = zone_pair_samples(fp[lay], fn[lay], coupling_max)
         coupled = len(smp) * SAMPLE_MM
@@ -804,6 +974,13 @@ def zone_pair(bg, spec, p, n, fp, fn, coupling_max) -> tuple[list, dict]:
                "min_width_p_mm": checklib.rnd(min(s[1] for s in smp)),
                "min_width_n_mm": checklib.rnd(min(s[2] for s in smp)),
                "gap_mm": checklib.rnd(gap), "coupled_mm": checklib.rnd(coupled)}
+        sp, bad_p = zone_strips(fp[lay], fn[lay], coupling_max)
+        sn, bad_n = zone_strips(fn[lay], fp[lay], coupling_max)
+        strips[lay] = (sp, bad_p, sn, bad_n, wp, wn)
+        if not bad_p:
+            row["length_p_mm"] = checklib.rnd(sum(L for _, L, _ in sp))
+        if not bad_n:
+            row["length_n_mm"] = checklib.rnd(sum(L for _, L, _ in sn))
         w = (wp + wn) / 2
         try:
             z, model = layer_zdiff(bg, lay, w, gap)
@@ -838,16 +1015,136 @@ def zone_pair(bg, spec, p, n, fp, fn, coupling_max) -> tuple[list, dict]:
                    "width_p_mm": checklib.rnd(a), "width_n_mm": checklib.rnd(b),
                    "stretch_mm": checklib.rnd(length),
                    "limit_pct": imb_pct}))
+    return violations, layers, strips
+
+
+def strips_measure(p, n, strips, coupling_max):
+    """(len_p, len_n, unc_p, unc_n, why) summed over zone_layers' strips;
+    a length, and so its uncoupled length (area over width), is None when a
+    strip on its net is not one width (why says where): a pour named like a
+    pair has no length to read (#1000)."""
+    lp = ln = 0.0
+    up = un = 0.0
+    why = []
+    for lay, (sp, bad_p, sn, bad_n, wp, wn) in sorted(strips.items()):
+        for net, bad in ((p, bad_p), (n, bad_n)):
+            why += [f"{net} on {lay} is {b}" for b in bad]
+        if lp is not None:
+            lp = None if bad_p else lp + sum(L for _, L, _ in sp)
+        if ln is not None:
+            ln = None if bad_n else ln + sum(L for _, L, _ in sn)
+        if up is not None:
+            up = None if bad_p or any(not w for _, _, w in sp) \
+                else up + strip_uncoupled(
+                sp, unary_union([x for x, _, _ in sn]), wn, coupling_max)
+        if un is not None:
+            un = None if bad_n or any(not w for _, _, w in sn) \
+                else un + strip_uncoupled(
+                sn, unary_union([x for x, _, _ in sp]), wp, coupling_max)
+    return lp, ln, up, un, why
+
+
+def pair_rules(spec, p, n, lp, ln, unc_p, unc_n, coupling_max, eps, at,
+               common) -> list[dict]:
+    """The length rules both drawings share: SKEW against max_skew_mm
+    (lengths None: not judged) and UNCOUPLED length against
+    max_uncoupled_mm (None: not judged), sense pairs as the module doc."""
+    out: list[dict] = []
+    sense = is_sense(spec)
+    max_skew = float(spec.get("max_skew_mm", MAX_SKEW_MM))
+    max_unc = float(spec.get("max_uncoupled_mm", MAX_UNCOUPLED_MM))
+    if lp is not None and ln is not None and not sense:
+        skew = abs(lp - ln)
+        skew_ps = skew * math.sqrt(eps) / C_MM_PER_PS
+        if skew > max_skew:
+            out.append(violation(
+                SCRIPT, "error" if skew > 2 * max_skew else "warning", at, None,
+                p, [], f"diff pair {p}/{n} length skew {skew:.2f} mm "
+                f"(~{skew_ps:.0f} ps, eps_r {eps:.1f}); limit {max_skew:.1f} mm",
+                SCRIPT, **{**common, "kind": "diffpair_skew",
+                           "skew_mm": checklib.rnd(skew),
+                           "skew_ps": checklib.rnd(skew_ps),
+                           "limit_mm": max_skew}))
+    if sense:
+        max_unc = float(spec.get("max_sense_uncoupled_mm", math.inf))
+    if unc_p is not None and unc_n is not None and max(unc_p, unc_n) > max_unc:
+        who, uval = (p, unc_p) if unc_p >= unc_n else (n, unc_n)
+        out.append(violation(
+            SCRIPT, "error", at, None, who, [],
+            f"diff pair {p}/{n} has {uval:.2f} mm of {who} running uncoupled "
+            f"(> {coupling_max:.2f} mm from its partner); limit {max_unc:.1f} mm",
+            SCRIPT, **{**common, "kind": "diffpair_uncoupled",
+                       "uncoupled_mm": checklib.rnd(uval),
+                       "uncoupled_p_mm": checklib.rnd(unc_p),
+                       "uncoupled_n_mm": checklib.rnd(unc_n),
+                       "coupling_max_mm": checklib.rnd(coupling_max),
+                       "limit_mm": max_unc}))
+    return out
+
+
+def via_rule(bg, spec, p, n, at, common) -> tuple[list, int, int]:
+    """([diffpair_via_asymmetry], vias_p, vias_n): the two nets should
+    change layers together."""
+    vp, vn = len(bg.vias_of(p)), len(bg.vias_of(n))
+    if abs(vp - vn) <= int(spec.get("max_via_asym", 0)):
+        return [], vp, vn
+    return [violation(
+        SCRIPT, "warning", at, None, p, [],
+        f"diff pair {p}/{n} via count asymmetric: {p} has {vp}, {n} has {vn}",
+        SCRIPT, **{**common, "kind": "diffpair_via_asymmetry",
+                   "vias_p": vp, "vias_n": vn})], vp, vn
+
+
+def zone_pair(bg, spec, p, n, fp, fn, coupling_max) -> tuple[list, dict]:
+    """A pair drawn as two zones (hw-lab zcoupon): per layer as zone_layers;
+    over all layers each net's strip length gives the skew, its copper
+    beyond coupling_max of the partner the uncoupled length, and the via
+    counts their symmetry, judged as for tracks (#1000). The running skew
+    is not judged: a strip has no drawn centreline to walk."""
+    violations, layers, strips = zone_layers(bg, spec, p, n, fp, fn,
+                                             coupling_max)
     if not layers:
         return [], {"pair": [p, n], "routed": False, "drawn_as": "zones",
                     "note": "zone pair not coupled on any layer; "
                             "coupling not evaluated"}
     main = max(layers, key=lambda l: layers[l]["coupled_mm"])
-    return violations, {
-        "pair": [p, n], "kind": "sense" if is_sense(spec) else "diff",
-        "drawn_as": "zones", "signal_layer": main, "layers": layers,
-        "not_judged": "skew, uncoupled length, vias and phase: the pair is "
-                      "drawn as zones"}
+    lp, ln, up, un, why = strips_measure(p, n, strips, coupling_max)
+    sp = strips[main][0]
+    c = sp[0][0].representative_point() if sp else None
+    at = (c.x, c.y) if c is not None else None
+    eps = _pair_epsilon(bg, p, n)
+    common = dict(pair=[p, n], drawn_as="zones",
+                  length_p_mm=checklib.rnd(lp) if lp is not None else None,
+                  length_n_mm=checklib.rnd(ln) if ln is not None else None)
+    violations += pair_rules(spec, p, n, lp, ln, up, un, coupling_max, eps,
+                             at, common)
+    vv, vp, vn = via_rule(bg, spec, p, n, at, common)
+    violations += vv
+    sense = is_sense(spec)
+    not_judged = []
+    if (lp is None or ln is None) and not sense:
+        not_judged.append("skew: " + "; ".join(why))
+    if up is None or un is None:
+        not_judged.append("uncoupled length: " + ("; ".join(why) or
+                                                  "a side is wider than a strip"))
+    if not sense:
+        not_judged.append(PHASE_ZONES)
+    facts = {"pair": [p, n], "kind": "sense" if sense else "diff",
+             "drawn_as": "zones", "signal_layer": main, "layers": layers,
+             "length_p_mm": common["length_p_mm"],
+             "length_n_mm": common["length_n_mm"],
+             "vias_p": vp, "vias_n": vn,
+             "coupling_max_mm": checklib.rnd(coupling_max)}
+    if lp is not None and ln is not None:
+        facts["skew_mm"] = checklib.rnd(abs(lp - ln))
+        facts["skew_ps"] = checklib.rnd(abs(lp - ln) * math.sqrt(eps)
+                                        / C_MM_PER_PS)
+    if up is not None and un is not None:
+        facts["uncoupled_p_mm"] = checklib.rnd(up)
+        facts["uncoupled_n_mm"] = checklib.rnd(un)
+    if not_judged:
+        facts["not_judged"] = not_judged
+    return violations, facts
 
 
 DEFAULT_ER = 4.5              # FR4 fallback when no reference dielectric exists
@@ -912,6 +1209,7 @@ def run(argv=None):
     violations: list[dict] = []
     checked: list[dict] = []
     untargeted: list[str] = []
+    pair_nj: list[str] = []
     for spec in resolve_pairs(bg, cons):
         p, n = spec.get("p"), spec.get("n")
         # A stale named pair (renamed/absent net) is a warning, not a whole-check
@@ -927,6 +1225,7 @@ def run(argv=None):
         vs, facts = check_pair(bg, spec)
         violations.extend(vs)
         checked.append(facts)
+        pair_nj += [f"{p}/{n}: {x}" for x in facts.get("not_judged", [])]
         if facts.get("routed") is not False and not is_sense(spec) \
                 and not spec.get("impedance_ohm"):
             untargeted.append(f"{p}/{n}: no impedance target, and held to the "
@@ -939,6 +1238,7 @@ def run(argv=None):
         SCRIPT, args.pcb, violations, checked=checked,
         stackup_assumed=bool(bg.stackup.assumed),
         not_judged=[f"{u}: not fully routed" for u in unrouted] + untargeted
+        + pair_nj
         + (["stackup: no (stackup) block, so any Zdiff is on the default "
             "FR4"] if assumed else []),
         nothing_to_judge=None if len(checked) > len(unrouted) else
