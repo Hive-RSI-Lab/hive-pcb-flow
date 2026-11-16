@@ -372,3 +372,40 @@ def test_unread_input_stays_not_judged(tmp_path_factory):
     assert any("U1's VIN pin: VSUP has no voltage: none declared, no "
                "feedback divider sets it, and its name gives none" in n
                for n in nj)
+
+
+def _sync_boost(tmp_path_factory, name, fns):
+    """U9 (TLV61070A) boosts IN to OUT through L9 with no diode: its output
+    pin is the only sign it's a boost. `fns` names U9's IN, SW and OUT pins."""
+    vin, sw, vout = fns
+    return _board(tmp_path_factory, name,
+                  _rpart("U9", 10, [("IN", vin), ("/SW", sw), ("OUT", vout)],
+                         "TLV61070ADBVR")
+                  + _rpart("L9", 20, [("IN", ""), ("/SW", "")], "10uH"))
+
+
+@pytest.mark.parametrize("fns", [
+    ("V_{IN}_1", "SW_2", "V_{OUT}_3"),     # the TLV61070A's symbol (#1460)
+    ("V^{IN}", "~{SW}", "V_{OUT}"),
+    ("VIN", "SW", "VOUT"),                 # plain names, read as before
+])
+def test_subscript_pin_names_read_a_synchronous_boost(tmp_path_factory, fns):
+    # #1460: KiCad's V_{OUT} pin read as "V_{OUT}" never matched the output
+    # pin pattern, so a synchronous boost with no diode read as a buck and
+    # came back not_judged. Same figures as the valley-only test above:
+    # 1.5 A out is over its 1.2251 A ceiling (planted); 0.5 A is quiet.
+    bg = _sync_boost(tmp_path_factory, "syncboost", fns)
+    cons = _cons(vin=3.3, vout=5, iout=1.5, topology="boost", fsw_khz=1000,
+                 inductor_isat_a=3.0)
+    viols, recs, nj = cv.judge(bg, cons, TABLE)
+    assert [v["kind"] for v in viols] == ["converter_overload"], nj
+    assert recs[0]["topology"] == "boost" and nj == []
+    cons["power"][0]["current_a"] = 0.5
+    viols, recs, nj = cv.judge(bg, cons, TABLE)
+    assert viols == [] and nj == [] and recs[0]["topology"] == "boost"
+
+
+def test_unmarked_drops_nested_markup_and_keeps_plain_names():
+    un = cv.cc.unmarked
+    assert un("~{V_{OUT}}") == "VOUT" and un("V_{IN}") == "VIN"
+    assert un("V^{2}") == "V2" and un("SW") == "SW" and un("EN_1") == "EN_1"

@@ -3002,12 +3002,24 @@ def switch_rows(path: Path = SWITCH_NODES_YAML) -> list[dict]:
                  pins={p.upper() for p in r["pins"]}) for r in rows]
 
 
+_MARKUP = re.compile(r"[~_^]\{([^{}]*)\}")
+
+
+def unmarked(name: str) -> str:
+    """A KiCad pin name with its text markup dropped, innermost first:
+    overbar '~{SW}' -> 'SW', subscript 'V_{OUT}' -> 'VOUT', superscript
+    'V^{IN}' -> 'VIN' (#1460)."""
+    while (out := _MARKUP.sub(r"\1", name)) != name:
+        name = out
+    return name
+
+
 def pin_name(pad: geom.Pad) -> str:
-    """'OUT_2' on pad 2 -> 'OUT'; '~{SW}' -> 'SW'."""
+    """'OUT_2' on pad 2 -> 'OUT'; '~{SW}' -> 'SW'; 'V_{OUT}_5' -> 'VOUT'."""
     name = pad.pinfunction.strip()
     if name.endswith(f"_{pad.number}"):
         name = name[: -len(pad.number) - 1]
-    return re.sub(r"~\{([^}]*)\}", r"\1", name).upper()
+    return unmarked(name).upper()
 
 
 def switch_row(fp: dict, rows: list[dict]) -> dict | None:

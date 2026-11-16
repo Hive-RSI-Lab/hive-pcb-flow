@@ -272,8 +272,9 @@ VIN_PIN = re.compile(r"[PA]?V?IN\d?", re.I)
 
 
 def _pin(pad) -> str:
-    """A pad's pin name with KiCad overbars dropped ('~{VIN}' -> 'VIN')."""
-    return re.sub(r"~\{([^}]*)\}", r"\1", str(pad.pinfunction or "")).strip()
+    """A pad's pin name with KiCad markup dropped ('~{VIN}', 'V_{IN}' ->
+    'VIN')."""
+    return cc.unmarked(str(pad.pinfunction or "")).strip()
 
 
 def _no_volts(net: str, conflicts: dict) -> str:
