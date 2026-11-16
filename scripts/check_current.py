@@ -327,6 +327,7 @@ import yaml
 from shapely import STRtree
 from shapely.geometry import MultiPolygon, Point
 from shapely.ops import unary_union
+from shapely.prepared import prep
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
@@ -747,10 +748,20 @@ def _neck_graph(bg: geom.BoardGeom, net: str, layer: str, fill,
                 others: dict | None):
     """(attachment vias, components) for one fill; components(radius)
     returns (nodes, root) where nodes[i] = (layer, reach polygon), the
-    fill's own pieces first, and root(i) its joined component."""
+    fill's own pieces first, and root(i) its joined component. Built once
+    per fill and set of others; components is kept per radius."""
+    key = ("neck_graph", net, layer, id(fill),
+           tuple(sorted((l, id(o[0]), o[1]) for l, o in (others or {}).items())))
+    return _memo(bg, key, lambda: _neck_graph_build(
+        bg, net, layer, fill, others),
+        keep=(fill, [o[0] for o in (others or {}).values()]))
+
+
+def _neck_graph_build(bg: geom.BoardGeom, net: str, layer: str, fill,
+                      others: dict | None):
     _tick()
-    vias = [v for v in bg.vias_of(net, layer)
-            if fill.buffer(0.01).contains(Point(v.at))]
+    grown = prep(fill.buffer(0.01))
+    vias = [v for v in bg.vias_of(net, layer) if grown.contains(Point(v.at))]
     others = {l: o for l, o in (others or {}).items()
               if l != layer and not o[0].is_empty}
     fills = {layer: fill, **{l: o[0] for l, o in others.items()}}
@@ -762,7 +773,15 @@ def _neck_graph(bg: geom.BoardGeom, net: str, layer: str, fill,
         r = oreq / 2.0
         other_nodes += [(l, part.buffer(r + 0.01)) for part in _pieces(ofill, r)]
 
+    built = {}
+
     def components(radius: float):
+        if radius not in built:
+            built[radius] = _components(radius)
+        return built[radius]
+
+    def _components(radius: float):
+        _tick()
         own = [part.buffer(radius + 0.01) for part in _pieces(fill, radius)]
         nodes = [(layer, g) for g in own] + other_nodes
         parent = list(range(len(nodes)))
@@ -1755,7 +1774,12 @@ def track_sides(bg: geom.BoardGeom, net: str, track):
 
 def _track_split(bg: geom.BoardGeom, net: str, track):
     """(side_of(item) -> its side's root or None, {root: refs} of the two
-    sides) for track_sides, else None."""
+    sides) for track_sides, else None. Once per track."""
+    return _memo(bg, ("track_split", net, id(track)),
+                 lambda: _track_split_build(bg, net, track), keep=track)
+
+
+def _track_split_build(bg: geom.BoardGeom, net: str, track):
     _tick()
     nodes, find, hits = _copper_graph(bg, net, drop=track)
     on = [i for i, (l, _p) in enumerate(nodes) if l == track.layer]
