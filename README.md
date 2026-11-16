@@ -75,5 +75,12 @@ An agent designs a PCB from a written brief: research, architecture, parts, sche
   runs pcb-flow's planted faults (`bin/strength.py`: the gate criteria, every
   verify check's mutant in `tests/golden/`, dfm at JLC's floors), and each
   one a check lets through charges 100.
+- **Frozen**, `bin/pcb-flow frozen test` (or `test-slow`, `check-all`,
+  `score`, or `-- CMD`): runs the command on a copy of the checkout taken
+  now (HEAD plus uncommitted edits, deletions and untracked files, not
+  ignored ones) and removes the copy after. A run that waits in a heavy
+  queue, or an edit made while it runs, then can't change what it judges;
+  paths into the checkout point into the copy, and it exits with the
+  command's status ([bin/frozen.py](bin/frozen.py)).
 
 MIT, like upstream; see NOTICE for what that doesn't cover.
