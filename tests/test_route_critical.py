@@ -672,12 +672,78 @@ def test_build_net_clearances_class_plus_dru(tmp_path):
     # class gives both V48 nets 0.4; the DRU raises V48_RAW to 0.635;
     # nothing is ever capped DOWN (max of class and DRU)
     assert m == {"V48_RAW": 0.635, "V48_RTN": 0.4}
-    # no sources at all -> None (no file emitted)
-    assert rc.build_net_clearances(None, None, nets) is None
-    # unparseable pro -> fail OPEN (None), never wrong values
+    # no sources at all: nothing set (KRT's caller then emits no file)
+    assert rc.build_net_clearances(None, None, nets) == {}
+    # unparseable pro: not judged (#1274), never a reading taken as
+    # "no clearances"
     bad = tmp_path / "bad.kicad_pro"
     bad.write_text("{not json", encoding="utf-8")
-    assert rc.build_net_clearances(bad, dru, nets) is None
+    assert rc.build_net_clearances(bad, dru, nets) == rc.NOT_JUDGED
+
+
+def _ns_pro(tmp_path, name, ns) -> Path:
+    pro = tmp_path / f"{name}.kicad_pro"
+    pro.write_text(json.dumps({"net_settings": ns}), encoding="utf-8")
+    return pro
+
+
+HV_CLASSES = [{"name": "Default", "clearance": 0.15, "priority": 2 ** 31 - 1},
+              {"name": "HV", "clearance": 0.8, "priority": 1}]
+
+
+def test_build_net_clearances_reads_netclass_assignments(tmp_path):
+    """#1274: a net put in a class by the board's netclass_assignments
+    (what the schematic's net class directives and the board editor's
+    "assign netclass" write) gets that class's clearance, in both the
+    name and the list form KiCad writes; it used to read only
+    netclass_patterns and route the HV net at the 0.15 mm floor."""
+    nets = {"V48", "/SIG", "GND"}
+    for form in ("HV", ["HV"]):
+        pro = _ns_pro(tmp_path, "asg", {
+            "classes": HV_CLASSES, "netclass_patterns": [],
+            "netclass_assignments": {"V48": form, "/SIG": None}})
+        assert rc.build_net_clearances(pro, None, nets) == {"V48": 0.8}
+
+
+def test_build_net_clearances_composes_by_priority(tmp_path):
+    """A net in two classes takes the clearance KiCad 10's DRC holds it to:
+    the class with the lowest priority number that sets one (probed on
+    KiCad 10.0.6: A pri 0 at 0.5 mm and B pri 1 at 0.8 mm give 0.5 mm; A
+    with no clearance falls through to B's 0.8 mm)."""
+    nets = {"V48"}
+    a = {"name": "A", "clearance": 0.5, "priority": 0}
+    b = {"name": "B", "clearance": 0.8, "priority": 1}
+    ns = {"classes": [HV_CLASSES[0], b, a],
+          "netclass_patterns": [{"netclass": "B", "pattern": "V*"}],
+          "netclass_assignments": {"V48": "A"}}
+    assert rc.build_net_clearances(_ns_pro(tmp_path, "p1", ns), None,
+                                   nets) == {"V48": 0.5}
+    ns["classes"] = [HV_CLASSES[0], b, {"name": "A", "priority": 0}]
+    assert rc.build_net_clearances(_ns_pro(tmp_path, "p2", ns), None,
+                                   nets) == {"V48": 0.8}
+
+
+def test_build_net_clearances_not_judged_when_unreadable(tmp_path):
+    """Net settings it can't read are not judged (#1274), never skipped: a
+    pattern entry that isn't an object could be the one that puts the HV
+    net in its class."""
+    nets = {"V48"}
+    good = {"classes": HV_CLASSES,
+            "netclass_patterns": [{"netclass": "HV", "pattern": "V48"}]}
+    assert rc.build_net_clearances(_ns_pro(tmp_path, "ok", good), None,
+                                   nets) == {"V48": 0.8}
+    for i, ns in enumerate((
+            dict(good, netclass_patterns=["V48 -> HV"]),
+            dict(good, netclass_patterns={"V48": "HV"}),
+            dict(good, netclass_assignments={"V48": 3}),
+            dict(good, classes=[{"name": "HV", "clearance": "0.8mm"}]),
+            dict(good, classes=["HV"]),
+            ["not", "an", "object"])):
+        pro = tmp_path / f"bad{i}.kicad_pro"
+        pro.write_text(json.dumps(ns if isinstance(ns, list)
+                                  else {"net_settings": ns}),
+                       encoding="utf-8")
+        assert rc.build_net_clearances(pro, None, nets) == rc.NOT_JUDGED, ns
 
 
 # A 4-layer board's clearance rules held to a footprint (#1146): a package

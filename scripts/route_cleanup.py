@@ -102,6 +102,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1034,18 +1035,34 @@ def _rules_clearance(pcb: Path, nets, *, scoped: bool = True
     memberOfFootprint test, route_critical.dru_condition_scoped) out of
     the floor, for a caller that weighs such rules per pair itself
     (board_update.swap_clash_details, #1146), which counts a rule it
-    cannot answer for a pair as holding there."""
+    cannot answer for a pair as holding there. Netclass clearances that
+    can't be read (route_critical.build_net_clearances' NOT_JUDGED) hold
+    every net to the largest clearance any class sets (#1274)."""
     import json  # noqa: PLC0415
     import route_critical as rc  # noqa: PLC0415 - heavy, lazy
     pro, dru = pcb.with_suffix(".kicad_pro"), pcb.with_suffix(".kicad_dru")
     floor, edge = KICAD_CLEARANCE, KICAD_EDGE
     try:
-        proj = json.loads(pro.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = pro.read_text(encoding="utf-8")
+    except OSError:
+        raw = ""
+    try:
+        proj = json.loads(raw)
+    except ValueError:
         proj = {}
-    rules = ((proj.get("board") or {}).get("design_settings") or {}).get(
-        "rules") or {}
-    for c in (proj.get("net_settings") or {}).get("classes") or []:
+
+    def obj(v) -> dict:
+        return v if isinstance(v, dict) else {}
+
+    def lst(v) -> list:
+        return [x for x in v if isinstance(x, dict)] \
+            if isinstance(v, list) else []
+
+    proj = obj(proj)
+    rules = obj(obj(obj(proj.get("board")).get("design_settings")).get(
+        "rules"))
+    classes = lst(obj(proj.get("net_settings")).get("classes"))
+    for c in classes:
         if c.get("name") == "Default" and \
                 isinstance(c.get("clearance"), (int, float)):
             floor = float(c["clearance"])
@@ -1081,7 +1098,20 @@ def _rules_clearance(pcb: Path, nets, *, scoped: bool = True
                                        (int, float)):
         hard_floor = max(hard_floor, float(rules["min_clearance"]))
     per_net = rc.build_net_clearances(pro if pro.is_file() else None,
-                                      dru, nets) or {}
+                                      dru, nets)
+    if per_net == rc.NOT_JUDGED:
+        # the netclasses can't be read (#1274): hold every net to the
+        # largest clearance a class sets, and its .kicad_dru rules on top
+        # (from the text where it isn't JSON: only a netclass has a key
+        # named just "clearance")
+        held = max([floor] + [
+            float(c["clearance"]) for c in classes
+            if isinstance(c.get("clearance"), (int, float))] + [
+            float(m) for m in re.findall(
+                r'"clearance"\s*:\s*([0-9]+(?:\.[0-9]+)?)', raw)])
+        dru_nets = rc.dru_net_floors(dru, "clearance")
+        per_net = {n: round(max(held, dru_nets.get(n, 0.0)), 4)
+                   for n in nets}
     return per_net, floor, edge, hard, hard_floor, hole
 
 

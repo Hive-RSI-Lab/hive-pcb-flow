@@ -1130,6 +1130,44 @@ def test_swap_clash_weighs_footprint_rules_per_pair(tmp_path):
     assert bu.swap_clash_details(bg, "C5", pads, pcb) == []
 
 
+def _class_board(tmp_path: Path, name: str, **ns) -> Path:
+    """PD_PCB staged in tmp_path/name, its .kicad_pro given an HV class
+    (0.5 mm) and the net_settings keys in ns."""
+    (tmp_path / name).mkdir()
+    pcb = _stage(tmp_path / name, PD_PCB)
+    pro = pcb.with_suffix(".kicad_pro")
+    proj = json.loads(pro.read_text(encoding="utf-8"))
+    proj["net_settings"]["classes"].append(
+        {"name": "HV", "clearance": 0.5, "priority": 2})
+    proj["net_settings"].update(ns)
+    pro.write_text(json.dumps(proj), encoding="utf-8")
+    return pcb
+
+
+def test_swap_clash_reads_netclass_assignments(tmp_path):
+    """#1274: a net the board's netclass_assignments puts in a class keeps
+    that class's clearance at a swap: C5's /CFG2 track, 0.19 mm off, clashes
+    once /CFG2 is assigned to a 0.5 mm class. Net settings that can't be
+    read hold every net to the largest clearance a class sets, never to
+    the floor ("no clearances")."""
+    bg = geom.BoardGeom.from_file(PD_PCB)
+    pads = bg.pads_of(ref="C5")
+    pcb = _class_board(tmp_path, "none")
+    assert bu.swap_clash_details(bg, "C5", pads, pcb) == []
+    for name, ns in (("str", {"netclass_assignments": {"/CFG2": "HV"}}),
+                     ("list", {"netclass_assignments": {"/CFG2": ["HV"]}})):
+        found = bu.swap_clash_details(
+            bg, "C5", pads, _class_board(tmp_path, name, **ns))
+        assert _clash_nets(found) == {"/CFG2"}, name
+        assert all(info["clearance_mm"] == 0.5 for _, info in found)
+    pcb = _class_board(tmp_path, "unread", netclass_patterns=[
+        {"netclass": "Power", "pattern": "VBUS"}, "/CFG2 -> HV"])
+    found = bu.swap_clash_details(bg, "C5", pads, pcb)
+    assert "/CFG2" in _clash_nets(found)
+    assert all(info["clearance_mm"] == 0.5 for _, info in found
+               if info["gap_mm"] > 0.1524)
+
+
 def test_swap_clash_leaves_copper_the_old_pad_held(tmp_path):
     """Copper the board already held as close to the old pad is not the
     swap's to rip (#1146); a new pad's own clash still is."""
