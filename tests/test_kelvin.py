@@ -34,9 +34,14 @@ def _fp(ref, val, x, y, *pads, size=2):
             f'(property "Value" "{val}" (at 0 0 0))\n{rows}  )\n')
 
 
-def _seg(net, x0, y0, x1, y1, w):
+def _seg(net, x0, y0, x1, y1, w, layer="F.Cu"):
     return (f'  (segment (start {x0} {y0}) (end {x1} {y1}) (width {w}) '
-            f'(layer "F.Cu") (net "{net}"))\n')
+            f'(layer "{layer}") (net "{net}"))\n')
+
+
+def _via(net, x, y, uid):
+    return (f'  (via (at {x} {y}) (size 0.6) (drill 0.3) '
+            f'(layers "F.Cu" "B.Cu") (net "{net}") (uuid "{uid}"))\n')
 
 
 def _board(tmp_path, body, name="k") -> Path:
@@ -257,11 +262,11 @@ def test_cli_and_registration(tmp_path):
 
 # ---- declared sense taps (#936) ---------------------------------------------
 
-def _zone(net, x0, y0, x1, y1, name="POUR"):
+def _zone(net, x0, y0, x1, y1, name="POUR", layer="F.Cu"):
     pts = f"(xy {x0} {y0}) (xy {x1} {y0}) (xy {x1} {y1}) (xy {x0} {y1})"
-    return (f'  (zone (net "{net}") (name "{name}") (layer "F.Cu")\n'
+    return (f'  (zone (net "{net}") (name "{name}") (layer "{layer}")\n'
             f'    (polygon (pts {pts}))\n'
-            f'    (filled_polygon (layer "F.Cu") (pts {pts})))\n')
+            f'    (filled_polygon (layer "{layer}") (pts {pts})))\n')
 
 
 def _rail(sense=None):
@@ -344,6 +349,54 @@ def test_pour_that_only_meets_the_tap_pad_is_fine(tmp_path):
     meets it only inside the pad."""
     vios, _ = _sense(_board(tmp_path, _rail() + _zone("P", 27, 5, 40, 10.5)))
     assert not vios
+
+
+def _via_by_tap(tap=None):
+    """#1356: the sense line drops to B.Cu and comes back up on a via 0.15 mm
+    off C1.1's edge, then a short F.Cu stub into the pad. `tap` replaces C1
+    (the tap part)."""
+    line = (_seg("P", 30, 20, 30, 15, 0.2) + _via("P", 30, 15, "v1")
+            + _seg("P", 30, 15, 30, 11.45, 0.2, layer="B.Cu")
+            + _via("P", 30, 11.45, "v2") + _seg("P", 30, 11.45, 30, 10.5, 0.2))
+    body = _rail(line)
+    if tap is not None:
+        c1 = _fp("C1", "22u", 30, 10, ("1", 0, "P", ""))
+        assert c1 in body
+        body = body.replace(c1, tap)
+    return body
+
+
+def test_back_pour_touching_the_lines_via_by_the_tap_is_caught(tmp_path):
+    """#1356 (planted): a B.Cu P pour reaches the line's via beside the SMD
+    tap. The via is within SENSE_SLACK_MM of C1.1, but C1.1 has no copper on
+    B.Cu: the line reads the pour there, a join no check flagged."""
+    pour = _zone("P", 25, 5, 35, 11.3, layer="B.Cu")
+    (v,), (f,) = _sense(_board(tmp_path, _via_by_tap() + pour))
+    assert v["kind"] == "sense_tap_off_pad" and v["severity"] == "error"
+    # the pour feeds C1.1 through the via and stub, so they are power copper
+    # now and the line meets them on B.Cu, 0.8 mm out
+    assert "a power via" in v["msg"] and v["layer"] == "B.Cu"
+    assert f["joins"] and f["joins"][0]["layer"] == "B.Cu"
+
+
+def test_back_pour_kept_off_the_lines_via_is_clean(tmp_path):
+    """The quiet twin of the above: the pour stops 0.25 mm short of the via."""
+    pour = _zone("P", 25, 5, 35, 10.9, layer="B.Cu")
+    vios, (f,) = _sense(_board(tmp_path, _via_by_tap() + pour))
+    assert not vios and f["reached"] and not f["joins"]
+
+
+def test_back_pour_by_a_through_hole_tap_is_the_tap(tmp_path):
+    """A through-hole C1.1 is on B.Cu too: the pour meeting the via within
+    SENSE_SLACK_MM of it there still meets it at the tap."""
+    tht = ('  (footprint "t:X" (at 30 10) (layer "F.Cu")\n'
+           '    (property "Reference" "C1" (at 0 0 0)) '
+           '(property "Value" "22u" (at 0 0 0))\n'
+           '    (pad "1" thru_hole rect (at 0 0) (size 2 2) (drill 1) '
+           '(layers "*.Cu") (net "P"))\n  )\n')
+    pour = _zone("P", 25, 5, 35, 11.3, layer="B.Cu")
+    vios, (f,) = _sense(_board(tmp_path, _via_by_tap(tht) + pour))
+    assert not vios and f["reached"]
 
 
 def test_sense_line_not_routed_is_missing(tmp_path):

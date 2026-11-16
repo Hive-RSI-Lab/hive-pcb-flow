@@ -779,6 +779,43 @@ def test_restored_teardrops_are_built_before_the_report_drc(tmp_path):
     assert tdl.read(routed, tdl.config(None)).drop_count >= 1
 
 
+def test_routed_tracks_too_wide_for_a_restored_drop_neck(tmp_path):
+    """#1320, planted fault: the route lays a 0.5 mm /A track on the
+    0.5 mm via whose teardrops the run turns back on, where KiCad makes no
+    drop over 0.45 mm: _neck_routed lays it again at /A's 0.2 mm from the
+    via out past the drop's end (0.55 mm from its centre), the rest at
+    0.5 mm. Quiet twin: a 0.5 mm track there before routing stays."""
+    cli = env.find_kicad_cli()
+    bp = env.find_kicad_python(cli) if cli else None
+    if bp is None:
+        pytest.skip("KiCad bundled python not installed")
+    old = ('  (segment (start 5 5) (end 2 5) (width 0.5) (layer "B.Cu")'
+           ' (net "/A") (uuid "3e1f7c6b-4d5e-4f60-9b2c-3d4e5f607182"))\n')
+    new = ('  (segment (start 5 5) (end 9 5) (width 0.5) (layer "F.Cu")'
+           ' (net "/A") (uuid "4f2a8d7c-5e6f-4a71-8c3d-4e5f60718293"))\n')
+    body = _TD_BOARD % _TD_ON
+    pre = tmp_path / "pre.kicad_pcb"
+    pre.write_text(body[:-2] + old + ")\n", encoding="utf-8")
+    staged = tmp_path / "routed.kicad_pcb"
+    staged.write_text(body[:-2] + old + new + ")\n", encoding="utf-8")
+    snap = route_auto._preexisting(geom.BoardGeom.from_file(pre))
+    work = tmp_path / "w"
+    work.mkdir()
+    necks = route_auto._neck_routed(bp, staged, work, snap)
+    assert [(n["net"], n["layer"], n["width"], n["was"]) for n in necks] \
+        == [("/A", "F.Cu", 0.2, 0.5)]
+    bg = geom.BoardGeom.from_file(staged)
+    got = sorted((t.layer, t.width, [tuple(round(c, 4) for c in xy)
+                                     for xy in t.shape.coords])
+                 for t in bg.tracks_of("/A"))
+    assert got == [("B.Cu", 0.5, [(5.0, 5.0), (2.0, 5.0)]),
+                   ("F.Cu", 0.15, [(5.0, 5.0), (5.0, 9.0)]),
+                   ("F.Cu", 0.2, [(5.0, 5.0), (5.55, 5.0)]),
+                   ("F.Cu", 0.5, [(5.55, 5.0), (9.0, 5.0)])]
+    # run again: nothing left too wide
+    assert route_auto._neck_routed(bp, staged, work, snap) == []
+
+
 # ---- row 129: per-ball escape keep-if-better ------------------------------
 
 def _seg(x0, y0, x1, y1, net, uid, layer="F.Cu", w=0.1):
@@ -823,6 +860,31 @@ def test_escape_drop_keeps_routed_joined_zoned_and_router_copper(tmp_path):
             '    (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5)))\n  )\n')
     bg3 = geom.BoardGeom.from_file(_escaped(tmp_path, zone, name="z"))
     assert route_auto._escape_drops(bg3, ["/S0_0"], protect) == []
+
+
+def test_escape_drop_keeps_an_enclosed_fine_balls_escape(tmp_path):
+    """Planted fault (the 6-layer bench's U2 /B3_2): a 0.5 mm field's C3
+    (/S2_2, two rings deep) escaped by a via in its pad and an In1.Cu
+    track, unrouted after the route: its bare pad has no way out, so the
+    escape stays. Quiet twins: the same escape on a ring-1 ball (B2,
+    /S1_1) still goes, and so does C3's on a 0.8 mm field."""
+    from test_route_escape import _via, board
+
+    def esc(pitch, row, col, name):
+        net = f"/S{row}_{col}"
+        bare = geom.BoardGeom.from_file(board(
+            tmp_path, pitch=pitch, pad=0.25, name=name + "0"))
+        (pad,) = [p for p in bare.pads_of(ref="U1") if p.net == net]
+        x, y = pad.center
+        extra = (_via(x, y, net, "e-v", size=0.25, drill=0.15)
+                 + _seg(x, y, 10, y, net, "e-s", layer="In1.Cu"))
+        bg = geom.BoardGeom.from_file(board(
+            tmp_path, pitch=pitch, pad=0.25, extra=extra, name=name))
+        return route_auto._escape_drops(bg, [net], {"e-v", "e-s"})
+
+    assert esc(0.5, 2, 2, "c3") == []
+    assert [d["ball"] for d in esc(0.5, 1, 1, "b2")] == ["B2"]
+    assert [d["ball"] for d in esc(0.8, 2, 2, "c3w")] == ["C3"]
 
 
 def test_drop_pre_forgets_only_the_dropped_copper(tmp_path):

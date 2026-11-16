@@ -42,9 +42,12 @@ divider's top, a regulator's SENSE pin) and the pad it must read, on that net.
 Power copper is every pad and pour on the net, and every track and via on a
 path between two of them; the sense line is the copper from the sense pad that
 is none of that. Where it first touches power copper is where it reads. A
-contact within SENSE_SLACK_MM of the named pad is the tap itself (the power
-track and the sense track may both end on it). The hit: the voice board's
-divider tops sat in their rails' pours, reading 6-16 mm from the pad named.
+contact within SENSE_SLACK_MM of the named pad, on the pad's own layers, is
+the tap itself (the power track and the sense track may both end on it). The
+hit: the voice board's divider tops sat in their rails' pours, reading 6-16 mm
+from the pad named. On another layer only copper inside the pad's outline is
+the tap: a back-layer pour touching the line's via beside the pad is a join
+the slack used to hide (#1356).
 
 Found sense lines (#1077): a line routed by hand carries no aiee_sensew mark
 and is declared nowhere. Each shunt whose two pads reach an amplifier's or
@@ -121,6 +124,7 @@ EXTRA_SOURCE_KINDS = ("FB", "T", "NT")
 PAD_BOOST = 100.0
 SENSE_PLUS_YAML = SCRIPTS.parent / "reference" / "sense_plus_pins.yaml"
 SENSE_SLACK_MM = 0.5     # a contact this near the tap pad is the tap itself (#936)
+TAP_EPS_MM = 0.01        # off the tap's layers, only copper in its outline is it (#1356)
 SENSE_PIN = re.compile(
     r"^[~/]?(V?IN\d*[-+−PN]\d*|[-+]\d*IN\d*|I?SENSE.*|I?SNS.*|ISEN.*|CS[-+PN]?\d*|"
     r"S[PN][ABC]?\d*|ISN\d*|ISP\d*|IS[-+]\d*|VS[-+]\d*)$", re.I)
@@ -659,7 +663,10 @@ def _line_walk(bg, sense, tap) -> dict:
     makes with it is where the line really taps. A
     contact inside the tap pad's outline (or within SENSE_SLACK_MM of it, the
     overhang of a wide track ending on the pad) is the tap itself: the power
-    track and the sense track may both end on it. Returns
+    track and the sense track may both end on it. The slack holds only on the
+    tap pad's own layers: on another layer only copper inside the pad's
+    outline (a via in the pad) is the tap, so a pour on an inner or back layer
+    touching the line's via beside an SMD pad is a join (#1356). Returns
     {reached, joins: [{label, layer, at, mm}], line: [the tracks and vias
     walked, the line's own copper]}."""
     nets = {sense.net, tap.net} - {None}
@@ -670,7 +677,14 @@ def _line_walk(bg, sense, tap) -> dict:
         by_layer.setdefault(it[2], []).append(it)
         by_key.setdefault(it[1], []).append(it)
     trees = {l: STRtree([it[3] for it in its]) for l, its in by_layer.items()}
-    near = tap.poly.buffer(SENSE_SLACK_MM)
+    slack = tap.poly.buffer(SENSE_SLACK_MM)
+    inside = tap.poly.buffer(TAP_EPS_MM)
+    tap_layers = set(tap.layers)
+
+    def near(layer, contact) -> bool:
+        """The contact is the tap itself (see the docstring, #1356)."""
+        return (slack if layer in tap_layers else inside).contains(contact)
+
     start, goal = ("p", id(sense)), ("p", id(tap))
 
     def touching(key):
@@ -696,7 +710,7 @@ def _line_walk(bg, sense, tap) -> dict:
     for k in neigh:
         for other, contact in touching(k):
             o = other[1]
-            if o != start and (goal in (k, o) or not near.contains(contact)):
+            if o != start and (goal in (k, o) or not near(other[2], contact)):
                 neigh[k].add(o)
                 neigh[o].add(k)
     neigh[_ROOT] = set(terminal)
@@ -716,11 +730,12 @@ def _line_walk(bg, sense, tap) -> dict:
             # a contact by the tap is the tap itself when it meets power
             # copper; the sense line's own short jogs there still lead on
             # to the pad (#1042)
-            if near.contains(contact) and other[1] in power:
+            if near(other[2], contact) and other[1] in power:
                 continue
             seen.add(other[1])
             if other[1] in power:
-                rest = contact.difference(near)
+                rest = contact.difference(
+                    slack if other[2] in tap_layers else inside)
                 c = rest.representative_point()
                 joins.append({"label": other[4], "layer": other[2],
                               "at": [checklib.rnd(c.x, 2), checklib.rnd(c.y, 2)],

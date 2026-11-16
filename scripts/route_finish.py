@@ -97,6 +97,7 @@ import hdilib  # noqa: E402
 import kc  # noqa: E402
 from necklib import NECK_REACH_MM, board_necks  # noqa: E402,F401  (#937)
 import routelib  # noqa: E402
+import teardroplib as tdl  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 KICAD_HOLE_CLEARANCE = 0.25   # board setup default min hole clearance
@@ -1784,6 +1785,72 @@ def _named_conns(after: dict, uuid_conn: dict) -> dict[int, list]:
     return bad
 
 
+def board_drop_vias(pcb: Path, bg: geom.BoardGeom) -> list:
+    """The board's vias with teardrops on, as teardroplib drop_vias has
+    them; [] without reading the file's tree when it has no teardrop
+    setting at all."""
+    import sexpdata
+    text = Path(pcb).read_text(encoding="utf-8")
+    if "(teardrops" not in text:
+        return []
+    return tdl.drop_vias(bg, tdl.via_params(sexpdata.loads(text)))
+
+
+def neck_fns(bg: geom.BoardGeom, rules: Rules, vias: list, skip=()):
+    """(width_of, board_at) for teardroplib neck_ops on board bg (#1320).
+    width_of(via, p): the widths a track into the drop via may narrow to,
+    best first (neck_widths): the board's own tracks into that via that
+    take a drop, widest first, then the net's width, then its floor.
+    board_at(net, layer, pt): board copper of the net there, which ends a
+    neck's walk; the tracks in skip (uuids: those the neck walks) and the
+    drop vias (neck_ops' list ends a walk at one) left out."""
+    on = {v["uuid"] for v in vias} | set(skip)
+
+    def width_of(v, p):
+        c, size = tuple(v["at"]), float(v["size"])
+        had = [t.width for t in bg.tracks_of(v["net"])
+               if t.uuid not in skip and tdl.takes_drop(t.width, size, p)
+               and min(math.dist(t.shape.coords[0], c),
+                       math.dist(t.shape.coords[-1], c))
+               <= size / 2 + tdl.NECK_TOL]
+        return tdl.neck_widths(size, p, had, rules.width(v["net"]),
+                               rules.width_floor(v["net"]))
+
+    def board_at(net, layer, pt) -> bool:
+        q = Point(pt)
+        return any(it.poly.distance(q) <= tdl.NECK_TOL
+                   for it in bg.tracks_of(net, layer)
+                   + bg.vias_of(net, layer) + bg.pads_of(net, layer)
+                   if getattr(it, "uuid", None) not in on)
+    return width_of, board_at
+
+
+def neck_jobs(pcb: Path, bg: geom.BoardGeom, rules: Rules,
+              jobs: list, rip=()) -> list:
+    """Neck the routed jobs' tracks that end too wide for a drop on a via
+    of the board with teardrops on (#1320): a join is laid at the net's
+    width, and KiCad makes no drop for a track at or over filter_ratio x
+    the via's size, so the track narrows from the via out past where the
+    drop ends (teardroplib neck_ops) to a width neck_fns gives. Each job's
+    ops change in place, and its "necks" lists what narrowed. The board
+    copper in rip (uuids the plan takes off) is not there for it. Returns
+    every job's necks."""
+    rip = set(rip)
+    vias = [v for v in board_drop_vias(pcb, bg) if v["uuid"] not in rip]
+    if not vias:
+        return []
+    width_of, board_at = neck_fns(bg, rules, vias, rip)
+    out = []
+    for j in jobs:
+        if j.get("status") != "routed" or not j.get("ops"):
+            continue
+        necks = tdl.neck_ops(j["ops"], vias, width_of, board_at)
+        if necks:
+            j["necks"] = necks
+            out += necks
+    return out
+
+
 def _one_pass(cli, staged, drc, opts, *, parity, refill, log):
     """Plan, apply, DRC, take out connections DRC names in an error.
     Returns (jobs, drc_after or None when nothing was applied)."""
@@ -1809,6 +1876,8 @@ def _one_pass(cli, staged, drc, opts, *, parity, refill, log):
         # chunk's later passes don't spend their time on them
         opts["skip"].update(conn_key(j["net"], j["a"], j["b"]) for j in jobs
                             if j["status"] == "failed")
+    # a join at the net's width can end too wide for a via's drop (#1320)
+    neck_jobs(staged, bg, rules, jobs, rip)
     all_ops, op_conn = [], []
     for c, j in enumerate(jobs):
         if j["status"] == "routed":

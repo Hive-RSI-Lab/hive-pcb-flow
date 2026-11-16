@@ -690,15 +690,51 @@ def _restore_teardrops(bp, staged: Path, work: Path, td: list) -> int:
     return len(uu) - len(res.get("missing") or [])
 
 
+def _neck_routed(bp, staged: Path, work: Path, pre: dict) -> list:
+    """Neck the routed tracks too wide for a drop on a via with teardrops
+    on (#1320): Freerouting and the maze pass lay a net at its width, and
+    KiCad makes no drop for a track at or over filter_ratio x the via's
+    size, so a track that ends on a via the run turned teardrops back on
+    for narrows from it out past where the drop ends (teardroplib
+    neck_board, route_finish neck_fns). Tracks there before routing stay
+    as they are. Returns the necks."""
+    import route_finish
+    import teardroplib as tdl
+    bg = geom.BoardGeom.from_file(staged)
+    vias = route_finish.board_drop_vias(staged, bg)
+    if not vias:
+        return []
+    keep = _protect_uuids(pre, bg)
+    nets = {v["net"] for v in vias}
+    tracks = [t for t in bg.tracks_of() if t.uuid and t.uuid not in keep
+              and t.net in nets]
+    if not tracks:
+        return []
+    rules = route_finish.board_rules(staged, bg)
+    width_of, board_at = route_finish.neck_fns(
+        bg, rules, vias, {t.uuid for t in tracks})
+    ops, necks = tdl.neck_board(tracks, vias, width_of, board_at)
+    if ops:
+        route_edit.apply_ops(staged, ops)
+    return necks
+
+
 def _teardrops_back(bp, cli, staged: Path, work: Path, td: list, *,
-                    parity: bool) -> tuple[int, dict | None]:
-    """_restore_teardrops, then a refill and a fresh DRC when it turned any
-    back on: the setting makes no copper, KiCad builds the teardrop zones
-    on a refill, and the report's DRC has to see them (6-layer bench: 12
-    restored, then 0 drops and 12 dfm_ring_breakout until refilled).
-    Returns (restored, drc or None when nothing was restored)."""
+                    parity: bool, pre: dict | None = None,
+                    necks: list | None = None) -> tuple[int, dict | None]:
+    """_restore_teardrops, then (with pre, the copper from before routing)
+    the necks of the routed tracks too wide for those vias' drops
+    (_neck_routed, listed in necks), then a refill and a fresh DRC when it
+    turned any back on or necked any: the setting makes no copper, KiCad
+    builds the teardrop zones on a refill, and the report's DRC has to see
+    them (6-layer bench: 12 restored, then 0 drops and 12
+    dfm_ring_breakout until refilled). Returns (restored, drc or None when
+    nothing changed)."""
     n = _restore_teardrops(bp, staged, work, td)
-    if not n:
+    got = _neck_routed(bp, staged, work, pre) if td and pre else []
+    if necks is not None:
+        necks += got
+    if not n and not got:
         return 0, None
     kc.run_drc(cli, staged, refill=True, save_board=True)
     return n, kc.run_drc(cli, staged, parity=parity, all_track_errors=True)
@@ -845,6 +881,35 @@ def _ball_islands(bg, net: str) -> list[dict]:
     return list(groups.values())
 
 
+def _enclosed_balls(bg, b) -> set[str]:
+    """Pad numbers of b's balls two or more rings deep in a fine field
+    (pitch <= bgalib.FINE_PITCH_MM): no track fits between two balls of
+    the outer rings and their through vias block every layer, so such a
+    ball gets out only by route_escape's way (a gate trade, row 139), never
+    from its bare pad. The 6-layer bench's U2 /B3_2, escaped through a
+    traded gate and unrouted after Freerouting, lost its escape to the drop
+    and then had no path on the grid. Empty for a coarser or rotated
+    field."""
+    import bgalib
+    if b.pitch > bgalib.FINE_PITCH_MM + 1e-6:
+        return set()
+    x0, y0, x1, y1 = b.bbox
+    nr = round((y1 - y0) / b.pitch) + 1
+    nc = round((x1 - x0) / b.pitch) + 1
+    out = set()
+    for pad in bg.pads_of(ref=b.ref):
+        if pad.number not in b.nets:
+            continue
+        c = (pad.center[0] - x0) / b.pitch
+        r = (pad.center[1] - y0) / b.pitch
+        if abs(c - round(c)) > 0.05 or abs(r - round(r)) > 0.05:
+            return set()
+        r, c = round(r), round(c)
+        if min(r, c, nr - 1 - r, nc - 1 - c) >= 2:
+            out.add(pad.number)
+    return out
+
+
 def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
     """Escapes that leave their ball cut off after the route (row 129): a
     BGA ball whose net DRC still calls unrouted, sitting on an island that
@@ -852,7 +917,9 @@ def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
     (route_escape's dog-bone). Its dog-bone took room the finish needs and
     joins nothing, so it goes before 5b/5c and the ball is routed from the
     bare pad. A routed ball, an island that reaches another pad, a net a
-    zone carries and an island of the router's own copper are kept."""
+    zone carries and an island of the router's own copper are kept, and so
+    is an enclosed ball's escape (_enclosed_balls): its bare pad has no way
+    out, so a drop loses it for good."""
     import bgalib
     bad = set(unrouted)
     zoned = {z.net for z in bg.zones_of()}
@@ -860,11 +927,14 @@ def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
     for b in bgalib.find_bgas(bg):
         nets = sorted({n for n in b.nets.values()
                        if n in bad and n not in zoned})
+        boxed = _enclosed_balls(bg, b) if nets else set()
         for net in nets:
             for isl in _ball_islands(bg, net):
                 if len(isl["pads"]) != 1 or isl["pads"][0][0] != b.ref:
                     continue
                 if not protect.intersection(isl["uuids"]):
+                    continue
+                if isl["pads"][0][1] in boxed:
                     continue
                 out.append({"ref": b.ref, "ball": isl["pads"][0][1],
                             "net": net, "uuids": sorted(isl["uuids"])})
@@ -1252,8 +1322,10 @@ def run(argv: list[str] | None = None):
                          "(board untouched)")
 
     # 6. sanity + swap the routed board in
+    td_necks: list = []
     teardrops_restored, td_drc = _teardrops_back(
-        bp, cli, staged, work, td_vias, parity=sch.is_file())
+        bp, cli, staged, work, td_vias, parity=sch.is_file(), pre=pre,
+        necks=td_necks)
     if td_drc is not None:
         drc = td_drc
     bg2 = geom.BoardGeom.from_file(staged)
@@ -1303,6 +1375,7 @@ def run(argv: list[str] | None = None):
             "maze_finish": maze_facts,
             "escape_drops": escape_drops,
             "teardrops_restored": teardrops_restored,
+            "teardrop_necks": td_necks,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),
             "neckdowns_snapped": dedup_facts.get("neckdowns_snapped", 0),
             "work_dir": str(work),
