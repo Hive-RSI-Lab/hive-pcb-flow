@@ -69,19 +69,28 @@ def test_board_mode_judges_each_copy_on_either_side(tmp_path):
 def test_board_mode_ref_filter_and_no_record(tmp_path):
     code, rep = _run(tmp_path, "--pcb", str(BOARD / "placed.kicad_pcb"),
                      "--ref", "U9", "--ref", "U1")
-    # without --parts the SO8 has no record: not judged, and said so
+    # without --parts the SO8 has no record, but it is a perimeter package,
+    # so its direction is read (#1285): SO8_BOT is numbered from the bottom
+    # view, a warning since no record declares the numbering
     assert code == 0 and rep["placed"] == 2
     by = {p["ref"]: p for p in rep["parts"]}
-    assert by["U9"]["pad_numbering"] is None
-    assert "no record" in by["U9"]["not_judged"][0]
+    assert by["U9"]["pad_numbering"]["from"] == "direction"
+    assert by["U9"]["pad_numbering"]["fit"] is False
+    assert by["U9"]["pad_numbering"]["hint"] == "bottom_view_numbering"
+    [w] = [x for x in rep["violations"] if x["refs"] == ["U9"]]
+    assert (w["kind"], w["severity"]) == ("pad_numbering_direction", "warning")
     assert by["U1"]["pad_numbering"] == {"from": "ball_names", "fit": True}
 
 
 def test_board_mode_nothing_to_judge(tmp_path):
     code, rep = _run(tmp_path, "--pcb", str(
         REPO / "tests" / "golden" / "blinky2" / "blinky2.kicad_pcb"))
-    assert code == 0 and rep["placed"] == 17 and rep["judged"] == {}
-    assert "pad numbering" in rep["nothing_to_judge"]
+    # no record on blinky2 states its numbering, but U1's LQFP-48 is read
+    # by its direction since #1285: counter-clockwise, as a top view runs
+    assert code == 0 and rep["placed"] == 17
+    assert rep["judged"] == {"direction": 1} and not rep["violations"]
+    by = {p["ref"]: p for p in rep["parts"]}
+    assert by["U1"]["pad_numbering"]["direction"] == "ccw"
 
 
 def test_golden_mutant_and_its_quiet_twin(tmp_path):
