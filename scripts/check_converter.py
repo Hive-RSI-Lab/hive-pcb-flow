@@ -21,6 +21,13 @@ vout_source say which, and vin_inferred / vout_inferred say how:
             tied to it by net ties and 0 ohm parts.
   net name  a name like 3V3 or +12V (check_ratings.volts_from_name): weaker,
             so an error that rests on it is a warning and says so.
+A net with none of the three takes the voltage of a net that a net tie or a
+fitted 0 ohm part joins it to, the strongest of them, with its basis kept
+and the ties named ("carried from +5V across NT3"): a converter whose input
+is another converter's output, or a rail tied in (#1459). Ferrites, load
+switches and diodes are not crossed, nor ground nets. Tied nets whose
+voltages disagree, or that are tied to a net whose voltage is unknown, get
+none.
 A net whose name disagrees with its divider (outside the window and more
 than 5 % off the nominal) gets no voltage, and a converter on it is not
 judged, with both readings. An IC whose ground pins (GND, AGND, PGND) are all
@@ -168,6 +175,86 @@ def _floating_ground(part: dict) -> str | None:
     return ", ".join(nets)
 
 
+def _link_nets(r: dict) -> list[str] | None:
+    """The two nets a fitted net tie or 0 ohm part joins, else None."""
+    nets = sorted(set((r.get("pads") or {}).values()))
+    if len(nets) != 2 or cr._is_dnp(r):
+        return None
+    kind = cr._fb_kind(r)
+    if kind == "tie" or (kind == "res" and
+                         engcalc.parse_value(r["value"]) == 0 and
+                         re.match(r"^\s*0", str(r["value"]))):
+        return nets
+    return None
+
+
+def _tie_path(edges: list[tuple[str, str, str]], src: str, dst: str) -> str:
+    """The refs of the net ties and 0 ohm parts on the shortest path from
+    net src to net dst, in order."""
+    prev: dict[str, tuple[str, str] | None] = {src: None}
+    todo = [src]
+    while todo and dst not in prev:
+        n = todo.pop(0)
+        for ref, a, c in edges:
+            for x, y in ((a, c), (c, a)):
+                if x == n and y not in prev:
+                    prev[y] = (n, ref)
+                    todo.append(y)
+    refs: list[str] = []
+    while prev.get(dst):
+        dst, ref = prev[dst]
+        refs.append(ref)
+    return ", ".join(reversed(refs))
+
+
+def _carry_ties(same: dict, edges: list, volts: dict, basis: dict,
+                conflicts: dict) -> None:
+    """A net with no voltage of its own takes the one of the nets a net tie
+    or 0 ohm part joins it to (#1459): a converter's input tied to +5V, or
+    to another converter's output, reads that rail. The strongest source
+    goes (declared, then divider, then name) and keeps its basis, so a
+    voltage read from a name only is still weak. Tied nets whose voltages
+    disagree, or that are tied to a net whose voltage is unknown, get none.
+    Ground nets are not carried, and ferrites, load switches and diodes are
+    not crossed."""
+    rank = {DECLARED: 0, DIVIDER: 1, NAME: 2}
+    for group in sorted({tuple(g) for g in same.values()}):
+        group = [n for n in group if not cr.is_ground(n)]
+        bad = [n for n in group if n in conflicts]
+        if bad:
+            for n in group:
+                if n not in conflicts and (n not in volts
+                                           or "tied_from" in basis[n]):
+                    conflicts[n] = (
+                        f"{n} is tied across {_tie_path(edges, bad[0], n)} "
+                        f"to {bad[0]}, whose voltage is unknown: "
+                        f"{conflicts[bad[0]]}")
+                    volts.pop(n, None)
+                    basis.pop(n, None)
+            continue
+        have = [n for n in group if n in volts]
+        empty = [n for n in group if n not in volts]
+        if not have or not empty:
+            continue
+        vals = [volts[n] for n in have]
+        if max(vals) - min(vals) > NAME_TOL * max(abs(v) for v in vals):
+            for n in empty:
+                conflicts[n] = (
+                    f"{n} is tied to nets that disagree: " + ", ".join(
+                        f"{h} {volts[h]:.3g} V ({basis[h]['source']}, across "
+                        f"{_tie_path(edges, h, n)})" for h in sorted(have))
+                    + ", so its voltage is unknown")
+            continue
+        src = min(have, key=lambda n: (rank[basis[n]["source"]], n))
+        origin = basis[src].get("tied_from", src)
+        how = basis[src]["how"].split(", carried from ")[0]
+        for n in empty:
+            path = _tie_path(edges, origin, n)
+            volts[n] = volts[src]
+            basis[n] = dict(basis[src], tied_from=origin, ties=path,
+                            how=f"{how}, carried from {origin} across {path}")
+
+
 def _tied_nets(board: list[dict]) -> dict[str, list[str]]:
     """net -> every net joined to it by net ties and fitted 0 ohm parts, as
     check_ratings._fb_network merges them: a divider on one sets them all."""
@@ -179,13 +266,8 @@ def _tied_nets(board: list[dict]) -> dict[str, list[str]]:
         return n
 
     for r in board:
-        nets = sorted(set((r.get("pads") or {}).values()))
-        if len(nets) != 2 or cr._is_dnp(r):
-            continue
-        kind = cr._fb_kind(r)
-        if kind == "tie" or (kind == "res" and
-                             engcalc.parse_value(r["value"]) == 0 and
-                             re.match(r"^\s*0", str(r["value"]))):
+        nets = _link_nets(r)
+        if nets:
             a, c = find(nets[0]), find(nets[1])
             if a != c:
                 parent[max(a, c)] = min(a, c)
@@ -230,6 +312,7 @@ def rail_volts(bg: geom.BoardGeom, cons: dict):
                "not_judged": []}
         by_ref = {b["ref"]: b for b in board}
         same = _tied_nets(board)
+        edges = [(r["ref"], *ns) for r in board if (ns := _link_nets(r))]
         for ic in ics:
             b = by_ref.get(ic)
             if b is None:
@@ -294,11 +377,22 @@ def rail_volts(bg: geom.BoardGeom, cons: dict):
                               "vref_verified": verified,
                               "window_v": [checklib.rnd(lo, 4),
                                            checklib.rnd(hi, 4)]}
+                # the net Rtop lands on; the others are reached across ties
+                top = [n for n in (by_ref.get(div["top"][0]) or {}).get(
+                    "pads", {}).values() if n == div["out"]
+                    or n in same.get(div["out"], ())]
+                if top and net not in (top[0], div.get("rail")):
+                    path = _tie_path(edges, top[0], net)
+                    basis[net].update(
+                        tied_from=top[0], ties=path,
+                        how=f"{how}, carried from {top[0]} across {path}")
     for net, v in named.items():
         if net not in volts and net not in conflicts:
             volts[net] = v
             basis[net] = {"source": NAME,
                           "how": f"read from the net name {net} only"}
+    if ics:
+        _carry_ties(same, edges, volts, basis, conflicts)
     return volts, basis, conflicts
 
 
