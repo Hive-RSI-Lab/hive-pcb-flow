@@ -111,6 +111,58 @@ def test_the_holdout_has_its_own_blind_count(tmp_path):
     assert "since #9" in t
 
 
+def _training_manifest(tmp_path, verdicts, **extra):
+    import yaml
+    ds = [{"id": f"t-{i}", "summary": "s", "source_quote": "q", "fault_class": "c",
+           "verdict": v, "follow_up": "#1", **extra} for i, v in enumerate(verdicts)]
+    b = {"id": "t", "url": "u", "commit": "0" * 40, "licence": "MIT", "source": "s",
+         "rev_a": {"name": "A", "sch": "a/x.kicad_sch"},
+         "rev_b": {"name": "B", "sch": "b/x.kicad_sch"}, "defects": ds}
+    m = tmp_path / "t.yaml"
+    m.write_text(yaml.safe_dump({"boards": [b], "holdout": []}))
+    return m
+
+
+def test_a_not_pinnable_defect_leaves_the_denominator(tmp_path):
+    """A defect whose fix is in every commit is out of the count, with the
+    count it would have made kept beside the new one (#1498)."""
+    m = _training_manifest(tmp_path, ["missed", "missed", "not_pinnable"],
+                           note="the fix is present in every commit")
+    t = ec.table(tmp_path, ec.load(m), [])
+    assert ("- Training: 0 of 2 caught (2 missed; 1 not_pinnable left out). "
+            "With the not_pinnable defect counted, as before #1498: 0 of 3.") in t
+    # the quiet twin: nothing left out, the line reads as it always did
+    t = ec.table(tmp_path, ec.load(_training_manifest(tmp_path, ["missed"] * 3)), [])
+    assert "- Training: 0 of 3 caught (3 missed)." in t
+    assert "not_pinnable" not in t and "before #1498" not in t
+
+
+def test_not_pinnable_needs_a_note_and_the_training_set(tmp_path):
+    try:
+        ec.load(_training_manifest(tmp_path, ["not_pinnable"]))
+    except SystemExit as e:
+        assert "needs a note" in str(e)
+    else:
+        raise AssertionError("not_pinnable with no note loaded")
+    # a holdout defect keeps its blind count: no leaving the denominator
+    try:
+        ec.load(_holdout_manifest(tmp_path, verdict="not_pinnable", note="n"), "holdout")
+    except SystemExit as e:
+        assert "training" in str(e)
+    else:
+        raise AssertionError("not_pinnable loaded in the holdout")
+
+
+def test_only_a_fix_in_every_commit_is_not_pinnable():
+    """a03cb's ruling (hwde-gaps-rerank): ambient-1 alone; the other
+    not_static training defects stay honest misses."""
+    left = [d for b in ec.load() for d in b["defects"] if d["verdict"] == "not_pinnable"]
+    assert [d["id"] for d in left] == ["ambient-1"]
+    assert "every commit" in left[0]["note"]
+    ids = {d["id"]: d["verdict"] for b in ec.load() for d in b["defects"]}
+    assert ids["bedlift-3"] == "not_static" and ids["minuet-7"] == "missed"
+
+
 def test_each_holdout_round_is_counted_apart(tmp_path):
     import yaml
     one = yaml.safe_load(_holdout_manifest(tmp_path).read_text())["holdout"][0]

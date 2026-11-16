@@ -557,8 +557,11 @@ boards:
     summary: no pull-ups on SWDIO and SWDCLK
     source_quote: "Need pull up resistors for SWDIO and SWDCLK lines"
     fault_class: SCH (datasheet pin state)
-    verdict: not_static
+    verdict: not_pinnable
     note: >-
+      Not pinnable: the fix is present in every commit. The only commit that
+      touches rev_c's ambient.sch (a0fae20) already has R7 and R8, so no
+      revision holds the defect and it is left out of the count (#1498).
       At the pinned commit rev_c's own files already carry the fix: its
       ambient.sch, kicad_pcb, shipped .net and BOM all have R7 and R8, 100k
       from /SAM4L_SWDIO and /SAM4L_SWDCLK to +3V3, as rev_d has R1 and R2.

@@ -15,7 +15,7 @@ only for the round's first reading: each round is swept once.
 
 ## Count
 
-- Training: 49 of 55 caught (49 caught, 2 missed, 4 not_static).
+- Training: 50 of 54 caught (50 caught, 1 missed, 3 not_static; 1 not_pinnable left out). With the not_pinnable defect counted, as before #1498: 50 of 55.
 - Holdout round 1, blind: 1 of 4 caught (1 caught, 3 missed).
 - Holdout round 1, with the rules written since: 2 of 4 caught (2 caught, 2 missed).
 - Holdout round 2, blind: 1 of 21 caught (1 caught, 20 missed).
@@ -190,7 +190,7 @@ into `reference/errata_corpus.yaml` and its members into the taxonomy.
 
 | defect | class | pcb-flow on rev A | follow-up |
 |---|---|---|---|
-| ambient-1: no pull-ups on SWDIO and SWDCLK | SCH (datasheet pin state) | not_static | At the pinned commit rev_c's own files already carry the fix: its ambient.sch, kicad_pcb, shipped .net and BOM all have R7 and R8, 100k from /SAM4L_SWDIO and /SAM4L_SWDCLK to +3V3, as rev_d has R1 and R2. The files were patched after the boards were made, so none holds the defect and no check can see it (#1044). The errata's other line, "Random trace on pin32?", is a question with no stated fix, so it is not judged. |
+| ambient-1: no pull-ups on SWDIO and SWDCLK | SCH (datasheet pin state) | not_pinnable | Not pinnable: the fix is present in every commit. The only commit that touches rev_c's ambient.sch (a0fae20) already has R7 and R8, so no revision holds the defect and it is left out of the count (#1498). At the pinned commit rev_c's own files already carry the fix: its ambient.sch, kicad_pcb, shipped .net and BOM all have R7 and R8, 100k from /SAM4L_SWDIO and /SAM4L_SWDCLK to +3V3, as rev_d has R1 and R2. The files were patched after the boards were made, so none holds the defect and no check can see it (#1044). The errata's other line, "Random trace on pin32?", is a question with no stated fix, so it is not judged. |
 
 ### one-rom-fire28: fire-28-a2 -> fire-28-a3
 
