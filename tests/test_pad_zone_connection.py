@@ -42,7 +42,7 @@ def test_validate_zone_connection():
         place_edit.validate_ops({"version": 1, "ops": [
             {"op": "set_pad", "ref": "J1", "pad": "A1",
              "zone_connection": "full"}]})
-    with pytest.raises(CheckError, match="needs net, size and/or"):
+    with pytest.raises(CheckError, match="needs one of net, size, zone_connection"):
         place_edit.validate_ops({"version": 1, "ops": [
             {"op": "set_pad", "ref": "J1", "pad": "A1"}]})
 

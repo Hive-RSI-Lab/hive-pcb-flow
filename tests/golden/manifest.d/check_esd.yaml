@@ -1,0 +1,13 @@
+# Seeded fault for check_esd (hive-pcb-flow #312).
+mutants:
+  esd-swd-unclamped:
+    board: blinky2
+    script: mutations/esd_swd_unclamped.py
+    check: check_esd
+    defect: >-
+      SIDECAR fault (copper unchanged): constraints.json drops the SWD header
+      from the bench-only connectors, so it is a user-facing port with no
+      clamp on /SWDIO or /SWCLK between its pins and the MCU
+    expect:
+      kind: esd_unclamped
+      net: /SWDIO

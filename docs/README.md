@@ -619,7 +619,7 @@ HTSSOP-32 stays `smd`. Parts marked `board_only`, `exclude_from_bom` or
 `virtual` aren't judged.
 
 - `fpfix` rule G writes the type the pads give into the library, so
-  `lib_pull` fixes it on every pull. `fpfix.py --pcb` does the same for
+  `lib_pull` fixes it on every pull. `pcb-flow fpfix --pcb` does the same for
   footprints already placed on a board. A footprint with both kinds of pad
   and no type at all is residue: only the part's drawing settles it.
 - `bom_cpl` classes a part by its pads where the attr contradicts them,

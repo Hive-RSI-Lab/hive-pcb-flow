@@ -96,7 +96,7 @@ def test_place_edit_validates_pad_and_dnp():
         {"op": "set_dnp", "ref": "R1", "dnp": True}]}
     assert len(place_edit.validate_ops(ok)) == 3
     for op, msg in (({"op": "set_pad", "ref": "R1", "pad": "1"},
-                     "needs net, size and/or zone_connection"),
+                     "needs one of net, size, zone_connection"),
                     ({"op": "set_pad", "ref": "R1", "pad": 1, "net": "A"},
                      "pad must be"),
                     ({"op": "set_pad", "ref": "R1", "pad": "1", "size": 0},

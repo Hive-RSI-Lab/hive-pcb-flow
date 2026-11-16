@@ -56,5 +56,16 @@
       "ref": "J96",
       "standard": "bedlift-lift-actuator"
     }
-  ]
+  ],
+  "esd": {
+    "_comment": "check_esd (#312): J2 (SWD) and J3 (MCO_OUT probe header) are bench-only, so they are not judged. /USB_DP and /USB_DM run from the micro-USB straight to the STM32F103 with no clamp, so the finding is real. They are exempt here because the golden is a never-built fixture whose verify run must stay clean, and tests/test_check_esd.py pins them as true findings. VBUS stays judged; its warning is a known one (10 uF + 4.7 uF at the connector, recorded fp in triage.yaml).",
+    "internal": [
+      "J2",
+      "J3"
+    ],
+    "exempt_nets": [
+      "/USB_DP",
+      "/USB_DM"
+    ]
+  }
 }

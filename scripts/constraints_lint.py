@@ -260,7 +260,9 @@ PLACEMENT: dict[str, dict[str, dict[str, str]]] = {
 # placement's scalar keys: place_seed (a decoupling cap may go on the back
 # under its IC unless false) and placelib (the courtyard margin around pads)
 PLACEMENT_SCALARS = {"fixed": "str_list", "backside_decoupling": "bool",
-                     "pad_margin_mm": "num"}
+                     "pad_margin_mm": "num",
+                     # keepout_gen: copper keep-out band along the edge
+                     "edge_band_mm": "num", "edge_band_layers": "str_list"}
 OVERRIDE = {"required": {"near": "pair", "radius_mm": "num",
                          "current_a": "num"}, "optional": {}}
 COATINGS = {"none", "soldermask", "conformal"}
@@ -311,7 +313,7 @@ TOP_OBJECTS: dict[str, dict] = {
         "exempt_nets": "str_list", "clamps": "str_list", "level_kv": "num",
         "corridor_mm": "num", "corridor_v": "num",
         "victim_abs_max_v": "num_or_map", "interfaces": "str_map",
-        "line_v": "num_or_map"}},
+        "line_v": "num_or_map", "bipolar_v": "num_or_map"}},
     # check_power_path + sim_inrush: the USB PD contract the input carries
     "pd_source": {"required": {}, "optional": {"contract_a": "num",
                                                "contract_v": "num"}},

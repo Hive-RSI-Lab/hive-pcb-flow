@@ -281,6 +281,28 @@ schematic-level structural problems BEFORE board work starts:
    0 ohm rename or a translator channel; a net named active-low on pins
    that assert high; a reset held asserted by its only pull). Class 14
    of the gaps list; lib/signal_domains.py; fact polarity_pins_checked.
+ - latch_enable_held (error): a latch or shift register's latch-enable,
+   strobe or storage clock (74x573 LE, 74x595 RCLK, 4094 STR, 74x165
+   ~PL...) tied to a rail, or held by its only pull with nothing to drive
+   it, at a level where the outputs never update: a transparent-high
+   latch held low, a storage clock or load pin that never moves. Its
+   active level is the family's datasheet's (lib/signal_domains.py
+   _LATCHES); a latch-named pin (LE, STB, STROBE, RCLK...) held on a part
+   not listed there is not_judged. A listed part whose pins come through
+   with numbers only (no pin names) is judged by its package's pin table
+   (_LATCH_PINOUTS: 165, 166, 595, 373, 573 in a leaded package), else
+   not_judged. Class 14; fact latch_enables_checked.
+ - latch_enable_polarity (error; warning when only the line's name says
+   its level): a latch's level-sensitive enable or load pin (74x573 LE
+   high, 74x259 ~LE low, 74x165 ~PL low, 4094 STR high...; _LATCH_ASSERT)
+   driven by a line that asserts at the other level with no inverter
+   between: an active-low ~{CS} or ~{WR} into an active-high LE. The
+   line's level is its driving pin's (an active-low marker; a plain
+   control name on a symbol that draws bars elsewhere), turned over
+   through a 74x04/14/00/02 gate traced to its input pin; a port, GPIO or
+   register output firmware sets is quiet; a driver whose level isn't
+   known is not_judged. Edge pins (74x595 RCLK) aren't judged: either
+   polarity clocks them. Class 14; fact latch_drive_checked.
  - io_domain_overdrive (error), io_domain_underdrive (warning),
    io_domain_pull_rail (error over, warning under): an output on one
    rail into an input whose datasheet row (reference/io_tolerance.yaml,
@@ -4448,8 +4470,8 @@ def _pair_rules(v, not_judged, violations, nets, comps, comp_pins, rails,
 
 def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
                   io_table, abs_table, pl_specs, io_tolerance):
-    """Report lib/signal_domains.py's findings; (polarity pins, I/O pairs)
-    checked."""
+    """Report lib/signal_domains.py's findings; (polarity pins, I/O pairs,
+    latch enables) checked."""
     import signal_domains as sd  # noqa: PLC0415
     tol = sd.load_io_tolerance() if io_tolerance is None else io_tolerance
     try:
@@ -4522,6 +4544,52 @@ def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
               f"on '{hit['net']}' drives it: its only pull ({pulls}) holds "
               f"it {hit['level']}{od}, so it stays asserted for good. Pull "
               f"it to the other side", kind_of=hit["kind"])
+    latch = 0
+    what = {"high": "is transparent (takes new data) while it is high",
+            "low": "is transparent (takes new data) while it is low",
+            "toggle": "moves data to the outputs only when it changes"}
+    for hit in sd.latch_enables(nets, comps, comp_pins, rails, h):
+        if "checked" in hit:
+            latch = hit["checked"]
+            continue
+        if "not_judged" in hit:
+            not_judged.append(hit["not_judged"])
+            continue
+        by = (f"tied to '{hit['net']}'" if hit["how"] == "tied" else
+              f"held {hit['level']} by its only pull "
+              f"({', '.join(f'{r} to {n}' for r, n in hit['pulls'])}) "
+              f"with nothing on '{hit['net']}' to drive it")
+        ps = "; ".join(
+            f"{m['ref']} ({comps.get(m['ref'], {}).get('value')}) "
+            f"{m.get('pinfunction')} (pin {m['pin']}"
+            f"{', by its package pin table' if m.get('by_table') else ''}"
+            f") {what[mode]}"
+            for m, _s, mode in hit["pins"])
+        v("error", "latch_enable_held", hit["net"],
+          sorted({m["ref"] for m, _s, _m in hit["pins"]}),
+          f"{ps}, and it is {by}, so it sits {hit['level']} for good: the "
+          f"latch never takes new data and its outputs never update. "
+          f"Drive it from the controller's latch or strobe line",
+          kind_of="latch")
+    latch_drive = 0
+    for hit in sd.latch_drive_levels(nets, comps, comp_pins, rails, h):
+        if "checked" in hit:
+            latch_drive = hit["checked"]
+            continue
+        if "not_judged" in hit:
+            not_judged.append(hit["not_judged"])
+            continue
+        m = hit["pin"]
+        val = comps.get(m["ref"], {}).get("value")
+        v("warning" if hit["by_name"] else "error", "latch_enable_polarity",
+          hit["net"], [m["ref"]],
+          f"{m['ref']} ({val}) {m.get('pinfunction')} (pin {m['pin']}) "
+          f"takes data while it is {hit['want']}, but '{hit['net']}' "
+          f"asserts {hit['got']} ({hit['why']}) with no inverter between: "
+          f"the latch is open while the line is idle and shuts as the "
+          f"strobe starts, so it holds whatever was on its inputs before. "
+          f"Put an inverter in the line or use the part with the other "
+          f"enable level", kind_of="latch")
     tables = {"io_levels": io_table, "pin_abs_max": abs_table,
               "pin_leakage": pl_specs, "io_tolerance": tol,
               "io_supply": io_sup}
@@ -4599,7 +4667,7 @@ def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
                f"{r} needs, so a high may read low or as noise. An input "
                f"of the HCT/AHCT kind, or a translator, fixes it{src}",
                nets=hit["nets"], driver_v=hit["vd"], vih_v=hit["limit"])
-    return pol, dom
+    return pol, dom, latch, latch_drive
 
 
 def audit(parsed: dict, constraints: dict,
@@ -5825,7 +5893,7 @@ def audit(parsed: dict, constraints: dict,
     # pin's supply domain against its net's level (lib/signal_domains.py,
     # classes 14 and 15 of the gaps list; built from datasheets and
     # planted faults)
-    pol_pins, dom_pairs = _signal_rules(
+    pol_pins, dom_pairs, latch_pins, latch_drive = _signal_rules(
         v, vt, not_judged, nets, comps, comp_pins, pl_rails, io_table,
         abs_table, pl_specs, io_tolerance)
 
@@ -5952,6 +6020,8 @@ def audit(parsed: dict, constraints: dict,
         "source_limits_checked": sl_checked,
         "switched_loads_checked": sw_checked,
         "polarity_pins_checked": pol_pins,
+        "latch_enables_checked": latch_pins,
+        "latch_drive_checked": latch_drive,
         "io_domain_pairs_checked": dom_pairs,
         "bus_groups_checked": bus_checked,
         "uart_parts_checked": uart_checked,

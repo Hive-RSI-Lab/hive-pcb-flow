@@ -14,7 +14,7 @@ through_hole, both (USB-C shell legs, pin-in-paste, THT parts with SMD tabs)
 -> its own attr stands. A plated hole inside an SMD pad is a thermal via, not
 a pin (lite-main U8's HTSSOP-32 stays smd). Parts marked board_only,
 exclude_from_bom or virtual aren't judged. fpfix rule G fixes it in the
-library (lib_pull runs it on every pull) and `fpfix.py --pcb` on a placed
+library (lib_pull runs it on every pull) and `pcb-flow fpfix --pcb` on a placed
 board; this check fails what the fix didn't reach, one error per ref, kind:
   fp_attr_mismatch     the pads give one type and (attr) says the other or
                        none (fixable: the pads settle it)
@@ -65,8 +65,8 @@ def check(pcb: Path) -> tuple[list[dict], int]:
         layer = fpfix._kid(root, "layer")
         lib_dir = ws / "lib" / f"{lib or '<lib>'}.pretty"
         if v["fix"]:
-            fix = (f"fpfix.py --lib {lib_dir} --only {fp} sets (attr "
-                   f"{v['fix']}) in the library, then fpfix.py --pcb {pcb} "
+            fix = (f"pcb-flow fpfix --lib {lib_dir} --only {fp} sets (attr "
+                   f"{v['fix']}) in the library, then pcb-flow fpfix --pcb {pcb} "
                    f"(or board_update) brings it onto the placed part")
             kind = "fp_attr_mismatch"
         else:

@@ -2461,6 +2461,417 @@
    "reason": "erratum 4: J7's BELL_1/BELL_2 labels reach no other part; the bell terminal is disconnected",
    "source": "https://github.com/justinlindh/digits/blob/9807030c8411bf854910b6e2bf4707fa4b47f7bf/hardware/pcb/v1/ERRATA.md",
    "kind": "dangling_net"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/UART_TX_PI",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    72.96,
+    25.56
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "Raspberry Pi 2x20 header: board-to-board, inside the phone"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/UART_RX_PI",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    72.96,
+    28.1
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "Raspberry Pi 2x20 header: board-to-board, inside the phone"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SWD_SWDIO",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    75.5,
+    35.72
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "Raspberry Pi 2x20 header: board-to-board, inside the phone"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SWD_SWCLK",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    72.96,
+    43.34
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "Raspberry Pi 2x20 header: board-to-board, inside the phone"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/EAR_P",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    81.27,
+    23.48
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "handset transducer wiring on an internal JST/header: the conductors are insulated inside the cord and handset, nothing bare is touched"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/EAR_N",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    81.27,
+    26.02
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "handset transducer wiring on an internal JST/header: the conductors are insulated inside the cord and handset, nothing bare is touched"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SWD_SWDIO",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    62.3,
+    64.585
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "SWD programming header: bench use only"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SWD_SWCLK",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    64.3,
+    64.585
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "SWD programming header: bench use only"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/KP_COL0",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    62.5,
+    43.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "keypad harness inside the phone body: no cable leaves the enclosure"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/KP_COL1",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    62.5,
+    45.46
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "keypad harness inside the phone body: no cable leaves the enclosure"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/KP_COL2",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    62.5,
+    46.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "keypad harness inside the phone body: no cable leaves the enclosure"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/KP_ROW3",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    62.5,
+    48.46
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "keypad harness inside the phone body: no cable leaves the enclosure"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/KP_ROW2",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    62.5,
+    49.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "keypad harness inside the phone body: no cable leaves the enclosure"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/KP_ROW1",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    62.5,
+    51.46
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "keypad harness inside the phone body: no cable leaves the enclosure"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/KP_ROW0",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    62.5,
+    52.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "keypad harness inside the phone body: no cable leaves the enclosure"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/RINGER_IN1",
+   "refs": [
+    "J5"
+   ],
+   "pos": [
+    67.5,
+    53.84
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "ringer coil harness inside the phone body"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/RINGER_IN2",
+   "refs": [
+    "J5"
+   ],
+   "pos": [
+    67.5,
+    56.38
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "ringer coil harness inside the phone body"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "Net-(J6-Pin_1)",
+   "refs": [
+    "J6"
+   ],
+   "pos": [
+    66.75,
+    47.01
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "internal header inside the phone body"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/MIC_HOT",
+   "refs": [
+    "J8"
+   ],
+   "pos": [
+    81.5,
+    17.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "handset transducer wiring on an internal JST/header: the conductors are insulated inside the cord and handset, nothing bare is touched"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/EAR_P",
+   "refs": [
+    "J8"
+   ],
+   "pos": [
+    83.0,
+    17.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "handset transducer wiring on an internal JST/header: the conductors are insulated inside the cord and handset, nothing bare is touched"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/EAR_N",
+   "refs": [
+    "J8"
+   ],
+   "pos": [
+    84.5,
+    17.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "handset transducer wiring on an internal JST/header: the conductors are insulated inside the cord and handset, nothing bare is touched"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/MIC_HOT",
+   "refs": [
+    "J9"
+   ],
+   "pos": [
+    79.5,
+    37.46
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "handset transducer wiring on an internal JST/header: the conductors are insulated inside the cord and handset, nothing bare is touched"
+  },
+  {
+   "gate": "verify",
+   "check": "check_pinouts",
+   "net": "/SWD_SWDIO",
+   "refs": [
+    "J2"
+   ],
+   "pos": null,
+   "kind": "pinout_mismatch",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_pinouts",
+   "net": "/SWD_SWCLK",
+   "refs": [
+    "J2"
+   ],
+   "pos": null,
+   "kind": "pinout_mismatch",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+5V",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    72.96,
+    17.94
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "Pi header power rail with 220 uF bulk"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+12V",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    22.7,
+    29.46
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "12 V rail with 680 uF bulk at the input"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+12V",
+   "refs": [
+    "J5"
+   ],
+   "pos": [
+    67.5,
+    58.92
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "12 V rail with 680 uF bulk at the input"
+  },
+  {
+   "gate": "verify",
+   "check": "netlist_audit",
+   "net": "/MIC_FROM_SW",
+   "refs": [
+    "J9"
+   ],
+   "pos": null,
+   "kind": "dangling_net",
+   "verdict": "?",
+   "reason": ""
   }
  ]
 }

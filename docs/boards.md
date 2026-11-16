@@ -71,7 +71,9 @@ them as `stand_in` scripts of their pins:
 - **core and lite-main: review-2 ECOs by hand.** hifi-receiver-2's
   9da177ca (the first-spin reviews) added about 30 core and 10 lite-main
   scripts: rip-ups (`rip_*`, `ripnet*`), `add_track`/`add_via`, `move_parts`
-  and `find_spots`, pad edits (`pad_*`, `eco_rca`), net edits
+  and `find_spots` (`find_spots` is `scripts/place_spots.py` now, #852: it
+  writes board_update placements and place_edit moves), pad edits (`pad_*`,
+  `eco_rca`), net edits
   (`renet_items`, `rename_net`), `set_dnp`, silk tidies and `via_array`
   power patches. Most do what route_edit, place_edit, board_update or
   planes_gen should take as one op; each pin names the gap.

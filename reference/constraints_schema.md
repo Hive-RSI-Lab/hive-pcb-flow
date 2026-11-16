@@ -318,10 +318,21 @@ Consumers per key (script -> phase):
   // port is judged on nothing with no warning (nothing_to_judge is set only
   // when no port is declared). Leave nets out for the kind's default, and
   // check the report lists lines for every port.
+  // The other polarity (#577): abs_min a pin's lower limit (ref or ref.pin,
+  // e.g. -0.3). A clamp's bidirectional (true/false) and forward drop vf_v
+  // at vf_a (A) decide what the negative pulse sees: -Vc for a bidirectional
+  // clamp, -Vf for a unidirectional one; a vf_v implies unidirectional.
+  // series rates a series part for one 8/20 pulse: pulse_w (W, a resistor,
+  // over its chip size's thick-film rating in reference/resistor_pulse.yaml),
+  // i2t_a2s (a fuse or PPTC: over it the part opens, a warning), ipk_a (any
+  // part's peak current).
   "surge": {"environment": "residential",
             "ports": {"J1": {"kind": "dc_power", "cable_m": 2, "nets": ["VBUS"],
                              "level_kv": 0.5}},
-            "abs_max": {"U2.3": 30}},
+            "clamps": {"D1": {"bidirectional": false, "vf_v": 3.5, "vf_a": 50}},
+            "abs_max": {"U2.3": 30}, "abs_min": {"U2.3": -0.3},
+            "series": {"R4": {"pulse_w": 150}, "F1": {"i2t_a2s": 0.02},
+                       "L2": {"ipk_a": 30}}},
 
   // check_isolation (P8, #353): isolation domains and barriers against IEC
   // 60664-1 / 62368-1 (reference/iso_tables.yaml, every row marked read or
@@ -645,6 +656,10 @@ Consumers per key (script -> phase):
     //        false keeps every decoupling cap on its IC's side (place_seed)
     "keepouts": [{"rect": [x1, y1, x2, y2], "side": "front",
                   "reason": "antenna"}],   // or "poly": [[x,y], ...]
+    "edge_band_mm": 0.5, "edge_band_layers": ["F.Cu", "B.Cu"],
+    //        keepout_gen: a copper keep-out band this wide along the board
+    //        edge, following the outline (no tracks, no vias; pours, pads
+    //        and footprints allowed); layers default to every copper layer
     "fixed": ["H1", "H2"],
     "separation": [{"a": ["U3"], "b": ["U5"], "min_mm": 10}],
     "corridors": [{"a": "J1", "b": "U1", "width_mm": 5.5, "net": "VBUS"}],
@@ -758,11 +773,16 @@ Consumers per key (script -> phase):
   // none}, the budget a clamp's capacitance is judged against (else by name;
   // USB D+/D- is taken as full speed). line_v: the line's working voltage, a
   // number or {net glob: V}, judged against the clamp's VRWM (else USB 2.0
-  // VOH on D+/D-, VBUS, or the volts in a rail's name). Clamp ratings come
+  // VOH on D+/D-, VBUS, or the volts in a rail's name). bipolar_v: a line
+  // that swings both sides of ground (E1/T1, RS-232, audio), a number or
+  // {net glob: peak V}; a one-way clamp with its ground pin on ground fails
+  // when the peak passes its forward drop, a two-way one when its VRWM is
+  // below the peak (no line is taken as bipolar by name). Clamp ratings come
   // from reference/esd_clamps.yaml; a clamp with no row is not judged.
   "esd": {"connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
           "clamps": ["D1"], "level_kv": 8, "victim_abs_max_v": {"/USB*": 6},
-          "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/RS485*": 12}},
+          "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/RS485*": 12},
+          "bipolar_v": {"/E1_*": 3.3}},
 
   // check_mate_pins (MECH-05): a connector and its mate. ref and one of
   // mate_ref or mate_standard are required; mate_standard: a mate with no

@@ -32,5 +32,12 @@
       "clearance_mm": 0.2,
       "why": "connector rated at its own pitch"
     }
-  ]
+  ],
+  "esd": {
+    "_comment": "check_esd (#312): J1 is the bench 5 V input header and J2 the SWD header, both bench-only, so neither is judged.",
+    "internal": [
+      "J1",
+      "J2"
+    ]
+  }
 }

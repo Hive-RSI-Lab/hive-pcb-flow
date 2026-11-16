@@ -60,12 +60,12 @@ OFFLINE = {"HWDE_EASYEDA_OFFLINE": "1", "HWDE_STOCK_OFFLINE": "1"}
 # bin/pin.py writes this block; don't edit it by hand.
 # pins:begin
 PINS = {
-    "core": "e1cac950ba5b506da3d57314548b3b05e01a562086c7b0d0da15734c7690e461",
-    "digits-v1": "9e0da1682142b785a75e4273ec6e0e465f2ddb22326fdfb0689ef94cf9aa0241",
-    "hwde-led-test": "7169d55fcd7815a0c9f6f831cb8207448e8f1934a573cc7814b148a0f0d6d1d9",
-    "lite-main": "3e720ffd22bc952b8563855dc267ae701da2609c4a7708e5dbbb48211cf5faf4",
-    "minuet-v3": "4398651d7c738e2053181b74a93a6895adc356c58d42c4548efcdb62f90115be",
-    "oasis-v0-2": "171b2c3c3200b0c7ee3fd5f23e2da49fe4038a664705e661b827b6abf3b0edd2",
+    "core": "88e1ed0d51fdadfd037b33f90f0aeb09789b5085fae77dc3c6a84392d22b8bd3",
+    "digits-v1": "bd9c872aa04772a82ca9e11579b629c39153c5655564b942c74ab00b01742109",
+    "hwde-led-test": "f86624731147cb74f1a8158553009777dd8d11b227002f3a10e5cc712ab656ca",
+    "lite-main": "e9dce58401a6893d606363fcab8e141fc03022b7e9b14235f9a4c1ac98e9da58",
+    "minuet-v3": "28fd94d5526f3d0c62015c3569e820a8ca2fc03ebcedf1f03bc40c5c29b420ad",
+    "oasis-v0-2": "48498f74efd4f4d800509caf4f386da53fca2f02420744ec1f002e42ad144dc5",
     "ultra-front": "8f5bb5866c46663aa62900277541bbdc045b3295cbe4b45fd94cdc5001d45e88",
 }
 # pins:end

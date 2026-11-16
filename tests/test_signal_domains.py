@@ -8,6 +8,10 @@ knowledge, each with a quiet twin that differs only in the fault:
   directly, through a 0 ohm rename and through a TXB0104 channel;
 - a regulator's power-good into a shutdown input that asserts high;
 - a reset input asserting low with only a pull-down on it;
+- a 74HC573's LE (transparent while high, TI SCLS147) tied to ground, a
+  74HC595's RCLK (storage clock, TI SCLS041) tied to a rail or held by a
+  pull, a 74HC165's ~PL tied low; a latch pin on an unlisted part is
+  not_judged;
 - a 5 V 74HC595 output into an RP2040 GPIO (IOVDD + 0.5 V abs max, RP2040
   datasheet 5.5.1, pin_abs_max.yaml);
 - a 3.3 V RP2040 output into a 5 V 74HC input (VIH 3.15 V at 4.5 V, TI
@@ -28,7 +32,8 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 import netlist_audit  # noqa: E402
 import signal_domains  # noqa: E402
 
-KINDS = ("polarity_", "idle_pull_asserted", "io_domain_")
+KINDS = ("polarity_", "idle_pull_asserted", "io_domain_",
+         "latch_enable_held", "latch_enable_polarity")
 
 HC_ROW = {"mpn": "SN74HC245", "match": r"^(SN)?74HC\d", "pintypes": "input",
           "vin_max_vdd": 0.0, "vih": 3.15, "vih_vdd": 4.5,
@@ -284,6 +289,144 @@ def test_open_drain_reset_line_with_only_a_pull_down():
     assert "open-drain" in hits[0]["msg"]
 
 
+# ------------------------------------------------------- latch_enable_held
+
+def _latch(value, func, to, pin_type="input"):
+    """U1 (VALUE) with its latch pin FUNC on net LATCH; TO is a rail to
+    tie it to, 'pull+3V3'/'pullGND' for a lone pull, or 'mcu' for a
+    controller output driving it."""
+    comps = {"U1": value, "U2": "RP2040", "R1": "10k"}
+    nets = _rails(("U1", "16", "+3V3", "VCC"), ("U1", "8", "GND", "GND"),
+                  ("U2", "1", "+3V3", "IOVDD"))
+    pin = _m("U1", "11", func, pin_type)
+    if to in nets:
+        nets[to].append(pin)
+    else:
+        nets["LATCH"] = [pin]
+        if to.startswith("pull"):
+            nets["LATCH"].append(_m("R1", "1"))
+            nets[to[4:]].append(_m("R1", "2"))
+        else:
+            nets["LATCH"].append(_m("U2", "5", "GPIO5", "bidirectional"))
+    return comps, nets
+
+
+def _kinds(hits):
+    return [(h["kind"], h["severity"], h["refs"]) for h in hits]
+
+
+def test_a_transparent_high_latch_enable_tied_low_never_updates():
+    hits, facts = _audit(*_latch("74HC573", "LE", "GND"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    assert "never update" in hits[0]["msg"]
+    assert facts["latch_enables_checked"] == 1
+
+
+def test_the_same_latch_enable_driven_or_held_transparent_is_quiet():
+    assert _audit(*_latch("74HC573", "LE", "mcu"))[0] == []
+    # held high, a 573 is a transparent buffer
+    assert _audit(*_latch("74HC573", "LE", "+3V3"))[0] == []
+
+
+def test_a_storage_clock_held_either_way_never_updates():
+    for to in ("+3V3", "GND", "pullGND", "pull+3V3"):
+        hits, _ = _audit(*_latch("SN74HC595DR", "RCLK", to))
+        assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])], to
+    assert "only pull" in _audit(*_latch("74HC595", "RCLK", "pullGND"))[
+        0][0]["msg"]
+    assert _audit(*_latch("74HC595", "RCLK", "mcu"))[0] == []
+
+
+def test_an_active_low_load_pin_is_read_through_its_bar():
+    hits, _ = _audit(*_latch("74HC165", "~{PL}", "GND"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    hits, _ = _audit(*_latch("74HC165", "SH/~{LD}", "+3V3"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    assert _audit(*_latch("74HC165", "~{PL}", "mcu"))[0] == []
+
+
+def test_an_active_low_latch_enable_held_high_never_updates():
+    hits, _ = _audit(*_latch("74HC259", "~{LE}", "+3V3"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    assert _audit(*_latch("74HC259", "~{LE}", "GND"))[0] == []
+
+
+def test_a_strobe_on_an_unlisted_part_is_not_judged():
+    hits, facts = _audit(*_latch("DISPLAY_X", "STB", "GND"))
+    assert hits == []
+    assert any(n.startswith("latch_enable_held") for n in facts["not_judged"])
+    # a latch-named pin someone drives is nothing to judge
+    hits, facts = _audit(*_latch("DISPLAY_X", "STB", "mcu"))
+    assert not any(n.startswith("latch_enable_held")
+                   for n in facts.get("not_judged", []))
+
+
+def test_other_pins_of_a_latch_are_not_its_enable():
+    # a 573's ~OE tied low is the usual always-driving strap
+    assert _audit(*_latch("74HC573", "~{OE}", "GND"))[0] == []
+    assert _audit(*_latch("74HC595", "SRCLK", "mcu"))[0] == []
+
+# --------------------------------------------------- latch_enable_polarity
+
+def _drive(value, func, drv, inverter=False, drv_type="output"):
+    """U1 (VALUE) with its latch pin FUNC on net LATCH, driven by U3 (a
+    CPLD that also has a ~{RD} output) through its pin DRV; with INVERTER
+    the line goes through U4 (74HC04) pin 1 in, pin 2 out."""
+    comps = {"U1": value, "U3": "XC9572", "U4": "74HC04"}
+    nets = _rails(("U1", "20", "+3V3", "VCC"), ("U1", "10", "GND", "GND"),
+                  ("U3", "1", "+3V3", "VCC"))
+    nets["RD_N"] = [_m("U3", "3", "~{RD}", "output")]
+    src = _m("U3", "2", drv, drv_type)
+    pin = _m("U1", "11", func, "input")
+    if inverter:
+        nets["STB_N"] = [src, _m("U4", "1", "1A", "input")]
+        nets["LATCH"] = [pin, _m("U4", "2", "1Y", "output")]
+    else:
+        nets["LATCH"] = [pin, src]
+    return comps, nets
+
+
+def test_an_active_low_select_into_a_transparent_high_enable_is_a_fault():
+    hits, facts = _audit(*_drive("74HC573", "LE", "~{CS}"))
+    assert _kinds(hits) == [("latch_enable_polarity", "error", ["U1"])]
+    assert "asserts low" in hits[0]["msg"]
+    assert facts["latch_drive_checked"] == 1
+
+
+def test_the_same_select_through_an_inverter_is_quiet():
+    hits, facts = _audit(*_drive("74HC573", "LE", "~{CS}", inverter=True))
+    assert hits == []
+    assert facts["latch_drive_checked"] == 1
+
+
+def test_a_matching_level_or_a_port_pin_driver_is_quiet():
+    assert _audit(*_drive("74HC573", "LE", "ALE"))[0] == []
+    assert _audit(*_drive("74HC259", "~{LE}", "~{WR}"))[0] == []
+    assert _audit(*_drive("74HC573", "LE", "GPIO5", drv_type="bidirectional"))[0] == []
+    assert _audit(*_drive("74HC273", "LE", "Q0"))[0] == []
+
+
+def test_a_plain_strobe_into_an_active_low_load_is_a_fault():
+    hits, _ = _audit(*_drive("74HC165", "~{PL}", "STB"))
+    assert _kinds(hits) == [("latch_enable_polarity", "error", ["U1"])]
+
+
+def test_an_edge_storage_clock_is_not_judged_for_polarity():
+    hits, facts = _audit(*_drive("74HC595", "RCLK", "~{CS}"))
+    assert hits == []
+    assert facts["latch_drive_checked"] == 0
+
+
+def test_a_driver_of_unknown_level_is_not_judged():
+    comps, nets = _drive("74HC573", "LE", "1")
+    nets["LATCH"] = [nets["LATCH"][0], _m("J1", "1", "1", "passive")]
+    comps["J1"] = "Conn_01x02"
+    hits, facts = _audit(comps, nets)
+    assert hits == []
+    nj = facts["not_judged"]
+    assert any("latch_enable_polarity on LATCH" in x for x in nj), nj
+
+
 # ---------------------------------------------------------- io domain
 
 def _hc_into_rp2040(hc_rail="+5V", series=None):
@@ -447,3 +590,68 @@ def test_each_golden_mutant_fires_and_its_twin_is_quiet(tmp_path):
     payload, _ = netlist_audit.run_audit(base, None, None, None)
     assert [v for v in payload["violations"]
             if v["kind"].startswith(KINDS)] == []
+
+
+def _nameless(value, footprint, to):
+    """U1 (VALUE, FOOTPRINT) from a library with no pin names: every pin
+    is a bare number. Its pin 15 (a 74x166's ~PE) is on LOAD, tied to TO
+    or driven by U2's GPIO ('mcu')."""
+    comps, nets = _latch(value, "", to, pin_type="")
+    for ms in nets.values():
+        for m in ms:
+            if m["ref"] == "U1":
+                m["pinfunction"], m["pintype"] = "", ""
+                if m["pin"] == "11":
+                    m["pin"] = "15"
+    parsed_fp = {"U1": footprint}
+    return comps, nets, parsed_fp
+
+
+def _audit_fp(comps, nets, fps):
+    parsed = {"components": {r: {"value": v, "footprint": fps.get(r, ""),
+                                 "libsource": ("Custom", v)}
+                             for r, v in comps.items()},
+              "nets": nets}
+    viol, facts = netlist_audit.audit(
+        parsed, {}, None, pin_requirements=[], pin_states=[],
+        stock_symbols="", io_tolerance=[])
+    return [x for x in viol if x["kind"].startswith(KINDS)], facts
+
+
+SOIC16 = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"
+
+
+def test_a_nameless_166_in_an_unknown_package_is_listed_not_skipped():
+    hits, facts = _audit_fp(*_nameless("74HC166", "Custom:MY_PKG", "GND"))
+    assert hits == []
+    nj = [n for n in facts["not_judged"] if "latch_enable_held" in n]
+    assert len(nj) == 1 and "no pin names" in nj[0] and "U1" in nj[0]
+    assert facts["latch_enables_checked"] == 0
+
+
+def test_a_nameless_166_pe_held_in_soic16_is_a_fault_by_pin_table():
+    for to in ("GND", "+3V3", "pull+3V3"):
+        hits, facts = _audit_fp(*_nameless("74HC166", SOIC16, to))
+        assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])], to
+        assert "pin table" in hits[0]["msg"]
+        assert facts["latch_enables_checked"] == 1
+        assert not [n for n in facts.get("not_judged", []) if "no pin names" in n]
+
+
+def test_a_nameless_166_pe_driven_in_soic16_is_quiet():
+    # gp8b-v50 rev_b: a custom 74HC166, ~PE (pin 15) from U6
+    hits, facts = _audit_fp(*_nameless("74HC166", SOIC16, "mcu"))
+    assert hits == []
+    assert facts["latch_enables_checked"] == 1
+
+
+def test_a_nameless_part_reads_only_its_family_pin():
+    # pin 15 of a 595 is QA, not its storage clock: not checked
+    hits, facts = _audit_fp(*_nameless("74HC595", "Package_DIP:DIP-16_W7.62mm",
+                                       "GND"))
+    assert hits == [] and facts["latch_enables_checked"] == 0
+    # a 20-pin package for a 16-pin family is not that pinout
+    hits, facts = _audit_fp(*_nameless(
+        "74HC166", "Package_DFN_QFN:DHVQFN-16-1EP_2.5x3.5mm_P0.5mm", "GND"))
+    assert hits == []
+    assert any("no pin names" in n for n in facts.get("not_judged", []))

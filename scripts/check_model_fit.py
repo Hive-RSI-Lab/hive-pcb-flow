@@ -44,6 +44,16 @@ Findings, one per footprint per kind, kind:
                      edge are outside the outline, so they pass.
   model_unmatched    warning: under half its pads are met and no slide or
                      turn fits better: a wrong model, or one tilted on X/Y
+  model_into_board_edge
+                     error (lib_pull's fit only, #405): an edge-mount
+                     footprint draws the board edge as an open Edge.Cuts
+                     line (fpfix.edge_mark), and its model's material in the
+                     board's band reaches past it into the board whichever
+                     way it faces, within EDGE_SLIDE_MM of sliding out. When
+                     the model or its 180 deg turn clears the line within
+                     that slide with its leads still on their pads, the fit
+                     writes that (kind model_edge) and fpfix rule I then
+                     moves the line to Dwgs.User.
   model_mount_height error: the part's stated mounting height (constraints
                      mechanical.mount_heights, #980/#1191) and its model's
                      disagree by more than tol_mm. The model is the part as
@@ -112,6 +122,9 @@ FLOAT_MM = 0.15          # mm: a model this far above the board floats
 SINK_MM = 0.3            # mm: a model detail this deep in the board is noise
 HOLE_SLACK_MM = 0.3      # a pin's corner may stand this far past its drill
 UNIT_EPS = 1e-3
+EDGE_SLACK_MM = 0.1      # mm: a body this far past an edge mark is flush on it
+EDGE_SLIDE_MM = 2.0      # mm: the farthest an edge fit slides a model out
+LIB_BOARD_MM = 1.6       # a library footprint's board: 1.6 mm thick
 MOUNT_AREA_FRAC = 0.2    # a body underside covers this share of the xy box
 MOUNT_DATUMS = ("body_underside", "lead_protrusion")
 
@@ -603,6 +616,87 @@ def refit(mesh, offset, scale, rotate, pads):
     return (*xf, kinds, found)
 
 
+def _edge_reach(mesh, offset, scale, rotate, pads, a, n) -> float | None:
+    """How far the placed model's material (the board's band, as in_board
+    reads it, outside every hole) reaches past the edge line through `a`
+    into the board, `n` the line's normal pointing off the board (file
+    frame); negative when it all stands clear. None: nothing in the band."""
+    import shapely
+    from shapely.ops import unary_union
+    holes = unary_union([p for _, t, p in pads if t]).buffer(HOLE_SLACK_MM) \
+        if any(t for _, t, _ in pads) else None
+    f = modelgeom.transform(offset, scale, rotate, False)
+    pts = [q for face in mesh.faces for q in map(f, face)
+           if SINK_MM - LIB_BOARD_MM < q[2] < -SINK_MM]
+    if holes is not None and pts:
+        keep = ~shapely.contains_xy(holes, [q[0] for q in pts], [q[1] for q in pts])
+        pts = [q for q, k in zip(pts, keep) if k]
+    if not pts:
+        return None
+    return -min((q[0] - a[0]) * n[0] + (q[1] - a[1]) * n[1] for q in pts)
+
+
+def edge_fit(mesh, offset, scale, rotate, pads, mark) -> dict | None:
+    """Face and seat an edge-mount model on its footprint's edge mark
+    (fpfix.edge_mark, #405). The board is the side of the mark the pads'
+    centre lies on. A model whose material in the board's band reaches
+    more than EDGE_SLACK_MM past the mark into the board (EasyEDA's
+    BWSMA-KE-P001 SMA, its barrel laid across the board, after the pad fit
+    slid it to the pads) is tried as placed and turned 180 deg about the
+    footprint's origin, each slid off the board just far enough to clear
+    the mark; the shorter slide (a turn pays TURN_PENALTY_MM) wins among
+    those of at most EDGE_SLIDE_MM after which fit_model still finds its
+    leads on their pads. Returns None (no mark, no material in the band, or
+    already clear), {"offset", "rotate", "turned", "slide_mm", "reach_mm"},
+    or {"finding": model_into_board_edge} when nothing clears."""
+    import math
+    (x1, y1), (x2, y2) = mark
+    span = math.hypot(x2 - x1, y2 - y1)
+    n = ((y2 - y1) / span, -(x2 - x1) / span)
+    if not pads:
+        return None
+    from shapely.ops import unary_union
+    c = unary_union([p for _, _, p in pads]).centroid
+    side = (c.x - x1) * n[0] + (c.y - y1) * n[1]
+    if abs(side) < EDGE_SLACK_MM:
+        return None                       # pads on the mark: no board side
+    if side > 0:
+        n = (-n[0], -n[1])
+    reach = _edge_reach(mesh, offset, scale, rotate, pads, (x1, y1), n)
+    if reach is None or reach <= EDGE_SLACK_MM:
+        return None
+    best = None
+    turned = ((-offset[0], -offset[1], offset[2]),
+              (rotate[0], rotate[1], (rotate[2] + 180.0) % 360.0))
+    for (off, rot), turn in (((tuple(offset), tuple(rotate)), False),
+                             (turned, True)):
+        r = _edge_reach(mesh, off, scale, rot, pads, (x1, y1), n)
+        slide = round(max(r, 0.0), 2) if r is not None else 0.0
+        if slide > EDGE_SLIDE_MM:
+            continue
+        # off the board along n, in the file frame (Y down): offset y is up
+        moved = (_r(off[0] + n[0] * slide, 4), _r(off[1] - n[1] * slide, 4),
+                 off[2])
+        if any(h["kind"] in REFIT
+               for h in fit_model(mesh, moved, scale, rot, False, pads)):
+            continue
+        cost = slide + (TURN_PENALTY_MM if turn else 0.0)
+        if best is None or cost < best[0]:
+            best = (cost, moved, rot, turn, slide)
+    if best is None:
+        return {"finding": {
+            "kind": "model_into_board_edge", "severity": "error",
+            "reach_mm": _r(reach),
+            "msg": f"the model reaches {reach:.2f} mm past the footprint's "
+                   "edge mark into the board, and neither it nor its 180 deg "
+                   f"turn clears the mark within {EDGE_SLIDE_MM:g} mm with "
+                   "its leads still on their pads: check the model against "
+                   "the part's drawing"}}
+    _, off, rot, turn, slide = best
+    return {"offset": off, "rotate": tuple(float(v) for v in rot),
+            "turned": turn, "slide_mm": _r(slide), "reach_mm": _r(reach)}
+
+
 def _xyz_text(node: str, key: str, v) -> str:
     """The (model ...) node text with its (key (xyz ...)) set to v."""
     put = f"({key} (xyz {' '.join(f'{_r(c, 4):g}' for c in v)}))"
@@ -650,6 +744,15 @@ def fit_footprint(fp_file: Path, dry_run: bool = False) -> dict:
             row["skipped"] = "no geometry"
             continue
         off, sc, rot, kinds, left = refit(mesh, offset, scale, rotate, pads)
+        mark = fpfix.edge_mark(text)
+        edge = edge_fit(mesh, off, sc, rot, pads, mark) if mark else None
+        if edge and "finding" in edge:
+            left = list(left) + [edge["finding"]]
+        elif edge:
+            off, rot = edge["offset"], edge["rotate"]
+            kinds = list(kinds) + ["model_edge"]
+            row["edge"] = {k: edge[k] for k in ("turned", "slide_mm",
+                                                 "reach_mm")}
         if left:
             row["left"] = [{"kind": h["kind"], "severity": h["severity"],
                             "msg": h["msg"]} for h in left]

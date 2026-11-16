@@ -1021,7 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
     for m in rep["attr_mismatch"]:
         print(f"bom_cpl: {m['ref']} classed {m['class']} by its pads: "
-              f"{m['detail']} (fix the footprint: fpfix.py rule G)",
+              f"{m['detail']} (fix the footprint: pcb-flow fpfix --lib, rule G)",
               file=sys.stderr)
     text = json.dumps(rep, indent=1)
     (Path(args.out).write_text(text, encoding="utf-8") if args.out

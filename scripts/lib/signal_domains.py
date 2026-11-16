@@ -17,6 +17,23 @@ Active level (polarity):
    drive, held by its pull resistors at the level that asserts it (an
    active-low reset pulled down, an open-drain reset line with only a
    pull-down). Enables are left out: one pulled on is an always-on strap.
+ - latch_enable_held: a latch or shift register's latch-enable, strobe
+   or storage clock held where its outputs never update: tied to a rail,
+   or held by its only pull with nothing to drive it. The level comes
+   from the family's datasheet (_LATCHES), not the symbol: 74x373/573 LE
+   and 4094 STR are transparent while high (held high is a buffer, held
+   low never updates), 74x259 LE while low; a 74x595 RCLK or a 74x165 ~PL
+   has to move, so held either way is a fault. A pin named like one (LE,
+   STB, STROBE, RCLK, XLAT...) on a part not in the table is not_judged.
+   A table part with numbers only for pin names is read by its package's
+   pin table (_LATCH_PINOUTS), else listed in not_judged as 'no pin names'.
+ - latch_enable_polarity: a latch's level-sensitive enable or load pin
+   (_LATCH_ASSERT: 573 LE high, 259 ~LE low, 165 ~PL low, 4094 STR high)
+   driven by a line asserting at the other level with no inverter between
+   (an active-low ~{CS} into an active-high LE). The line's level is its
+   driving pin's, turned over through a traced 74x04/14/00/02 gate; a
+   port, GPIO or register output is set by firmware and quiet; a driver
+   of unknown level is not_judged. Edge pins (595 RCLK) aren't judged.
 
 A pin's active level comes from its name: KiCad's overbar ~{X}, a
 leading ~ or /, a # or * suffix, an N, _N, _B or _L suffix, a lowercase n
@@ -528,6 +545,419 @@ def _idle_pull(nets, comps, comp_pins, rails, h):
                    "level": level, "pin": m,
                    "pulls": pulls_dn if idle == "low" else pulls_up,
                    "ods": ods}
+
+
+# ------------------------------------------------------- latch enables
+
+# latch and shift-register parts and the pins that move data to their
+# outputs, from each family's datasheet: (part, pin names, mode). Mode
+# 'high' or 'low' is the level at which the latch is transparent (or
+# loads); held at the other level it never takes new data. 'toggle' is a
+# pin that has to move: an edge-triggered storage clock (74HC595 RCLK), a
+# parallel load a shift register needs both ways (74HC165 ~PL, 74HC166
+# ~PE: held low it never shifts, held high it never loads).
+_FAM = r"(?:SN|MC|CD|HEF|NLV|NL|M|IDT|QS)?74[A-Z]{0,6}"
+_LATCHES = (
+    (re.compile(_FAM + r"(?:16|162|1G)?(?:373|573|533|563|580|841)"
+                r"(?![0-9])"), {"LE", "C", "G"}, "high"),
+    (re.compile(_FAM + r"(?:259|4724)(?![0-9])"), {"LE", "E"}, "low"),
+    (re.compile(_FAM + r"(?:595|594|596|599|6595)(?![0-9])|"
+                r"[NT]PIC6[A-Z]?59[56]"),
+     {"RCLK", "RCK", "STCP", "LATCH"}, "toggle"),
+    (re.compile(_FAM + r"(?:597|589)(?![0-9])"),
+     {"RCLK", "RCK", "STCP", "PL", "SLOAD", "LD"}, "toggle"),
+    (re.compile(_FAM + r"(?:165|166|674)(?![0-9])"),
+     {"PL", "PE", "LD", "LOAD", "SLOAD"}, "toggle"),
+    (re.compile(r"(?<![0-9])(?:74[A-Z]{0,6}|CD|HEF|MC1|NLV)?4[07]94"
+                r"(?![0-9])"), {"STR", "STROBE", "STB", "ST"}, "high"),
+    (re.compile(r"STP(?:08|16)C|TLC59(?:16|17|25|26|27)(?![0-9])"),
+     {"LE"}, "high"),
+    (re.compile(r"TLC59(?:40|41|47)(?![0-9])"), {"XLAT"}, "high"),
+    (re.compile(r"MAX72(?:19|21)(?![0-9])"), {"LOAD", "CS", "LD"},
+     "toggle"),
+)
+# the level each family's level-sensitive pin asserts at (transparent,
+# or loading the parallel inputs), from the datasheet, in _LATCHES'
+# order; a storage clock or LOAD that acts on an edge isn't listed: a
+# driver of either polarity clocks it, half a pulse apart
+_LATCH_ASSERT = (
+    {"LE": "high", "C": "high", "G": "high"},
+    {"LE": "low", "E": "low"},
+    {},
+    {"PL": "low", "SLOAD": "low", "LD": "low"},
+    {"PL": "low", "PE": "low", "LD": "low", "LOAD": "low", "SLOAD": "low"},
+    {"STR": "high", "STROBE": "high", "STB": "high", "ST": "high"},
+    {"LE": "high"},
+    {},
+    {},
+)
+# names a latch or strobe pin goes by on a part not in the table above:
+# its active level isn't known, so a held one is listed in not_judged
+_LATCH_NAMES = {"LE", "STB", "STR", "STROBE", "LATCH", "LAT", "RCLK",
+                "RCK", "STCP", "XLAT"}
+
+
+# a part above whose pins come through with numbers only (a custom
+# library the netlist carries no pin names for): where the family's
+# pinout is the same in every leaded package, the latch pin by number,
+# from the datasheet's pin table, keyed on the footprint's pin count.
+# (family, pin count, {pin number: name}); another package is not judged
+_LATCH_PINOUTS = (
+    (re.compile(_FAM + r"165(?![0-9])"), 16, {"1": "PL"}),
+    (re.compile(_FAM + r"166(?![0-9])"), 16, {"15": "PE"}),
+    (re.compile(_FAM + r"595(?![0-9])"), 16, {"12": "RCLK"}),
+    (re.compile(_FAM + r"(?:373|573)(?![0-9])"), 20, {"11": "LE"}),
+)
+_LEADED = re.compile(r"^(?:P?DIP|SOIC|SO|SOP|SSOP|TSSOP|QSOP)(\d+)$")
+
+
+def _nameless(ref, nets, comp_pins):
+    """True when none of REF's pins carries a name, only its number."""
+    pins = comp_pins.get(ref, {})
+    if not pins:
+        return False
+    for pnum, net in pins.items():
+        m = next((x for x in nets.get(net, []) if x["ref"] == ref
+                  and x["pin"] == pnum), {})
+        f = str(m.get("pinfunction") or "").strip()
+        if f and f != pnum and not f.isdigit():
+            return False
+    return True
+
+
+def _latch_pinout(comp):
+    """{pin number: name} for a part in _LATCH_PINOUTS in a leaded
+    package of its pin count; None when the package isn't one of those."""
+    import pinmaplib  # noqa: PLC0415
+    val = " ".join(str(x or "") for x in (
+        comp.get("value"), (comp.get("libsource") or ("", ""))[1])).upper()
+    pkg = _LEADED.match(pinmaplib.package_family(comp.get("footprint")) or "")
+    for pat, count, pins in _LATCH_PINOUTS:
+        if pat.search(val):
+            return pins if pkg and int(pkg.group(1)) == count else None
+    return None
+
+
+def _latch_family(comp):
+    val = " ".join(str(x or "") for x in (
+        comp.get("value"), (comp.get("libsource") or ("", ""))[1])).upper()
+    for (pat, names, mode), lv in zip(_LATCHES, _LATCH_ASSERT):
+        if pat.search(val):
+            return names, mode, lv
+    return None
+
+
+def _latch_stem(func, names):
+    """The pin name in NAMES a pin's name says, markers and digits off
+    ('~{LE}', '1LE', 'nLE', 'LE_N', 'ST_CP', 'SH/~{LD}' -> LD)."""
+    for name, _bar in _segments(func):
+        u = re.sub(r"\s+", "", name)
+        if u[:1] == "n" and u[1:2].isupper():
+            u = u[1:]
+        u = u.upper().rstrip("#*\\").strip("_")
+        u = re.sub(r"^\d+|\d+$", "", u).replace("_", "")
+        for c in (u, re.sub(r"(?:N|B)$", "", u),
+                  u[1:] if u.startswith("N") else u):
+            if c in names:
+                return c
+    return None
+
+
+def _held(net, ms, rails, h, comp_pins):
+    """(level, how, pulls) a net sits at with nothing able to drive it:
+    tied to a rail or ground, or held by pull resistors to one side with
+    only inputs besides; None when something can drive it or it floats."""
+    if h["is_ground"](net):
+        return "low", "tied", []
+    if (net in rails and rails[net] > 0) or any(
+            h["base_type"](m.get("pintype")) in ("power_in", "power_out")
+            for m in ms):
+        return "high", "tied", []
+    if net.startswith("unconnected-"):
+        return None
+    up, dn = [], []
+    for m in ms:
+        ref = m["ref"]
+        k = h["part_kind"](ref)
+        if k == "C":
+            continue
+        if k == "R":
+            rp = comp_pins.get(ref, {})
+            far = next((n for p, n in rp.items() if p != m["pin"]), None)
+            if len(rp) == 2 and far and h["is_ground"](far):
+                dn.append((ref, far))
+            elif len(rp) == 2 and far in rails and rails[far] > 0:
+                up.append((ref, far))
+            else:
+                return None
+            continue
+        if h["base_type"](m.get("pintype")) != "input":
+            return None
+    if up and not dn:
+        return "high", "pulled", up
+    if dn and not up:
+        return "low", "pulled", dn
+    return None
+
+
+def latch_enables(nets, comps, comp_pins, rails, h):
+    """Yield latch_enable_held findings: a latch or shift register's
+    latch-enable, strobe or storage clock held where its outputs never
+    update. {'not_judged': msg} for a held latch-named pin on a part whose
+    active level isn't known; the last item is {'checked': n}."""
+    checked = 0
+    # a table part with numbers only for pin names: its latch pin by the
+    # package's pin table, else listed, never skipped without a word
+    by_number = {}
+    for ref, comp in sorted(comps.items()):
+        if _latch_family(comp) is None or not _nameless(ref, nets,
+                                                        comp_pins):
+            continue
+        pins = _latch_pinout(comp)
+        if pins is None:
+            yield {"not_judged":
+                   f"latch_enable_held on {ref} ({comp.get('value')}): no "
+                   f"pin names - its pins come through with numbers only "
+                   f"and there is no pin table here for its package "
+                   f"({comp.get('footprint') or 'no footprint'}), so its "
+                   f"latch or load pin isn't judged"}
+            continue
+        by_number[ref] = pins
+    for net, ms in sorted(nets.items()):
+        ms = [dict(m, pinfunction=by_number[m["ref"]][m["pin"]],
+                   pintype="input", by_table=True)
+              if m["pin"] in by_number.get(m["ref"], {}) else m
+              for m in ms]
+        bad, unknown = [], []
+        for m in ms:
+            ref = m["ref"]
+            if h["part_kind"](ref) in ("R", "C", "L"):
+                continue
+            if h["base_type"](m.get("pintype")) in ("power_in",
+                                                    "power_out"):
+                continue
+            func = m.get("pinfunction") or ""
+            fam = _latch_family(comps.get(ref, {}))
+            if fam is None:
+                if _latch_stem(func, _LATCH_NAMES):
+                    unknown.append(m)
+                continue
+            stem = _latch_stem(func, fam[0])
+            if stem is None:
+                continue
+            checked += 1
+            bad.append((m, stem, fam[1]))
+        if not bad and not unknown:
+            continue
+        held = _held(net, ms, rails, h, comp_pins)
+        if held is None:
+            continue
+        level, how, pulls = held
+        for m in unknown:
+            val = comps.get(m["ref"], {}).get("value")
+            yield {"not_judged":
+                   f"latch_enable_held on {net}: {m['ref']} ({val}) "
+                   f"{m.get('pinfunction')} (pin {m['pin']}) is {how} "
+                   f"{level}; no row says the part's active level, so "
+                   f"whether its outputs ever update isn't known"}
+        pins = [(m, stem, mode) for m, stem, mode in bad
+                if mode == "toggle" or mode != level]
+        if pins:
+            yield {"rule": "latch_enable_held", "net": net, "level": level,
+                   "how": how, "pulls": pulls, "pins": pins}
+    yield {"checked": checked}
+
+
+# a register, port or buffer's data output: what it carries is the data
+# firmware wrote (74x273 Q0, 74x244 1Y2), not a level its name says
+_DATA_OUT = re.compile(r"^(?:\d*[QYOD]\d*[A-H]?|Q[A-H]|[AB]\d+|\d+[AB]\d*|"
+                       r"D?OUT\d*|DO\d*|IO\w*)$")
+# names a strobe or latch line goes by on its driver, beyond _STEMS
+_DRIVE_STEMS = {"LE", "ALE", "STB", "STROBE", "STR", "LATCH", "LAT", "LD",
+                "LOAD", "PL", "PE", "SLOAD", "XLAT", "RCLK", "RCK"}
+# an inverting gate's output pin -> its input pins, by pin number, for a
+# 14-pin hex inverter (04, 05, 06, 14), quad NAND (00) and NOR (02), and
+# a single-gate inverter (1G04, 1G14: A pin 2, Y pin 4)
+_INV_GATES = (
+    (re.compile(r"74\w*?1G(?:U?04|06|14)\b", re.I), {"4": ("2",)}),
+    (re.compile(r"74\w*?(?:U04|04|05|06|14)\b", re.I),
+     {"2": ("1",), "4": ("3",), "6": ("5",), "8": ("9",), "10": ("11",),
+      "12": ("13",)}),
+    (re.compile(r"74\w*?(?:00|132)\b", re.I),
+     {"3": ("1", "2"), "6": ("4", "5"), "8": ("9", "10"),
+      "11": ("12", "13")}),
+    (re.compile(r"74\w*?02\b", re.I),
+     {"1": ("2", "3"), "4": ("5", "6"), "10": ("8", "9"),
+      "13": ("11", "12")}),
+)
+
+
+def _marked_low(raw: str) -> tuple[str, bool] | None:
+    """(stem, marked active-low) for a pin or net name's first role:
+    '~{LOAD}', '/WR', 'LE#', 'STB_N', 'nCS' -> marked; None when the
+    stem is neither a control stem nor a latch or strobe name."""
+    segs = _segments(raw)
+    if not segs:
+        return None
+    name, bar = segs[0]
+    u = re.sub(r"\s+", "", name)
+    low = bar
+    if u[:1] == "n" and u[1:2].isupper():
+        u, low = u[1:], True
+    u = u.upper()
+    if u.endswith(("#", "*", "\\")):
+        u, low = u.rstrip("#*\\"), True
+    u = u.strip("_")
+    m = re.fullmatch(r"(.+?)_(?:N|L|BAR)", u)
+    if m:
+        u, low = m.group(1), True
+    stem = re.sub(r"\d+$", "", u.split("_")[-1])
+    if stem in _STEMS or stem in _DRIVE_STEMS:
+        return stem, low
+    return None
+
+
+def _barred(ref, nets, comp_pins):
+    """True when some pin of REF is drawn with an active-low marker: on
+    that symbol a plain control name means it asserts high."""
+    for pnum, net in comp_pins.get(ref, {}).items():
+        m = next((x for x in nets.get(net, []) if x["ref"] == ref
+                  and x["pin"] == pnum), {})
+        lv = _marked_low(m.get("pinfunction") or "")
+        if lv and lv[1]:
+            return True
+    return False
+
+
+def _driver_level(m, comps, nets, comp_pins, rails, h, groups, depth):
+    """(level, why) the line from a driving pin asserts at: 'low' or
+    'high' from its name (an active-low marker; a plain control name on
+    a symbol that draws bars elsewhere), through an inverting gate the
+    level of the gate's input line turned over; ('data', why) for a
+    port, register or buffer output firmware sets; (None, why) when it
+    isn't known."""
+    ref = m["ref"]
+    comp = comps.get(ref, {})
+    val = f"{comp.get('value') or ''} {(comp.get('libsource') or ('', ''))[1]}"
+    func = m.get("pinfunction") or ""
+    if _INVERTING.search(val):
+        ins = None
+        for pat, gates in _INV_GATES:
+            if pat.search(val):
+                ins = gates.get(m["pin"])
+                break
+        if ins is None or depth > 1:
+            return None, f"{ref} ({comp.get('value')}) inverts, and which " \
+                f"input pin feeds pin {m['pin']} isn't known here"
+        in_nets = {comp_pins.get(ref, {}).get(p) for p in ins}
+        if len(in_nets) != 1 or None in in_nets:
+            return None, f"{ref} ({comp.get('value')}) pin {m['pin']} " \
+                f"is a gate with inputs on different lines"
+        lv, why = _line_level(next(iter(in_nets)), {ref}, comps, nets,
+                              comp_pins, rails, h, groups, depth + 1)
+        if lv in ("low", "high"):
+            flip = "high" if lv == "low" else "low"
+            return flip, f"{why}, inverted by {ref} ({comp.get('value')})"
+        return lv, why
+    segs = _segments(func)
+    if any(_GPIO.match(re.sub(r"\s+", "", n).upper()) for n, _ in segs):
+        return "data", f"{ref} {func} is a port pin firmware sets"
+    lv = _marked_low(func)
+    if lv and lv[1]:
+        return "low", f"{ref} {func} (pin {m['pin']}) asserts low"
+    if lv and _barred(ref, nets, comp_pins):
+        return "high", f"{ref} {func} (pin {m['pin']}) asserts high"
+    u = re.sub(r"~\{([^}]*)\}", r"\1", func).strip().upper()
+    if not u or _DATA_OUT.match(u):
+        return "data", f"{ref} {func or 'pin ' + m['pin']} is a data " \
+            f"output firmware sets"
+    return None, f"{ref} ({comp.get('value')}) {func} (pin {m['pin']}) " \
+        f"has no active level in its name"
+
+
+_DRIVE_TYPES_OUT = {"output", "tri_state", "open_collector", "bidirectional"}
+
+
+def _line_level(net, skip, comps, nets, comp_pins, rails, h, groups,
+                depth=0):
+    """(level, why) a line asserts at, from the pins driving it (across
+    series resistors and buffer channels): 'low'/'high' when every
+    driver whose level is known agrees, 'data' when every driver is one
+    firmware sets, else (None, why). A line no pin drives falls back on
+    an explicit active-low marker in its own name."""
+    root = groups.get(net, net)
+    levels, data, unknown = [], [], []
+    names = []
+    for n, ms in nets.items():
+        if groups.get(n, n) != root:
+            continue
+        names.append(n)
+        for m in ms:
+            if m["ref"] in skip or h["part_kind"](m["ref"]) in ("R", "C",
+                                                                 "L"):
+                continue
+            if h["base_type"](m.get("pintype")) not in _DRIVE_TYPES_OUT:
+                continue
+            if _PASS.search(f"{comps.get(m['ref'], {}).get('value') or ''}"):
+                continue
+            lv, why = _driver_level(m, comps, nets, comp_pins, rails, h,
+                                    groups, depth)
+            (levels if lv in ("low", "high") else
+             data if lv == "data" else unknown).append((lv, why))
+    if levels:
+        if len({lv for lv, _ in levels}) == 1:
+            return levels[0][0], "; ".join(w for _, w in levels)
+        return None, "its drivers assert at both levels"
+    if data and not unknown:
+        return "data", data[0][1]
+    if unknown:
+        return None, unknown[0][1]
+    for n in sorted(names):
+        lv = _marked_low(n.rsplit("/", 1)[-1])
+        if lv and lv[1]:
+            return "low", f"no pin drives it here; its name '{n}' says " \
+                f"it asserts low"
+    return None, "no pin on it drives it with a known level"
+
+
+def latch_drive_levels(nets, comps, comp_pins, rails, h):
+    """Yield latch_enable_polarity findings: a latch's level-sensitive
+    enable or load pin (_LATCH_ASSERT) driven by a line that asserts at
+    the other level, with no inverter between. {'not_judged': msg} when
+    the driver's level isn't known; the last item is {'checked': n}."""
+    groups, _how = _joined_groups(nets, comps, comp_pins, rails,
+                                  h["parse_value"], h["part_kind"],
+                                  h["is_ground"])
+    checked = 0
+    for net, ms in sorted(nets.items()):
+        for m in ms:
+            fam = _latch_family(comps.get(m["ref"], {}))
+            if fam is None or h["part_kind"](m["ref"]) in ("R", "C", "L"):
+                continue
+            stem = _latch_stem(m.get("pinfunction") or "", fam[0])
+            want = fam[2].get(stem) if stem else None
+            if want is None:
+                continue
+            if _held(net, ms, rails, h, comp_pins) is not None or \
+                    net.startswith("unconnected-"):
+                continue
+            checked += 1
+            lv, why = _line_level(net, {m["ref"]}, comps, nets, comp_pins,
+                                  rails, h, groups)
+            val = comps.get(m["ref"], {}).get("value")
+            if lv is None:
+                yield {"not_judged":
+                       f"latch_enable_polarity on {net}: {m['ref']} ({val})"
+                       f" {m.get('pinfunction')} (pin {m['pin']}) asserts "
+                       f"{want}, and the level of the line driving it "
+                       f"isn't known ({why})"}
+                continue
+            if lv == "data" or lv == want:
+                continue
+            yield {"rule": "latch_enable_polarity", "net": net, "pin": m,
+                   "stem": stem, "want": want, "got": lv, "why": why,
+                   "by_name": why.startswith("no pin drives")}
+    yield {"checked": checked}
 
 
 # ----------------------------------------------------------- supply domain

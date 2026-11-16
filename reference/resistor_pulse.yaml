@@ -1,0 +1,28 @@
+# Single-pulse power a standard thick-film chip resistor takes, by chip size
+# and rectangular pulse width ti, for check_surge's series parts (#577).
+#
+# Source: Vishay D/CRCW e3 datasheet (doc 20035, revision 14-Apr-2026),
+# page 5, "Single Pulse" chart: maximum pulse load for a single rectangular
+# pulse, valid while the mean load is near zero and the pulse voltage stays
+# under the size's Umax. Points read off the log-log chart by hand at the
+# decade marks: about +-10 %, so a surge within 10 % of a value is close,
+# not proven safe or unsafe. Watts.
+#
+# An 8/20 us surge pulse is judged as a rectangular pulse of the same peak
+# power and energy: ti = 12.17 us (surgelib.I2T_PER_A2). Pulse-rated parts
+# (anti-surge, metal film, wirewound) take far more: give their own number in
+# constraints surge.series.<ref>.pulse_w, read at that width.
+source: >-
+  Vishay D/CRCW e3 (doc 20035, rev 14-Apr-2026) p.5 single pulse chart,
+  read by hand to about 10 %
+verified: true
+ti_us: [1, 2, 5, 10, 20, 50, 100]
+sizes:
+  "0402": [20.6, 16.3, 11.7, 9.0, 6.8, 4.7, 3.5]
+  "0603": [44, 35, 25.6, 19.9, 15.8, 11.6, 8.8]
+  "0805": [67, 53, 38.6, 29.9, 23.1, 16, 12]
+  "1206": [118, 97, 72.5, 58, 43.4, 29.4, 21.9]
+  "1210": [207, 163, 116, 90, 69, 48, 37]
+  "2010": [285, 236, 183, 149, 108, 69, 50]
+  "1218": [343, 278, 207, 168, 122, 81, 60]
+  "2512": [454, 371, 282, 227, 169, 115, 85]

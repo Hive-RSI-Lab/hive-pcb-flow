@@ -50,6 +50,12 @@ or KiCad 6/7's `fp_text reference`, which placelib reads no reference from,
 #1123) is first brought to the current format by `kicad-cli pcb upgrade` on a copy in the run
 dir, as intake does to every board; the board checks read that copy.
 
+A revision whose schematic holds IMPORTED symbols (a library KiCad's importer
+named "<stem>-<format>-import", from Eagle and the like) is first retyped by
+lib_pin_types, as the flow does to an imported schematic (#1494): the checks
+read a copy of the checkout in the run dir with those sheets' lib_symbols
+retyped. A revision drawn in KiCad is read as it is.
+
 A catch may give `constraints: {rev_a: {...}, rev_b: {...}}`: what that
 revision's constraints.json would say, written in place of the empty file
 (a defect only a stated fact can show, such as the mate a cable goes to; its
@@ -651,6 +657,46 @@ class CheckCrashed(SystemExit):
             f"\n  {ln}" for ln in self.tail))
 
 
+IMPORTED_SYMBOL = re.compile(r'\(symbol\s+"[^":]*-[a-z0-9_]+-import:', re.IGNORECASE)
+
+
+def typed_repo(cache: Path, b: dict, rev: str) -> Path:
+    """The revision's checkout as the checks read it: when a schematic in it
+    holds imported symbols, a copy in the run dir with lib_pin_types applied
+    to each such sheet (#1494); otherwise the checkout itself. The copy is
+    remade while the sheets or lib_pin_types change."""
+    import hashlib
+    import shutil
+    repo = repo_dir(cache, b, rev)
+    sheets = [f for f in sorted(repo.rglob("*.kicad_sch"))
+              if ".git" not in f.relative_to(repo).parts and f.is_file()]
+    hit = [f for f in sheets
+           if IMPORTED_SYMBOL.search(f.read_text(encoding="utf-8", errors="replace"))]
+    if not hit:
+        return repo
+    h = hashlib.sha256((SCRIPTS / "lib_pin_types.py").read_bytes())
+    for f in hit:
+        h.update(str(f.relative_to(repo)).encode() + b"\0" + f.read_bytes())
+    dest = cache / "runs" / b["id"] / f"{rev}-typed"
+    stamp = dest.parent / f"{rev}-typed.src"
+    if dest.is_dir() and stamp.is_file() and stamp.read_text() == h.hexdigest():
+        return dest
+    stamp.unlink(missing_ok=True)
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(repo, dest, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git"))
+    sys.path.insert(0, str(SCRIPTS))
+    import lib_pin_types as lpt
+    for f in hit:
+        t = dest / f.relative_to(repo)
+        index, span = lpt.symbol_index(t)
+        text, _ = lpt.retype(t.read_text(encoding="utf-8"),
+                             lpt.build_rules(index, {})[0], None, span)
+        t.write_text(text, encoding="utf-8")
+    stamp.write_text(h.hexdigest())
+    return dest
+
+
 def audit(cache: Path, b: dict, rev: str, script: str,
           constraints: dict | None = None) -> list[dict]:
     """`script` on one revision, with `constraints` as its constraints.json
@@ -666,7 +712,7 @@ def audit(cache: Path, b: dict, rev: str, script: str,
     out.unlink(missing_ok=True)
     empty = out.parent / f"constraints{tag}.json"
     empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
-    cmd, *args = RUNNERS[script](b, rev, repo_dir(cache, b, rev), empty)
+    cmd, *args = RUNNERS[script](b, rev, typed_repo(cache, b, rev), empty)
     try:
         # nothing is written into the foreign tree (check_ratings' ledger)
         p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
