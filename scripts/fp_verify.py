@@ -347,7 +347,7 @@ def _number_centres(copper: list[fplib.Pad]) -> dict[str, tuple[float, float]]:
 NEAR_RATIO = 0.7  # a pad's nearest drawing pin must be clearly nearer than the next
 
 
-def _assign(ref: dict, got: dict, deg: int) -> tuple[dict, float] | None:
+def _assign(ref: dict, got: dict, deg: float) -> tuple[dict, float] | None:
     """Pad -> the drawing pin nearest it, with `got` turned `deg` and the
     centroids aligned, and the worst pad-to-pin distance; None unless the
     map is one to one and each pad's nearest pin is clearly nearer than its
@@ -371,22 +371,65 @@ def _assign(ref: dict, got: dict, deg: int) -> tuple[dict, float] | None:
     return (out, worst) if len(set(out.values())) == len(out) else None
 
 
-def _clean(ref: dict, got: dict, tol: float) -> list[tuple[int, dict]]:
-    """The quarter turns whose nearest-pin map is clean and whose worst
-    distance is within `tol` of the best turn's: a near-square body (3.2 x
-    2.5 mm) turned a quarter still maps cleanly, a little worse, and must
-    not stand in for the turn that really fits."""
-    maps = [(t, *m) for t in TURNS if (m := _assign(ref, got, t)) is not None]
+def _turns(ref: dict, got: dict) -> tuple[float, ...]:
+    """TURNS, plus the turn the shared pad numbers point to and its quarter
+    offsets when that is off a quarter turn (#1409): a round can's land
+    drawing (TO-46 at 45 degrees) is often drawn turned by something else,
+    and under a quarter turn each pad's nearest pin is then its neighbour's.
+    The angle is the least-squares (Kabsch) turn of the footprint's pads
+    onto the drawing's, about their centroids, in fpg._turn's sense."""
+    common = [k for k in ref if k in got]
+    if len(common) < 2:
+        return TURNS
+    rc = [sum(ref[k][i] for k in common) / len(common) for i in (0, 1)]
+    gc = [sum(got[k][i] for k in common) / len(common) for i in (0, 1)]
+    dot = cross = 0.0
+    for k in common:
+        gx, gy = got[k][0] - gc[0], got[k][1] - gc[1]
+        rx, ry = ref[k][0] - rc[0], ref[k][1] - rc[1]
+        dot += gx * rx + gy * ry
+        cross += gx * ry - gy * rx
+    if abs(dot) + abs(cross) < 1e-9:
+        return TURNS
+    deg = -math.degrees(math.atan2(cross, dot)) % 360
+    off = min(deg % 90, 90 - deg % 90)
+    reach = max(math.hypot(got[k][0] - gc[0], got[k][1] - gc[1]) for k in common)
+    if reach * math.radians(off) <= 0.01:
+        return TURNS
+    return TURNS + tuple(round((deg + q) % 360, 3) for q in TURNS)
+
+
+def _fit_limit(ref: dict, tol: float, pad_reach: float = 0.0) -> float:
+    """How far a pad may sit from the drawing pin it is matched to for a
+    mismatch to count (#1409): 0.4 x the drawing's closest pin spacing, as
+    #1286's fit uses, or `pad_reach` (half the footprint pads' typical
+    longer side: a maker's SO-8 rows 3.85 mm apart against the footprint's
+    5 mm leave each pad 0.58 mm off, still on its pin's land), and never
+    under the size tolerance."""
+    pts = list(ref.values())
+    near = min((math.hypot(a[0] - b[0], a[1] - b[1])
+                for i, a in enumerate(pts) for b in pts[i + 1:]), default=0.0)
+    return max(tol, 0.4 * near, pad_reach)
+
+
+def _clean(ref: dict, got: dict, tol: float) -> list[tuple[float, dict, float]]:
+    """The turns (_turns) whose nearest-pin map is clean and whose worst
+    distance is within `tol` of the best turn's, with that distance: a
+    near-square body (3.2 x 2.5 mm) turned a quarter still maps cleanly, a
+    little worse, and must not stand in for the turn that really fits."""
+    maps = [(t, *m) for t in _turns(ref, got)
+            if (m := _assign(ref, got, t)) is not None]
     if not maps:
         return []
     best = min(w for _, _, w in maps)
-    return [(t, m) for t, m, w in maps if w <= best + tol]
+    return [(t, m, w) for t, m, w in maps if w <= best + tol]
 
 
-def _fits(ref: dict, got: dict, tol: float) -> int | None:
-    """The quarter turn (no mirror) under which every pad's nearest drawing
-    pin is its own, else None."""
-    return next((t for t, m in _clean(ref, got, tol)
+def _fits(ref: dict, got: dict, tol: float) -> float | None:
+    """The turn (no mirror; a quarter turn, or the one the pads point to,
+    _turns) under which every pad's nearest drawing pin is its own, else
+    None."""
+    return next((t for t, m, _ in _clean(ref, got, tol)
                  if all(k == r for k, r in m.items())), None)
 
 
@@ -400,12 +443,25 @@ def _shifted(got: dict, s: int) -> dict:
     return out
 
 
-def _misplaced(ref: dict, got: dict, tol: float) -> list[tuple[str, str]] | None:
+def _pad_reach(copper: list[fplib.Pad], numbers: list[str]) -> float:
+    """Half the median longer side of the copper pads named in `numbers`."""
+    sides = sorted(max(p.size) / 2 for p in copper if p.number in numbers)
+    return sides[len(sides) // 2] if sides else 0.0
+
+
+def _misplaced(ref: dict, got: dict, tol: float,
+               pad_reach: float = 0.0) -> list[tuple[str, str]] | None:
     """(pad, the drawing's pin at its place) for each pad on another pin's
-    place, in the clean quarter turn where most pads sit on their own pin;
-    None when no turn gives a clean one-to-one match (the shape differs)."""
+    place, in the clean turn where most pads sit on their own pin; None
+    when no turn gives a clean one-to-one match within _fit_limit (the
+    shape differs, or the drawing is turned some way the fit can't find:
+    nearest with no limit read a TO-46 drawn at 45 degrees as misnumbered,
+    #1409)."""
     best = None
-    for _, m in _clean(ref, got, tol):
+    limit = _fit_limit(ref, tol, pad_reach)
+    for _, m, w in _clean(ref, got, tol):
+        if w > limit + EPS_MM:
+            continue
         pairs = [(k, r) for k, r in m.items() if k != r]
         if best is None or len(pairs) < len(best):
             best = pairs
@@ -647,13 +703,17 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
                 "mirror image, so they can't tell a top-view numbering from "
                 "a bottom-view one")})
         elif turn is not None:
-            numbering_fact = {"from": "pads", "fit": True, "turn_deg": turn,
+            numbering_fact = {"from": "pads", "fit": True,
+                              "turn_deg": round(turn, 1) if turn % 1 else int(turn),
                               "pads": len(common)}
-        elif (moved := _misplaced(ref, mine, size_tol)) is None:
+        elif (moved := _misplaced(ref, mine, size_tol, _pad_reach(
+                copper, common))) is None:
             not_judged.append({"check": "pad_numbering", "why": (
                 "the footprint's pads don't fall one to one on the land "
-                "drawing's places under any quarter turn (the shape differs; "
-                "check_fp_geometry judges that), so numbering is unchecked")})
+                "drawing's places, each within 0.4 x the drawing's closest "
+                "pin spacing or half a pad, under any quarter turn or the turn the pad "
+                "numbers point to (the shape differs; check_fp_geometry "
+                "judges that), so numbering is unchecked")})
         else:
             hint = ("bottom_view_numbering" if _fits(mirror, mine, size_tol) is not None
                     else "numbering_rotated" if any(

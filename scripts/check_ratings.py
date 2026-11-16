@@ -380,8 +380,9 @@ def pin_map(b: dict, ext: dict | None) -> tuple[dict | None, str | None]:
     common = sorted(set(ref_all) & set(got))
     if len(common) < 2:
         return None, None
-    maps = fpv._clean({k: ref_all[k] for k in common},
-                      {k: got[k] for k in common}, POS_TOL_MM)
+    maps = [(t, m) for t, m, _ in fpv._clean({k: ref_all[k] for k in common},
+                                             {k: got[k] for k in common},
+                                             POS_TOL_MM)]
     if not maps:
         return None, ("its pads don't fall one to one on the land "
                       "drawing's places, so pins were matched by number")
