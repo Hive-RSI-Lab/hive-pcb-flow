@@ -109,8 +109,12 @@ Two-pad diodes, LEDs and polarised caps go through `polarity_mark()`: a "+"
 must sit by the board's + pad, else (but for electrolytics, whose hatching and
 chamfers lean either way) the silk must lean toward the K or + pad; leaning
 the other way is `silk_mark_wrong`, centred is `silk_mark_missing` (#800).
-Battery holders and switches are keyed housings, left alone. Silk drawn on the
-board rather than in the footprint isn't read.
+Battery holders and switches are keyed housings, left alone. Where a part's own
+silk has no mark, silk drawn on the board itself (gr_circle, gr_line, gr_poly,
+gr_rect, gr_arc and a "+" gr_text on its side's silk layer) is read too when
+the whole drawing sits within BOARD_MARK_MARGIN_MM of the part's pads; its row
+says `silk_source: board`. A drawing that close to two parts counts for
+neither, and an unmarked part's row says so in `silk_note` (#1380).
 
 `derive_rotation()` is what bom_cpl.py uses to WRITE the CPL; the package table
 is only its fallback when this check has no model. `merge_visual()` puts the
@@ -220,6 +224,11 @@ POLAR_MARK_SHARE = 0.15
 # cut outline corners count only out by the pad ends, past the body's middle
 CHAMFER_SHARE = 0.6
 PLUS_MIN_MM, PLUS_MAX_MM = 0.3, 2.5
+# board-level silk counts for a part when all of it lies within this of the
+# part's pad copper (#1380): a pin-1 dot sits by its pad, a mounting hole's
+# circle or a board outline doesn't
+BOARD_MARK_MARGIN_MM = 1.0
+_BOARD_SILK = ("gr_circle", "gr_line", "gr_poly", "gr_rect", "gr_arc")
 _ELEC_FP = re.compile(r"^(CP_Radial|CP_Elec|C_Elec)|Elec|CAP-TH", re.I)
 
 # ------------------------------------------------------------ board side
@@ -252,6 +261,12 @@ class Footprint:
     # the part's own side's silk drawings and "+" texts, local frame
     own_silk: list[list[tuple[float, float]]] = field(default_factory=list)
     plus_texts: list[tuple[float, float]] = field(default_factory=list)
+    # the same, from silk drawn on the board by this part only (#1380)
+    board_marks: list[tuple[float, float]] = field(default_factory=list)
+    board_silk: list[list[tuple[float, float]]] = field(default_factory=list)
+    board_plus: list[tuple[float, float]] = field(default_factory=list)
+    # board silk drawings by this part and another, so counted for neither
+    board_shared: int = 0
 
     @property
     def name(self) -> str:
@@ -425,7 +440,88 @@ def board_footprints(pcb: Path) -> dict[str, Footprint]:
                     f.plus_texts.append(tuple(_nums(_kid(node, "at"))[:2]))
         if ref:
             out[ref] = f
+    _board_silk(tree, out)
     return out
+
+
+def _local_node(node, fp: Footprint):
+    """A board silk drawing as the fp_ drawing it would be in fp's stored
+    local frame (board = origin + rot(local, fp.rot); a bottom part's stored
+    frame is already flipped), or None if it isn't one we read. A gr_rect turns
+    with the part, so it comes back as a four-corner fp_poly."""
+    head = _t(node[0])
+    lay = _kid(node, "layer")
+    if lay is None:
+        return None
+    loc = lambda xy: list(rot(xy[0] - fp.x, xy[1] - fp.y, -fp.rot))
+    if head == "gr_text":
+        at = _nums(_kid(node, "at"))
+        if len(node) < 2 or str(_t(node[1])).strip() != "+" or len(at) < 2:
+            return None
+        return ["fp_text", "user", "+", ["at", *loc(at[:2])], lay]
+    if head not in _BOARD_SILK:
+        return None
+    if head == "gr_rect":
+        (x0, y0), (x1, y1) = _nums(_kid(node, "start")), _nums(_kid(node, "end"))
+        return ["fp_poly", ["pts", *(["xy", *loc(c)] for c in
+                                     ((x0, y0), (x1, y0), (x1, y1), (x0, y1)))],
+                lay]
+    out = ["fp_" + head[3:]]
+    for k in node[1:]:
+        if isinstance(k, list) and k and _t(k[0]) in ("start", "end", "center", "mid"):
+            out.append([k[0], *loc(_nums(k))])
+        elif isinstance(k, list) and k and _t(k[0]) == "pts":
+            out.append(["pts", *(["xy", *loc(_nums(xy))] for xy in _kids(k, "xy"))])
+        else:
+            out.append(k)
+    return out
+
+
+def _near_pads(pts, fp: Footprint) -> bool:
+    """Every point within BOARD_MARK_MARGIN_MM of the part's pad copper."""
+    pads = [p for p in fp.pads if p.number]
+    if not pads or not pts:
+        return False
+    half = max(max(p.w, p.h) for p in pads) / 2 + BOARD_MARK_MARGIN_MM
+    box = _pad_field(fp)
+    return all(box[0] - half <= x <= box[2] + half
+               and box[1] - half <= y <= box[3] + half for x, y in pts)
+
+
+def _board_silk(tree, fps: dict[str, Footprint]) -> None:
+    """Give each part the board-level silk drawn by it alone (#1380)."""
+    for node in tree[1:]:
+        if not (isinstance(node, list) and node
+                and _t(node[0]) in (*_BOARD_SILK, "gr_text")):
+            continue
+        lay = _kid(node, "layer")
+        layer = str(_t(lay[1])) if lay else ""
+        if layer not in ("F.SilkS", "B.SilkS"):
+            continue
+        side = "top" if layer == "F.SilkS" else "bottom"
+        near = []
+        for f in fps.values():
+            if f.side != side:
+                continue
+            ln = _local_node(node, f)
+            if ln is None:
+                break
+            pts = ([tuple(_nums(_kid(ln, "at"))[:2])] if _t(ln[0]) == "fp_text"
+                   else _silk_shape(ln))
+            if _near_pads(pts, f):
+                near.append((f, ln, pts))
+        if len(near) > 1:
+            for f, _, _ in near:
+                f.board_shared += 1
+        elif near:
+            f, ln, pts = near[0]
+            if _t(ln[0]) == "fp_text":
+                f.board_plus.append(pts[0])
+                continue
+            f.board_silk.append(pts)
+            m = _silk_mark(ln, f.side, _pad_field(f))
+            if m:
+                f.board_marks.append(m)
 
 
 # ------------------------------------------------------------- geometry
@@ -888,6 +984,20 @@ def bga_pin1(fp: Footprint) -> KPad | None:
 
 
 def silk_mark(fp: Footprint) -> dict:
+    """_silk_mark_of the part's own silk; where that has no mark, of the
+    silk drawn on the board by it alone, with `source: board` (#1380)."""
+    mark = _silk_mark_of(fp)
+    if mark["state"] in (None, "none") and (fp.board_marks or fp.board_silk
+                                            or fp.board_plus):
+        alt = _silk_mark_of(replace(fp, marks=fp.board_marks,
+                                    own_silk=fp.board_silk,
+                                    plus_texts=fp.board_plus))
+        if alt["state"] in ("ok", "wrong"):
+            return {**alt, "source": "board"}
+    return mark
+
+
+def _silk_mark_of(fp: Footprint) -> dict:
     """Whether the part's pin-1 silk mark is at the board's pin 1. `state` is
     None for parts the rule leaves alone (only ball grids and U/IC/Q parts
     with three or more pads and a pin 1, a Q only when it has a mark, and the
@@ -1408,6 +1518,14 @@ def verify(pcb: Path, cpl: dict[str, dict], lcsc: dict[str, str],
             row["silk_off"] = mark["off"]
             if mark.get("why"):
                 row["silk_why"] = mark["why"]
+            if mark.get("source"):
+                row["silk_source"] = mark["source"]
+        if fp.board_shared and mark["state"] == "none":
+            # only where a board mark could have answered: else it's noise
+            # (glasgow's 0402s sit 234 deep in shared drawings)
+            row["silk_note"] = (f"{fp.board_shared} silk drawing(s) on the "
+                                f"board sit by this part and another, so they "
+                                f"count for neither")
         rows.append(row)
     bad = [r for r in rows if r["verdict"] in FAIL_VERDICTS]
     below = [r["ref"] for r in rows if r.get("side") == "bottom"
