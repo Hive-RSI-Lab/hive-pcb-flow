@@ -19,6 +19,7 @@
    "check_pdn": 0,
    "check_ratings": 0,
    "check_antenna": 0,
+   "check_backfeed": 0,
    "check_body_clash": 0,
    "check_bom_sync": 0,
    "check_cap_load": 0,
