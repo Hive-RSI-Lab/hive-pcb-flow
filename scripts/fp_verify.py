@@ -763,7 +763,10 @@ def ball_map_check(copper: list[fplib.Pad], ds: dict, land: dict,
     pins = [str(p.get("pin") or "") for p in ds.get("pinout") or []]
     want = _ball_names(pins)
     names = [p.number for p in copper if p.number]
-    have = _ball_names(names)
+    # names alone don't make a grid: a USB-C's A1..A12, B1..B12 and S1..S4
+    # parse as three rows, but its row and column steps are parallel (#1455)
+    have = (_ball_names(names) if _grid_handedness(copper) is not None
+            else None)
     if want is None and have is None:
         return [], [], None
     if want is None:

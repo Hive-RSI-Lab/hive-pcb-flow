@@ -1,0 +1,51 @@
+# ball_map_urls.yaml - the maker's ball-by-ball pinout file for ball-grid
+# parts whose datasheet prints no ball list (#1455).
+#
+# land_batch.py reads a ball-grid part's ball map from its datasheet's text
+# first (one "A1 NAME" line per ball). When the datasheet has none it can
+# read, it takes the map from the entry here that names the part, checks it
+# (scripts/lib/ballmaps.py) and writes it into the part's record as a pinout
+# with ball names, for fp_verify's ball-map check (#377). A part no entry
+# names, or that two entries name, stays not_judged with the reason.
+#
+# Rules for an entry:
+#  - `match` are fnmatch patterns, case aside, on the part's MPN, its
+#    listing's MPN or its Value. Each must be covered by the file's device
+#    and package: the speed grade and temperature range may vary, the die
+#    and the package may not.
+#  - `url` is the maker's own file and must pass the fetch allowlist
+#    (reference/knowledge/domains.yaml), every redirect hop too.
+#  - `format` is how the file is read: lattice_csv (Lattice's pinout CSV,
+#    one row per pad, a column per package) or xilinx_pkg_txt (Xilinx's
+#    package file: ball, bank, ..., pin description, tab-separated, ending
+#    "Total Number of Pins generated, N").
+#  - `column` (lattice_csv only) is the package's column header.
+#  - `balls` is the package's ball count as the datasheet states it. The
+#    map must have exactly that many balls, each once.
+#  - `package` is the package as the maker names it.
+version: 1
+
+parts:
+  - match: ["LFE5U-25F-*BG256*"]
+    brand: Lattice Semiconductor
+    package: caBGA-256 (14 x 14 mm, 0.8 mm)
+    url: https://www.latticesemi.com/view_document?document_id=50485
+    format: lattice_csv
+    column: CABGA256
+    balls: 256
+    note: ECP5U-25 pinout file, revision 2.0
+  - match: ["LFE5U-85F-*BG381*"]
+    brand: Lattice Semiconductor
+    package: caBGA-381 (17 x 17 mm, 0.8 mm)
+    url: https://www.latticesemi.com/view_document?document_id=50487
+    format: lattice_csv
+    column: CABGA381
+    balls: 381
+    note: ECP5U-85 pinout file, revision 1.0
+  - match: ["XC6SLX25-*FTG256*", "XC6SLX25-FTG256*"]
+    brand: Xilinx
+    package: FTG256 (17 x 17 mm, 1.0 mm)
+    url: https://www.xilinx.com/support/packagefiles/s6packages/6slx25ftg256pkg.txt
+    format: xilinx_pkg_txt
+    balls: 256
+    note: Spartan-6 package file; xilinx.com redirects to download.amd.com
