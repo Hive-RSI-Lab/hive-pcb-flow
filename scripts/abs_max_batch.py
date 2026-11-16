@@ -7,12 +7,13 @@ ICs from their datasheets, for check_ratings (#1339).
     abs_max_batch.py --sealed N      holdout round N, sealed (scorers only)
 
 Which parts: every IC (refdes U, IC or VR) on either revision of a board in
-the set, in the BOM, with three or more pads on a net, an LCSC code or a
-manufacturer part number, and no extraction in hwde's library
-(reference/extractions). A part is keyed by its LCSC code, else by its MPN
-(its listing then comes from an exact-MPN search of JLC's catalogue, cached
-under listings/mpn/; no exact match, no reading). A part with neither is left
-out.
+the set, in the BOM, with three or more pads on a net, an LCSC code, a
+manufacturer part number or a part number in Value, and no extraction in hwde's library
+(reference/extractions). A part is keyed by its LCSC code, else by its MPN,
+else by its Value when that reads as a part number (#815; check_ratings
+reads the extraction back under it). An MPN's listing comes from an
+exact-MPN search of JLC's catalogue, cached under listings/mpn/; no exact
+match, no reading. A part with none of these is left out.
 
 For each part: its LCSC listing (cached), the datasheet that listing names,
 fetched as `datasheet_extract.fetch_datasheet` fetches one (a file judged
@@ -173,12 +174,22 @@ def wanted_parts(boards: list[dict], cache: Path, work: Path) -> tuple[dict, Cou
 
 
 def part_key(p: dict) -> str | None:
-    """A part's key: its LCSC code (C<digits>), else 'mpn:<MPN>', else None."""
+    """A part's key: its LCSC code (C<digits>), else 'mpn:<MPN>', else
+    'mpn:<Value>' when the Value reads as a part number (#815: many boards
+    carry an IC's number only there; check_ratings.key_by_mpn reads the
+    extraction back under it), else None."""
     lc = (p.get("lcsc") or "").strip().upper()
     if re.fullmatch(r"C\d+", lc):
         return lc
-    mpn = (p.get("mpn") or "").strip()
+    mpn = (p.get("mpn") or "").strip() or check_ratings.value_mpn(p)
     return f"mpn:{mpn}" if mpn and check_ratings._safe_name(mpn) else None
+
+
+def keyed_by_value(p: dict) -> bool:
+    """Whether part_key took the part's number from its Value field."""
+    lc = (p.get("lcsc") or "").strip().upper()
+    return not (re.fullmatch(r"C\d+", lc) or (p.get("mpn") or "").strip()) \
+        and bool(check_ratings.value_mpn(p))
 
 
 def ext_name(key: str) -> str:
@@ -491,12 +502,16 @@ def main(argv: list[str] | None = None) -> int:
     for f in (out / "ext").glob("*.json") if (out / "ext").is_dir() else ():
         if f.stem not in keep and f.stem in names:
             f.unlink()      # a part whose reading no longer passes
+    by_value = sorted({ext_name(k) for k, ps in parts.items()
+                       if any(keyed_by_value(p) for p in ps)})
     _write(out / "report.json", {"model": READER_MODEL, "prompt": PROMPT_ID,
-                                 "skipped": dict(skipped), "parts": reps})
+                                 "skipped": dict(skipped),
+                                 "keyed_by_value": by_value, "parts": reps})
     st = Counter(r["status"] for r in reps)
     print(f"boards {len(boards)}; ICs to read {len(parts)} (read {len(todo)}); "
           "left out: " + (", ".join(f"{k} {v}" for k, v in sorted(skipped.items()))
                           or "none"))
+    print(f"keyed by their Value field: {len(by_value)}")
     print("parts: " + ", ".join(f"{k} {v}" for k, v in st.most_common()))
     print(f"rows kept {sum(r.get('rows_kept', 0) for r in reps)}, rows read "
           f"{sum(r.get('rows_read', 0) for r in reps)}")

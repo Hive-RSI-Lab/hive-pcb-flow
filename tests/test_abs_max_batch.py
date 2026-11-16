@@ -120,9 +120,9 @@ def test_no_package_found_leaves_the_part_out():
 
 # ------------------------------------------------------------ which parts
 
-def _fp(ref, pads, lcsc="", mpn="", bom=True):
+def _fp(ref, pads, lcsc="", mpn="", bom=True, value=""):
     return {"ref": ref, "in_bom": bom, "lcsc": lcsc, "mpn": mpn,
-            "pads": pads, "fns": {}, "nums": sorted(pads)}
+            "value": value, "pads": pads, "fns": {}, "nums": sorted(pads)}
 
 
 def test_part_key_is_the_lcsc_code_else_the_mpn():
@@ -131,6 +131,18 @@ def test_part_key_is_the_lcsc_code_else_the_mpn():
         == "mpn:TPS7A02"
     assert amb.ext_name("mpn:TPS 7A/02") == "TPS-7A-02"
     assert amb.part_key(_fp("U1", {})) is None
+
+
+def test_part_key_falls_back_to_a_value_that_reads_as_a_part_number():
+    """#815: an IC with its number only in Value is keyed by it; an LCSC
+    code or MPN still wins, and a Value like 3.3V or MCU keys nothing."""
+    p = _fp("U1", {}, value="AMS1117-3.3")
+    assert amb.part_key(p) == "mpn:AMS1117-3.3" and amb.keyed_by_value(p)
+    p = _fp("U1", {}, mpn="TPS7A02", value="AMS1117-3.3")
+    assert amb.part_key(p) == "mpn:TPS7A02" and not amb.keyed_by_value(p)
+    assert amb.part_key(_fp("U1", {}, lcsc="C6186", value="AMS1117")) == "C6186"
+    for v in ("3.3V", "MCU", "LDO 3V3"):
+        assert amb.part_key(_fp("U1", {}, value=v)) is None
 
 
 def test_nets_agree_when_only_names_differ():

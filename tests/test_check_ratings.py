@@ -273,10 +273,11 @@ def test_capacitor_voltage_attribute(tmp_path):
 
 def _us_ws(tmp_path: Path, pa0: str, mpn_prop: bool = True,
            record: str | None = "TESTMCU", bom=None,
-           mpn: str = "TESTMCU") -> Path:
+           mpn: str = "TESTMCU", value: str = "") -> Path:
     """A US-sourced board (#1119): U1 carries an MPN, no LCSC code."""
     ws = _ws(tmp_path, [], {}, bom)
     prop = f' (property "MPN" "{mpn}")' if mpn_prop else ""
+    prop += f' (property "Value" "{value}")' if value else ""
     (ws / "kicad" / "board.kicad_pcb").write_text(
         '(kicad_pcb (version 20240108)\n'
         f'  (footprint "x" (property "Reference" "U1"){prop}\n'
@@ -334,6 +335,35 @@ def test_mpn_key_finds_a_record_saved_under_a_sanitized_name(tmp_path):
     # an MPN with a '/' is looked up only under its safe name
     p = _run(_us_ws(tmp_path / "c", "+5V", mpn="TEST/MCU", record="TEST-MCU"))
     assert p["keyed_by_mpn"] == {"U1": "TEST-MCU"}
+
+
+def test_value_field_keys_a_part_with_no_number_only_with_a_record(tmp_path):
+    """#815: an IC whose number is only in its Value field finds the record
+    saved under it; its quiet twin on +3V3 is clean; with no record, or a
+    parts.json line alone, it stays unkeyed."""
+    p = _run(_us_ws(tmp_path, "+5V", mpn_prop=False, value="TESTMCU1"))
+    assert p["keyed_by_mpn"] == {}      # the record is TESTMCU, not TESTMCU1
+    p = _run(_us_ws(tmp_path / "b", "+5V", mpn_prop=False, value="TESTMCU1",
+                    record="TESTMCU1"))
+    assert p["keyed_by_mpn"] == {"U1": "TESTMCU1"}
+    assert [(e["kind"], e["pin"]) for e in _errors(p)] == [
+        ("rating_over_voltage", "U1.3")]
+    quiet = _run(_us_ws(tmp_path / "c", "+3V3", mpn_prop=False,
+                        value="TESTMCU1", record="TESTMCU1"))
+    assert _errors(quiet) == []
+    bom = [{"mpn": "TESTMCU1"}]
+    p = _run(_us_ws(tmp_path / "d", "+5V", mpn_prop=False, value="TESTMCU1",
+                    record=None, bom=bom))
+    assert p["keyed_by_mpn"] == {}
+
+
+def test_value_mpn_reads_part_numbers_not_component_values():
+    for v in ("TPS62086", "AMS1117-3.3", "74LVC1G3157", "XC6220B331MR",
+              "LM2596T-ADJ"):
+        assert cr.value_mpn({"value": v}) == v
+    for v in ("", "3.3V", "100nF", "10k", "4.7uF", "MCU", "LDO 3V3", "U1",
+              "~"):
+        assert cr.value_mpn({"value": v}) == ""
 
 
 def test_constraints_and_power_tree_outrank_net_names(tmp_path):
