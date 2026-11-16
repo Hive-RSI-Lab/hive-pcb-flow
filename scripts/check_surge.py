@@ -17,8 +17,12 @@ a board that declares none, since what a port is cabled to isn't in the board:
                      "nets": ["VBUS"],   // default by kind (below)
                      "level_kv": 0.5,    // override the assumed level
                      "eft_kv": 0.5}},
-    "clamps": {"D1": {"vbr": 23.3, "vc": 32.4, "ipp_a": 100}},
-    "abs_max": {"U1": 32, "U2.3": 30}
+    "clamps": {"D1": {"vbr": 23.3, "vc": 32.4, "ipp_a": 100,
+                      "bidirectional": false, "vf_v": 3.5, "vf_a": 50}},
+    "abs_max": {"U1": 32, "U2.3": 30},
+    "abs_min": {"U1": -0.3},
+    "series": {"R4": {"pulse_w": 150}, "F1": {"i2t_a2s": 0.02},
+               "L2": {"ipk_a": 30}}
   }
 
 Levels come from reference/surge_levels.yaml by kind, environment and cable
@@ -50,16 +54,40 @@ Findings:
   surge_eft_over_abs_max    warning: the EFT burst's Vc over a pin's abs max
                             (5/50 ns, 50 ohm; its energy is too small to judge
                             against an 8/20 rating, so no overstress finding)
+  surge_negative_under_abs_min
+                            error: the same surge, negative: a bidirectional
+                            clamp holds -Vc, a unidirectional one conducts
+                            forward at -Vf(I) = -(0.7 + rf I), rf from the
+                            datasheet's Vf at its test current; under the
+                            abs min of an IC pin on the stretch
+  surge_series_overstress   error: a series resistor's I^2 R over its
+                            single-pulse rating at 8/20 (its chip size in
+                            reference/resistor_pulse.yaml, or constraints
+                            surge.series pulse_w), or any series part's peak
+                            over constraints ipk_a
+  surge_fuse_opens          warning: the pulse's I^2 t (12.17 us * Ipk^2 for
+                            8/20) over a series fuse or PPTC's constraints
+                            i2t_a2s
+
+Series current: a part before the first clamp carries the whole surge
+current, one between the first and a secondary clamp the secondary's; each
+part is judged once, at the worst current over all ports, modes and both
+polarities. Parts nothing rates go in the report as series_unrated.
 
 Pin abs max: constraints surge.abs_max (ref or ref.pin) first, then the part's
 extraction (<parts>/<LCSC>.json), then reference/pin_ratings.yaml's abs_max_v
 by pin name, or by pad number (pin_numbers) when the board's pads carry no
 pin names. Pins nothing rates go in the report as unrated_pins, not findings.
+Pin abs min: constraints surge.abs_min, then the extraction's ground-referred
+lower bound; pins without one go in unrated_pins_negative. A clamp whose
+direction or forward drop nothing gives (constraints bidirectional / vf_v,
+or a family in surgelib.FORWARD_VF) leaves the negative pulse unjudged and
+is listed in negative_not_judged.
 
-Not modelled: a unidirectional clamp's other polarity (its forward drop), bulk
-capacitors on the line (they eat some of the 1.2/50 energy, so this errs
-high), series element dissipation, 10/700 us telecom waves, a MOV + fuse
-coordination. --spice runs the wave into each clamp's diode model in ngspice
+Not modelled: bulk capacitors on the line (they eat some of the 1.2/50
+energy, so this errs high), a series resistor's pulse voltage limit, the EFT
+burst's negative polarity, forward drops for families other than SMBJ,
+10/700 us telecom waves, a MOV + fuse coordination. --spice runs the wave into each clamp's diode model in ngspice
 and adds spice_i_a / spice_vc_v to the report; findings stay on the closed form.
 
 CLI exit 0 pass / 1 violations / 2 error, per SPEC section 6.
@@ -223,6 +251,23 @@ def pin_limit(pad, fp, part, parts_dir, table, overrides) -> tuple:
     return None, ""
 
 
+def pin_limit_lo(pad, part, parts_dir, overrides) -> tuple:
+    """(abs min volts, source) for an IC pad, or (None, ""): constraints
+    surge.abs_min (ref or ref.pin), then the extraction's ground-referred
+    lower bound (the tightest, e.g. -0.3 of "-0.3 to VDD+0.3")."""
+    for key in (f"{pad.ref}.{pad.number}", pad.ref):
+        if key in overrides:
+            return float(overrides[key]), "constraints surge.abs_min"
+    rows = [r for r in (_extraction_ratings(part, parts_dir).get(pad.number)
+                        or {}).get(("voltage", "abs")) or []
+            if r["ref"] is None and isinstance(r["lo"], (int, float))
+            and not isinstance(r["lo"], bool)]
+    if rows:
+        r = max(rows, key=lambda r: r["lo"])
+        return float(r["lo"]), f"{part.get('lcsc')}.json {r['src']}"
+    return None, ""
+
+
 def _pin_table() -> list[dict]:
     import sim_board
     rows = [r for r in sim_board.load_pin_ratings() if r.get("abs_max_v")]
@@ -289,6 +334,11 @@ def judge_mode(ctx, ref, net, cp, mode, cls, reach, facts) -> None:
                rating_estimated=bool(m.get("estimated")))
     if ctx["spice"] is not None:
         ctx["spice"].append((row, v_kv, z - surgelib.GENERATOR_OHM, m))
+    second, v2, i2 = _secondary(rated, first, got["vc_v"], lambda c: c["model"])
+    if second:
+        row["secondary"] = second["ref"]
+        row["secondary_vc_v"] = checklib.rnd(v2, 1)
+    _carry(ctx, first, second, got["i_a"], i2, ref, net, v_kv, mode, "+")
     if got["i_a"] > m["ipp_a"] or got["p_w"] > m["ppk_w"]:
         vios.append(checklib.violation(
             SCRIPT, "error", first["pos"], None, net, [first["ref"], ref],
@@ -300,23 +350,90 @@ def judge_mode(ctx, ref, net, cp, mode, cls, reach, facts) -> None:
             + f": the clamp fails short. {assumed}", SOURCE,
             kind="surge_clamp_overstress", level_kv=v_kv, assumption=True,
             i_a=row["i_a"], ipp_a=row["ipp_8_20_a"]))
-    judge_pins(ctx, ref, net, reach, rated, got["vc_v"], assumed, row, vios,
-               kind="surge_vc_over_abs_max", severity="error", kv=v_kv)
+    judge_pins(ctx, ref, net, reach, first, second, got["vc_v"], v2, assumed,
+               row, vios, kind="surge_vc_over_abs_max", severity="error",
+               kv=v_kv)
+    judge_negative(ctx, ref, net, reach, mode, z, rated, assumed, row)
 
 
-def judge_pins(ctx, ref, net, reach, cls, vc, assumed, row, vios, kind,
-               severity, kv) -> None:
-    """Pins on the stretch against the voltage that reaches them: the first
-    clamp's Vc, or a secondary clamp's when the pin sits on or behind it."""
-    first = cls[0]
-    second = next((c for c in cls[1:] if c["model"] and c["ohms"] > first["ohms"]),
-                  None)
-    v2 = None
+def _secondary(rated, first, vc, model_of) -> tuple:
+    """(second clamp, its Vc, the current between the two) for the first
+    rated clamp further along than `first`; (None, None, None) without one,
+    and (clamp, None, None) when model_of gives it no model."""
+    second = next((c for c in rated[1:] if c["ohms"] > first["ohms"]), None)
+    if not second:
+        return None, None, None
+    m2 = model_of(second)
+    if not m2:
+        return second, None, None
+    got = surgelib.clamped(vc, second["ohms"] - first["ohms"], m2)
+    return second, got["vc_v"], got["i_a"]
+
+
+def _carry(ctx, first, second, i1, i2, ref, net, kv, mode, sign) -> None:
+    """Note the current each series part carries, keeping the worst: up to
+    the first clamp the whole surge current, between the two clamps the
+    secondary's."""
+    legs = [(r, i1) for r in first["via"]]
+    if second and i2 is not None:
+        legs += [(r, i2) for r in second["via"] if r not in first["via"]]
+    for r, i in legs:
+        old = ctx["series"].get(r)
+        if old is None or i > old["i_a"]:
+            ctx["series"][r] = {"i_a": i, "port": ref, "net": net,
+                                "level_kv": kv, "mode": mode["mode"],
+                                "polarity": sign}
+
+
+def judge_negative(ctx, ref, net, reach, mode, z, rated, assumed, row) -> None:
+    """The same surge, negative: a bidirectional clamp at -Vc, a
+    unidirectional one forward at -Vf(I); pins against their abs min."""
+    v = mode["kv"] * 1000.0
+    first = rated[0]
+
+    def neg_model(c):
+        texts = _texts(ctx["bg"].footprints[c["ref"]], ctx["parts"].get(c["ref"]))
+        over = ctx["clamp_over"].get(c["ref"])
+        d = surgelib.clamp_direction(texts, over)
+        if d == "bi":
+            return c["model"]
+        return surgelib.forward_model(texts, over) if d == "uni" else None
+
+    m = neg_model(first)
+    if not m:
+        row["negative"] = {"judged": False, "why": (
+            f"{first['ref']}: neither its direction nor its forward drop is "
+            "known")}
+        ctx["neg_unjudged"].add(first["ref"])
+        return
+    got = surgelib.clamped(v, z, m)
+    second, v2, i2 = _secondary(rated, first, got["vc_v"], neg_model)
+    neg = {"judged": True, "clamp": first["ref"],
+           "conducts": "forward" if m.get("forward") else "reverse",
+           "i_a": checklib.rnd(got["i_a"], 1),
+           "vc_v": -checklib.rnd(got["vc_v"], 1),
+           "source": m.get("source", "")}
     if second:
-        dr = second["ohms"] - first["ohms"]
-        v2 = surgelib.clamped(vc, dr, second["model"])["vc_v"]
-        row["secondary"] = second["ref"]
-        row["secondary_vc_v"] = checklib.rnd(v2, 1)
+        neg["secondary"] = second["ref"]
+        if v2 is None:
+            ctx["neg_unjudged"].add(second["ref"])
+        else:
+            neg["secondary_vc_v"] = -checklib.rnd(v2, 1)
+    row["negative"] = neg
+    _carry(ctx, first, second, got["i_a"], i2, ref, net, mode["kv"], mode, "-")
+    assumed = assumed.replace(" is the level", ", negative, is the level", 1)
+    judge_pins(ctx, ref, net, reach, first, second, got["vc_v"], v2, assumed,
+               neg, ctx["vios"], kind="surge_negative_under_abs_min",
+               severity="error", kv=mode["kv"], sign=-1)
+
+
+def judge_pins(ctx, ref, net, reach, first, second, vc, v2, assumed, row,
+               vios, kind, severity, kv, sign=1) -> None:
+    """Pins on the stretch against the voltage that reaches them: the first
+    clamp's Vc, or a secondary clamp's when the pin sits on or behind it.
+    sign -1 is the negative pulse: vc and v2 are magnitudes, the limit is
+    the pin's abs min, and a pin behind a secondary clamp with no negative
+    model (v2 None) is not judged."""
     pins = []
     for pnet, (ohms, via) in sorted(reach.items()):
         for p in ctx["bg"].pads_of(pnet):
@@ -325,24 +442,54 @@ def judge_pins(ctx, ref, net, reach, cls, vc, assumed, row, vios, kind,
                 continue
             fp = ctx["bg"].footprints[p.ref]
             part = ctx["parts"].get(p.ref)
-            lim, src = pin_limit(p, fp, part, ctx["parts_dir"], ctx["table"],
-                                 ctx["abs_max"])
             behind = bool(second) and ohms >= second["ohms"]
             at_pin = v2 if behind else vc
-            if lim is None:
-                ctx["unrated"].add(f"{p.ref}.{p.number}")
-                continue
-            pins.append({"ref": p.ref, "pin": p.number, "net": pnet,
-                         "abs_max_v": lim, "at_pin_v": checklib.rnd(at_pin, 1),
-                         "source": src})
-            if at_pin <= lim:
-                continue
+            if sign < 0:
+                lim, src = pin_limit_lo(p, part, ctx["parts_dir"],
+                                        ctx["abs_min"])
+                if lim is None or at_pin is None:
+                    ctx["unrated_lo"].add(f"{p.ref}.{p.number}")
+                    continue
+                pins.append({"ref": p.ref, "pin": p.number, "net": pnet,
+                             "abs_min_v": lim,
+                             "at_pin_v": -checklib.rnd(at_pin, 1),
+                             "source": src})
+                if -at_pin >= lim:
+                    continue
+            else:
+                lim, src = pin_limit(p, fp, part, ctx["parts_dir"],
+                                     ctx["table"], ctx["abs_max"])
+                if lim is None:
+                    ctx["unrated"].add(f"{p.ref}.{p.number}")
+                    continue
+                pins.append({"ref": p.ref, "pin": p.number, "net": pnet,
+                             "abs_max_v": lim,
+                             "at_pin_v": checklib.rnd(at_pin, 1),
+                             "source": src})
+                if at_pin <= lim:
+                    continue
             behind_series = ohms > first["ohms"] or len(via) > len(first["via"])
             hint = ("the secondary clamp still lets it through" if behind else
                     "the series element has no clamp behind it: add a "
                     "secondary clamp" if behind_series else
                     "add a series element and a secondary clamp, or a "
                     "lower-Vc clamp")
+            if sign < 0:
+                fwd = row.get("conducts") == "forward" and not behind
+                vios.append(checklib.violation(
+                    SCRIPT, severity, p.copper_center, None, pnet,
+                    [p.ref, first["ref"], ref],
+                    f"{p.ref} pin {p.number} ({pnet}): {-at_pin:.1f} V during "
+                    f"the negative pulse on {ref} {net}, under its abs min "
+                    f"{lim:g} V ({src})"
+                    + (f": {first['ref']} is unidirectional and conducts "
+                       "forward; a bidirectional clamp, or " if fwd else ": ")
+                    + (f"{hint}" if not fwd else "a series element and a "
+                       "secondary clamp")
+                    + f". {assumed}", SOURCE, kind=kind, level_kv=kv,
+                    assumption=True, at_pin_v=-checklib.rnd(at_pin, 1),
+                    abs_min_v=lim, pin=p.number))
+                continue
             vios.append(checklib.violation(
                 SCRIPT, severity, p.copper_center, None, pnet,
                 [p.ref, first["ref"], ref],
@@ -368,9 +515,90 @@ def judge_eft(ctx, ref, net, kv, cls, reach, facts) -> None:
     facts["eft"] = row
     assumed = (f"{kv:g} kV EFT is the level assumed from {ref}'s declaration "
                f"as {ctx['ports'][ref]['kind']}, not a requirement")
-    judge_pins(ctx, ref, net, reach, rated, got["vc_v"], assumed, row,
-               ctx["vios"], kind="surge_eft_over_abs_max", severity="warning",
-               kv=kv)
+    second, v2, _i2 = _secondary(rated, first, got["vc_v"],
+                                 lambda c: c["model"])
+    if second:
+        row["secondary"] = second["ref"]
+        row["secondary_vc_v"] = checklib.rnd(v2, 1)
+    judge_pins(ctx, ref, net, reach, first, second, got["vc_v"], v2, assumed,
+               row, ctx["vios"], kind="surge_eft_over_abs_max",
+               severity="warning", kv=kv)
+
+
+def judge_series(ctx, cfg) -> list[dict]:
+    """Each series part against the worst surge current it carries (an 8/20
+    pulse, I2t = I2T_PER_A2 * Ipk^2): a resistor's pulse power P = I^2 R
+    against its size's single-pulse rating or constraints pulse_w; any part
+    against constraints i2t_a2s (a fuse or PPTC opens) and ipk_a."""
+    over = cfg.get("series") or {}
+    table = surgelib.load_pulse_table()
+    rows = []
+    for r, hit in sorted(ctx["series"].items()):
+        fp = ctx["bg"].footprints[r]
+        o = over.get(r) or {}
+        i = hit["i_a"]
+        i2t = surgelib.pulse_i2t(i)
+        row = {"ref": r, "i_a": checklib.rnd(i, 1),
+               "i2t_a2s": checklib.rnd(i2t, 4), "port": hit["port"],
+               "net": hit["net"], "level_kv": hit["level_kv"],
+               "mode": hit["mode"], "polarity": hit["polarity"]}
+        where = (f"{hit['level_kv']:g} kV {hit['mode'].upper()} "
+                 f"({hit['polarity']}) on {hit['port']} {hit['net']}")
+        assumed = (f"{hit['level_kv']:g} kV is the level assumed from "
+                   f"{hit['port']}'s declaration, not a requirement")
+        pos = next(iter(ctx["bg"].pads_of(ref=r))).copper_center
+        judged = False
+        ohms = _series_ohms(r, fp)
+        if _ref_letters(r) == "R" and ohms:
+            p_w = i * i * ohms
+            if o.get("pulse_w") is not None:
+                lim, src = float(o["pulse_w"]), "constraints surge.series"
+            else:
+                code = engcalc.package_code(fp.get("lib"))
+                lim = surgelib.resistor_pulse_w(code, table=table)
+                src = (f"{code} thick film, reference/resistor_pulse.yaml"
+                       if lim else "")
+            row["p_w"] = checklib.rnd(p_w, 1)
+            if lim:
+                judged = True
+                row.update(pulse_w=checklib.rnd(lim, 1), pulse_source=src)
+                if p_w > lim:
+                    ctx["vios"].append(checklib.violation(
+                        SCRIPT, "error", pos, None, hit["net"], [r, hit["port"]],
+                        f"{r} ({fp.get('value')} ohm): {i:.0f} A through it "
+                        f"during {where} is {p_w:.0f} W for 8/20 us, over its "
+                        f"single-pulse rating {lim:.0f} W ({src}): a bigger "
+                        "or pulse-rated resistor, or a lower-Vc first clamp. "
+                        f"{assumed}", SOURCE, kind="surge_series_overstress",
+                        level_kv=hit["level_kv"], assumption=True,
+                        p_w=checklib.rnd(p_w, 1), pulse_w=checklib.rnd(lim, 1)))
+        if o.get("i2t_a2s") is not None:
+            judged = True
+            lim = float(o["i2t_a2s"])
+            if i2t > lim:
+                ctx["vios"].append(checklib.violation(
+                    SCRIPT, "warning", pos, None, hit["net"], [r, hit["port"]],
+                    f"{r}: {i:.0f} A for 8/20 us during {where} is "
+                    f"{i2t:.3g} A2s, over its I2t {lim:g} A2s (constraints "
+                    "surge.series): it opens, and the port stays down until "
+                    f"it is replaced or cools. {assumed}", SOURCE,
+                    kind="surge_fuse_opens", level_kv=hit["level_kv"],
+                    assumption=True, i2t_a2s=checklib.rnd(i2t, 4)))
+        if o.get("ipk_a") is not None:
+            judged = True
+            lim = float(o["ipk_a"])
+            if i > lim:
+                ctx["vios"].append(checklib.violation(
+                    SCRIPT, "error", pos, None, hit["net"], [r, hit["port"]],
+                    f"{r}: {i:.0f} A peak during {where}, over its pulse "
+                    f"current {lim:g} A (constraints surge.series). {assumed}",
+                    SOURCE, kind="surge_series_overstress",
+                    level_kv=hit["level_kv"], assumption=True,
+                    i_a=checklib.rnd(i, 1)))
+        if not judged:
+            ctx["series_unrated"].add(r)
+        rows.append(row)
+    return rows
 
 
 def run_spice(items: list, timeout: float = 120.0) -> str | None:
@@ -421,7 +649,10 @@ def check(pcb: Path, constraints: dict | None = None,
 
     ctx = {"bg": bg, "ports": ports, "clamps": clamps, "parts": parts,
            "parts_dir": parts_dir, "table": _pin_table(),
-           "abs_max": cfg.get("abs_max") or {}, "vios": [], "unrated": set(),
+           "abs_max": cfg.get("abs_max") or {},
+           "abs_min": cfg.get("abs_min") or {}, "clamp_over": overrides,
+           "vios": [], "unrated": set(), "unrated_lo": set(),
+           "neg_unjudged": set(), "series": {}, "series_unrated": set(),
            "spice": [] if spice else None}
     lines, unrated_clamps = [], set()
     for ref, port in sorted(ports.items()):
@@ -453,10 +684,15 @@ def check(pcb: Path, constraints: dict | None = None,
                 judge_mode(ctx, ref, net, cp, mode, cls, reach, facts)
             if eft is not None:
                 judge_eft(ctx, ref, net, eft, cls, reach, facts)
+    series = judge_series(ctx, cfg)
     report = {"ports_declared": len(ports), "environment": env,
               "levels_source": str(levels.get("source", "")).strip(),
               "levels_verified": bool(levels.get("verified")),
               "lines": lines, "unrated_pins": sorted(ctx["unrated"]),
+              "unrated_pins_negative": sorted(ctx["unrated_lo"]),
+              "negative_not_judged": sorted(ctx["neg_unjudged"]),
+              "series": series,
+              "series_unrated": sorted(ctx["series_unrated"]),
               "clamp_ratings": {
                   r: {k: (checklib.rnd(v, 3) if isinstance(v, float) else v)
                       for k, v in m.items()}

@@ -141,18 +141,18 @@ def test_mains_always_applies_and_level_can_be_forced():
 LAYERS = ('(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))')
 
 
-def _part(ref, value, x, nets, y=0.0):
+def _part(ref, value, x, nets, fpname=None, y=0.0):
     pads = " ".join(
         f'(pad "{i + 1}" smd rect (at {i * 2.0} 0) (size 1 1) '
         f'(layers "F.Cu") (net "{n}"))' for i, n in enumerate(nets))
-    return (f'(footprint "Lib:{value}" (layer "F.Cu") (at {x} {y})\n'
+    return (f'(footprint "Lib:{fpname or value}" (layer "F.Cu") (at {x} {y})\n'
             f' (property "Reference" "{ref}" (at 0 -1 0) (layer "F.SilkS"))\n'
             f' (property "Value" "{value}" (at 0 1 0) (layer "F.Fab"))\n'
             f' {pads})\n')
 
 
 def _board(tmp_path, parts) -> Path:
-    names = sorted({n for _r, _v, _x, nets in parts for n in nets})
+    names = sorted({n for p in parts for n in p[3]})
     decl = " ".join(f'(net {i + 1} "{n}")' for i, n in enumerate(names))
     body = "".join(_part(*p, y=10.0 * k) for k, p in enumerate(parts))
     pcb = tmp_path / "b.kicad_pcb"
@@ -267,6 +267,121 @@ def test_eft_judges_vc_not_the_8_20_rating(tmp_path):
     assert facts["lines"][0]["eft"]["level_kv"] == 0.5
     assert _kinds(viols) == {"surge_eft_over_abs_max"}
     assert viols[0]["severity"] == "warning"
+
+
+# ------------------------------------------- series parts and the other polarity
+
+def test_8_20_i2t_known_answer():
+    """I2t of the 8/20 current per A^2 of peak: the analytic wave
+    integrated numerically, and its shape by the standard's 10-90 % and
+    50 % definitions."""
+    n, dt = 400000, 1e-10
+    ts = [k * dt for k in range(n)]
+    i2 = sum(surgelib.wave_8_20(t) ** 2 for t in ts) * dt
+    assert surgelib.I2T_PER_A2 == pytest.approx(i2, rel=0.01)
+    assert surgelib.pulse_i2t(100.0) == pytest.approx(1e4 * i2, rel=0.01)
+    sh = surgelib.current_shape(ts, [surgelib.wave_8_20(t) for t in ts])
+    assert sh["peak"] == pytest.approx(1.0, rel=0.01)
+    assert sh["t1_s"] == pytest.approx(8e-6, rel=0.05)
+    assert sh["td_s"] == pytest.approx(20e-6, rel=0.10)
+
+
+def test_generator_short_circuit_i2t_matches_the_closed_form():
+    """The generator into a short, integrated: I2t / Ipk^2 within 20 % of
+    the closed form the series check uses."""
+    sc = _spice([surgelib.load_deck(1.0, 1e-3)])[0]
+    t, i = sc["time"], [x / 1e-3 for x in sc["o"]]
+    i2t = sum((i[k] ** 2 + i[k + 1] ** 2) / 2 * (t[k + 1] - t[k])
+              for k in range(len(t) - 1))
+    assert i2t / max(i) ** 2 == pytest.approx(surgelib.I2T_PER_A2, rel=0.20)
+
+
+def test_resistor_pulse_table_reads_the_chart():
+    assert surgelib.resistor_pulse_w("0603", 10e-6) == pytest.approx(19.9)
+    assert 15.8 < surgelib.resistor_pulse_w("0603") < 19.9      # 12.2 us
+    assert surgelib.resistor_pulse_w("2512") > 200
+    assert surgelib.resistor_pulse_w(None) is None
+
+
+SERIES = [("J1", "CONN", 0, ["LINE", "GND"]),
+          ("D1", "SMBJ20A", 20, ["LINE", "GND"]),
+          ("R1", "10R", 40, ["LINE", "LINE2"], "R_0603_1608Metric"),
+          ("D2", "SRV05-4", 60, ["LINE2", "GND"])]
+
+
+def test_planted_small_resistor_between_two_clamps_overstresses(tmp_path):
+    """1 kV into the SMBJ20A holds LINE near 37 V; 10 ohm to the SRV05-4
+    behind it is ~2.7 A, ~73 W for 8/20 us: over an 0603's ~18 W."""
+    cons = {"surge": {"ports": {"J1": PORT}}}
+    viols, facts = check_surge.check(_board(tmp_path, SERIES), cons)
+    bad = [v for v in viols if v["kind"] == "surge_series_overstress"]
+    assert bad and "R1" in bad[0]["refs"] and bad[0]["severity"] == "error"
+    row = facts["series"][0]
+    assert row["ref"] == "R1" and row["pulse_w"] < 20
+    assert row["p_w"] == pytest.approx(73, rel=0.15)
+    # the quiet twin: a 2512, or a pulse rating the designer gives
+    twin = SERIES[:2] + [("R1", "10R", 40, ["LINE", "LINE2"],
+                          "R_2512_6332Metric"), SERIES[3]]
+    viols, _ = check_surge.check(_board(tmp_path, twin), cons)
+    assert "surge_series_overstress" not in _kinds(viols)
+    cons["surge"]["series"] = {"R1": {"pulse_w": 150}}
+    viols, facts = check_surge.check(_board(tmp_path, SERIES), cons)
+    assert "surge_series_overstress" not in _kinds(viols)
+    assert facts["series"][0]["pulse_source"] == "constraints surge.series"
+
+
+def test_fuse_i2t_opens_and_unrated_series_parts_are_listed(tmp_path):
+    parts = [("J1", "CONN", 0, ["LINE", "GND"]),
+             ("F1", "PTC", 20, ["LINE", "LINE2"]),
+             ("D1", "SMBJ20A", 40, ["LINE2", "GND"])]
+    cons = {"surge": {"ports": {"J1": PORT}}}
+    viols, facts = check_surge.check(_board(tmp_path, parts), cons)
+    assert facts["series_unrated"] == ["F1"]
+    cons["surge"]["series"] = {"F1": {"i2t_a2s": 0.001}}
+    viols, _ = check_surge.check(_board(tmp_path, parts), cons)
+    hit = [v for v in viols if v["kind"] == "surge_fuse_opens"]
+    assert hit and hit[0]["severity"] == "warning"       # ~23 A: ~6.4e-3 A2s
+    cons["surge"]["series"] = {"F1": {"i2t_a2s": 0.1}}
+    viols, _ = check_surge.check(_board(tmp_path, parts), cons)
+    assert "surge_fuse_opens" not in _kinds(viols)
+
+
+NEG = [("J1", "CONN", 0, ["LINE", "GND"]),
+       ("D1", "SMBJ20A", 20, ["LINE", "GND"]),
+       ("U1", "LM358", 40, ["LINE", "GND"])]
+
+
+def test_planted_unidirectional_clamp_forward_under_abs_min(tmp_path):
+    """The negative 1 kV pulse forward-biases a SMBJ20A: ~23 A at ~2 V, under
+    a pin's -0.5 V; the bidirectional SMBJ20CA holds it at -Vc instead."""
+    cons = {"surge": {"ports": {"J1": PORT}, "abs_max": {"U1": 40},
+                      "abs_min": {"U1": -0.5}}}
+    viols, facts = check_surge.check(_board(tmp_path, NEG), cons)
+    bad = [v for v in viols if v["kind"] == "surge_negative_under_abs_min"]
+    assert bad and bad[0]["severity"] == "error" and "U1" in bad[0]["refs"]
+    assert "unidirectional" in bad[0]["msg"]
+    neg = facts["lines"][0]["modes"][0]["negative"]
+    assert neg["conducts"] == "forward" and -3.5 < neg["vc_v"] < -0.7
+    bi = [NEG[0], ("D1", "SMBJ20CA", 20, ["LINE", "GND"]), NEG[2]]
+    cons["surge"]["abs_min"] = {"U1": -40}
+    viols, facts = check_surge.check(_board(tmp_path, bi), cons)
+    assert "surge_negative_under_abs_min" not in _kinds(viols)
+    neg = facts["lines"][0]["modes"][0]["negative"]
+    pos = facts["lines"][0]["modes"][0]
+    assert neg["conducts"] == "reverse"
+    assert neg["vc_v"] == pytest.approx(-pos["vc_v"])
+
+
+def test_unknown_direction_is_not_judged_negative(tmp_path):
+    parts = [NEG[0], ("D1", "TVS", 20, ["LINE", "GND"]), NEG[2]]
+    cons = {"surge": {"ports": {"J1": PORT}, "abs_min": {"U1": -0.5},
+                      "clamps": {"D1": {"vbr": 23, "vc": 32, "ipp_a": 100}}}}
+    viols, facts = check_surge.check(_board(tmp_path, parts), cons)
+    assert "surge_negative_under_abs_min" not in _kinds(viols)
+    assert facts["negative_not_judged"] == ["D1"]
+    cons["surge"]["clamps"]["D1"]["vf_v"] = 1.5
+    viols, _ = check_surge.check(_board(tmp_path, parts), cons)
+    assert "surge_negative_under_abs_min" in _kinds(viols)
 
 
 def test_bad_declaration_is_an_error(tmp_path):

@@ -19,6 +19,22 @@ families; Ppk falls as t^-0.5 on their peak-power vs pulse-width curve, so
 the rating at 8/20 (Td 20 us) is Ppk * sqrt(1000/20) = 7.07 x Ppk: an
 ESTIMATE, flagged as such in the report. A datasheet's 8/20 number goes in
 reference/surge_clamps.yaml or constraints surge.clamps.
+
+The 8/20 wave as a closed form (#577): i(t) = Ipk (t/3tau)^3 e^(3 - t/tau),
+tau = 3.911 us, peaks at 3 tau and measures 8.0/19.1 us by Ed.3's T1 and Td.
+Its I2t is 6! A^2 (tau/2)^7 = I2T_PER_A2 x Ipk^2 (12.17 us), the same as a
+rectangular pulse of Ipk lasting 12.17 us: the width at which a resistor's
+single-pulse chart is read and against which a fuse's melting I2t is set.
+tests/test_check_surge.py pins it to a numeric integral and to the
+generator's own short-circuit wave in ngspice.
+
+Reverse polarity: a unidirectional TVS (family name without C, as SMBJ20A)
+conducts forward on the negative pulse. Its forward drop is modelled as
+0.7 V + rf x I through the datasheet's maximum, Vf 3.5 V at 50 A for single
+die and 5.0 V for stacked die (SMBJ300A and up), Littelfuse SMBJ datasheet
+(Revised 06/03/20) note 4. Only SMBJ is sourced, so no other family's
+forward drop is assumed. A bidirectional part (SMBJ20CA) clamps at its own
+Vc either way.
 """
 from __future__ import annotations
 
@@ -31,6 +47,7 @@ import yaml
 REFERENCE = Path(__file__).resolve().parents[2] / "reference"
 LEVELS_YAML = REFERENCE / "surge_levels.yaml"
 CLAMPS_YAML = REFERENCE / "surge_clamps.yaml"
+PULSE_YAML = REFERENCE / "resistor_pulse.yaml"
 
 GENERATOR_OHM = 2.0
 EFT_OHM = 50.0
@@ -46,6 +63,85 @@ FAMILY_RE = re.compile(r"(SMAJ|P4SMA|SMBJ|P6KE|SMCJ|SMF)(\d+(?:\.\d+)?)", re.I)
 VC_PER_VRWM = 1.62
 VBR_PER_VRWM = 1.1675
 PULSE_SCALE_8_20 = math.sqrt(1000.0 / 20.0)
+
+# the 8/20 wave i = A t^3 e^(-t/tau), A = e^3 / (27 tau^3) per amp of peak
+TAU_8_20 = 3.911e-6
+I2T_PER_A2 = math.factorial(6) * (math.e ** 3 / (27 * TAU_8_20 ** 3)) ** 2 \
+    * (TAU_8_20 / 2) ** 7
+# Littelfuse SMBJ (Revised 06/03/20) note 4: Vf max at 50 A, unidirectional
+FORWARD_KNEE_V = 0.7
+FORWARD_VF = {"SMBJ": (50.0, 3.5, 5.0, 300.0)}  # at A, single, stacked, Vrwm>=
+
+
+def wave_8_20(t: float, i_peak: float = 1.0) -> float:
+    """The 8/20 short-circuit current at t seconds, peak i_peak at 3 tau."""
+    x = t / TAU_8_20
+    return i_peak * (x / 3.0) ** 3 * math.exp(3.0 - x) if t > 0 else 0.0
+
+
+def pulse_i2t(i_peak: float) -> float:
+    """I2t (A^2 s) of an 8/20 pulse peaking at i_peak."""
+    return I2T_PER_A2 * i_peak * i_peak
+
+
+def load_pulse_table(path: Path = PULSE_YAML) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def resistor_pulse_w(code: str | None, ti_s: float = I2T_PER_A2,
+                     table: dict | None = None) -> float | None:
+    """A chip size's single rectangular pulse power at width ti_s, log-log
+    between the chart's points; None for a size the chart doesn't give."""
+    table = table or load_pulse_table()
+    row = (table.get("sizes") or {}).get(code or "")
+    if not row:
+        return None
+    us = [float(x) for x in table["ti_us"]]
+    t = min(max(ti_s * 1e6, us[0]), us[-1])
+    for (t0, p0), (t1, p1) in zip(zip(us, row), zip(us[1:], row[1:])):
+        if t <= t1:
+            f = math.log(t / t0) / math.log(t1 / t0)
+            return math.exp(math.log(p0) + f * (math.log(p1) - math.log(p0)))
+    return float(row[-1])
+
+
+def clamp_direction(texts: list[str], override: dict | None = None
+                    ) -> str | None:
+    """'uni', 'bi' or None (not known) for a clamp. Constraints decide
+    first: bidirectional true/false, or a forward drop vf_v, which only a
+    unidirectional clamp has."""
+    if override and "bidirectional" in override:
+        return "bi" if override["bidirectional"] else "uni"
+    if override and override.get("vf_v") is not None:
+        return "uni"
+    for t in texts:
+        m = re.search(FAMILY_RE.pattern + r"(C?)A?\b", t or "", re.I)
+        if m:
+            return "bi" if m.group(3) else "uni"
+    return None
+
+
+def forward_model(texts: list[str], override: dict | None = None
+                  ) -> dict | None:
+    """A unidirectional clamp's forward conduction as Vf(I) = 0.7 + rf I, in
+    clamp_model's shape so clamped() can drive it; None when no source gives
+    the forward drop. Constraints give it as vf_v at vf_a."""
+    if override and override.get("vf_v") is not None:
+        at, vf, src = (float(override.get("vf_a", 50.0)),
+                       float(override["vf_v"]), "constraints surge.clamps")
+    else:
+        m = next((FAMILY_RE.search(t or "") for t in texts
+                  if FAMILY_RE.search(t or "")), None)
+        if not m or m.group(1).upper() not in FORWARD_VF:
+            return None
+        fam = m.group(1).upper()
+        at, single, stacked, from_v = FORWARD_VF[fam]
+        vf = stacked if float(m.group(2)) >= from_v else single
+        src = (f"{fam} datasheet note 4 (Littelfuse, Revised 06/03/20): "
+               f"Vf < {vf:g} V at {at:g} A")
+    rf = max(vf - FORWARD_KNEE_V, 0.0) / at
+    return {"vbr": FORWARD_KNEE_V, "rdyn": rf, "vc": vf, "ipp_a": at,
+            "vf_at_a": at, "source": src, "forward": True}
 
 
 def load_levels(path: Path = LEVELS_YAML) -> dict:

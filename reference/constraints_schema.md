@@ -318,10 +318,21 @@ Consumers per key (script -> phase):
   // port is judged on nothing with no warning (nothing_to_judge is set only
   // when no port is declared). Leave nets out for the kind's default, and
   // check the report lists lines for every port.
+  // The other polarity (#577): abs_min a pin's lower limit (ref or ref.pin,
+  // e.g. -0.3). A clamp's bidirectional (true/false) and forward drop vf_v
+  // at vf_a (A) decide what the negative pulse sees: -Vc for a bidirectional
+  // clamp, -Vf for a unidirectional one; a vf_v implies unidirectional.
+  // series rates a series part for one 8/20 pulse: pulse_w (W, a resistor,
+  // over its chip size's thick-film rating in reference/resistor_pulse.yaml),
+  // i2t_a2s (a fuse or PPTC: over it the part opens, a warning), ipk_a (any
+  // part's peak current).
   "surge": {"environment": "residential",
             "ports": {"J1": {"kind": "dc_power", "cable_m": 2, "nets": ["VBUS"],
                              "level_kv": 0.5}},
-            "abs_max": {"U2.3": 30}},
+            "clamps": {"D1": {"bidirectional": false, "vf_v": 3.5, "vf_a": 50}},
+            "abs_max": {"U2.3": 30}, "abs_min": {"U2.3": -0.3},
+            "series": {"R4": {"pulse_w": 150}, "F1": {"i2t_a2s": 0.02},
+                       "L2": {"ipk_a": 30}}},
 
   // check_isolation (P8, #353): isolation domains and barriers against IEC
   // 60664-1 / 62368-1 (reference/iso_tables.yaml, every row marked read or
