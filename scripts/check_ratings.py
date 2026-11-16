@@ -3703,10 +3703,24 @@ def _pin_name(s: str) -> str:
     return re.sub(r"[^0-9A-Z]", "", str(s or "").upper())
 
 
+# A 4053 triple 2-channel mux under two namings (#1522): a CD4053-style
+# symbol (A/B/C select X/Y/Z; X0/X1/X; INH; VDD/VSS) and the 74HC4053
+# datasheets' (S1/S2/S3 select 1/2/3; 1Y0/1Y1/1Z; E; VCC/GND). Same pins.
+# Only for an extraction whose MPN names a 4053: a 4051 or 4052 maps its
+# selects otherwise (A is S0 there).
+MUX_4053_NAMES = {"A": "S1", "B": "S2", "C": "S3", "INH": "E",
+                  "X0": "1Y0", "X1": "1Y1", "X": "1Z",
+                  "Y0": "2Y0", "Y1": "2Y1", "Y": "2Z",
+                  "Z0": "3Y0", "Z1": "3Y1", "Z": "3Z",
+                  "VDD": "VCC", "VSS": "GND"}
+MUX_4053_RE = re.compile(r"(?<!\d)4053(?!\d)")
+
+
 def pinout_fact(b: dict, ext: dict | None) -> tuple[str, str]:
     """(status, value) for a part's pin map: the board's pad numbers must all
     be pins of the datasheet extraction, and where the pad carries a pin
-    name, it must be that pin's name (or an alias of it). A name that
+    name, it must be that pin's name (or an alias of it; for a 4053, its
+    other naming, MUX_4053_NAMES). A name that
     disagrees is unknown, not failed: the two may spell one pin differently,
     and a reader has to look."""
     if ext is None or not ext.get("pinout"):
@@ -3720,13 +3734,15 @@ def pinout_fact(b: dict, ext: dict | None) -> tuple[str, str]:
         return "failed", (f"board pad(s) {', '.join(missing[:8])} are not "
                           f"pins of the {ext.get('mpn')} extraction")
     differ = []
+    mux = MUX_4053_NAMES if MUX_4053_RE.search(str(ext.get("mpn") or "")) \
+        else {}
     for n, fn in sorted((b.get("fns") or {}).items()):
         p = pins.get(n)
         if p is None or not fn:
             continue
         a, c = _pin_name(fn), _pin_name(p.get("name"))
         if a and c and not (a in c or c in a or aliases(fn) & aliases(
-                str(p.get("name")))):
+                str(p.get("name"))) or mux.get(a) == c or mux.get(c) == a):
             differ.append(f"{n}: board {fn} / datasheet {p.get('name')}")
     if differ:
         return "unknown", ("pin names differ, check by eye: "
