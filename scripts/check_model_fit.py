@@ -166,7 +166,10 @@ def _hidden(node) -> bool:
 
 def _pads(fp, angle: float) -> list[tuple[str, bool, object]]:
     """(number, through, copper or hole polygon in the footprint's file
-    frame) of every pad with copper or a hole."""
+    frame) of every pad with copper or a hole. An SMD pad with neither a
+    paste nor a mask opening is bare copper under the mask, a Kelvin
+    footprint's sense tab (R0805_Kelvin pads 3 and 4, #612) or a net tie's
+    bridge: no lead lands on it, so the model is not fitted to it."""
     out = []
     for pad in _kids(fp, "pad"):
         ps = _strs(pad)
@@ -177,6 +180,8 @@ def _pads(fp, angle: float) -> list[tuple[str, bool, object]]:
                           is not None else [])
         if not through and ".Cu" not in layers:
             continue                       # a paste or mask aperture
+        if not through and ".Paste" not in layers and ".Mask" not in layers:
+            continue                       # bare copper: no lead lands on it
         at = _nums(_kid(pad, "at")) if _kid(pad, "at") is not None else [0, 0]
         if through and _kid(pad, "drill") is not None:
             d = _nums(_kid(pad, "drill"))
