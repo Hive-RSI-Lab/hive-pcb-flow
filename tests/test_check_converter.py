@@ -2,7 +2,7 @@
 IC's current limits and minimum on-time, on synthetic boards.
 
 Expected figures are worked by hand from the formulas the check cites:
-TI SLVA477C eq. 1, 3, 4 (buck), TI SLVA372D eq. 2, 3, 5 (boost)."""
+TI SLVA477C eq. 1 to 4 (buck), TI SLVA372D eq. 2 to 4 (boost)."""
 from __future__ import annotations
 
 import json

@@ -7,14 +7,14 @@ output voltages, L and fsw, from declared voltages, the inductor's Value, and
 reference/converter_fsw.yaml or a block's fsw_khz. The load is the output
 rail's power entry current_a. Then:
 
-  buck   dI = (Vin - Vout) * Vout / (Vin * fsw * L)        TI SLVA477C eq. 1
+  buck   dI = (Vin - Vout) * Vout / (Vin * fsw * L)        TI SLVA477C eq. 1, 2
          Ipeak = Iout + dI / 2                             SLVA477C eq. 4
          Iout max = Ilim(min) - dI / 2                     SLVA477C eq. 3
          ton = Vout / (Vin * fsw)
   boost  D = 1 - Vin / Vout (lossless; losses raise D a little, so Ipeak
          here is a lower bound)
          dI = Vin * D / (fsw * L)                          TI SLVA372D eq. 2
-         Ipeak = dI / 2 + Iout / (1 - D)                   SLVA372D eq. 5
+         Ipeak = dI / 2 + Iout / (1 - D)                   SLVA372D eq. 4
          Iout max = (Ilim(min) - dI / 2) * (1 - D)         SLVA372D eq. 3
          RHP zero = Vout * (1 - D)^2 / (2 pi L Iout)
 
@@ -222,7 +222,7 @@ def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
                 add("converter_isat_low", "error",
                     f"Isat {_fmt(isat)} is below the peak current {_fmt(peak)} "
                     f"at {_fmt(iout)} out (dI {_fmt(ripple)}; {ref} "
-                    f"{'eq. 4' if topo == 'buck' else 'eq. 5'})",
+                    "eq. 4)",
                     isat_a=isat, peak_a=checklib.rnd(peak, 4))
         if row is None:
             missing.append(f"{ic} has no row in reference/converter_limits.yaml "
