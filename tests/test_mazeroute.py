@@ -997,3 +997,174 @@ def test_live_route_and_corridor_drc_clean(kicad, tmp_path):
                            "--to", "P2.1", "--half-width", "0.5"])
     assert p["status"] == "pass" and p["fill_mm2"] > 10
     assert _signal_drc(kicad, pcb) == []
+
+
+# ------------------------------------------------------------ pour links (#1311)
+
+_LINK_ZONE = """  (zone (net "GND") (layer "B.Cu") (uuid "00000000-0000-0000-0000-0000000006a1")
+    (hatch edge 0.5) (connect_pads yes (clearance 0.25)) (min_thickness 0.25)
+    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts {outline}))
+{fills})
+"""
+_V1 = "00000000-0000-0000-0000-0000000006b1"
+_V2 = "00000000-0000-0000-0000-0000000006b2"
+
+
+def _bpad(ref, x, y, net):
+    return (f'  (footprint "t:{ref}" (layer "B.Cu") (at {x} {y})\n'
+            f'    (property "Reference" "{ref}" (at 0 0 0))\n'
+            f'    (pad "1" smd rect (at 0 0) (size 1.0 1.0)'
+            f' (layers "B.Cu") (net "{net}")))\n')
+
+
+# the zone's outline: x 9.6 on, but for a notch to x 10.25 at y 8 to 12
+_LINK_OUTLINE = [(9.6, 0.5), (19.5, 0.5), (19.5, 19.5), (9.6, 19.5), (9.6, 12),
+                 (10.25, 12), (10.25, 8), (9.6, 8)]
+
+
+def _pour_link(tmp_path, body="", name="link"):
+    """20 x 20, F.Cu and B.Cu (#1311, U202.1's via on the voice board):
+    G1, a GND pad on F.Cu at (10, 10) with via V1 in it, which meets the
+    B.Cu GND pour by 0.05 mm at the foot of a notch (zone edge x 10.25 at
+    y 8 to 12, x 9.6 elsewhere) and nothing else of GND; G2 at (17, 10)
+    with V2 well inside the pour. A's B.Cu pads at (10.6, 13) and
+    (10.6, 7): A's straight way runs 0.2 mm past V1's join, and the refill
+    (at the 0.15 mm rule floor, which KiCad puts above the zone's own
+    0.25) leaves the fill there under the min thickness: G1 is cut off.
+    0.25 mm off the join, the fill left of A is thick enough to stay and
+    reaches the pour round A's pads. A B track on B.Cu at x 9.2 leaves A no way round V1's
+    other side. `body` adds copper."""
+    import make_fixture as mf
+    from shapely.geometry import Polygon
+    from shapely.ops import split
+    apads = box(10.1, 12.5, 11.1, 13.5).union(box(10.1, 6.5, 11.1, 7.5))
+    fill = Polygon(_LINK_OUTLINE).difference(apads.buffer(0.25))
+    # cut through A's pads, so each piece is a fill outline with no holes
+    pieces = split(fill, LineString([(10.6, 0), (10.6, 20)])).geoms
+    fills = "".join(
+        '    (filled_polygon (layer "B.Cu") (pts '
+        + " ".join(f"(xy {x:.4f} {y:.4f})" for x, y in pc.exterior.coords[:-1])
+        + "))\n" for pc in pieces)
+    outline = " ".join(f"(xy {x} {y})" for x, y in _LINK_OUTLINE)
+    body = (mf.pad("G1", 10, 10, "GND") + mf.via(10, 10, "GND", _V1)
+            + mf.pad("G2", 17, 10, "GND") + mf.via(17, 10, "GND", _V2)
+            + _bpad("A1", 10.6, 13, "A") + _bpad("A2", 10.6, 7, "A")
+            + mf.seg(9.2, 3, 9.2, 17, 0.25, "B.Cu", "B",
+                     "00000000-0000-0000-0000-0000000006d1")
+            + _LINK_ZONE.format(fills=fills, outline=outline) + body)
+    pcb = mf.write(tmp_path / f"{name}.kicad_pcb", body, 20, 20)
+    return geom.BoardGeom.from_file(pcb)
+
+
+# a GND track on F.Cu from G1 to G2: the pour is no longer G1's only link
+_G1_G2 = "  (segment (start 10 10) (end 17 10) (width 0.25) (layer \"F.Cu\")" \
+    " (net \"GND\") (uuid \"00000000-0000-0000-0000-0000000006c1\"))\n"
+
+
+def test_pour_links_are_the_joins_only_a_pour_makes(tmp_path, mf_path):
+    """#1311: V1 joins G1 to the rest of GND only through the B.Cu pour, as
+    V2 joins G2; a track from G1 to G2 makes neither the only link."""
+    bg = _pour_link(tmp_path)
+    links = rf.pour_links(bg)
+    assert sorted(o for *_, o in links) == [("via", _V1), ("via", _V2)]
+    [(net, layer, band, clr, _)] = [k for k in links if k[4] == ("via", _V1)]
+    assert (net, layer, clr) == ("GND", "B.Cu", 0.25)
+    # the fill within the zone's min thickness of V1's copper
+    assert band.bounds[0] == pytest.approx(10.25)
+    assert band.bounds[2] == pytest.approx(10.3 + 0.25, abs=0.01)
+    assert rf.Obstacles(bg, links=False).spokes_near(box(0, 0, 20, 20)) == []
+    assert len(rf.Obstacles(bg).spokes_near(box(9, 9, 11, 11))) == 1
+    assert rf.pour_links(_pour_link(tmp_path, _G1_G2, "twin")) == []
+
+
+def _link_gap(bg, ops):
+    """The least gap from A's new tracks to V1's join with the pour."""
+    [band] = [b for _, _, b, _, o in rf.pour_links(bg) if o == ("via", _V1)]
+    return min(LineString([o["start"], o["end"]]).buffer(o["width"] / 2)
+               .distance(band) for o in _tracks(ops, "A"))
+
+
+def test_a_route_leaves_a_via_only_a_pour_joins(tmp_path, mf_path):
+    """#1311: a route of another net keeps the zone's clearance off the
+    fill that alone joins V1 to its net; in the twin, where a track joins
+    G1 too, it takes the straight way past V1."""
+    bg = _pour_link(tmp_path)
+    r = mazeroute.Router(bg, layers=["B.Cu"])
+    ops = r.route("A", "A1.1", "A2.1")
+    assert len(r.islands("A")) == 1
+    assert _link_gap(bg, ops) >= 0.25 - 1e-6
+    # the band alone let the first path wall V1's fill in against the
+    # notch's edge; the search again went round it
+    assert r.cuts == []
+    assert rf.pour_cuts(r.obs, ops, "A", r.rules) == []
+    twin = _pour_link(tmp_path, _G1_G2, "twin")
+    r = mazeroute.Router(twin, layers=["B.Cu"])
+    ops = r.route("A", "A1.1", "A2.1")
+    assert len(r.islands("A")) == 1
+    assert _link_gap(bg, ops) < 0.25
+
+
+def _straight_a(x=10.6):
+    return [{"op": "add_track", "net": "A", "layer": "B.Cu", "width": 0.2,
+             "start": [x, 12.5], "end": [x, 7.5]}]
+
+
+def test_pour_cuts_names_the_via_a_route_cuts_off(tmp_path, mf_path):
+    """#1311, the planted cut: A's straight way leaves V1's join under the
+    zone's min thickness, and pour_cuts names V1; in the twin a track joins
+    G1 too and the same route cuts nothing, as does one 3 mm away."""
+    bg = _pour_link(tmp_path)
+    obs, rules = rf.Obstacles(bg), rf.board_rules(Path(bg.path), bg)
+    [(owner, layer, pocket, znet, zclr)] = rf.pour_cuts(
+        obs, _straight_a(), "A", rules)
+    assert (owner, layer, znet, zclr) == (("via", _V1), "B.Cu", "GND", 0.25)
+    assert pocket.distance(Point(10, 10)) < 0.3
+    assert rf.cut_note([(owner, layer, pocket, znet, zclr)]) == (
+        f"cuts the B.Cu GND pour off via {_V1}")
+    assert rf.pour_cuts(obs, _straight_a(13.6), "A", rules) == []
+    assert rf.pour_cuts(rf.Obstacles(bg, links=False), _straight_a(), "A",
+                        rules) == []
+    twin = _pour_link(tmp_path, _G1_G2, "twin")
+    assert rf.pour_cuts(rf.Obstacles(twin), _straight_a(), "A",
+                        rules) == []
+
+
+def test_live_a_route_leaves_the_pour_whole(kicad, tmp_path, mf_path):
+    """#1311 at KiCad's refill: route_edit's route of A leaves GND whole;
+    the planted straight way splits it, as pour_cuts said."""
+    import kc
+    pcb = Path(_pour_link(tmp_path).path)
+    payload, _ = route_edit.run(["--pcb", str(pcb), "--op", json.dumps(
+        {"op": "route", "net": "A", "from": "A1.1", "to": "A2.1",
+         "layers": ["B.Cu"]})])
+    assert payload["results"][0]["status"] == "added"
+    unconnected = [v for v in kc.run_drc(kicad, pcb, refill=True)["violations"]
+                   if v["check"] == "unconnected_items"]
+    assert unconnected == []
+
+    (tmp_path / "cut").mkdir()
+    pcb = Path(_pour_link(tmp_path / "cut").path)
+    route_edit.apply_ops(pcb, _straight_a())
+    unconnected = [v for v in kc.run_drc(kicad, pcb, refill=True)["violations"]
+                   if v["check"] == "unconnected_items"]
+    assert [v["net"] for v in unconnected] == ["GND"]
+
+
+def test_plan_routes_searches_again_round_a_pour_link(tmp_path, mf_path,
+                                                      monkeypatch):
+    """#1311 in route_finish: plan_routes' first path for A walls V1's fill
+    in; it searches again round it, and with no rounds left it keeps the
+    cut and says so on the connection."""
+    bg = _pour_link(tmp_path)
+    rules = rf.board_rules(Path(bg.path), bg)
+    pair = {"net": "A", "a": {"msg": "Pad 1 [A] of A1 on B.Cu",
+                              "pos": [10.6, 13]},
+            "b": {"msg": "Pad 1 [A] of A2 on B.Cu", "pos": [10.6, 7]}}
+    [job] = rf.plan_routes(bg, rules, [pair], ["B.Cu"])
+    assert job["status"] == "routed" and "pour_cut" not in job
+    assert rf.pour_cuts(rf.Obstacles(bg), job["ops"], "A", rules) == []
+    monkeypatch.setattr(rf, "LINK_ROUNDS", 0)
+    [job] = rf.plan_routes(bg, rules, [pair], ["B.Cu"])
+    assert job["status"] == "routed"
+    assert job["pour_cut"] == f"cuts the B.Cu GND pour off via {_V1}"
