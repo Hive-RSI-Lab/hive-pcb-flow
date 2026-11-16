@@ -296,6 +296,12 @@ class Pad:
     thermal_gap: Optional[float] = None
     spoke_width: Optional[float] = None
     spoke_angle: Optional[float] = None
+    # The pad's own `(clearance x)`, else its footprint's: None when neither
+    # sets one. KiCad 10's DRC holds a pair with one to it in place of every
+    # netclass and .kicad_dru clearance (barriers included), floored only by
+    # the board setup's minimum clearance; physical and hole clearances
+    # still hold (checked with kicad-cli, #1275).
+    clearance: Optional[float] = None
 
     @cached_property
     def copper_center(self) -> tuple[float, float]:
@@ -982,7 +988,7 @@ class BoardGeom:
                                     "attrs": tuple(str(_tok(x)) for x in _strs(attr))
                                     if attr is not None else ()}
             first_pad = len(self._pads)
-            fp_th = _thermal_of(fp)
+            fp_th = dict(_thermal_of(fp), clearance=_num_of(fp, "clearance"))
             for pad in _kids(fp, "pad"):
                 self._add_pad(pad, fx, fy, fangle, ref, fp_th)
             nets = frozenset(p.net for p in self._pads[first_pad:] if p.net)
@@ -1069,7 +1075,7 @@ class BoardGeom:
                 if len(on) >= 2:
                     drill_off = (on[0], on[1])
         custom = _custom_pad(pad, w, h, self.legacy_fill) if pshape == "custom" else None
-        th = _thermal_of(pad)
+        th = dict(_thermal_of(pad), clearance=_num_of(pad, "clearance"))
         for k, v in (fp_th or {}).items():
             if th[k] is None or (k == "zone_connect"
                                  and th[k] == ZONE_CONNECT_INHERIT):
@@ -1093,7 +1099,7 @@ class BoardGeom:
             else th["zone_connect"],
             thermal_gap=th["thermal_gap"] or None,
             spoke_width=th["spoke_width"] or None,
-            spoke_angle=th["spoke_angle"])
+            spoke_angle=th["spoke_angle"], clearance=th["clearance"])
         if npth and drill:
             self.npth.append(made)
         if layers:
