@@ -1424,6 +1424,39 @@ class BoardGeom:
             _cleanup(fresh)
         return self._refill_empty
 
+    def stale_patches(self) -> list[dict]:
+        """The PATCH_<net> zones (zone_patch) that look left behind (#1424):
+        one that holds no via of its net (a via is held when its copper
+        meets the outline on one of the zone's layers, as route_edit's
+        #1145 check reads it), and one with a layer it fills nothing on.
+        Read the second on a fresh board only: after assert_fresh() an
+        empty zone is one KiCad's own refill leaves empty too. Each:
+        {uuid, name, net, layers, at (a point inside the outline), box
+        (patch_region: the outline's bounds for zone_patch), no_via:
+        bool, empty: [layers it fills nothing on]}; a zone with
+        neither is not listed. zone_patch never writes an empty patch, but
+        a strip it pours in corridor mode joins pads and holds no via by
+        design, so no_via alone is a hint, not proof."""
+        from shapely.geometry import Polygon
+        out = []
+        for z in self._zones:
+            if z.teardrop or not z.outline or z.name != f"PATCH_{z.net}":
+                continue
+            ring = Polygon(z.outline)
+            ring = ring if ring.is_valid else ring.buffer(0)
+            lys = [ly for ly in z.layers if ly in self._copper_set]
+            no_via = not any(ring.intersects(v.poly)
+                             for v in self.vias_of(net=z.net)
+                             if any(v.spans(ly) for ly in lys))
+            empty = [ly for ly in lys if z.fill_on(ly).is_empty]
+            if no_via or empty:
+                p = ring.representative_point()
+                out.append({"uuid": z.uuid, "name": z.name, "net": z.net,
+                            "layers": lys, "at": [p.x, p.y],
+                            "box": patch_region(z.outline),
+                            "no_via": no_via, "empty": empty})
+        return out
+
     # -------------------------------------------------- summary
     def summary(self) -> dict:
         nets = {}
@@ -1446,6 +1479,15 @@ class BoardGeom:
                            for ra in self.rule_areas],
             "net_area_mm2": nets,
         }
+
+
+def patch_region(outline) -> str:
+    """A zone outline's bounds as zone_patch --region takes them
+    ("x0,y0,x1,y1", rounded out to 0.01 mm), so the region holds it."""
+    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+    box = [math.floor(min(xs) * 100) / 100, math.floor(min(ys) * 100) / 100,
+           math.ceil(max(xs) * 100) / 100, math.ceil(max(ys) * 100) / 100]
+    return ",".join(f"{v:g}" for v in box)
 
 
 # ============================================================ layer helpers

@@ -71,7 +71,9 @@ part_repair.json, and base/, trial/ and work/ with their boards. When DRC got
 worse, both list the new violations on work/B (where, which net, the items'
 uuids), so the next try knows what to rip or move. Zones are
 refilled, not reshaped: a PATCH_<net> zone (zone_patch) whose fill met an
-old pad and meets no new pad of its net is named in the report's notes; one
+old pad and meets no new pad of its net is named in the report's notes, as
+is one base/B's refill leaves filling nothing (left over: zone_patch
+--remove it, #1424); one
 the run leaves joining no copper of its net at all (DRC's isolated copper,
 one more island of the net) is removed in 03-route, and the report names
 the pads it met. A pad the run leaves starved, its pour reaching it by one
@@ -1262,15 +1264,24 @@ def _shorted(bg, old: dict) -> set:
 
 def patch_notes(bg, old: dict, new: dict, uuids: bool = False) -> list:
     """PATCH_<net> zones whose fill met an old pad of their net and meets
-    no new one: zone_patch's to reshape. uuids=True: (zone uuid, note)
+    no new one: zone_patch's to reshape. A patch layer bg's refill left
+    empty is named too (#1424): it fills nothing before the run, so it is
+    left over, zone_patch's to remove. uuids=True: (zone uuid, note)
     pairs, so a note can go with its zone (orphan_patches)."""
     notes = []
     for z in bg.zones_of():
-        if not z.name.startswith("PATCH_"):
+        if not z.name.startswith("PATCH_") or z.teardrop:
             continue
-        for ly in z.fills:
+        for ly in dict.fromkeys(list(z.layers) + list(z.fills)):
+            if ly not in bg.copper_layers:
+                continue
             fill = z.fill_on(ly)
             if fill.is_empty:
+                note = (f"zone {z.name} on {ly} fills nothing after the"
+                        f" refill: left over, remove it with zone_patch"
+                        f" --net {z.net} --layer {ly} --region "
+                        f"{geom.patch_region(z.outline)} --remove")
+                notes.append((z.uuid, note) if uuids else note)
                 continue
             for ref in old:
                 met = [p for p in old[ref] if p.net == z.net
