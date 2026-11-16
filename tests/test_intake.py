@@ -499,9 +499,10 @@ GOLDEN_WARNINGS = {
 # STM32F1 row in reference/reset_states.yaml) and must pass it, as below.
 # The checks blinky2 gives nothing to judge: it has none of what they read.
 # check_mounting says so since #1295 (blinky2 has no mounting holes), and
-# fp_verify since #1285 (no record on blinky2 states its pad numbering).
+# fp_verify since #1285 (no record on blinky2 states its pad numbering),
+# and check_backfeed since #394 (one power tree, no two rails apart).
 GOLDEN_NOTHING_TO_JUDGE = {
-    "check_antenna", "check_cap_load", "check_creepage", "check_ddr_timing", "check_diffpair",
+    "check_antenna", "check_backfeed", "check_cap_load", "check_creepage", "check_ddr_timing", "check_diffpair",
     "check_isolation", "check_kelvin", "check_length_groups", "check_mate_pins",
     "check_mounting", "check_net_tie", "fp_verify", "check_pinouts", "check_rail_budget", "check_rf_match", "check_stackup", "check_surge", "check_thermal",
     "check_transformer", "check_usb_phy", "check_via_stubs",
