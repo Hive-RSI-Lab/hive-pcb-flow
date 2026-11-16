@@ -689,7 +689,7 @@ def _register_project(project: Path, nickname: str, sym_lib: Path | None,
 # ------------------------------------------------------------ post-pull hygiene
 
 def _autofix(pretty: Path, names: list[str], dry_run: bool) -> dict:
-    """Sanitise the footprints this pull produced (fpfix rules A-G).
+    """Sanitise the footprints this pull produced (fpfix rules A-H).
 
     Every pull ships the same library-inherent defects - silk artifacts on pad
     copper, outlines under the silk-to-copper bar, plated locating pegs with no
