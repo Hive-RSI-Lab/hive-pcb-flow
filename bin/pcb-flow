@@ -31,6 +31,8 @@
 #                         untracked files included, so a run that waits in the
 #                         heavy queue judges the tree it was asked about
 #                         (bin/frozen.py); `frozen -- CMD` runs any command there
+#                         `frozen --root DIR ...` freezes DIR (another checkout,
+#                         an old commit's worktree) instead of this one
 #   pcb-flow publish <dir>    put a self-contained copy at <dir>/hwde (a warden
 #                         runs it into the Hive's tools folder, so a check
 #                         sandbox, which mounts only /work and /hive/tools,
@@ -360,7 +362,9 @@ check)
 	x "$py" "$here/scripts/check_env.py" "$@"
 	;;
 "" | -h | --help)
-	sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+	# the header up to its second bare '#' line, so a new usage line can't
+	# fall off the end of a fixed range (it did twice: #894, #1417)
+	awk 'NR==1{next} /^#$/{if(++n==2)exit} {print}' "$0" | sed 's/^# \{0,1\}//'
 	;;
 *)
 	s=${1%.py}
