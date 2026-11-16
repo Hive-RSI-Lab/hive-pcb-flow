@@ -2,9 +2,10 @@
 
 board_init draws the outline at a non-round origin (lite-main's at
 x = 22.864999), and KiCad's Gerber writer then leaves its corner arcs up to
-0.05 um off the straight edges. gerblib snaps the Edge.Cuts lines to 0.01 um
-before it closes them, so the outline comes out open, and dfm skips every
-copper- and hole-to-edge check on it. lite-main (hifi-receiver-2) snaps its
+0.05 um off the straight edges. gerblib snapped the Edge.Cuts lines to 0.01 um
+before it closed them, so the outline came out open, and dfm skipped every
+copper- and hole-to-edge check on it. Since #858 it joins line ends within
+0.1 um first. lite-main (hifi-receiver-2) snaps its
 outline to 1 um by hand before fab (kicad/gen/snap_outline.py). Fixed when
 gerblib closes a 100 x 90 mm outline with a 0.05 um gap at one corner. (If
 the fix lands in board_init instead, round origins, this probe moves there.)

@@ -844,6 +844,58 @@ def test_outline_snaps_nanometre_corner_gaps(tmp_path):
     assert fab.outline.area == pytest.approx(100.0, abs=0.01)
 
 
+def _lite_main_outline(d: Path, miss_nm: int, flashes=()) -> object:
+    """lite-main's outline as KiCad's Gerber writer puts it at board_init's
+    non-round origin (#858): a 100 x 90 mm board with 2 mm corner arcs at
+    x = 22.864999, and the first arc's end, recomputed from its centre,
+    missing the top edge's start by miss_nm nm."""
+    x0, y0, w, h, r = 22.864999, -60.323, 100.0, 90.0, 2.0
+    x1, y1 = x0 + w, y0 - h
+    e = miss_nm * 1e-6
+    write_gerber(d / "lm-F_Cu.gtl", flashes=flashes)
+    write_gerber(d / "lm-Edge_Cuts.gm1", traces=[
+        (0.1, x0 + r, y0, x1 - r, y0), (0.1, x1, y0 - r, x1, y1 + r),
+        (0.1, x1 - r, y1, x0 + r, y1), (0.1, x0, y1 + r, x0, y0 - r)],
+        arcs=[(0.1, x0, y0 - r, x0 + r + e, y0 + e, r, 0.0, False),
+              (0.1, x1 - r, y0, x1, y0 - r, 0.0, -r, False),
+              (0.1, x1, y1 + r, x1 - r, y1, -r, 0.0, False),
+              (0.1, x0 + r, y1, x0, y1 + r, 0.0, r, False)])
+    return gerblib.open_fab(d)
+
+
+def test_outline_joins_kicad_corner_arcs_missing_by_51_nm(tmp_path):
+    """#858 planted fault and quiet twin: a corner arc 51 nm off the edge
+    (the worst KiCad wrote over 40 shifted copies of lite-main) straddles
+    the 0.01 um snap grid and read as an open outline, so neither edge check
+    ran. Joined, it closes at the board's area: the flash 0.1 mm off the
+    edge fires and the one 1 mm in does not."""
+    x0, y0 = 22.864999, -60.323
+    hot, legal = (x0 + 50.0, y0 - 0.1), (x0 + 50.0, y0 - 45.0)
+    d = tmp_path / "lm"
+    d.mkdir()
+    fab = _lite_main_outline(d, 51, flashes=[(0.2, *hot), (0.2, *legal)])
+    assert fab.outline.area == pytest.approx(
+        100.0 * 90.0 - (4 - math.pi) * 2.0 ** 2, abs=0.01)
+    vios: list = []
+    dfm_check.check_outline(fab, vios)
+    dfm_check.check_copper_to_edge(fab, {"min_copper_to_edge_mm": 0.3}, vios)
+    c2e = [v for v in vios if v["kind"] == "dfm_copper_to_edge"]
+    assert [v["kind"] for v in vios] == ["dfm_copper_to_edge"]
+    assert c2e[0]["pos"] == pytest.approx([hot[0], -hot[1]], abs=0.3)
+
+
+def test_outline_gap_over_the_join_stays_open(tmp_path):
+    """#858: only ends within 0.1 um are joined. An arc 1 um off its edge is
+    a real gap, still read as open and reported."""
+    d = tmp_path / "gap"
+    d.mkdir()
+    fab = _lite_main_outline(d, 1000)
+    assert fab.outline.is_empty
+    vios: list = []
+    dfm_check.check_outline(fab, vios)
+    assert [v["kind"] for v in vios] == ["dfm_open_outline"]
+
+
 def test_rounded_corner_outline_measures_the_arc_not_the_chord(tmp_path):
     """gerblib used to flatten Edge.Cuts arcs to chords, cutting a 3.0 mm
     rounded corner ~0.879 mm inboard - two false copper_to_edge errors on

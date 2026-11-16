@@ -137,6 +137,40 @@ ARC_MAX_ERROR_MM = 1e-3
 # format resolution and 1/10000 of any fab tolerance.
 OUTLINE_SNAP_MM = 1e-5
 
+# A grid snap can't join two ends that straddle a grid line, however close.
+# KiCad's Gerber writer recomputes a corner arc's end from its centre, so at
+# a non-round origin (board_init's shelf-pack origin, x = 22.864999 on
+# lite-main) the arc misses the straight edge by up to 0.05 um and the
+# outline read as open, which turned off both edge checks (#858). So line
+# ends within 0.1 um are joined first, to the end met first: twice the
+# worst miss measured, and 1/1000 of any fab tolerance.
+OUTLINE_JOIN_MM = 1e-4
+
+
+def _join_ends(lines: list, tol: float = OUTLINE_JOIN_MM) -> list:
+    """The lines with each end moved onto an earlier line end within tol
+    (#858). A line whose ends then meet and that has no other point is
+    dropped."""
+    seen: dict[tuple[int, int], list] = {}
+
+    def at(pt):
+        i, j = math.floor(pt[0] / tol), math.floor(pt[1] / tol)
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for q in seen.get((i + di, j + dj), ()):
+                    if math.dist(q, pt) <= tol:
+                        return q
+        seen.setdefault((i, j), []).append(pt)
+        return pt
+
+    out = []
+    for ls in lines:
+        cs = list(ls.coords)
+        cs[0], cs[-1] = at(cs[0]), at(cs[-1])
+        if len(set(cs)) >= 2:
+            out.append(LineString(cs))
+    return out
+
 
 def _rect_pts(r) -> list:
     """A gerbonara Rectangle's four corners. gerbonara 1.6.3's own
@@ -469,7 +503,7 @@ class FabStack:
                 lines = [ls for ls, _ in lg.trace_lines]
                 polys = []
                 if lines:
-                    snapped = set_precision(unary_union(lines),
+                    snapped = set_precision(unary_union(_join_ends(lines)),
                                             OUTLINE_SNAP_MM)
                     polys = list(polygonize(snapped))
                 if polys:
