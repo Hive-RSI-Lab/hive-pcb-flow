@@ -61,6 +61,18 @@ them measured against real DRC on the shipped boards (LEARNINGS 2026-07-28
      the rectangle over both. A footprint with no body drawn and no round
      model is left alone: nothing says where the body ends.
 
+  I  an edge mark on Edge.Cuts: EasyEDA's edge-launch SMAs (BWSMA-KE-P001)
+     draw the board edge the part sits on as an open line on Edge.Cuts. On
+     a board KiCad merges a footprint's Edge.Cuts into the outline, so the
+     line is a stray open contour inside it (DRC's malformed outline, a
+     fab's unclosed edge file). When every open run on Edge.Cuts (lines
+     whose ends meet no other Edge.Cuts end) lies on one straight line,
+     those lines move to Dwgs.User, where they still show where the edge
+     goes. A closed cut-out stays, and so do open runs that turn (a
+     mid-mount notch drawn to meet the board's own outline).
+     check_model_fit.fit_footprint reads the mark (edge_mark) before this
+     runs, to face and seat the model on the edge (#405).
+
 Flags (reported, never fixed: only the part's drawing can settle them), from
 the footprint's own 3D model when lib_pull fetched one (body_flags):
   model_off_footprint  the model's pins below the board miss the footprint's
@@ -83,6 +95,7 @@ Handles BOTH the legacy `(module ...)`/`(width W)` form easyeda2kicad emits and
 KiCad-10's `(footprint ...)`/`(stroke (width W))` form.
 
 Library API:
+  edge_mark(text)        -> the open Edge.Cuts line (rule I), or None
   sanitize(text, **opts) -> (new_text, [action, ...])
   analyze(text, **opts)  -> {"items": [...], "worst_gap_mm": float|None, ...}
   fix_file(path, **opts) -> report dict
@@ -462,6 +475,70 @@ def _peg(node) -> bool:
 _PAD_TYPE = re.compile(r"(\(pad\s+(?:\"[^\"]*\"|\S+)\s+)thru_hole\b")
 
 
+_EDGE_LAYER = re.compile(r'(\(\s*layer\s+"?)Edge\.Cuts("?\s*\))')
+_END_GRID = 1e-3         # mm: Edge.Cuts ends this close meet
+
+
+def _ends(node):
+    """(start, end) of an fp_line or fp_arc, else None."""
+    a, b = _kid(node, "start"), _kid(node, "end")
+    if a is None or b is None:
+        return None
+    a, b = _nums(a), _nums(b)
+    return (tuple(a[:2]), tuple(b[:2])) if len(a) >= 2 and len(b) >= 2 else None
+
+
+def _open_edge_cuts(nodes) -> list:
+    """The footprint's Edge.Cuts lines and arcs that close no contour: those
+    left once every run of them that ends at a free end is pruned away
+    (the leaves of the end graph, repeatedly). Rects, circles and polys are
+    closed by themselves and never listed."""
+    def key(p):
+        return (round(p[0] / _END_GRID), round(p[1] / _END_GRID))
+    segs = [(n, _ends(n[3])) for n in nodes if n[0] in ("fp_line", "fp_arc")
+            and "Edge.Cuts" in _layers(n[3])]
+    segs = [(n, ends) for n, ends in segs if ends is not None]
+    live, opened = list(segs), []
+    while True:
+        deg: dict = {}
+        for _n, (a, b) in live:
+            for p in (a, b):
+                deg[key(p)] = deg.get(key(p), 0) + 1
+        leaves = [s for s in live if deg[key(s[1][0])] < 2 or deg[key(s[1][1])] < 2]
+        if not leaves:
+            break
+        opened += leaves
+        live = [s for s in live if s not in leaves]
+    return [n for n, _ in opened]
+
+
+def edge_mark(text: str):
+    """((x1, y1), (x2, y2)): the board edge an edge-mount footprint draws
+    as an open Edge.Cuts line (rule I's mark), in the footprint's file
+    frame, or None when it draws none. Every open straight run must lie on
+    one line (within _EDGE_COLLINEAR_MM); the mark is their span along it.
+    Open arcs or runs on two lines say no single edge: None."""
+    nodes = [(h, s, e, _parse(text[s:e])) for h, s, e in top_level_nodes(text)
+             if h in ("fp_line", "fp_arc")]
+    opened = _open_edge_cuts(nodes)
+    if not opened or any(h != "fp_line" for h, *_ in opened):
+        return None
+    pts = [p for _h, _s, _e, n in opened for p in _ends(n)]
+    a, b = max(((p, q) for p in pts for q in pts),
+               key=lambda pq: math.dist(*pq))
+    span = math.dist(a, b)
+    if span < 0.5:
+        return None
+    ux, uy = (b[0] - a[0]) / span, (b[1] - a[1]) / span
+    if any(abs((p[0] - a[0]) * uy - (p[1] - a[1]) * ux) > _EDGE_COLLINEAR_MM
+           for p in pts):
+        return None
+    return (a, b)
+
+
+_EDGE_COLLINEAR_MM = 0.05
+
+
 def sanitize(text: str, *, min_gap: float = MIN_GAP,
              min_line_width: float = MIN_LINE_WIDTH,
              promote_silk: bool = True, fix_pegs: bool = True,
@@ -469,8 +546,9 @@ def sanitize(text: str, *, min_gap: float = MIN_GAP,
              fix_courtyard: bool = True,
              fix_ep_vias: bool = True,
              fix_attr: bool = True,
+             fix_edge_mark: bool = True,
              model_body: tuple | None = None) -> tuple[str, list[dict]]:
-    """Apply rules A-H. Returns (new_text, actions); idempotent. model_body
+    """Apply rules A-I. Returns (new_text, actions); idempotent. model_body
     is rule H's (cx, cy, r) from the footprint's 3D model (fix_file reads
     it), used only when no body outline is drawn."""
     nodes, copper, silk = _collect(text)
@@ -597,6 +675,23 @@ def sanitize(text: str, *, min_gap: float = MIN_GAP,
             edits.append((start, end, repl, "courtyard"))
             if act:
                 actions.append(act)
+
+    # ---- I: an open edge mark on Edge.Cuts -> Dwgs.User
+    if fix_edge_mark and edge_mark(text) is not None:
+        # only a straight mark: open runs that turn (a mid-mount notch drawn
+        # to meet the board's outline) are the board's cut, and stay
+        for head, s, e, node in _open_edge_cuts(nodes):
+            sub = text[s:e]
+            new = _EDGE_LAYER.sub(lambda m: m.group(1) + "Dwgs.User" + m.group(2),
+                                  sub, count=1)
+            if new == sub:
+                continue
+            edits.append((s, e, new, "edge_mark"))
+            ends = _ends(node)
+            actions.append({"rule": "I", "action": "edge_mark_to_dwgs_user",
+                            "kind": head,
+                            "from": [round(v, 3) for v in ends[0]] if ends else None,
+                            "to": [round(v, 3) for v in ends[1]] if ends else None})
 
     out = text
     for start, end, repl, _why in sorted(edits, key=lambda t: -t[0]):
