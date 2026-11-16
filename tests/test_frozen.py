@@ -424,3 +424,25 @@ def test_root_usage_errors(args, tmp_path):
     assert cp.returncode == 2, cp.stderr
     assert "usage: pcb-flow frozen" in cp.stderr or "is not a folder" in cp.stderr
     assert [p for p in tmp_path.iterdir()] == []
+
+
+def test_root_subcommand_from_outside_keeps_the_callers_folder(old_checkout, tmp_path):
+    """A SUBCOMMAND keeps the caller's folder, as without --root: a project's
+    boards/ (pcb-flow reads $PWD/boards) must not become DIR's copy's."""
+    repo, side, tmp = old_checkout
+    project = tmp_path / "project"
+    project.mkdir()
+    p = start_root(project, side, tmp, ["--root", str(repo), "score", "boards/x"])
+    wait_ready(p, side)
+    rc, seen, err = finish(p, side)
+    assert rc == 0, err
+    assert seen["argv0"] == f"{seen['here']}/bin/show"
+    assert seen["cwd"] == str(project) and seen["pwd"] == str(project)
+    assert seen["args"] == ["score", "boards/x"]
+
+
+def test_root_given_twice_is_a_usage_error(tmp_path):
+    cp = subprocess.run([sys.executable, str(ROOT / "bin" / "frozen.py"), "--root", ".",
+                         "--root=.", "--", "true"], cwd=tmp_path,
+                        env={**os.environ, "TMPDIR": str(tmp_path)}, capture_output=True, text=True)
+    assert cp.returncode == 2 and "usage: pcb-flow frozen" in cp.stderr
