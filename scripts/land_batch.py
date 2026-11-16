@@ -607,7 +607,10 @@ def fetch_pages(key: str, on_boards: list[dict], store: Path, rep: dict
         # by maker serves both batches
         found = amb.resolved(mpn, hit.get("brand"), store, name)
         if not found.get("url"):
-            return None, {**rep, "status": "no listing with a datasheet URL",
+            # a maker site that stalled twice may have had it: not judged (#1480)
+            return None, {**rep, "status": "datasheet site stalled, not judged"
+                    if found.get("miss") == "stalled" else
+                    "no listing with a datasheet URL",
                     "resolver": found.get("miss"),
                     "why": str(found.get("why") or amb._tried(found))[:300]}
         hit.update(datasheet=found["url"],
