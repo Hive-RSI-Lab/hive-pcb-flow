@@ -1,0 +1,16 @@
+# A seeded power-domain back-feed for check_backfeed (#394). The mutant
+# ships a changed usbbuck4.net beside the board and no schematic, so the
+# check reads the planted netlist; the copper is untouched. Quiet twin:
+# tests/test_check_backfeed.py.
+mutants:
+  backfeed-pullup-live-rail:
+    board: usbbuck4
+    script: mutations/backfeed_pullup_live_rail.py
+    check: check_backfeed
+    defect: >-
+      NETLIST fault: a BME280 on a header-switched LDO has its SDA pulled
+      up to the always-on +3V3, which feeds about 0.6 mA through the
+      pull-up and the sensor's clamp diode into its dead rail
+    expect:
+      kind: backfeed
+      ref: R98
