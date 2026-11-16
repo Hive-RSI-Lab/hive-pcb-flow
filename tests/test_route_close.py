@@ -95,6 +95,20 @@ def test_failing_connections_do_not_starve_the_long_ones(tmp_path):
     assert "placement or topology" in f["next"]
 
 
+def test_a_walled_in_connection_is_set_aside_for_every_round(tmp_path):
+    """#682: a pad walled in by fixed copper fails the same way every round,
+    so it is tried once; a plain failure is tried again each round."""
+    world = {"a:x": "walled", "b:x": "fail", "z:y": "ok"}
+    pcb = _setup(tmp_path, world)
+    p, f = _run(tmp_path, pcb)
+    assert sorted(_open(pcb)) == ["a:x", "b:x"]
+    assert f["rounds"] == 2
+    assert f["failed_nets"]["b"]["fails"] == 2
+    assert f["failed_nets"]["a"]["fails"] == 1
+    assert [w["net"] for w in f["walled"]] == ["a"]
+    assert "walled in" in f["walled"][0]["reason"]
+
+
 def test_all_closed_and_later_chunks_reuse_the_last_report(tmp_path):
     pcb = _setup(tmp_path, {f"n{i}:x": "ok" for i in range(9)})
     p, f = _run(tmp_path, pcb)

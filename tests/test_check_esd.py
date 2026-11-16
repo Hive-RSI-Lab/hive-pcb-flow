@@ -388,3 +388,127 @@ def test_loop_mutual_over_a_plane_closed_form():
          - emsolve.filament_mutual(0, l, 0, l, math.hypot(d, 2 * h)))
     want = 1e-7 * math.log(1 + (2 * h / d) ** 2) * l * 1e-3
     assert m == pytest.approx(want, rel=0.002)
+
+
+# ---- clamp ratings (#310): reference/esd_clamps.yaml against the line
+
+def _clamp_p(ref: str, net: str, y: float, props: dict) -> str:
+    """A clamp at x = 8 with its line pad at (8, y), GND pad at (8, y + 2)
+    and the given datasheet properties (MPN, LCSC)."""
+    fp = _fp(ref, props.pop("Value", "ESD"), f"8 {y}",
+             [("1", 0, 0, net), ("2", 0, 2, "GND")])
+    extra = "".join(f'    (property "{k}" "{v}" (at 0 0 0) (layer "F.Fab"))\n'
+                    for k, v in props.items())
+    head, tail = fp.split("    (pad", 1)
+    return head + extra + "    (pad" + tail
+
+
+def _usb_pair(tmp_path, dp: dict, dn: dict) -> Path:
+    """J1 D+/D- at (5, 10) / (5, 14), clamps D1 / D2 straight on them,
+    on to U1; a ground via by each clamp."""
+    j = _fp("J1", "USB-C", "5 10", [("1", 0, 0, "/USB_D+"),
+                                    ("2", 0, 4, "/USB_D-"), ("3", 0, 8, "GND")])
+    u = _fp("U1", "MCU", "30 10", [("1", 0, 0, "/USB_D+"), ("2", 0, 4, "/USB_D-")])
+    body = (j + u + _clamp_p("D1", "/USB_D+", 10, dict(dp))
+            + _clamp_p("D2", "/USB_D-", 14, dict(dn))
+            + _seg(5, 10, 8, 10, "/USB_D+") + _seg(8, 10, 30, 10, "/USB_D+")
+            + _seg(5, 14, 8, 14, "/USB_D-") + _seg(8, 14, 30, 14, "/USB_D-")
+            + _via(8, 13) + _via(8, 17))
+    return _pcb(tmp_path, body)
+
+
+def _ratings(payload) -> dict:
+    return {ln["net"]: ln.get("rating") for c in payload["checked"]
+            for ln in c["lines"] if ln.get("clamp")}
+
+
+ESD321 = {"MPN": "ESD321DPYR"}
+
+
+def test_rated_clamp_on_usb_fs_passes(tmp_path):
+    payload, kinds = _run(_usb_pair(tmp_path, ESD321, ESD321))
+    assert not kinds & {"esd_clamp_cap", "esd_clamp_vrwm", "esd_pair_mismatch"}
+    r = _ratings(payload)["/USB_D+"]
+    assert r["interface"] == "usb_fs" and r["cap_pf"] == 1.1 and r["cap_kind"] == "max"
+    assert r["cap"] == "pass" and r["budget_pf"] == 50.0
+    assert r["hs_cap"] == "pass"    # 1.1 pF is under the HS budget too: a fact
+    assert r["vrwm"] == 3.6 and r["working_v"] == 3.6 and r["vrwm_check"] == "pass"
+    assert r["pair"] == "pass"
+
+
+def test_clamp_over_the_hs_budget_is_an_error(tmp_path):
+    srv = {"Value": "SRV05-4", "LCSC": "C85364"}
+    pcb = _usb_pair(tmp_path, srv, srv)
+    payload, kinds = _run(pcb, {"esd": {"interfaces": {"/USB_D*": "usb_hs"}}})
+    caps = [v for v in payload["violations"] if v["kind"] == "esd_clamp_cap"]
+    assert len(caps) == 2 and all(v["severity"] == "error" for v in caps)
+    assert caps[0]["budget_pf"] == 4.0 and caps[0]["cap_pf"] == 5.0
+    # at full speed (the default) the same part passes, the HS figure a fact
+    payload, kinds = _run(pcb)
+    assert "esd_clamp_cap" not in kinds
+    r = _ratings(payload)["/USB_D-"]
+    assert r["cap"] == "pass" and r["hs_cap"] == "fail"
+
+
+def test_typical_only_capacitance_over_budget_is_a_warning(tmp_path):
+    z = {"MPN": "ESD5Z5.0T1G"}
+    payload, _ = _run(_usb_pair(tmp_path, z, z))
+    caps = [v for v in payload["violations"] if v["kind"] == "esd_clamp_cap"]
+    assert caps and all(v["severity"] == "warning" and v["cap_kind"] == "typ"
+                        for v in caps)
+
+
+def test_vrwm_below_the_line_voltage_is_an_error(tmp_path):
+    payload, kinds = _run(_usb_pair(tmp_path, ESD321, ESD321),
+                          {"esd": {"line_v": {"/USB_D*": 5}}})
+    v = [x for x in payload["violations"] if x["kind"] == "esd_clamp_vrwm"]
+    assert len(v) == 2 and v[0]["severity"] == "error"
+    assert v[0]["vrwm"] == 3.6 and v[0]["working_v"] == 5
+
+
+def test_mismatched_pair_is_a_warning(tmp_path):
+    payload, kinds = _run(_usb_pair(tmp_path, ESD321, {"MPN": "TPD1E04U04DPLR"}))
+    assert "esd_pair_mismatch" in kinds
+    assert _ratings(payload)["/USB_D+"]["pair"] == "fail"
+
+
+def test_clamp_with_no_row_is_not_judged(tmp_path):
+    payload, kinds = _run(_usb_pair(tmp_path, {"MPN": "XYZ123"}, {"MPN": "XYZ123"}))
+    assert not kinds & {"esd_clamp_cap", "esd_clamp_vrwm", "esd_pair_mismatch"}
+    r = _ratings(payload)["/USB_D+"]
+    assert r["row"] is None and r["cap"] == "not_judged"
+    assert r["vrwm_check"] == "not_judged"
+    assert any("no row" in w for w in r["why_not"])
+
+
+def test_second_source_without_its_own_row_is_not_judged(tmp_path):
+    # MCC's TPD1E04U04DPLR-TP has its own sheet: TI's row does not hold
+    mcc = {"MPN": "TPD1E04U04DPLR-TP", "LCSC": "C41408060"}
+    payload, _ = _run(_usb_pair(tmp_path, mcc, mcc))
+    assert _ratings(payload)["/USB_D+"]["row"] is None
+    payload, _ = _run(_usb_pair(tmp_path, {"MPN": "TPD1E04U04DPLR"},
+                                {"MPN": "TPD1E04U04DPLR"}))
+    assert "TPD1E04U04" in _ratings(payload)["/USB_D+"]["row"]
+    # USBLC6-2 is rated only for the LCSC code whose sheet was read
+    usb = {"Value": "USBLC6-2SC6"}
+    payload, _ = _run(_usb_pair(tmp_path, usb, usb))
+    assert _ratings(payload)["/USB_D+"]["row"] is None
+    usb = {"Value": "USBLC6-2SC6", "LCSC": "C2827654"}
+    payload, _ = _run(_usb_pair(tmp_path, usb, usb))
+    assert _ratings(payload)["/USB_D+"]["cap_pf"] == 1.0
+
+
+def test_unknown_interface_kind_is_not_judged(tmp_path):
+    payload, kinds = _run(_usb_pair(tmp_path, ESD321, ESD321),
+                          {"esd": {"interfaces": {"/USB_D*": "hdmi"}}})
+    r = _ratings(payload)["/USB_D+"]
+    assert r["interface"] is None and r["cap"] == "not_judged"
+    assert "not one of" in r["interface_from"]
+
+
+def test_usb_names_pair_up():
+    for p, n in (("/USB_D+", "/USB_D-"), ("D_USB_P", "D_USB_N"),
+                 ("/USB/DP", "/USB/DM")):
+        a, b = check_esd.usb_data_pol(p), check_esd.usb_data_pol(n)
+        assert a and b and a[0] == b[0] and {a[1], b[1]} == {"P", "N"}, (p, n)
+    assert check_esd.usb_data_pol("/FPGA/TDI") is None

@@ -310,7 +310,8 @@ TOP_OBJECTS: dict[str, dict] = {
         "connectors": "str_list", "internal": "str_list",
         "exempt_nets": "str_list", "clamps": "str_list", "level_kv": "num",
         "corridor_mm": "num", "corridor_v": "num",
-        "victim_abs_max_v": "num_or_map"}},
+        "victim_abs_max_v": "num_or_map", "interfaces": "str_map",
+        "line_v": "num_or_map"}},
     # check_power_path + sim_inrush: the USB PD contract the input carries
     "pd_source": {"required": {}, "optional": {"contract_a": "num",
                                                "contract_v": "num"}},
