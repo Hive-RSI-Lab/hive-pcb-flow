@@ -617,3 +617,114 @@ def test_tied_rails_that_disagree_are_not_judged(tmp_path_factory):
         "name says 5 V but U2's divider R3 140k / R4 10k")
     viols, recs, nj = cv.judge(bg, _fb_cons(vin=None, iout=0.8), TABLE)
     assert viols == [] and not any(r["ic"] == "U1" for r in recs)
+
+
+# -- what needs no load current (#1497) --------------------------------------
+
+def _mpn_board(tmp_path_factory, name, body, ref, mpn):
+    """`body` with an MPN property on `ref`."""
+    tag = f'(property "Reference" "{ref}" (at 0 0 0))\n'
+    assert tag in body
+    return _board(tmp_path_factory, name, body.replace(
+        tag, tag + f'    (property "MPN" "{mpn}" (at 0 0 0))\n'))
+
+
+def _lm5158_body(rt="20k"):
+    body = (_rpart("U9", 10, [("IN", "VIN"), ("/SW", "SW"), ("/FB", "FB"),
+                              ("/RT", "RT"), ("GND", "AGND")], "LM5158DPRR")
+            + _rpart("L9", 20, [("IN", ""), ("/SW", "")], "10uH")
+            + _rpart("D9", 30, [("/SW", ""), ("OUT", "")])
+            + _rpart("R1", 40, [("OUT", ""), ("/FB", "")], "110k")
+            + _rpart("R2", 45, [("/FB", ""), ("GND", "")], "10k")
+            + _rpart("R3", 50, [("/RT", ""), ("GND", "")], rt))
+    return body
+
+
+def test_isat_from_the_inductor_mpn_with_no_load(tmp_path_factory):
+    # No current_a anywhere. Würth 7447714220 (Isat 3.6 A typ, |dL/L| < 10 %)
+    # on an LM5158 (switch limit 3.26 / 3.75 / 4.24 A): under the typical
+    # limit a short drives it to, a warning. 7447714150 (4.1 A) is the twin.
+    cons = {"voltages": [{"net": "IN", "voltage": 5.0}]}
+    bg = _mpn_board(tmp_path_factory, "we220", _lm5158_body(), "L9",
+                    "7447714220")
+    viols, recs, nj = cv.judge(bg, cons, TABLE)
+    hit, = _kinds(viols, "converter_isat_below_limit")
+    assert hit["severity"] == "warning" and hit["isat_a"] == 3.6
+    assert hit["limit_a"] == 3.75 and "7447714220" in hit["msg"]
+    # the limit is said once, and the divider's Vout note every finding
+    # carries is kept (a local once shadowed it with the limit clause)
+    assert hit["msg"].count("typical peak limit") == 1
+    assert "; Vout " in hit["msg"] and " on OUT " in hit["msg"]
+    rec, = recs
+    assert rec["isat_a"] == 3.6 and "inductor_ratings.yaml" in rec["isat_source"]
+    # the load the switch allows, with none stated: (3.26 - 0.2766 / 2) *
+    # (1 - 0.5833) = 1.3007 A, and the not_judged line names it
+    assert rec["iout_max_a"] == pytest.approx(1.3007, abs=1e-3)
+    assert any("no power entry current_a, so the full-load checks can't run"
+               in n and "allows up to 1.3 A" in n for n in nj)
+    assert not any("states no saturation current" in n for n in nj)
+    bg = _mpn_board(tmp_path_factory, "we150", _lm5158_body(), "L9",
+                    "7447714150")
+    viols, recs, nj = cv.judge(bg, cons, TABLE)
+    assert viols == [] and recs[0]["isat_a"] == 4.1
+
+
+def test_no_isat_anywhere_is_named(tmp_path_factory):
+    viols, recs, nj = cv.judge(_buck(tmp_path_factory, "noisat"),
+                               _cons(iout=None), TABLE)
+    assert viols == [] and "isat_a" not in recs[0]
+    assert any("L1 states no saturation current" in n for n in nj)
+
+
+def test_unverified_inductor_row_holds_only_the_isat_findings(tmp_path_factory):
+    # A distributor-only Isat (verified: false) below the AP63203's 2.8 A
+    # typical: that warning goes to not_judged; the overload, which needs no
+    # Isat, is still a violation.
+    rows = cv.load_inductors() + [{"match": "^TESTL2A", "mpn": "test 2 A",
+                                   "isat_a": 2.0, "verified": False,
+                                   "rx": re.compile("^TESTL2A")}]
+    bg = _mpn_board(tmp_path_factory, "unvl",
+                    _rpart("U1", 10, [("IN", "VIN"), ("/SW", "SW"),
+                                      ("GND", "GND"), ("OUT", "FB")],
+                           "AP63203WU")
+                    + _rpart("L1", 20, [("/SW", ""), ("OUT", "")], "4.7uH"),
+                    "L1", "TESTL2A-01")
+    viols, recs, nj = cv.judge(bg, _cons(iout=2.5, vin_max_v=5.5), TABLE, rows)
+    assert [v["kind"] for v in viols] == ["converter_overload"]
+    assert any("Isat 2 A" in n and "[unverified: test 2 A]" in n for n in nj)
+    rec, = recs
+    assert rec["status"] == "fail" and "(unverified)" in rec["isat_source"]
+
+
+def test_ripple_over_isat_at_no_load_and_quiet_twin(tmp_path_factory):
+    # 5 V to 3.3 V, 4.7 uH, 1.1 MHz; at vin_max 5.5 V dI = 2.2 * 3.3 /
+    # (5.5 * 1.1e6 * 4.7e-6) = 0.2553 A, half 0.1277 A over a 0.1 A Isat.
+    bg = _buck(tmp_path_factory, "ripisat")
+    viols, recs, nj = cv.judge(bg, _cons(iout=None, inductor_isat_a=0.1,
+                                         vin_max_v=5.5), TABLE)
+    hit, = _kinds(viols, "converter_ripple_over_isat")
+    assert hit["severity"] == "error" and "at 5.5 V in" in hit["msg"]
+    assert hit["ripple_peak_a"] == pytest.approx(0.1277, abs=1e-3)
+    assert recs[0]["ripple_max_a"] == pytest.approx(0.2553, abs=1e-3)
+    # the output cap's RMS ripple, dI / sqrt(12), is recorded
+    assert recs[0]["cout_ripple_rms_a"] == pytest.approx(0.2553 / 12 ** 0.5,
+                                                         abs=1e-4)
+    viols, _, _ = cv.judge(bg, _cons(iout=None, inductor_isat_a=0.2,
+                                     vin_max_v=5.5), TABLE)
+    assert not _kinds(viols, "converter_ripple_over_isat")
+
+
+def test_no_headroom_when_ripple_alone_hits_the_limit(tmp_path_factory):
+    # 0.2 uH: at 5.5 V in dI = 2.2 * 3.3 / (5.5 * 1.1e6 * 0.2e-6) = 6.0 A, half
+    # 3.0 A, over the AP63203's 2.5 A minimum peak limit, with no load stated.
+    bg = _buck(tmp_path_factory, "nohead", henries="0.2uH")
+    viols, recs, _ = cv.judge(bg, _cons(iout=None, vin_max_v=5.5), TABLE)
+    hit, = _kinds(viols, "converter_no_headroom")
+    assert hit["severity"] == "error" and hit["limit_a"] == 2.5
+    assert hit["ripple_peak_a"] == pytest.approx(3.0, abs=1e-3)
+    assert "at 5.5 V in" in hit["msg"]
+    assert recs[0]["iout_max_a"] == 0.0
+    viols, recs, _ = cv.judge(_buck(tmp_path_factory, "head"),
+                              _cons(iout=None, vin_max_v=5.5), TABLE)
+    assert viols == [] and recs[0]["iout_max_a"] == pytest.approx(2.3915,
+                                                                  abs=1e-3)

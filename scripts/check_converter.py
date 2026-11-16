@@ -8,7 +8,10 @@ Value, and reference/converter_fsw.yaml or a block's fsw_khz. A part whose
 frequency one resistor sets has an `rt` row: fsw = k / (R + offset) from its
 datasheet, R the one fitted resistor from the IC's RT pin to ground, inside
 the datasheet's range only, else not judged (#1458). The load is the output
-rail's power entry current_a.
+rail's power entry current_a. The inductor's saturation current is the
+block's operating_point inductor_isat_a, else the lowest Isat of the
+reference/inductor_ratings.yaml rows that its Value or an MPN-like property
+matches (#1497); the record's isat_source says which.
 
 Rail voltages (#1433), strongest first; each record's vin_source and
 vout_source say which, and vin_inferred / vout_inferred say how:
@@ -49,7 +52,19 @@ names the input pin's net. Then:
          Iout max = (Ivalley(min) + dI / 2) * (1 - D)      TI SLVSGK6B eq. 1
          RHP zero = Vout * (1 - D)^2 / (2 pi L Iout)
 
-Findings, all on the inductor and its IC:
+Findings, all on the inductor and its IC. With no load stated, the ones
+that need none still run (#1497): ripple against Isat, the ripple alone
+against the switch limit, and Isat against the limit; the record keeps the
+load the switch limit allows (iout_max_a) and, for a buck, the output cap's
+RMS ripple current dI / sqrt(12) (cout_ripple_rms_a, recorded only: no cap
+ripple ratings are read). For these two no-load findings a buck's dI is
+taken at its highest input (operating_point vin_max_v, else the stated
+input); the load checks keep the stated input's dI.
+  converter_ripple_over_isat
+                          error: half the ripple alone, at no load, reaches
+                          the inductor's Isat.
+  converter_no_headroom   error: half the ripple alone, at no load, reaches
+                          the IC's minimum peak switch limit.
   converter_isat_low      error: the inductor's stated saturation current
                           (block operating_point inductor_isat_a) is below
                           the peak current at the stated load.
@@ -79,7 +94,8 @@ output's voltage (operating_point "inductor" names it when two share one).
 A check that needs an input the board doesn't state goes to not_judged and
 names it; a pass that needs vin_max_v is not judged without it. A row of
 converter_limits.yaml or converter_fsw.yaml not `verified: true` sends its
-findings to not_judged.
+findings to not_judged, and so does an inductor_ratings.yaml row not
+`verified: true` for the findings that use its Isat.
 
 CLI: --pcb board.kicad_pcb [--constraints c.json] [--table limits.yaml]
      [--out report.json]; exit 0 pass / 1 violations / 2 error (SPEC 6).
@@ -107,6 +123,7 @@ import engcalc  # noqa: E402
 SCRIPT = "check_converter"
 SOURCE = SCRIPT
 TABLE = HERE.parent / "reference" / "converter_limits.yaml"
+INDUCTORS = HERE.parent / "reference" / "inductor_ratings.yaml"
 BUCK = "TI SLVA477C"
 BOOST = "TI SLVA372D"
 GENERIC_BAND = (0.2, 0.4)          # SLVA477C eq. 6, of the load
@@ -121,6 +138,37 @@ def load_table(path: Path = TABLE) -> list[dict]:
         raise checklib.CheckError(f"converter limits table {path}: {exc}") from exc
     return [dict(r, rx=re.compile(r["match"], re.I))
             for r in doc.get("regulators") or []]
+
+
+def load_inductors(path: Path = INDUCTORS) -> list[dict]:
+    """The rows of reference/inductor_ratings.yaml, each with its regex."""
+    try:
+        doc = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        raise checklib.CheckError(f"inductor ratings table {path}: {exc}") from exc
+    return [dict(r, rx=re.compile(r["match"], re.I))
+            for r in doc.get("inductors") or []]
+
+
+# fields that are prose or links, never a part number
+_NOT_MPN = {"datasheet", "description", "ki_fp_filters", "footprint",
+            "reference", "type", "rating", "package"}
+
+
+def _inductor_rating(bg: geom.BoardGeom, ind: str, irows: list[dict]):
+    """(Isat, [rows]) for an inductor whose Value or an MPN-like field
+    matches reference/inductor_ratings.yaml, the lowest Isat where fields
+    match rows that differ; None with no match."""
+    fp = bg.footprints.get(ind) or {}
+    fields = [fp.get("value") or ""] + [
+        str(v) for k, v in (fp.get("props") or {}).items()
+        if k.lower() not in _NOT_MPN and k.lower().split("#")[0].strip()
+        not in _NOT_MPN]
+    fields = [re.sub(r"\s+", "", f).upper() for f in fields if f]
+    hits = [r for r in irows if any(r["rx"].match(f) for f in fields)]
+    if not hits:
+        return None
+    return min(float(r["isat_a"]) for r in hits), hits
 
 
 def _num(op: dict, key: str) -> float | None:
@@ -500,9 +548,14 @@ def _fmt(a: float) -> str:
     return f"{a:.3g} A"
 
 
-def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
-    """(violations, records, not_judged) over every converter on the board."""
+def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict],
+          inductors: list[dict] | None = None):
+    """(violations, records, not_judged) over every converter on the board.
+    `inductors` is reference/inductor_ratings.yaml (load_inductors), read
+    when not given."""
     cons = cons or {}
+    if inductors is None:
+        inductors = load_inductors()
     blocks = cons.get("blocks") or []
     power = {e.get("net"): e.get("current_a") for e in cons.get("power") or []}
     fsw_unverified = {r["match"] for r in cc.fsw_rows()
@@ -555,58 +608,102 @@ def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
                 if bs["source"] == NAME]
         found, missing = [], []
 
-        def add(kind, sev, msg, **extra):
+        isat_unverified = []
+
+        def add(kind, sev, msg, uses_isat=False, **extra):
             if weak and sev == "error":
                 # a name is weaker evidence than a declared or divider volt
                 sev = "warning"
                 msg += (f" (a warning, not an error: it rests on "
                         f"{' and '.join(weak)} read from the net name only)")
-            found.append(checklib.violation(
+            found.append((checklib.violation(
                 SCRIPT, sev, None, None, node, [ind, ic],
                 f"{where}: {msg}{said}", SOURCE, kind=kind,
                 voltage_basis={"vin": vb["source"], "vout": ob["source"]},
-                **extra))
+                **extra), uses_isat))
 
         iout = power.get(rd["out_net"])
         iout = float(iout) if isinstance(iout, (int, float)) else None
         isat = _num(op, "inductor_isat_a")
-        peak = None
-        if iout is None:
-            missing.append(f"{rd['out_net']} has no power entry current_a, so "
-                           f"its peak current and load limit can't be read")
+        if isat is not None:
+            rec.update(isat_a=isat, isat_source="block operating_point "
+                                                "inductor_isat_a")
         else:
+            got = _inductor_rating(bg, ind, inductors)
+            if got:
+                isat, irows = got
+                rec.update(isat_a=isat, isat_source="; ".join(
+                    f"{r['mpn']}{'' if r.get('verified') is True else ' (unverified)'}"
+                    for r in irows) + " (reference/inductor_ratings.yaml)")
+                isat_unverified = [r for r in irows
+                                   if r.get("verified") is not True]
+            else:
+                missing.append(
+                    f"{ind} states no saturation current: no {topo} block for "
+                    f"{vout:g} V gives inductor_isat_a and no part number on it "
+                    f"has a row in reference/inductor_ratings.yaml, so Isat "
+                    f"can't be judged against the switch limit or the ripple "
+                    f"peak")
+        vmax = _num(op, "vin_max_v")
+        # the most ripple: a buck's grows with Vin, so at its highest input
+        top = ripple
+        if topo == "buck" and vmax is not None and vmax > vin:
+            top = (vmax - vout) * vout / (vmax * fsw * henries)
+            rec["ripple_max_a"] = checklib.rnd(top, 4)
+        if topo == "buck":
+            # the output cap's RMS ripple current, the triangle's dI / sqrt(12)
+            # (SLVA477C eq. 7's basis); recorded: no cap here states a rating
+            rec["cout_ripple_rms_a"] = checklib.rnd(top / math.sqrt(12), 4)
+        if isat is not None and top / 2 >= isat:
+            add("converter_ripple_over_isat", "error",
+                f"half the ripple, {_fmt(top / 2)}"
+                f"{f' at {vmax:g} V in' if 'ripple_max_a' in rec else ''}, reaches "
+                f"Isat {_fmt(isat)} with no load at all: the inductor "
+                f"saturates at every load ({rec['isat_source']})",
+                uses_isat=True, isat_a=isat, ripple_peak_a=checklib.rnd(top / 2, 4))
+        peak = None
+        if iout is not None:
             peak = (iout + ripple / 2 if topo == "buck"
                     else ripple / 2 + iout / (1 - duty))
             rec.update(iout_a=iout, peak_a=checklib.rnd(peak, 4))
             if topo == "boost":
                 rec["rhp_zero_hz"] = checklib.rnd(
                     vout * (1 - duty) ** 2 / (2 * math.pi * henries * iout), 1)
-            if isat is None:
-                missing.append(f"no {topo} block for {vout:g} V states "
-                               f"inductor_isat_a")
-            elif isat < peak:
+            if isat is not None and isat < peak:
                 add("converter_isat_low", "error",
                     f"Isat {_fmt(isat)} is below the peak current {_fmt(peak)} "
                     f"at {_fmt(iout)} out (dI {_fmt(ripple)}; {ref} "
-                    "eq. 4)",
+                    "eq. 4)", uses_isat=True,
                     isat_a=isat, peak_a=checklib.rnd(peak, 4))
+        cap = None
         if row is None:
             missing.append(f"{ic} has no row in reference/converter_limits.yaml "
                            f"for its current limits and minimum on-time")
         else:
             pk, vl = row.get("peak_limit_a") or {}, row.get("valley_limit_a") or {}
-            cap = None
-            if iout is not None and pk.get("min") is not None:
+            if pk.get("min") is not None:
                 cap = pk["min"] - ripple / 2
                 why = f"peak limit {pk['min']:g} A min less dI/2"
                 cite = f"{ref} eq. 3"
-                if topo == "boost":
+                if top / 2 >= pk["min"]:
+                    # the worst case: a buck's ripple at its highest input
+                    add("converter_no_headroom", "error",
+                        f"half the ripple, {_fmt(top / 2)}"
+                        f"{f' at {vmax:g} V in' if 'ripple_max_a' in rec else ''}"
+                        f", already reaches the {_fmt(pk['min'])} minimum peak "
+                        f"current limit: the switch hits its limit with no "
+                        f"load ({cite})",
+                        ripple_peak_a=checklib.rnd(top / 2, 4),
+                        limit_a=pk["min"])
+                if cap <= 0:
+                    cap = 0.0
+                elif topo == "boost":
                     cap *= 1 - duty
                     why = f"({why}) * (1 - D)"
                 elif vl.get("min") is not None and vl["min"] + ripple / 2 < cap:
                     cap = vl["min"] + ripple / 2
                     why = f"valley limit {vl['min']:g} A min plus dI/2"
-            elif iout is not None and vl.get("min") is not None:
+            elif vl.get("min") is not None:
                 # A valley-mode part states no peak limit: the switch
                 # current at the valley is Ilim, so the inductor's average
                 # is Ilim + dI/2 (TI SLVSGK6B eq. 1 for a boost).
@@ -617,8 +714,9 @@ def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
                     cap *= 1 - duty
                     why = f"({why}) * (1 - D)"
             if cap is not None:
+                # the load the switch limit allows, read with no load stated
                 rec["iout_max_a"] = checklib.rnd(cap, 4)
-                if iout > cap:
+                if iout is not None and cap > 0 and iout > cap:
                     add("converter_overload", "error",
                         f"the load {_fmt(iout)} is over the {_fmt(cap)} its "
                         f"switch limit allows ({why}; {cite})",
@@ -627,16 +725,16 @@ def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
             lim = (vl if floor.get("limit") == "valley" else pk)
             lim_a = lim.get("min") if floor else pk.get("typ")
             if isat is not None and lim_a is not None and isat < lim_a:
-                said = (f"{row['mpn']}'s datasheet: {floor['quote'].strip()}"
+                basis = (f"{row['mpn']}'s datasheet: {floor['quote'].strip()}"
                         if floor else
                         f"below {row['mpn']}'s typical peak limit; a short "
                         f"drives the switch to its limit (part-dependent)")
                 add("converter_isat_below_limit", "warning",
-                    f"Isat {_fmt(isat)} is below {_fmt(lim_a)}, {said}",
+                    f"Isat {_fmt(isat)} ({rec['isat_source']}) is below "
+                    f"{_fmt(lim_a)}, {basis}", uses_isat=True,
                     isat_a=isat, limit_a=lim_a)
             ton = row.get("ton_min_s") or {}
             if topo == "buck" and ton.get("value"):
-                vmax = _num(op, "vin_max_v")
                 v_at = vmax if vmax is not None else vin
                 t_on = vout / (v_at * fsw)
                 rec.update(ton_s=t_on, ton_min_s=ton["value"])
@@ -652,6 +750,14 @@ def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
                     missing.append(f"no {topo} block for {vout:g} V states "
                                    f"vin_max_v, so its on-time at the highest "
                                    f"input can't be read")
+        if iout is None:
+            allows = (f" (its switch limit allows up to {_fmt(cap)})"
+                      if cap else "")
+            missing.append(
+                f"{rd['out_net']} has no power entry current_a, so the "
+                f"full-load checks can't run: Isat against the peak at load, "
+                f"the load against what the switch limit allows{allows}, and "
+                f"ripple against the load")
         band = (row or {}).get("ripple_band")
         if band and band.get("of") == "rated" and row.get("iout_rated_a"):
             base, lo, hi = float(row["iout_rated_a"]), band["lo"], band["hi"]
@@ -668,14 +774,21 @@ def judge(bg: geom.BoardGeom, cons: dict | None, rows: list[dict]):
                        ripple_note=f"dI {_fmt(ripple)} is {ratio:.0%} of {of}; "
                                    f"guidance {lo:.0%} to {hi:.0%}")
         rec["missing"] = missing
-        if unverified and found:
-            names = ", ".join(r.get("mpn") or r["match"] for r in unverified)
-            not_judged.extend(f"{v['msg']} [unverified: {names}]" for v in found)
+        held, kept = [], []
+        for v, uses_isat in found:
+            why = unverified + (isat_unverified if uses_isat else [])
+            if why:
+                names = ", ".join(r.get("mpn") or r["match"] for r in why)
+                held.append(f"{v['msg']} [unverified: {names}]")
+            else:
+                kept.append(v)
+        not_judged.extend(held)
+        viols.extend(kept)
+        if held and not kept:
             rec["status"] = "not_judged"
         else:
-            viols.extend(found)
             rec["status"] = "fail" if any(
-                v["severity"] == "error" for v in found) else "checked"
+                v["severity"] == "error" for v in kept) else "checked"
         if missing:
             not_judged.extend(f"{where}: {m}" for m in missing)
     return viols, records, not_judged

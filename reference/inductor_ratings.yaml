@@ -1,0 +1,66 @@
+# Saturation current of a power inductor read from its part number, for
+# check_converter (#1497). A board's inductor is matched on its Value and
+# every MPN-like field (MPN, Part, a distributor's part number: the regex is
+# searched from the start of each, upper-cased). Where fields match rows
+# with different ratings, the lowest Isat is used and each row is named.
+#
+# match: a regex matched from the start of a field.
+# mpn: the part the row was read for.
+# isat_a: the saturation current, as the datasheet defines it (the
+#   condition is in `isat_condition`).
+# source: the document, its revision, the line quoted.
+# verified: true when the maker's datasheet was read; false for a
+#   distributor's attribute only, whose findings go to not_judged.
+# Add a row only from a page in hand, never from memory.
+inductors:
+  - match: '^SRN6045-100M'
+    mpn: Bourns SRN6045-100M
+    isat_a: 3.0
+    isat_condition: inductance drops 30 %
+    source: >-
+      Bourns SRN6045 Series datasheet REV. 01/20 (sha256
+      fb909e67fcca90f5181aadcc36f8b072ee436b2182752b9afd8ea77d68bfeb1b,
+      https://www.bourns.com/docs/Product-Datasheets/SRN6045.pdf),
+      Electrical Specifications: "SRN6045-100M 10 20 17 2.52 15 0.0586 2.5
+      3.0" (Isat 3.0 A, Irms 2.5 A), "Inductance drops 30 % at Isat".
+    verified: true
+  - match: '^7447714220'
+    mpn: Würth 7447714220 (WE-PD 1050, 22 uH)
+    isat_a: 3.6
+    isat_condition: '|dL/L| < 10 %, typical'
+    source: >-
+      Würth Elektronik 7447714220 datasheet revision 002.004, 2018-12-01
+      (sha256 ed3f9c9f5ab450aec3404eb64e045ee460e567737e9ca608d352f2cc039fd376,
+      https://www.we-online.com/components/products/datasheet/7447714220.pdf),
+      Electrical Properties: "Saturation Current ISAT |ΔL/L| < 10 % 3.6 A
+      typ.", "Rated Current IR ΔT = 40 K 3 A max.".
+    verified: true
+  - match: '^7447714150'
+    mpn: Würth 7447714150 (WE-PD 1050, 15 uH)
+    isat_a: 4.1
+    isat_condition: '|dL/L| < 10 %, typical'
+    source: >-
+      Würth Elektronik 7447714150 datasheet (sha256
+      3497e5e883463bd158e070c544a366b7678d8586f3145f93174fab1af72d0a41,
+      https://www.we-online.com/components/products/datasheet/7447714150.pdf),
+      Electrical Properties: "Saturation Current ISAT |ΔL/L| < 10 % 4.1 A
+      typ.", "Rated Current IR ΔT = 40 K 3.5 A max.".
+    verified: true
+  - match: '^FTC201612S1R0M'
+    mpn: cjiang FTC201612S1R0MBCA (1 uH, 2016)
+    isat_a: 5.0
+    isat_condition: not stated (distributor attribute)
+    source: >-
+      LCSC C18724413 product attributes, read 2026-11-16: "Current -
+      Saturation(Isat) 5A", "Current Rating 5A", "DC Resistance(DCR) 36mΩ".
+      The datasheet LCSC serves is scanned images with no text.
+    verified: false
+  - match: '^FTC201212S100M'
+    mpn: cjiang FTC201212S100MBCA (10 uH, 2012)
+    isat_a: 1.4
+    isat_condition: not stated (distributor attribute)
+    source: >-
+      LCSC C53436344 product attributes, read 2026-11-16: "Current -
+      Saturation(Isat) 1.4A", "Current Rating 1.2A", "DC Resistance(DCR)
+      500mΩ". The datasheet LCSC serves is scanned images with no text.
+    verified: false
