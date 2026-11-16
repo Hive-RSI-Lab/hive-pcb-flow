@@ -81,6 +81,15 @@ pitch, pad_size, land_gap), judged / not_judged / not_stated, so a check
 that judged nothing shows as such, not as a pass. `--pairs FILE` (FOOTPRINT<TAB>RECORD lines)
 runs the set and reports those counts plus every error.
 
+Board mode (#1285): `--pcb BOARD.kicad_pcb [--parts DIR] [--ref U1 ...]` runs
+the pad-numbering checks on each footprint as placed. Each one is taken back to
+its library frame (at 0 0, front side: a bottom part's y and B./F. layers
+mirrored back, each pad's angle less the part's turn) and judged against the
+record its LCSC field (else --parts' lcsc, else its MPN) finds in --parts or
+hwde's extractions. Only pad_numbering / bga_numbering findings are kept, each
+at the part's board place with refs, side and footprint. `judged` counts the
+parts each record judged; `parts` says per part what record (or none) it got.
+
 Exit (SPEC section 6): 0 = no error-severity findings (warnings allowed),
 1 = one or more errors, 2 = unreadable footprint/JSON.
 
@@ -88,6 +97,7 @@ Examples:
   fp_verify.py --footprint lib/aiee.pretty/C0402.kicad_mod --datasheet-json parts/C1525.json
   fp_verify.py --footprint fp.kicad_mod --datasheet-json ds.json --svg out.svg
   fp_verify.py --pairs pairs.tsv
+  fp_verify.py --pcb board.kicad_pcb --parts parts/ --out fp_verify.json
 """
 from __future__ import annotations
 
@@ -98,6 +108,7 @@ import statistics
 import sys
 from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
@@ -413,7 +424,10 @@ def _grid_handedness(copper: list[fplib.Pad]) -> float | None:
     across, down = _median_step(by_row), _median_step(by_col)
     if not across or not down:
         return None
-    return across[0] * down[1] - across[1] * down[0]
+    hand = across[0] * down[1] - across[1] * down[0]
+    # a zero cross product is no grid: a USB-C receptacle's A and B rows
+    # and S shield tabs match the ball pattern but its steps are parallel
+    return hand if abs(hand) > 1e-6 else None
 
 
 def _ccw_turn(got: dict) -> float | None:
@@ -1003,6 +1017,168 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
     return viol, facts, fp
 
 
+# ------------------------------------------------------------- board mode
+
+# a placed footprint's coordinate pairs that a flip to the bottom mirrors
+_XY_HEADS = ("at", "xy", "start", "end", "mid", "center")
+EXTRACTIONS = Path(__file__).resolve().parent.parent / "reference" / "extractions"
+
+
+def _sym(x):
+    import sexpdata
+    return sexpdata.Symbol(x)
+
+
+def _flip_layer(x):
+    """B.* <-> F.* (a layer name as a string or a symbol)."""
+    s = str(fpg._t(x))
+    if s[:2] in ("B.", "F."):
+        s = ("F." if s[0] == "B" else "B.") + s[2:]
+        return _sym(s) if not isinstance(x, str) else s
+    return x
+
+
+def library_copy(node, rot: float, bottom: bool):
+    """A placed footprint (its board node) as its library footprint: the
+    origin at 0 0, no turn, and a bottom-side copy unflipped. The board file
+    keeps pads in the footprint's own frame but a pad's angle absolute (the
+    footprint's turn added), and a flipped footprint's items with y -> -y,
+    angles negated and B./F. layers swapped (KiCad's flip; check_fp_geometry
+    _frames)."""
+    def walk(n, depth, in_pad):
+        out = []
+        for i, c in enumerate(n):
+            if not isinstance(c, list) or not c:
+                if bottom and i > 0 and fpg._t(n[0]) in ("layer", "layers"):
+                    c = _flip_layer(c)
+                out.append(c)
+                continue
+            h = str(fpg._t(c[0]))
+            if depth == 0 and h == "at":
+                out.append([_sym("at"), 0, 0])
+                continue
+            if depth == 0 and h == "layer":
+                out.append([_sym("layer"), "F.Cu"])
+                continue
+            c = walk(c, depth + 1, h == "pad")
+            nums = [isinstance(fpg._t(v), (int, float)) for v in c[1:]]
+            if h in _XY_HEADS and len(c) >= 3 and nums[0] and nums[1]:
+                if bottom:
+                    c[2] = -c[2]
+                if h == "at" and in_pad:
+                    ang = (c[3] if len(c) > 3 and nums[2] else 0) - rot
+                    ang = (-ang if bottom else ang) % 360
+                    c = c[:3] + ([round(ang, 6)] if abs(ang) > 1e-9 else [])
+            elif h == "angle" and bottom and len(c) > 1 and nums[0]:
+                c[1] = -c[1]
+            out.append(c)
+        return out
+    return walk(node, 0, False)
+
+
+def _record_index(dirs: list[Path]) -> dict[str, Path]:
+    """Record file by name stem (an LCSC number or MPN) and by its "mpn"
+    field, the first dir winning (the board's parts dir, then
+    reference/extractions)."""
+    idx: dict[str, Path] = {}
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.glob("*.json")):
+            if f.name == "parts.json":
+                continue
+            idx.setdefault(f.stem.upper(), f)
+            try:
+                doc = checklib.load_json(f, f"record {f.name}")
+            except checklib.CheckError:
+                continue
+            if isinstance(doc, dict) and isinstance(doc.get("mpn"), str):
+                idx.setdefault(doc["mpn"].strip().upper(), f)
+    return idx
+
+
+def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
+                 pitch_tol: float, size_tol: float) -> tuple[list[dict], dict]:
+    """The pad-numbering checks on each footprint placed in a .kicad_pcb
+    (#1285): every copy taken back to its library form (a bottom one
+    unflipped), its record found by LCSC number or MPN, and verify()'s
+    pad_numbering findings kept, under the placed reference and position."""
+    import tempfile
+
+    import sexpdata
+    import matinglib
+    tree = sexpdata.loads(Path(pcb).read_text(encoding="utf-8"))
+    rows = matinglib.load_parts(parts)
+    idx = _record_index(([parts] if parts else []) + [EXTRACTIONS])
+    viols: list[dict] = []
+    placed: list[dict] = []
+    judged = Counter()
+    with tempfile.TemporaryDirectory(prefix="fp_verify-") as tmp:
+        for node in fpg._kids(tree, "footprint"):
+            props = {str(fpg._t(p[1])): str(fpg._t(p[2]))
+                     for p in fpg._kids(node, "property") if len(p) > 2}
+            for t in fpg._kids(node, "fp_text"):
+                if len(t) > 2 and str(fpg._t(t[1])) == "reference":
+                    props.setdefault("Reference", str(fpg._t(t[2])))
+            ref = props.get("Reference", "?")
+            if only and ref not in only:
+                continue
+            at = fpg._nums(fpg._kid(node, "at"))
+            rot = at[2] if len(at) > 2 else 0.0
+            side = str(fpg._t((fpg._kid(node, "layer") or [None, "F.Cu"])[1]))
+            bottom = side.startswith("B.")
+            row = rows.get(ref) or {}
+            keys = [fpg.lcsc_of(SimpleNamespace(fields=props)),
+                    str(row.get("lcsc") or ""), matinglib.part_mpn(props, row)]
+            rec = next((idx[k.strip().upper()] for k in keys
+                        if k and k.strip().upper() in idx), None)
+            ds = checklib.load_json(rec, f"record {rec.name}") if rec else {}
+            mod = Path(tmp) / f"{len(placed)}.kicad_mod"
+            mod.write_text(sexpdata.dumps(library_copy(node, rot, bottom)),
+                           encoding="utf-8")
+            try:
+                found, facts, _ = verify(mod, ds if isinstance(ds, dict) else {},
+                                         pitch_tol, size_tol)
+            except Exception as e:  # noqa: BLE001  (one odd footprint, not the board)
+                placed.append({"ref": ref, "footprint": str(fpg._t(node[1])),
+                               "side": "bottom" if bottom else "top",
+                               "unreadable": str(e)[:200]})
+                continue
+            num = facts["pad_numbering"]
+            if num:
+                judged[num["from"]] += 1
+            for v in found:
+                if not str(v.get("kind") or "").startswith(
+                        ("pad_numbering", "bga_numbering")):
+                    continue
+                v["refs"] = [ref]
+                v["footprint"] = str(fpg._t(node[1]))
+                v["side"] = "bottom" if bottom else "top"
+                if len(at) >= 2:
+                    v["pos"] = [at[0], at[1]]
+                v["layer"] = side
+                viols.append(v)
+            placed.append({
+                "ref": ref, "footprint": str(fpg._t(node[1])),
+                "side": "bottom" if bottom else "top",
+                "record": str(rec) if rec else None, "pad_numbering": num,
+                "not_judged": ([n["why"] for n in facts["not_judged"]
+                                if n["check"] == "pad_numbering"] if rec
+                               else ["no record found by its LCSC number or "
+                                     "MPN (the parts dir, then "
+                                     "reference/extractions), and not a "
+                                     "lettered ball grid"] if not num
+                               else []) or None})
+    n = sum(judged.values())
+    facts = {"placed": len(placed), "judged": dict(judged),
+             "parts": placed,
+             "nothing_to_judge": None if viols or n else (
+                 "no placed footprint could have its pad numbering judged: "
+                 "none is a lettered ball grid and none has a record with "
+                 "land_pattern.pads or numbering")}
+    return viols, facts
+
+
 # ------------------------------------------------------------------ SVG overlay
 
 def _pad_corners(p: fplib.Pad) -> list[tuple[float, float]]:
@@ -1075,11 +1251,19 @@ def write_svg(path: Path, fp: fplib.Footprint, bad_pads: set[str],
     path.write_text("\n".join(parts), encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--footprint", help=".kicad_mod file")
     ap.add_argument("--datasheet-json",
                     help="datasheet-extract JSON (uses its land_pattern block)")
+    ap.add_argument("--pcb", help="instead of one footprint: a .kicad_pcb; "
+                    "runs the pad-numbering checks on each placed footprint "
+                    "(a bottom one unflipped), its record found in --parts "
+                    "or reference/extractions by LCSC number or MPN")
+    ap.add_argument("--parts", help="with --pcb: the board's parts dir "
+                    "(parts.json and per-part records)")
+    ap.add_argument("--ref", action="append",
+                    help="with --pcb: only this reference (repeatable)")
     ap.add_argument("--pairs", help="instead of one footprint: a file of "
                     "FOOTPRINT<TAB>RECORD lines; reports per check how many "
                     "were judged, not judged and not stated, and each error")
@@ -1089,48 +1273,65 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pitch-tol-mm", type=float, default=0.05)
     ap.add_argument("--size-tol-mm", type=float, default=0.1)
     ap.add_argument("--out", help="write JSON report here instead of stdout")
+    return ap
 
-    def run():
-        args = ap.parse_args(argv)
-        if args.pairs:
-            rows = [ln.split("\t")[:2] for ln in Path(args.pairs).read_text(
-                encoding="utf-8").splitlines() if ln.strip()
-                and not ln.startswith("#")]
-            rep = coverage_report([(a.strip(), b.strip()) for a, b in rows],
-                                  args.pitch_tol_mm, args.size_tol_mm)
-            payload = checklib.report("fp_verify", Path(args.pairs), [], **rep)
-            payload["status"] = "violations" if rep["errors"] else "pass"
-            return payload, args.out
-        if not (args.footprint and args.datasheet_json):
-            raise checklib.CheckError(
-                "give --footprint and --datasheet-json, or --pairs")
-        fp_path = Path(args.footprint)
-        if not fp_path.exists():
-            raise checklib.CheckError(f"footprint not found: {fp_path}")
-        ds = checklib.load_json(args.datasheet_json, "datasheet-json")
-        viol, facts, fp = verify(fp_path, ds, args.pitch_tol_mm, args.size_tol_mm)
 
-        # Never beside the footprint: a .svg in a .pretty folder is a stray
-        # file in the library (#1066)
-        svg_path = (Path(args.svg) if args.svg else
-                    Path(args.out).with_suffix(".overlay.svg") if args.out
-                    else None)
-        if svg_path is not None:
-            # A pitch/size finding implicates the whole pad field; count/pin1
-            # don't point at a specific pad, so nothing is reddened for those.
-            flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing",
-                                     "pad_turned", "land_gap")
-                       for v in viol)
-            bad_pads = {p.number for p in fp.copper_pads} if flag else set()
-            write_svg(svg_path, fp, bad_pads, facts["land_pattern"])
-            facts["svg"] = str(svg_path)
-
-        has_error = any(v["severity"] == "error" for v in viol)
-        payload = checklib.report("fp_verify", fp_path, viol, **facts)
-        payload["status"] = "violations" if has_error else "pass"
+def run(argv: list[str] | None = None):
+    """The SPEC section 6 entry the gate calls (checks.d): (payload, out)."""
+    args = _parser().parse_args(argv)
+    if args.pcb:
+        pcb = Path(args.pcb)
+        if not pcb.is_file():
+            raise checklib.CheckError(f"board not found: {pcb}")
+        viol, facts = board_report(
+            pcb, Path(args.parts) if args.parts else None,
+            set(args.ref) if args.ref else None,
+            args.pitch_tol_mm, args.size_tol_mm)
+        payload = checklib.report("fp_verify", pcb, viol, **facts)
+        payload["status"] = ("violations" if any(
+            v["severity"] == "error" for v in viol) else "pass")
         return payload, args.out
+    if args.pairs:
+        rows = [ln.split("\t")[:2] for ln in Path(args.pairs).read_text(
+            encoding="utf-8").splitlines() if ln.strip()
+            and not ln.startswith("#")]
+        rep = coverage_report([(a.strip(), b.strip()) for a, b in rows],
+                              args.pitch_tol_mm, args.size_tol_mm)
+        payload = checklib.report("fp_verify", Path(args.pairs), [], **rep)
+        payload["status"] = "violations" if rep["errors"] else "pass"
+        return payload, args.out
+    if not (args.footprint and args.datasheet_json):
+        raise checklib.CheckError(
+            "give --footprint and --datasheet-json, or --pairs")
+    fp_path = Path(args.footprint)
+    if not fp_path.exists():
+        raise checklib.CheckError(f"footprint not found: {fp_path}")
+    ds = checklib.load_json(args.datasheet_json, "datasheet-json")
+    viol, facts, fp = verify(fp_path, ds, args.pitch_tol_mm, args.size_tol_mm)
 
-    return checklib.cli_wrap("fp_verify", run)
+    # Never beside the footprint: a .svg in a .pretty folder is a stray
+    # file in the library (#1066)
+    svg_path = (Path(args.svg) if args.svg else
+                Path(args.out).with_suffix(".overlay.svg") if args.out
+                else None)
+    if svg_path is not None:
+        # A pitch/size finding implicates the whole pad field; count/pin1
+        # don't point at a specific pad, so nothing is reddened for those.
+        flag = any(v["kind"] in ("pad_pitch", "pad_size", "row_spacing",
+                                 "pad_turned", "land_gap")
+                   for v in viol)
+        bad_pads = {p.number for p in fp.copper_pads} if flag else set()
+        write_svg(svg_path, fp, bad_pads, facts["land_pattern"])
+        facts["svg"] = str(svg_path)
+
+    has_error = any(v["severity"] == "error" for v in viol)
+    payload = checklib.report("fp_verify", fp_path, viol, **facts)
+    payload["status"] = "violations" if has_error else "pass"
+    return payload, args.out
+
+
+def main(argv: list[str] | None = None) -> int:
+    return checklib.cli_wrap("fp_verify", lambda: run(argv))
 
 
 if __name__ == "__main__":

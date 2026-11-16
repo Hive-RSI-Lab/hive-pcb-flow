@@ -155,3 +155,68 @@ def test_error_report_goes_to_out_report(tmp_path):
                    "--out-report", str(rep)])
     assert rc == 2
     assert json.loads(rep.read_text())["status"] == "error"
+
+
+def _fp_named(ref: str, name: str, value: str) -> str:
+    return (f'  (footprint "{name}" (layer "F.Cu") (at 1 1)\n'
+            f'    (property "Reference" "{ref}" (at 0 0 0) (layer "F.SilkS"))\n'
+            f'    (property "Value" "{value}" (at 0 0 0) (layer "F.Fab"))\n'
+            f'    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))\n'
+            f'  )\n')
+
+
+def _two_revs(tmp: Path, b_fp: str) -> tuple[dict, Path]:
+    """rev_a ships a BOM, rev_b (in its own folder) does not."""
+    a, b = tmp / "rev_a", tmp / "rev_b"
+    a.mkdir()
+    b.mkdir()
+    pa = _board(a, _fp_named("R1", "Resistor_SMD:R_0603", "10k"),
+                _fp_named("C1", "Capacitor_SMD:C_0402", "100n"))
+    (a / "bom.csv").write_text("Designator,LCSC\nR1,C25804\nC1,C1525\n")
+    pb = _board(b, _fp_named("R1", "Resistor_SMD:R_0603", "10k"), b_fp)
+    out, rep = tmp / "out.kicad_pcb", tmp / "r.json"
+    assert pnb.main(["--pcb", str(pb), "--src-pcb", str(pb), "--repo",
+                     str(b), "--other-pcb", str(pa), "--other-src-pcb",
+                     str(pa), "--other-repo", str(a), "--out", str(out),
+                     "--out-report", str(rep)]) == 0
+    return json.loads(rep.read_text()), out
+
+
+def test_other_revision_bom_fills_the_matching_footprint(tmp_path):
+    rep, out = _two_revs(
+        tmp_path, _fp_named("C1", "Capacitor_SMD:C_0402", "100n"))
+    got = _props(out)
+    assert got["R1"]["LCSC"] == "C25804"
+    assert got["C1"]["LCSC"] == "C1525"
+    assert rep["counts"]["added_from"]["other_revision"] == 2
+    assert rep["counts"]["other_revision_unmatched"] == 0
+    assert rep["other_revision"]["boms_read"] == ["bom.csv"]
+
+
+def test_other_revision_does_not_fill_a_changed_footprint(tmp_path):
+    # the quiet twin: C1 moved to 0603 on this revision, so rev_a's number
+    # is not this part's
+    rep, out = _two_revs(
+        tmp_path, _fp_named("C1", "Capacitor_SMD:C_0603", "100n"))
+    got = _props(out)
+    assert got["R1"]["LCSC"] == "C25804"
+    assert "LCSC" not in got["C1"]
+    assert rep["counts"]["added_from"]["other_revision"] == 1
+    assert rep["counts"]["other_revision_unmatched"] == 1
+
+
+def test_own_sources_win_over_the_other_revision(tmp_path):
+    a, b = tmp_path / "rev_a", tmp_path / "rev_b"
+    a.mkdir()
+    b.mkdir()
+    pa = _board(a, _fp_named("R1", "R_0603", "10k"))
+    (a / "bom.csv").write_text("Designator,LCSC\nR1,C25804\n")
+    pb = _board(b, _fp_named("R1", "R_0603", "10k"))
+    (b / "bom.csv").write_text("Designator,LCSC\nR1,C21190\n")
+    out, rep = tmp_path / "o.kicad_pcb", tmp_path / "r.json"
+    pnb.main(["--pcb", str(pb), "--repo", str(b), "--other-pcb", str(pa),
+              "--other-repo", str(a), "--out", str(out),
+              "--out-report", str(rep)])
+    assert _props(out)["R1"]["LCSC"] == "C21190"
+    assert json.loads(rep.read_text())["counts"]["added_from"] == {
+        "schematic": 0, "bom": 1, "parts_json": 0, "other_revision": 0}

@@ -39,6 +39,15 @@ Kinds (one per ref and source; the worst first):
   fp_courtyard_small_vs_stock warning  the courtyard ends more than 0.5 mm
                                     inside the stock one's and another
                                     part's pad sits in the strip it leaves out
+  fp_pin1_mark_vs_number   error    the footprint marks another pad as pin 1
+                                    the way the stock one marks its pad 1
+                                    (its one rect pad, the fab chamfer or
+                                    dot): a symmetric header numbered from
+                                    the other end, which the pad set alone
+                                    can't tell. With no such mark, a
+                                    connector that fits only turned, or an
+                                    own library's renumbered copy, is not
+                                    judged
   fp_pin_order_vs_model    warning  the LCSC model's pads land only with
   fp_pads_vs_model         warning  numbers permuted / not at all
   fp_pitch_vs_drawing      error    the pitch along a row of three or more
@@ -92,6 +101,8 @@ SMALL_AREA_FRAC = 0.5  # a pad under half the stock one's area; older stock
 DRILL_TOL_MM = 0.05
 PITCH_TOL_MM = 0.03
 CRTYD_TOL_MM = 0.5   # older stock libraries' courtyards differ by up to 0.25 mm
+PIN1_MARK_MM = 2.0   # a fab chamfer is a short diagonal (KLC: 1 mm or a quarter of the body)
+PIN1_DOT_MM = 0.5    # a pin-1 dot's radius
 CONNECTOR = re.compile(r"^(?:J|P|CN|CON|X)\d", re.I)
 CONNECTOR_NAME = re.compile(r"PinHeader|PinSocket|IDC|Conn|USB|Header|Socket|Terminal|JST|Molex", re.I)
 
@@ -106,6 +117,7 @@ class P:
     w: float          # extent along the footprint's x
     h: float
     drill: float | None = None
+    shape: str = ""   # rect, roundrect, circle, oval, custom...
 
 
 @dataclass
@@ -119,6 +131,7 @@ class FP:
     pads: list[P] = field(default_factory=list)
     crtyd: tuple | None = None
     rot: float = 0.0
+    marks: list = field(default_factory=list)  # pin-1 marks, own frame
 
     @property
     def connector(self) -> bool:
@@ -174,7 +187,8 @@ def _pads(node, fp_rot: float) -> list[P]:
         elif min(local, 180.0 - local) >= 1.0:
             w = h = min(w, h)  # an odd angle: only the narrow side is sure
         dn = _nums(_kid(pad, "drill"))
-        out.append(P(num, at[0], at[1], w, h, min(dn) if dn else None))
+        out.append(P(num, at[0], at[1], w, h, min(dn) if dn else None,
+                     str(_t(pad[3]))))
     return out
 
 
@@ -234,6 +248,33 @@ def _crtyd(node) -> tuple | None:
     return c
 
 
+def _marks(node) -> list[tuple[float, float]]:
+    """Where the footprint's fab and silk graphics mark a pin, in its own
+    frame: the midpoint of a short diagonal Fab line (KLC's chamfered pin-1
+    corner) and the centre of a small circle on Fab or silk (a pin-1 dot)."""
+    out = []
+    for kind in ("fp_line", "fp_circle"):
+        for g in _kids(node, kind):
+            ly = str(_t((_kid(g, "layer") or [None, ""])[1]))
+            fab = ly.endswith(".Fab")
+            if not (fab or ly.endswith(".SilkS")):
+                continue
+            if kind == "fp_line" and fab:
+                a, b = _nums(_kid(g, "start")), _nums(_kid(g, "end"))
+                if len(a) < 2 or len(b) < 2:
+                    continue
+                dx, dy = abs(b[0] - a[0]), abs(b[1] - a[1])
+                if (min(dx, dy) > 0.05 and 0.5 <= dx / dy <= 2.0
+                        and math.hypot(dx, dy) <= PIN1_MARK_MM):
+                    out.append(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2))
+            elif kind == "fp_circle":
+                c, e = _nums(_kid(g, "center")), _nums(_kid(g, "end"))
+                if len(c) >= 2 and len(e) >= 2 and math.hypot(
+                        e[0] - c[0], e[1] - c[1]) <= PIN1_DOT_MM:
+                    out.append((c[0], c[1]))
+    return out
+
+
 def board_footprints(pcb: Path) -> list[FP]:
     import sexpdata
     tree = sexpdata.loads(Path(pcb).read_text(encoding="utf-8"))
@@ -253,7 +294,7 @@ def board_footprints(pcb: Path) -> list[FP]:
         out.append(FP(props.get("Reference", "?"), str(_t(node[1])),
                       "bottom" if layer.startswith("B.") else "top",
                       (at[0], at[1]) if len(at) >= 2 else (0.0, 0.0), layer,
-                      props, _pads(node, rot), _crtyd(node), rot))
+                      props, _pads(node, rot), _crtyd(node), rot, _marks(node)))
     return out
 
 
@@ -261,6 +302,46 @@ def library_footprint(path: Path) -> tuple[list[P], tuple | None]:
     import sexpdata
     node = sexpdata.loads(path.read_text(encoding="utf-8"))
     return _pads(node, 0.0), _crtyd(node)
+
+
+def library_marks(path: Path) -> list[tuple[float, float]]:
+    import sexpdata
+    return _marks(sexpdata.loads(path.read_text(encoding="utf-8")))
+
+
+def _marked(pads: list[P], marks: list) -> str | None:
+    """The one pad every mark sits clearly nearest (under 0.7 of the
+    next pad's distance), or None."""
+    cen = _centres([p for p in pads if p.number])
+    hit = set()
+    for mx, my in marks:
+        d = sorted((math.hypot(x - mx, y - my), k) for k, (x, y) in cen.items())
+        if len(d) < 2 or d[0][0] >= 0.7 * d[1][0]:
+            return None
+        hit.add(d[0][1])
+    return hit.pop() if len(hit) == 1 else None
+
+
+def pin1_cue(pads: list[P], marks: list, spads: list[P], smarks: list):
+    """(pad, how): the pad a footprint marks as pin 1, read only by a cue
+    the stock footprint uses for its own pad 1 (its one rect pad among round
+    ones; a fab chamfer or dot nearest pad 1). None if there is no such cue,
+    or the cues disagree."""
+    cues = []
+    s1 = {p.shape for p in spads if p.number == "1"}
+    rest = {p.shape for p in spads if p.number not in ("1", "")}
+    if len(s1) == 1 and rest and not s1 & rest:
+        shape = next(iter(s1))
+        hit = sorted({p.number for p in pads if p.number and p.shape == shape})
+        if len(hit) == 1 and not {p.shape for p in pads if p.number == hit[0]} - {shape}:
+            cues.append((hit[0], f"its one {shape} pad"))
+    if smarks and _marked(spads, smarks) == "1":
+        m = _marked(pads, marks)
+        if m:
+            cues.append((m, "its pin-1 mark on fab or silk"))
+    if len({c[0] for c in cues}) != 1:
+        return None
+    return cues[0][0], " and ".join(c[1] for c in cues)
 
 
 # ------------------------------------------------------------- matching
@@ -387,6 +468,11 @@ class Stock:
         if path not in self._cache:
             self._cache[path] = library_footprint(path)
         return self._cache[path]
+
+    def marks(self, path: Path) -> list:
+        if ("marks", path) not in self._cache:
+            self._cache[("marks", path)] = library_marks(path)
+        return self._cache[("marks", path)]
 
 
 def load_land_patterns(path: Path = LAND_PATTERNS) -> list[dict]:
@@ -641,11 +727,34 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                         fp, spads, common, g_, r_):
                     c = {"fit": True}
                 own = bool(fp.lib) and fp.lib != sp.parent.stem
+                # pin order the pad set can't tell: a symmetric pattern that
+                # fits only turned (a 1xN header numbered from the other
+                # end), or an own library's renumbered copy. The stock's
+                # pin-1 cue, where the footprint carries it, says which end
+                cue = turned = None
+                if fp.connector and c["fit"]:
+                    turned = not compare(r_, g_, fp.side)["fit"]
+                if turned or (not c["fit"] and c["permuted"] and own):
+                    cue = pin1_cue(fp.pads, fp.marks, spads, stock.marks(sp))
+                    if cue and cue[0] == "1":
+                        cue = None
+                    elif cue is None and turned:
+                        skip = ("a connector whose pads fit the stock's only turned "
+                                "(numbered from the other end) and that carries no "
+                                "pin-1 mark to say which end is pin 1")
                 if not c["fit"] and c["permuted"] and fp.connector and compare(
                         r_, g_, "top" if fp.side == "bottom" else "bottom",
                         turns=(0, 90, 180, 270))["fit"]:
                     skip = ("a connector numbered as the stock one's mirror image: "
                             "which hand mates is check_mate_pins' to judge")
+                elif cue:
+                    add(fp, "error", "fp_pin1_mark_vs_number",
+                        f"{cue[1]} marks pad {cue[0]} as pin 1, where the stock "
+                        f"{sp.parent.stem}:{sp.stem} marks pad 1 the same way: the pads "
+                        f"are numbered from the other end. Fix: renumber the pads so the "
+                        f"marked one is 1", stock=str(sp.name), pad=cue[0])
+                elif skip:
+                    pass
                 elif not c["fit"] and c["permuted"] and own:
                     skip = (f"its own library's copy of a stock name ({fp.lib}): the "
                             f"numbering of a {sp.stem} is the part's, not the stock's")

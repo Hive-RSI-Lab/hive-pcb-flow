@@ -625,6 +625,178 @@ def solve_grid(bg: geom.BoardGeom, entry: dict, net: str, layers: list[str],
     }
 
 
+def _cut_vector(grid: NetGrid, layer: str, at, u, half: float):
+    """The flux functional of one cross-section of a track: c with
+    c . v = the current (A) crossing the line through `at` normal to the
+    unit direction `u`, within `half` mm of `at`, on `layer`, counted
+    positive along u. None when the section isn't clean: copper of the
+    net lies just beyond `half` beside it (the line would cut a pour or a
+    neighbour as well as the track), or fewer than two cell edges cross."""
+    h = grid.cell
+    keys, n0 = grid.keys[layer], grid.n0[layer]
+    if not len(keys):
+        return None
+    px, py = at
+    ux, uy = u
+    ii, jj = np.divmod(keys, grid.nx)
+    du = (grid.xs[jj] - px) * ux + (grid.ys[ii] - py) * uy
+    dn = -(grid.xs[jj] - px) * uy + (grid.ys[ii] - py) * ux
+    beside = (np.abs(du) <= h) & (np.abs(dn) > half) \
+        & (np.abs(dn) <= half + 1.5 * h)
+    if beside.any():
+        return None
+    g = 1.0 / sheet_res_ohm_sq(grid.bg.stackup.copper_thickness[layer])
+    rows, vals = [], []
+    for a, b, _ka, _kb in grid.layer_edges(layer):
+        da, db = du[a - n0], du[b - n0]
+        mid = 0.5 * (dn[a - n0] + dn[b - n0])
+        cross = ((da < 0) != (db < 0)) & (np.abs(mid) <= half)
+        if not cross.any():
+            continue
+        sgn = np.sign(db[cross] - da[cross])
+        rows += [a[cross], b[cross]]
+        vals += [g * sgn, -g * sgn]
+    if not rows or sum(len(r) for r in rows) < 4:
+        return None
+    return (np.concatenate(rows), np.concatenate(vals))
+
+
+def cut_transfer(bg: geom.BoardGeom, net: str, layers: list[str],
+                 cell: float, cuts: list, source_refs: list,
+                 rhs_cap: int = 64, mg_rhs_cap: int = 16):
+    """Transfer fractions for check_current's grid bound (#1169). For each
+    source ref s, T[c, k] is the current (A) crossing cut c, counted along
+    its direction, per ampere drawn by ref k with s's pads held at 0 V and
+    every other ref drawing nothing. The net is rasterized and assembled
+    once for all sources. cuts: [(layer, (x, y), (ux, uy), half_mm)].
+    T = C^T L^-1 E, solved on whichever side has fewer columns (one solve
+    per cut, or per sink): sparse LU up to DIRECT_MAX_UNKNOWNS unknowns and
+    rhs_cap columns, multigrid CG above it up to mg_rhs_cap columns.
+
+    Returns ({source: (T, refs) | "why it couldn't be solved"}, facts):
+    refs names T's columns (every other ref with pads on the net); a NaN
+    row is a cut that isn't clean (_cut_vector) or not on the source's
+    copper, a NaN column a ref the grid doesn't connect to the source."""
+    grid = NetGrid(bg, net, layers, cell)
+    adj, _used, _skipped = assemble(grid)
+    groups = pad_groups(bg, net)
+    deg = np.asarray(adj.sum(axis=1)).ravel()
+    lap = (sparse.diags(deg) - adj).tocsr()
+    lay, rows, cols = grid.node_coords()
+    _n, labels = connected_components(adj, directed=False)
+
+    def pad_nodes(p) -> np.ndarray:
+        pools = [grid.poly_cells(l, p.poly) for l in p.layers
+                 if l in grid.mask]
+        pool = (np.unique(np.concatenate(pools))
+                if pools and sum(len(x) for x in pools) else
+                np.empty(0, dtype=np.int64))
+        if len(pool):
+            return pool
+        near = grid.nearest_node([l for l in p.layers if l in grid.mask],
+                                 p.center[0], p.center[1],
+                                 max(p.size) / 2.0 + 3.0 * cell)
+        return (np.array([near], dtype=np.int64) if near is not None
+                else np.empty(0, dtype=np.int64))
+
+    ref_nodes = {}
+    for ref in sorted(groups):
+        nodes = [pad_nodes(p) for p in groups[ref]]
+        ref_nodes[ref] = np.unique(np.concatenate(
+            nodes + [np.empty(0, dtype=np.int64)]))
+    sections = [(_cut_vector(grid, layer, at, u, half)
+                 if layer in grid.mask else None)
+                for layer, at, u, half in cuts]
+
+    out: dict = {}
+    facts = {"cell_mm": checklib.rnd(cell, 5), "cells": int(grid.n_nodes),
+             "solves": 0, "method": "direct"}
+    for source in source_refs:
+        src = ref_nodes.get(source, np.empty(0, dtype=np.int64))
+        if not len(src):
+            out[source] = f"source {source} lands on no copper cells"
+            continue
+        kept = np.isin(labels, np.unique(labels[src]))
+        is_src = np.zeros(grid.n_nodes, dtype=bool)
+        is_src[src] = True
+        unknown = np.nonzero(kept & ~is_src)[0]
+        pos = np.full(grid.n_nodes, -1, dtype=np.int64)
+        pos[unknown] = np.arange(len(unknown))
+        nu = len(unknown)
+        refs = [r for r in sorted(groups) if r != source]
+        t = np.full((len(cuts), len(refs)), np.nan)
+        cmat = []                             # (cut index, rows, vals)
+        for ci, cv in enumerate(sections):
+            if cv is None or not kept[cv[0]].all():
+                continue
+            r, v = cv
+            sel = pos[r] >= 0                 # source nodes sit at 0 V
+            cmat.append((ci, pos[r[sel]], v[sel]))
+        emat = []                             # (ref index, rows, vals)
+        for si, ref in enumerate(refs):
+            nodes = ref_nodes[ref]
+            if not len(nodes) or not kept[nodes].all():
+                continue
+            p = pos[nodes]
+            p = p[p >= 0]
+            emat.append((si, p, np.full(len(p), -1.0 / len(nodes))))
+        if not cmat or not emat or not nu:
+            out[source] = "no clean section or connected sink to solve"
+            continue
+
+        def as_matrix(cols_):
+            r = np.concatenate([x[1] for x in cols_])
+            c = np.concatenate([np.full(len(x[1]), j)
+                                for j, x in enumerate(cols_)])
+            v = np.concatenate([x[2] for x in cols_])
+            return sparse.csc_matrix((v, (r, c)), shape=(nu, len(cols_)))
+
+        cm, em = as_matrix(cmat), as_matrix(emat)
+        adjoint = len(cmat) <= len(emat)
+        rhs = cm if adjoint else em
+        direct = nu <= DIRECT_MAX_UNKNOWNS
+        cap = rhs_cap if direct else mg_rhs_cap
+        if rhs.shape[1] > cap:
+            out[source] = (f"{rhs.shape[1]} right-hand sides on "
+                           f"{nu} unknowns exceed the cap of {cap}")
+            continue
+        a = lap[unknown][:, unknown].tocsr()
+        if direct:
+            x = splu(a.tocsc()).solve(rhs.toarray())
+        else:
+            facts["method"] = "multigrid_cg"
+            mg = _Multigrid(a, (lay[unknown], rows[unknown], cols[unknown]))
+            pre = LinearOperator(a.shape, matvec=mg.vcycle, dtype=float)
+            x = np.zeros(rhs.shape)
+            failed = None
+            for j in range(rhs.shape[1]):
+                b = rhs[:, j].toarray().ravel()
+                its = [0]
+
+                def count(_x, its=its):
+                    its[0] += 1
+                x[:, j], info = cg(a, b, rtol=CG_RTOL, atol=0.0,
+                                   maxiter=CG_MAXITER, M=pre,
+                                   callback=count)
+                if info != 0:
+                    failed = f"CG did not converge in {its[0]} iterations"
+                    break
+                facts["iterations_max"] = max(
+                    facts.get("iterations_max", 0), its[0])
+            if failed:
+                out[source] = failed
+                continue
+        facts["solves"] += int(rhs.shape[1])
+        # adjoint: x = L^-1 C (nu x m), so E^T x is K x m; else x = L^-1 E
+        # and C^T x is m x K. prod is m x K either way.
+        prod = np.asarray((em.T @ x).T) if adjoint else np.asarray(cm.T @ x)
+        for a_i, (ci, _r, _v) in enumerate(cmat):
+            for b_i, (si, _r2, _v2) in enumerate(emat):
+                t[ci, si] = prod[a_i, b_i]
+        out[source] = (t, refs)
+    return out, facts
+
+
 def current_density(grid: NetGrid, v: np.ndarray):
     """Sheet current density |K| (A/mm) per cell from the solved voltages.
     Returns (jmax, [x, y], layer, top-neck list). K on the edge between two

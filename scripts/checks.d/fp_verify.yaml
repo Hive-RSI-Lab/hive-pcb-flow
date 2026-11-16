@@ -1,0 +1,10 @@
+# fp_verify (board mode, #1285): the pad-numbering checks on each placed
+# footprint, taken back to its library frame (a bottom part unflipped) and
+# judged against the record its LCSC number or MPN finds in parts/ or
+# reference/extractions: which pad carries which pin, and a lettered ball
+# grid numbered as its top view (a bottom-view BGA). Board only.
+name: fp_verify
+needs: []
+args: []
+optional:
+  parts: [--parts, "{parts}"]

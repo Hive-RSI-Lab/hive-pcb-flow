@@ -288,6 +288,7 @@ def _margin(node):
 def read_pads(root, dflt: dict) -> dict[str, list[dict]]:
     """{ref: [pad]} with its copper and its mask opening per side."""
     out: dict[str, list[dict]] = {}
+    legacy = geom.legacy_fill(root)
     for fp in _kids(root, "footprint"):
         at = _kid(fp, "at")
         fn = _nums(at) if at is not None else [0, 0, 0]
@@ -311,7 +312,7 @@ def read_pads(root, dflt: dict) -> dict[str, list[dict]]:
             w, h = sz[0], (sz[1] if len(sz) > 1 else sz[0])
             rr = _kid(pad, "roundrect_rratio")
             rratio = _nums(rr)[0] if rr is not None and _nums(rr) else 0.0
-            if shape == "custom" and (cg := geom._custom_pad(pad, w, h)) is not None:
+            if shape == "custom" and (cg := geom._custom_pad(pad, w, h, legacy)) is not None:
                 cg = affinity.rotate(cg, -angle, origin=(0, 0), use_radians=False)
                 copper = affinity.translate(cg, c[0], c[1])
             else:

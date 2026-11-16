@@ -1,0 +1,15 @@
+# Seeded fault for fp_verify's board mode (#1285): pad numbering as placed.
+mutants:
+  lqfp-numbered-clockwise:
+    board: blinky2
+    script: mutations/lqfp_numbered_clockwise.py
+    check: fp_verify
+    defect: >-
+      LIBRARY fault: U1's LQFP-48 footprint is numbered clockwise, drawn from
+      the package's bottom view, so every pin off the mirror line lands on
+      another's pad while pad count, sizes and name still match the stock
+      footprint (#1285; the record, parts/C9900003.json, says ccw_top)
+    expect:
+      kind: pad_numbering
+      ref: U1
+      pos: [128, 118]   # U1's origin
