@@ -1065,6 +1065,15 @@
 				(hide yes)
 			)
 		)
+		(property "LCSC Part" "C492401"
+			(at 64.77 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "de29b3f0-fad2-4fae-9003-e9a4b6d3ac56")
 		)
@@ -1192,6 +1201,15 @@
 		)
 		(property "Footprint" "aiee:C0603"
 			(at 90.17 39.37 0.0000)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "LCSC Part" "C19666"
+			(at 90.17 46.99 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1336,6 +1354,15 @@
 		(pin "2"
 			(uuid "d15b58e9-944f-4890-9e0a-7d9198371045")
 		)
+		(property "LCSC Part" "C23179"
+			(at 115.57 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "d275932d-fdf2-4e8f-b94f-531214e56a1a")
 		)
@@ -1428,6 +1455,15 @@
 		)
 		(pin "2"
 			(uuid "b5c5c92a-c53e-47cc-b60f-4cabc167a959")
+		)
+		(property "LCSC Part" "C12624"
+			(at 140.97 46.99 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
 		)
 		(pin "1"
 			(uuid "3eb0b6c4-94e4-4b96-9274-41a3d438a95c")

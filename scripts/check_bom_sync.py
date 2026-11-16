@@ -42,6 +42,13 @@ Rules, each a finding's `kind` (error unless marked):
    run), and, with --live, from JLC's own record (lib/stocklib.py); a part
    with none is named in `skipped`, never passed. Only chip sizes compare (engcalc.package_code:
    0201..2512 on both sides); a SOT or QFN part is not this rule's.
+ - bom_lcsc_mismatch: the schematic's placed symbol and the board's
+   footprint name different LCSC numbers for one ref (kicad-happy SS-001;
+   digits v2's schematic buys C1, a 470 uF can, as C307331, a 100 nF 0402,
+   where its board and shipped BOM say C248607). #351.
+ - bom_lcsc_unsynced (warning): an assembled, populated ref carries an LCSC
+   number on one side only. A number only in the schematic's lib_symbols is
+   not the placed part's (hwde-led-test's schematic before #689's writer).
  - bom_pos_excluded (warning): an SMD footprint carries
    `exclude_from_pos_files` (and neither `exclude_from_bom` nor
    `board_only`) and parts.json gives it no class, so it became hand_install
@@ -156,10 +163,18 @@ def board_footprints(pcb: Path) -> dict[str, dict]:
 
 
 def schematic_dnp(sch: Path) -> dict[str, bool]:
-    """ref -> the schematic's `(dnp yes|no)`, over the root sheet and every
-    sheet it names (each file read once). Refs come from the symbol's
-    instances block (the per-sheet-instance truth), else its Reference."""
-    out: dict[str, bool] = {}
+    """ref -> the schematic's `(dnp yes|no)`; see schematic_symbols."""
+    return {r: s["dnp"] for r, s in schematic_symbols(sch).items()}
+
+
+def schematic_symbols(sch: Path) -> dict[str, dict]:
+    """ref -> {dnp, lcsc} of each placed symbol: its `(dnp yes|no)` and the
+    LCSC number its own fields carry (None when none does; a number only
+    in lib_symbols is not the placed part's, KiCad's BOM never reads it),
+    over the root sheet and every sheet it names (each file read once).
+    Refs come from the symbol's instances block (the per-sheet-instance
+    truth), else its Reference."""
+    out: dict[str, dict] = {}
     seen: set[Path] = set()
     todo = [sch]
     while todo:
@@ -179,6 +194,11 @@ def schematic_dnp(sch: Path) -> dict[str, bool]:
                 continue
             d = _child(node, "dnp")
             dnp = d is not None and len(d) > 1 and _sval(d[1]) == "yes"
+            lcsc = None
+            for sub in node[1:]:
+                if _head(sub) == "property" and len(sub) >= 3 \
+                        and bom_cpl.is_lcsc_field(_sval(sub[1])):
+                    lcsc = _sval(sub[2]).strip() or lcsc
             refs = []
             inst = _child(node, "instances")
             for proj in (inst[1:] if inst else []):
@@ -194,7 +214,7 @@ def schematic_dnp(sch: Path) -> dict[str, bool]:
                         refs.append(_sval(sub[2]))
             for r in refs:
                 if not r.startswith("#"):
-                    out[r] = dnp
+                    out[r] = {"dnp": dnp, "lcsc": lcsc}
     return out
 
 
@@ -400,11 +420,12 @@ def check(pcb: Path, fab_dir: Path | None, parts: Path | None,
           bom=None, cpl=None) -> tuple:
     fps = board_footprints(pcb)
     sch_path = pcb.with_suffix(".kicad_sch")
-    sch = schematic_dnp(sch_path) if sch_path.is_file() else {}
+    symbols = schematic_symbols(sch_path) if sch_path.is_file() else {}
+    sch = {r: s["dnp"] for r, s in symbols.items()}
     have_parts = parts is not None and parts.is_file()
     records = bom_cpl.load_parts_records(parts if have_parts else None)
-    classes, _, src = bom_cpl.resolve_assembly(
-        set(fps), records, bom_cpl.board_part_fields(pcb))
+    fields = bom_cpl.board_part_fields(pcb)
+    classes, _, src = bom_cpl.resolve_assembly(set(fps), records, fields)
     parts_refs = {r for rec in records for r in rec["refs"]} | {
         r for rec in records for r in rec["refdes_class"]}
 
@@ -435,6 +456,30 @@ def check(pcb: Path, fab_dir: Path | None, parts: Path | None,
             add("bom_dnp_mismatch", "error", ref,
                 f"{ref} has the board dnp attr but the schematic says "
                 "(dnp no)")
+    # SS-001 (#351): the schematic and the board name one LCSC number per
+    # part. The board's feeds bom_cpl; the schematic's feeds KiCad's own BOM
+    # and comes back onto the board on the next update from the schematic.
+    for ref in sorted(fps, key=bom_cpl._natural_key):
+        if ref not in symbols:
+            continue
+        s_code = symbols[ref]["lcsc"]
+        b_code = (fields.get(ref) or {}).get("lcsc")
+        if s_code and b_code:
+            if s_code.upper() != b_code.upper():
+                add("bom_lcsc_mismatch", "error", ref,
+                    f"{ref} is {s_code} in the schematic but {b_code} on "
+                    "the board: one of them buys the wrong part")
+        elif (s_code or b_code) and not is_dnp(ref) \
+                and classes.get(ref, PLACED) in ASSEMBLED:
+            has, lacks = ("schematic", "board") if s_code \
+                else ("board", "schematic")
+            add("bom_lcsc_unsynced", "warning", ref,
+                f"{ref} carries LCSC {s_code or b_code} on the {has} but "
+                f"none on its {lacks}"
+                + ("'s placed symbol (a number only in lib_symbols is not "
+                   "the part's): a BOM from the schematic loses it"
+                   if b_code else "'s footprint: bom_cpl reads the board, "
+                   "and falls back to parts.json or nothing"))
     for ref in sorted(fps, key=bom_cpl._natural_key):
         f = fps[ref]
         # board_feature (exclude_from_bom / board_only: fiducials, printed
@@ -490,7 +535,7 @@ def check(pcb: Path, fab_dir: Path | None, parts: Path | None,
     # The part each ref is bought as against its pad's chip size. Every
     # source that names an LCSC number for a ref is a statement of its own.
     bought: dict[tuple[str, str], list[str]] = {}
-    for ref, f in bom_cpl.board_part_fields(pcb).items():
+    for ref, f in fields.items():
         if f.get("lcsc"):
             bought.setdefault((ref, f["lcsc"]), []).append("the board")
     for rec in records:

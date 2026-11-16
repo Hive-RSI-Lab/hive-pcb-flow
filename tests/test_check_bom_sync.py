@@ -539,3 +539,94 @@ def test_cli_bom_and_cpl_name_the_files(tmp_path):
     assert {v["refs"][0] for v in rep["violations"]} == {"C4"}
     assert check_bom_sync.main(["--pcb", str(pcb), "--bom",
                                 str(tmp_path / "nope.csv")]) == 2
+
+
+# --- #351: the schematic and the board name one LCSC number (SS-001) ------
+
+GOLDEN_SCH = (GOLDEN / "blinky2" / "blinky2.kicad_sch").read_text(
+    encoding="utf-8")
+
+
+def _board_lcsc(text, ref, code):
+    anchor = f'(property "Reference" "{ref}"'
+    return MUT.mutlib.edit_footprint(
+        text, ref, anchor,
+        f'(property "LCSC" "{code}" (at 0 0 0) (layer "F.Fab") (hide yes))'
+        f'\n\t\t{anchor}', f"{ref} LCSC")
+
+
+def _sch_lcsc(text, ref, code):
+    """The LCSC field on the placed symbol `ref` (its own properties)."""
+    anchor = f'\t\t(property "Reference" "{ref}"\n'
+    assert text.count(anchor) == 1
+    return text.replace(anchor, f'\t\t(property "LCSC Part" "{code}" '
+                        '(at 0 0 0) (effects (hide yes)))\n' + anchor)
+
+
+def _lib_lcsc(text, lib_id, code):
+    """The LCSC field only inside lib_symbols, as hwde's writer left it
+    before #689: the placed symbols carry none."""
+    anchor = f'\t\t(symbol "{lib_id}"\n'
+    assert text.count(anchor) == 1
+    return text.replace(anchor, anchor + f'\t\t\t(property "LCSC Part" '
+                        f'"{code}" (at 0 0 0) (effects (hide yes)))\n')
+
+
+def _lcsc_ws(tmp_path, pcb_text, sch_text):
+    pcb = _workspace(tmp_path, pcb_text=pcb_text, fab=False)
+    (tmp_path / "blinky2.kicad_sch").write_text(sch_text, encoding="utf-8")
+    return pcb
+
+
+def test_schematic_and_board_name_different_lcsc(tmp_path):
+    # planted: digits v2's shape, the schematic buys another part than the
+    # board (and the BOM that shipped)
+    pcb = _lcsc_ws(tmp_path, _board_lcsc(GOLDEN_PCB, "R1", "C25804"),
+                   _sch_lcsc(GOLDEN_SCH, "R1", "C25805"))
+    viols, _ = _run(pcb)
+    hits = _errors(viols, "bom_lcsc_mismatch")
+    assert _refs(hits, "bom_lcsc_mismatch") == {"R1"}
+    assert "C25805" in hits[0]["msg"] and "C25804" in hits[0]["msg"]
+    assert not _refs(viols, "bom_lcsc_unsynced")
+
+
+def test_same_lcsc_on_both_sides_is_quiet(tmp_path):
+    # twin: one number, spelt in another case, under another field name
+    pcb = _lcsc_ws(tmp_path, _board_lcsc(GOLDEN_PCB, "R1", "c25804"),
+                   _sch_lcsc(GOLDEN_SCH, "R1", "C25804"))
+    viols, _ = _run(pcb)
+    assert not [v for v in viols if v["kind"].startswith("bom_lcsc")]
+
+
+def test_lcsc_only_in_lib_symbols_is_not_the_placed_parts(tmp_path):
+    # planted: the led-test shape: the board carries R1's number, the
+    # schematic only in lib_symbols; and C1's only on the schematic
+    pcb_text = _board_lcsc(GOLDEN_PCB, "R1", "C25804")
+    sch = _sch_lcsc(_lib_lcsc(GOLDEN_SCH, "Device:R", "C25804"), "C1",
+                    "C1525")
+    viols, _ = _run(_lcsc_ws(tmp_path, pcb_text, sch))
+    hits = [v for v in viols if v["kind"] == "bom_lcsc_unsynced"]
+    assert {v["refs"][0]: v["severity"] for v in hits} == {
+        "R1": "warning", "C1": "warning"}
+    msg = {v["refs"][0]: v["msg"] for v in hits}
+    assert "lib_symbols" in msg["R1"] and "bom_cpl" in msg["C1"]
+    assert not _errors(viols, "bom_lcsc_mismatch")
+
+
+def test_one_sided_lcsc_on_a_dnp_part_is_quiet(tmp_path):
+    # twin: the same one-sided number on a part nobody fits
+    pcb_text = _board_lcsc(GOLDEN_PCB, "R1", "C25804")
+    sch = MUT.mark_schematic_dnp(_lib_lcsc(GOLDEN_SCH, "Device:R", "C25804"),
+                                 "R1")
+    viols, _ = _run(_lcsc_ws(tmp_path, pcb_text, sch))
+    assert "R1" not in _refs(viols, "bom_lcsc_unsynced")
+
+
+def test_hwde_led_test_schematic_carries_its_board_lcsc():
+    # #351: the committed led-test sheet had LCSC only in lib_symbols
+    pcb = REPO / "boards" / "hwde-led-test" / "kicad" / "hwde-led-test.kicad_pcb"
+    viols, _ = check_bom_sync.check(pcb, None, None)
+    assert not [v for v in viols if v["kind"].startswith("bom_lcsc")]
+    syms = check_bom_sync.schematic_symbols(pcb.with_suffix(".kicad_sch"))
+    assert {r: s["lcsc"] for r, s in syms.items()} == {
+        "J1": "C492401", "C1": "C19666", "R1": "C23179", "D1": "C12624"}
