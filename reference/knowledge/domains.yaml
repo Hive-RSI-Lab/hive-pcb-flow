@@ -67,6 +67,9 @@ domains:
   - {domain: ablic.com,             kind: vendor,      note: ABLIC}
   - {domain: aosmd.com,             kind: vendor,      note: Alpha and Omega}
   - {domain: mpsind.com,            kind: vendor,      note: MPS (alt domain)}
+  - {domain: latticesemi.com,       kind: vendor,      note: Lattice (ECP5 pinout files)}
+  - {domain: xilinx.com,            kind: vendor,      note: "AMD Xilinx (package pinout files)"}
+  - {domain: amd.com,               kind: vendor,      note: AMD (Xilinx docs moved here)}
   # --- passives / magnetics / connectors -----------------------------------
   - {domain: murata.com,            kind: vendor,      note: Murata}
   - {domain: tdk.com,               kind: vendor,      note: TDK (incl. EPCOS)}

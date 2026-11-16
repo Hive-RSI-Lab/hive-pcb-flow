@@ -60,6 +60,20 @@ view mirrored), and fp_verify fits them; otherwise only the direction is
 fails is left out and counted, never guessed: its numbering stays
 not_judged.
 
+A ball-grid part (pads named A1, B2 ... on every board it sits on) gets a
+ball map instead (#1455, scripts/lib/ballmaps.py): the datasheet's own ball
+list when its text prints one (a ball and its name on a line, on pages that
+say "ball"), else the maker's pinout file that reference/ball_map_urls.yaml
+names for the part (fetched through the same allowlist, cached under
+abs-max/<set>/ballmaps/). Either is kept only when each ball is listed once
+with one name, the balls form a letter-row / number-column grid, and their
+count is the package's stated ball count; anything else leaves the part out
+with the reasons. The record's pinout is then the ball map with types read
+from the names (GND / VSS ground, VCC / VDD supply), which fp_verify's
+ball-map check (#377) judges the footprint by. The board's nets are noted
+against it in the report, not used to keep it: the map comes from the
+maker, so a footprint fault can't hide its own map.
+
 Output, under <cache>/land/<set>/ (<set> is `training` or `round-N`, in the
 cache that holds the set's checkouts):
   ext/<key>.json     the kept reading (<key>: the LCSC code, or the MPN as
@@ -99,6 +113,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "lib"))
 
 import abs_max_batch as amb  # noqa: E402
+import ballmaps  # noqa: E402
 import check_ratings  # noqa: E402
 import datasheet_extract  # noqa: E402
 import errata_corpus as ec  # noqa: E402
@@ -489,11 +504,11 @@ def ask_reader(prompt: str, cwd: Path, timeout: int = 900) -> dict:
     return json.loads(m.group(0))
 
 
-def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
-              reader=ask_reader) -> dict:
-    """One part from listing to record; its report line. `store` is
-    abs_max_batch's folder for the set (listings and PDFs shared)."""
-    rep: dict = {"key": key, "boards": len(on_boards)}
+def fetch_pages(key: str, on_boards: list[dict], store: Path, rep: dict
+                ) -> tuple[dict | None, dict | None]:
+    """The part's listing, datasheet and its text: ({hit, mpn, pdf, got,
+    sha, pages}, None), or (None, the report line saying why not). rep
+    gets what was found on the way."""
     name = amb.ext_name(key)
     by_value = all(amb.keyed_by_value(p) for p in on_boards)
     if by_value:
@@ -505,7 +520,7 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
                     (p.get("footprint") or "", len(p.get("nums") or p["pads"]))
                     for p in on_boards])
             if hit is None:
-                return {**rep, "status": "not one listing for its Value", "why": vwhy}
+                return None, {**rep, "status": "not one listing for its Value", "why": vwhy}
             if vwhy:
                 rep["package_from"] = vwhy
         else:
@@ -523,13 +538,13 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
                    package=maker["package"])
         rep["datasheet_from"] = "reference/datasheet_urls.yaml"
     elif err is not None:
-        return {**rep, "status": "no listing", "why": str(err)[:200]}
+        return None, {**rep, "status": "no listing", "why": str(err)[:200]}
     if not hit.get("datasheet"):
         # abs_max_batch's resolver and its cache (#815, #1406): one lookup
         # by maker serves both batches
         found = amb.resolved(mpn, hit.get("brand"), store, name)
         if not found.get("url"):
-            return {**rep, "status": "no listing with a datasheet URL",
+            return None, {**rep, "status": "no listing with a datasheet URL",
                     "resolver": found.get("miss"),
                     "why": str(found.get("why") or amb._tried(found))[:300]}
         hit.update(datasheet=found["url"],
@@ -550,11 +565,28 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
         meta.write_text(json.dumps(got, indent=1), encoding="utf-8")
     got = json.loads(meta.read_text(encoding="utf-8"))
     if got.get("status") != "fetched":
-        return {**rep, "status": f"datasheet {got.get('status')}",
+        return None, {**rep, "status": f"datasheet {got.get('status')}",
                 "why": str(got.get("error") or
                            (got.get("assessment") or {}).get("reasons"))[:300]}
     sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
     pages = datasheet_extract.extract_pdf_text(pdf)
+    return {"hit": hit, "mpn": mpn, "lcsc": lcsc, "pkg": pkg, "pdf": pdf,
+            "got": got, "sha": sha, "pages": pages, "name": name}, None
+
+
+def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
+              reader=ask_reader) -> dict:
+    """One part from listing to record; its report line. `store` is
+    abs_max_batch's folder for the set (listings and PDFs shared)."""
+    rep: dict = {"key": key, "boards": len(on_boards)}
+    ctx, fail = fetch_pages(key, on_boards, store, rep)
+    if ball_grid(on_boards):
+        return read_balls(key, on_boards, out, store, rep, ctx, fail)
+    if fail is not None:
+        return fail
+    hit, mpn, lcsc, pkg, pdf, got, sha, pages, name = (
+        ctx[k] for k in ("hit", "mpn", "lcsc", "pkg", "pdf", "got", "sha",
+                         "pages", "name"))
     views, dims, both = pick_pages(pages)
     rep["pages_with_both_views"] = both
     if not views:
@@ -634,6 +666,113 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
     return {**rep, "status": "kept", "kept": "pads" if pads else "ccw_top"}
 
 
+def _named_grid(names: list[str]) -> bool:
+    """Pad names that are a ball grid by name alone: fp_verify's letter-row
+    / number-column names, at least four rows, and the balls filling half
+    the rows x columns. A USB-C socket's A1..A12, B1..B12 and S1 parse as
+    three rows (fp_verify tells them apart by geometry, which a board part
+    here doesn't carry)."""
+    got = fp_verify._ball_names(names)
+    if not got:
+        return False
+    rows = {r for r, _ in got.values()}
+    cols = {c for _, c in got.values()}
+    return len(rows) >= 4 and len(got) >= 0.5 * len(rows) * len(cols)
+
+
+def ball_grid(on_boards: list[dict]) -> bool:
+    """Whether the part's pads are named as a ball grid (A1, B2 ...) on
+    every board it sits on: its record's pinout must then be a ball map."""
+    return all(_named_grid(list(p.get("nums") or p["pads"])) for p in on_boards)
+
+
+def read_balls(key: str, on_boards: list[dict], out: Path, store: Path,
+               rep: dict, ctx: dict | None, fail: dict | None) -> dict:
+    """A ball-grid part's ball map into its record (#1455): the datasheet's
+    own ball list when its text prints one, else the maker's pinout file
+    that reference/ball_map_urls.yaml names for it; checked by ballmaps
+    (each ball once, a grid, the package's ball count). Anything else
+    leaves it out with both reasons, never a partial map."""
+    rep = {**rep, "ball_grid": True}
+    name = amb.ext_name(key)
+    hit = (ctx or {}).get("hit") or {}
+    mpn = key[4:] if key.startswith("mpn:") else hit.get("mpn") or ""
+    names = [mpn, hit.get("mpn") or ""] + [
+        x for p in on_boards for x in (p.get("mpn"), p.get("value"))]
+    entry, ewhy = ballmaps.curated(names)
+    pkg = hit.get("package") or (entry or {}).get("package") or ""
+    want = (entry or {}).get("balls") or ballmaps.ball_count(pkg, mpn)
+    whys = []
+    pinout = None
+    if ctx is not None:
+        pinout, pwhy, used = ballmaps.from_pages(ctx["pages"], want)
+        if pinout:
+            doc = f"{hit.get('brand') or ''} {mpn} datasheet".strip()
+            src = {"ball_map_from": "datasheet",
+                   "pads_source": f"{doc} p.{', '.join(map(str, used))} ball list",
+                   "source_pdf": (f"{doc}, {len(ctx['pages'])} pages; "
+                                  f"{ctx['got'].get('final_url') or ctx['got']['url']} "
+                                  f"sha256 {ctx['sha']}")}
+        else:
+            whys.append(f"datasheet: {pwhy}")
+    else:
+        whys.append(f"datasheet: {fail.get('status')}"
+                    + (f" ({fail['why'][:120]})" if fail.get("why") else ""))
+    if pinout is None and entry is not None:
+        dest = store / "ballmaps" / name
+        meta = dest.parent / f"{dest.name}.json"
+        if not (dest.is_file() and meta.is_file()) or json.loads(
+                meta.read_text(encoding="utf-8")).get("url") != entry["url"]:
+            dest.unlink(missing_ok=True)
+            got = ballmaps.fetch_file(entry["url"], dest)
+            meta.parent.mkdir(parents=True, exist_ok=True)
+            meta.write_text(json.dumps(got, indent=1), encoding="utf-8")
+        got = json.loads(meta.read_text(encoding="utf-8"))
+        if got.get("status") != "fetched":
+            whys.append(f"maker's file {got.get('status')}: "
+                        f"{str(got.get('error'))[:160]}")
+        else:
+            data = dest.read_bytes()
+            sha = hashlib.sha256(data).hexdigest()
+            pinout, fwhy = ballmaps.from_file(data, entry, [mpn])
+            if pinout:
+                doc = f"{entry['brand']} {entry.get('note') or 'pinout file'}"
+                src = {"ball_map_from": "reference/ball_map_urls.yaml",
+                       "pads_source": f"{doc} ({entry['format']}"
+                                      + (f", column {entry['column']}"
+                                         if entry.get("column") else "") + ")",
+                       "source_pdf": f"{doc}; {got.get('final_url') or got['url']} "
+                                     f"sha256 {sha}"}
+            else:
+                whys.append(f"maker's file: {fwhy}")
+    elif pinout is None:
+        whys.append(ewhy)
+    if pinout is None:
+        return {**rep, "mpn": mpn, "status": "no ball map",
+                "why": "; ".join(whys)[:400]}
+    # a fact for the sweep, not a gate: a ground ball the board leaves off
+    # ground is the footprint's to answer for, not the map's
+    rep["nets"] = [f"{b['ref']}: " + " ".join(amb.nets_agree(b, pinout, ""))
+                   for b in on_boards]
+    lcsc = hit.get("lcsc") or ""
+    ext = {"mpn": mpn, **({"lcsc": lcsc} if lcsc else {}),
+           "package": pkg, "pinout": pinout,
+           "land_pattern": {"package": pkg, "pad_count": len(pinout),
+                            "pin1": "A1", "pads_source": src["pads_source"]},
+           "description": (f"ball map by land_batch.py from the "
+                           f"{'datasheet text' if src['ball_map_from'] == 'datasheet' else 'maker pinout file'}"
+                           f", checked by ballmaps.py: each ball once, a "
+                           f"letter-row / number-column grid, {len(pinout)} balls"),
+           "source_pdf": src["source_pdf"]}
+    f = amb._write(out / "ext" / f"{name}.json", ext)
+    ok, code = datasheet_extract.do_validate(argparse.Namespace(validate=str(f)))
+    if code:
+        f.unlink()
+        return {**rep, "status": "schema", "why": json.dumps(ok)[:300]}
+    return {**rep, "mpn": mpn, "lcsc": lcsc, "package": pkg, "status": "kept",
+            "kept": "ball_map", "ball_map_from": src["ball_map_from"]}
+
+
 # --- main ----------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -682,6 +821,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"kept with pad places {kept['pads']}, with direction only "
           f"{kept['ccw_top']}; pages saying both views "
           f"{sum(r.get('pages_with_both_views', 0) for r in reps)}")
+    src = Counter(r["ball_map_from"] for r in reps if r.get("kept") == "ball_map")
+    print(f"ball grids {sum(1 for r in reps if r.get('ball_grid'))}: ball map "
+          f"kept {kept['ball_map']} (" + (", ".join(
+              f"from {k} {v}" for k, v in sorted(src.items())) or "none") + ")")
     print(f"written: {out}/ext (per part: {out}/report.json)")
     return 0
 

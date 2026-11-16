@@ -577,3 +577,156 @@ def test_errata_corpus_passes_the_sets_folder_to_fp_verify(tmp_path):
     hits = [v for v in ec.audit(cache, b, "rev_a", "fp_verify")
             if v.get("severity") == "error"]
     assert [v.get("refs") for v in hits] == [["U1"]]
+
+
+# --- #1455: a ball-grid part's ball map into its record ----------------------
+
+BGA_BALLS = [f"{r}{c}" for r in "ABCD" for c in range(1, 5)]
+BGA_NAMES = {b: "GND" if b in ("A1", "D4") else f"IO_{b}" for b in BGA_BALLS}
+BGA_ENTRY = {"match": ["BGAX-16*"], "brand": "Acme", "package": "caBGA-16",
+             "url": "https://www.latticesemi.com/view_document?document_id=1",
+             "format": "lattice_csv", "column": "CABGA16", "balls": 16,
+             "note": "BGAX pinout file"}
+
+
+def _bga_part(ref, value="BGAX-16C"):
+    return {"ref": ref, "in_bom": True, "lcsc": "", "mpn": "", "value": value,
+            "footprint": "Package_BGA:BGA-16_Layout4x4",
+            "pads": {b: f"N_{b}" for b in BGA_BALLS}, "fns": {},
+            "nums": list(BGA_BALLS)}
+
+
+def _bga_csv(rows) -> bytes:
+    return ("PAD,Pin/Ball Function,Bank,CABGA16\n" + "".join(
+        f"{i},{n},0,{b}\n" for i, (b, n) in enumerate(rows))).encode()
+
+
+@pytest.fixture
+def bga_table(tmp_path, monkeypatch):
+    """No JLC listing and no maker's datasheet for BGAX-16C; the ball-map
+    table names it once; the maker's file comes from a stand-in fetch."""
+    import yaml
+    t = tmp_path / "ball_map_urls.yaml"
+    t.write_text(yaml.safe_dump({"version": 1, "parts": [BGA_ENTRY]}))
+    monkeypatch.setattr(lb.ballmaps, "TABLE", t)
+    d = tmp_path / "datasheet_urls.yaml"
+    d.write_text("version: 1\nparts: []\n")
+    monkeypatch.setattr(lb.amb, "DATASHEET_URLS", d)
+    files = {"body": _bga_csv([(b, BGA_NAMES[b]) for b in BGA_BALLS])}
+    fetched = []
+
+    def fetch(url, dest, transport=None, domains=None):
+        fetched.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(files["body"])
+        return {"url": url, "status": "fetched", "final_url": url,
+                "file": str(dest)}
+    monkeypatch.setattr(lb.ballmaps, "fetch_file", fetch)
+    return t, files, fetched
+
+
+def _bga_mod(tmp_path, swap=None) -> Path:
+    pads = {b: ((int(b[1:]) - 1) * 1.0, "ABCD".index(b[0]) * 1.0)
+            for b in BGA_BALLS}
+    if swap:
+        a, b = swap
+        pads[a], pads[b] = pads[b], pads[a]
+    fp = tmp_path / ("bga-swap.kicad_mod" if swap else "bga.kicad_mod")
+    fp.write_text('(footprint "bga" (layer "F.Cu")\n' + "\n".join(
+        f'  (pad "{n}" smd circle (at {x:g} {y:g}) (size 0.4 0.4) '
+        '(layers "F.Cu" "F.Paste" "F.Mask"))' for n, (x, y) in pads.items())
+        + "\n)\n", encoding="utf-8")
+    return fp
+
+
+def _fp_one(tmp_path, fp, rec):
+    out = tmp_path / "fp1.json"
+    code = fp_verify.main(["--footprint", str(fp), "--datasheet-json", str(rec),
+                           "--svg", str(tmp_path / "o.svg"), "--out", str(out)])
+    return code, json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_a_ball_grid_part_gets_the_makers_map_and_fp_verify_judges_it(
+        stand_ins, bga_table, tmp_path):
+    """#1455 planted fault and quiet twin: the datasheet gives no ball list,
+    so the map comes from the maker's file the table names, checked and
+    written as the record's pinout with ball names. fp_verify then catches
+    a footprint with two balls swapped and passes the right one."""
+    out, store, reader, calls, _, _ = stand_ins
+    _, _, fetched = bga_table
+    _value_rows(store, "BGAX-16C", [])
+    rep = lb.read_part("mpn:BGAX-16C", [_bga_part("U1")], out, store, reader)
+    assert rep["status"] == "kept" and rep["kept"] == "ball_map", rep
+    assert rep["ball_map_from"] == "reference/ball_map_urls.yaml"
+    assert not calls                       # no model reading for a ball map
+    rec = out / "ext" / "BGAX-16C.json"
+    ext = json.loads(rec.read_text())
+    assert [p["pin"] for p in ext["pinout"]] == BGA_BALLS
+    assert {p["pin"]: p["type"] for p in ext["pinout"]}["A1"] == "ground"
+    assert ext["land_pattern"]["pad_count"] == 16
+    assert ext["land_pattern"]["pin1"] == "A1"
+    assert "sha256" in ext["source_pdf"]
+    # a second run reads the cached file, not the maker's site
+    assert lb.read_part("mpn:BGAX-16C", [_bga_part("U1")], out, store,
+                        reader)["status"] == "kept"
+    assert len(fetched) == 1
+
+    code, fp = _fp_one(tmp_path, _bga_mod(tmp_path), rec)
+    assert code == 0, fp["violations"]
+    assert fp["coverage"]["ball_map"] == "judged"
+    code, fp = _fp_one(tmp_path, _bga_mod(tmp_path, swap=("B2", "C3")), rec)
+    assert code == 1
+    off = [v for v in fp["violations"] if v.get("problem") == "ball_off_site"]
+    assert off and set(off[0]["balls"]) == {"B2", "C3"}
+
+
+def test_a_ball_list_in_the_datasheet_comes_first(stand_ins, bga_table):
+    """The listing's datasheet prints the ball list: it is read from the
+    text, and the maker's file is never fetched."""
+    out, store, reader, calls, pages, _ = stand_ins
+    _, _, fetched = bga_table
+    _value_rows(store, "BGAX-16C", [{
+        "lcsc": "C999016", "mpn": "BGAX-16C", "brand": "Acme",
+        "package": "BGA-16", "datasheet": "https://example.com/BGAX-16C.pdf"}])
+    pages["BGAX-16C"] = [
+        {"page": 0, "text": "BGAX-16C\nElectrical characteristics"},
+        {"page": 1, "text": "Ball Assignments\n" + "\n".join(
+            f"{b} {BGA_NAMES[b]} I/O" for b in BGA_BALLS)}]
+    rep = lb.read_part("mpn:BGAX-16C", [_bga_part("U1")], out, store, reader)
+    assert rep["status"] == "kept" and rep["ball_map_from"] == "datasheet", rep
+    assert not fetched and not calls
+    ext = json.loads((out / "ext" / "BGAX-16C.json").read_text())
+    assert len(ext["pinout"]) == 16 and ext["lcsc"] == "C999016"
+    assert "p.2 ball list" in ext["land_pattern"]["pads_source"]
+
+
+def test_no_readable_ball_map_leaves_the_part_out_with_the_reasons(
+        stand_ins, bga_table, monkeypatch):
+    """No entry names the part, or the maker's file is a ball short: no
+    record, and the report says why at both sources."""
+    out, store, reader, calls, _, _ = stand_ins
+    _, files, fetched = bga_table
+    _value_rows(store, "OTHER-16", [])
+    rep = lb.read_part("mpn:OTHER-16", [_bga_part("U2", "OTHER-16")], out,
+                       store, reader)
+    assert rep["status"] == "no ball map" and rep["ball_grid"] is True
+    assert "datasheet:" in rep["why"] and "no entry in" in rep["why"]
+    assert not fetched and not (out / "ext" / "OTHER-16.json").exists()
+
+    files["body"] = _bga_csv([(b, BGA_NAMES[b]) for b in BGA_BALLS[:-1]])
+    _value_rows(store, "BGAX-16C", [])
+    rep = lb.read_part("mpn:BGAX-16C", [_bga_part("U1")], out, store, reader)
+    assert rep["status"] == "no ball map"
+    assert "15 balls listed, the package has 16" in rep["why"]
+    assert not (out / "ext" / "BGAX-16C.json").exists()
+
+
+def test_a_usb_c_socket_is_not_routed_to_the_ball_map():
+    """A1..A12, B1..B12 and S1 parse as three rows of balls; land_batch
+    keeps them on the pad-numbering path. A 4 x 4 grid is a ball grid."""
+    usb = [f"{r}{c}" for r in "AB" for c in (1, 4, 5, 6, 7, 8, 9, 12)] + ["S1"]
+    part = {"pads": {n: "x" for n in usb}, "nums": usb}
+    assert fp_verify._ball_names(usb) is not None
+    assert lb.ball_grid([part]) is False
+    assert lb.ball_grid([_bga_part("U1")]) is True
+    assert lb.ball_grid([_board_part("U7", 8, "C999008")]) is False

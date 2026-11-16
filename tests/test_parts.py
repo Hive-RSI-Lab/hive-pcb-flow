@@ -584,6 +584,47 @@ def test_fp_verify_ball_map_not_judged(tmp_path, capsys):
     assert "names no ball grid" in nj["why"]
 
 
+# #1455: a USB-C receptacle's pads A1..A12, B1..B12 and S1 parse as three
+# rows of balls. HRO TYPE-C-31-M-12 as placed on a training board: A and B
+# interleave on one line, the shield tabs off it.
+_USB_C = ([("A1", -3.2), ("A4", -2.4), ("A5", -1.25), ("A6", -0.25),
+           ("A7", 0.25), ("A8", 1.25), ("A9", 2.4), ("A12", 3.2),
+           ("B1", 3.2), ("B4", 2.4), ("B5", 1.75), ("B6", 0.75),
+           ("B7", -0.75), ("B8", -1.75), ("B9", -2.4), ("B12", -3.2)])
+
+
+def _usb_c(tmp_path) -> Path:
+    pads = [f'  (pad "{n}" smd rect (at {x:g} -1.07) (size 0.3 1.14) '
+            '(layers "F.Cu" "F.Paste" "F.Mask"))' for n, x in _USB_C]
+    pads += [f'  (pad "S1" thru_hole oval (at {x:g} {y:g}) (size 0.9 1.7) '
+             '(drill oval 0.6 1.4) (layers "*.Cu" "*.Mask"))'
+             for x in (-4.325, 4.325) for y in (3.68, -0.5)]
+    fp = tmp_path / "usb_c.kicad_mod"
+    fp.write_text('(footprint "USB_C_Receptacle_HRO_TYPE-C-31-M-12" '
+                  '(layer "F.Cu")\n' + "\n".join(pads) + "\n)\n",
+                  encoding="utf-8")
+    return fp
+
+
+def test_fp_verify_usb_c_is_not_a_ball_grid(tmp_path, capsys):
+    """Planted: a USB-C with a record that has no ball map. Its names parse as
+    balls, its geometry is no grid, so ball_map leaves it alone (it read the
+    socket as a ball grid with no map before). Quiet twin: a 5 x 5 grid
+    against the same record is still a ball grid with no map."""
+    ds = write_ds(tmp_path, {"mpn": "TYPE-C-31-M-12", "pinout": [
+        {"pin": n, "type": "io"} for n, _ in _USB_C],
+        "land_pattern": {"pad_count": 20, "pin1": "A1"}})
+    assert fp_verify._ball_names([n for n, _ in _USB_C] + ["S1"]) is not None
+    code, payload = _fpv(tmp_path, capsys, _usb_c(tmp_path), ds)
+    assert not _bga_kinds(payload)
+    assert not [n for n in payload["not_judged"] if n["check"] == "ball_map"]
+    assert payload["coverage"].get("ball_map") != "not_judged"
+    code, payload = _fpv(tmp_path, capsys, _ballgrid(tmp_path, "ABCDE", 5), ds)
+    assert not _bga_kinds(payload)
+    nj, = [n for n in payload["not_judged"] if n["check"] == "ball_map"]
+    assert "names no ball grid" in nj["why"]
+
+
 def test_fp_verify_ccw_numbering_and_not_judged(tmp_path, capsys):
     ccw = {"1": (-1.1, -0.95), "2": (-1.1, 0.95), "3": (1.1, 0.95),
            "4": (1.1, -0.95)}  # down the left, back up the right: CCW on screen
