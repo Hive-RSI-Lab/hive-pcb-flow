@@ -3038,3 +3038,115 @@ def test_unsolved_grid_keeps_the_budget_with_a_fact(tmp_path_factory,
     [fb] = facts["grid_fallback"]
     assert why in fb["why"] and fb["layer"] == "F.Cu"
     assert "grid_bounded" not in facts
+
+
+# ---- #816: boost input and output caps (TI LM3478 SNVS085Y p. 23, eq. 31-33)
+
+def _rpart(ref, x, pads, value=""):
+    """A part with one pad per (net, pinfunction), values as its Value."""
+    val = f'    (property "Value" "{value}" (at 0 0 0))\n' if value else ""
+    body = "".join(
+        f'    (pad "{i}" smd rect (at {i - 1} 0) (size 0.5 1) (layers "F.Cu") '
+        f'(net "{net}")' + (f' (pinfunction "{fn}")' if fn else "") + ")\n"
+        for i, (net, fn) in enumerate(pads, 1))
+    return (f'  (footprint "t:{ref[0]}" (at {x} 8)\n    (layer "F.Cu")\n'
+            f'    (property "Reference" "{ref}" (at 0 0 0))\n{val}{body}  )\n')
+
+
+def _boost_board(tmp_path_factory, name, cap_on_output, sync=False):
+    """C2's bulk tap on PWR. U9 boosts 5 V to 12 V through L9 (10 uH) and D9,
+    or through its own VOUT pin when `sync`. PWR is the output when
+    `cap_on_output`, else the input."""
+    vin, vout = ("IN", "PWR") if cap_on_output else ("PWR", "OUT")
+    ic = [(vin, "VIN"), ("/SW", "SW")] + ([(vout, "VOUT")] if sync else [])
+    return _board(tmp_path_factory, name, _cap_tap("22uF")
+                  + _rpart("U9", 30, ic)
+                  + _rpart("L9", 34, [(vin, ""), ("/SW", "")], "10uH")
+                  + ("" if sync else _rpart("D9", 38, [("/SW", ""), (vout, "")])))
+
+
+def _boost_cons(cap_on_output, iout=0.5, fsw_khz=500, power=True):
+    vin, vout = ("IN", "PWR") if cap_on_output else ("PWR", "OUT")
+    op = {"vin_v": 5, "vout_v": 12}
+    if fsw_khz:
+        op["fsw_khz"] = fsw_khz
+    return {"voltages": [{"net": vin, "voltage": 5}, {"net": vout, "voltage": 12},
+                         {"net": "GND", "voltage": 0}],
+            "power": [{"net": vout, "current_a": iout}] if power else [],
+            "blocks": [{"topology": "boost", "block": "B9",
+                        "operating_point": op}]}
+
+
+@pytest.mark.parametrize("sync", [False, True])
+def test_boost_input_cap_reads_the_inductor_triangle(tmp_path_factory, sync):
+    """LM3478 eq. 31: 5 V to 12 V through 10 uH at 500 kHz is
+    5 * 7 / (2 * sqrt(3) * 12 * 10 uH * 500 kHz) = 0.168 A RMS."""
+    bg = _boost_board(tmp_path_factory, f"bstin{sync}", False, sync)
+    rip = check_current.cap_ripple(bg, "PWR", ["C2"], _boost_cons(False))
+    term, = rip["terms"]
+    assert term["from"] == "U9" and "LM3478" in term["formula"] and "eq. 31" in term["formula"]
+    assert rip["amps"] == pytest.approx(5 * 7 / (2 * 3 ** 0.5 * 12 * 10e-6 * 500e3))
+    assert term["inputs"]["fsw_source"] == "boost block fsw_khz"
+
+
+@pytest.mark.parametrize("sync", [False, True])
+def test_boost_output_cap_reads_lm3478_eq32(tmp_path_factory, sync):
+    """LM3478 eq. 32, 33 at D = 1 - 5 / 12, Iout 0.5 A, dI = D * Vin / (2 L fsw)."""
+    bg = _boost_board(tmp_path_factory, f"bstout{sync}", True, sync)
+    rip = check_current.cap_ripple(bg, "PWR", ["C2"], _boost_cons(True))
+    d = 1 - 5 / 12
+    di = d * 5 / (2 * 10e-6 * 500e3)
+    term, = rip["terms"]
+    assert term["from"] == "U9" and "eq. 32, 33" in term["formula"]
+    assert rip["amps"] == pytest.approx(
+        ((1 - d) * (0.25 * d / (1 - d) ** 2 + di ** 2 / 3)) ** 0.5)
+
+
+@pytest.mark.parametrize("cap_on_output,changes,missing", [
+    (False, {"fsw_khz": 0}, "switching frequency"),
+    (True, {"fsw_khz": 0}, "switching frequency"),
+    (True, {"power": False}, "power entry"),
+])
+def test_boost_names_its_missing_input(tmp_path_factory, cap_on_output, changes,
+                                       missing):
+    """A boost with no fsw, or an output rail with no Iout, stays unjudged and
+    names the input to add."""
+    bg = _boost_board(tmp_path_factory, f"bstmiss{cap_on_output}{len(changes)}",
+                      cap_on_output)
+    rip = check_current.cap_ripple(bg, "PWR", ["C2"],
+                                   _boost_cons(cap_on_output, **changes))
+    assert "amps" not in rip and missing in rip["why"]
+
+
+@pytest.mark.parametrize("iout,fails", [(8.0, True), (0.5, False)])
+def test_planted_boost_output_strip_fails_at_its_ripple(tmp_path_factory, iout,
+                                                       fails):
+    """Planted: a boost's output cap at 8 A out carries ~9.5 A RMS, which the
+    1 A strip can't. Its quiet twin at 0.5 A out (~0.6 A) passes. Before #816
+    both stayed unjudged as a boost."""
+    bg = _boost_board(tmp_path_factory, f"bstplant{iout}", True)
+    entry = {"net": "PWR", "current_a": 1.0, "via_amps": 100.0}
+    vs, facts = check_current.check_net(bg, entry, cons=_boost_cons(True, iout))
+    found = [v for v in _kinds(vs, "undersized_track") if "ripple" in v["msg"]]
+    assert bool(found) == fails
+    if fails:
+        assert found[0]["severity"] == "error" and "LM3478" in found[0]["msg"]
+    assert not [u for u in facts.get("unjudged", []) if u.get("refs") == ["C2"]]
+    rip = check_current.cap_ripple(bg, "PWR", ["C2"], _boost_cons(True, iout))
+    assert rip["amps"] == pytest.approx(iout * (7 / 5) ** 0.5, rel=0.02)
+
+
+def test_buck_beside_a_boost_block_is_still_a_buck(tmp_path_factory):
+    """#816's L201: a boost block whose vin_v is this buck's Vout made the
+    buck's inductor read as a boost's, leaving its output cap unjudged."""
+    bg = _board(tmp_path_factory, "l201", _cap_tap("22uF")
+                + _rpart("U9", 30, [("HV", "VIN"), ("/SW", "SW")])
+                + _rpart("L9", 34, [("/SW", ""), ("PWR", "")], "10uH"))
+    cons = {"voltages": [{"net": "HV", "voltage": 24}, {"net": "PWR", "voltage": 5}],
+            "blocks": [{"topology": "buck", "operating_point": {
+                "vin_v": 24, "vout_v": 5, "fsw_khz": 500}},
+                {"topology": "boost", "operating_point": {"vin_v": 5, "vout_v": 12}}]}
+    rip = check_current.cap_ripple(bg, "PWR", ["C2"], cons)
+    term, = rip["terms"]
+    assert term["from"] == "U9" and "AN4067" in term["formula"]
+    assert rip["amps"] == pytest.approx(5 * (1 - 5 / 24) / (10e-6 * 500e3) / 12 ** 0.5)
