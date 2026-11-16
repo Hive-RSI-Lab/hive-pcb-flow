@@ -65,7 +65,7 @@ _FAMILIES: list[tuple[str, str, str, int | None]] = [
     ("TO-247", r"TO-?247", "tht", None),
     ("DIP", r"(?<![A-Z])P?DIP-?(\d+)", "tht", None),
     ("QFP", r"(?<![A-Z])[LTPHV]?QFP-?(\d+)", "smd", None),
-    ("NOLEAD", r"(?<![A-Z])[VWUXT]?(?:QFN|DFN|SON)-?(\d+)", "smd", None),
+    ("NOLEAD", r"(?<![A-Z])[VWUXTLH]?(?:QFN|DFN|SON)-?(\d+)", "smd", None),
     ("SO", r"(?<![A-Z])(?:HTS|TS|VS|HS|QS|HT|E|H|T|V|M|S|Q|U)?SO(?:IC|P)?-?(\d+)", "smd",
      None),
     ("BGA", r"(?<![A-Z])[FTUV]?BGA-?(\d+)", "smd", None),

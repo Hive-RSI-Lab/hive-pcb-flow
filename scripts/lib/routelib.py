@@ -1381,6 +1381,53 @@ def _parse_dsn_wire(text: str, s: int, e: int) -> dict | None:
             "pts": pts, "fpts": fpts}
 
 
+_DSN_UNIT_MM = {"um": 0.001, "mm": 1.0, "mil": 0.0254, "inch": 25.4}
+
+
+def dsn_fixed_copper(dsn_text: str) -> dict:
+    """The wires and vias a DSN gives Freerouting as `(type fix)`, in board
+    mm (DSN y is up): {"segs": [(layer, (x1, y1), (x2, y2)), ...], "vias":
+    [(x, y), ...]}. Freerouting sends no fix wire back in its SES, and
+    KiCad's import deletes every unlocked track, so an unlocked segment
+    KiCad's export folded into a locked chain's fix wire is lost (#664).
+    Empty for a DSN this can't read."""
+    out: dict = {"segs": [], "vias": []}
+    scan = re.sub(r'\(string_quote\s+"\s*\)',
+                  lambda q: q.group(0).replace('"', " "), dsn_text)
+    mask = _quote_mask(scan)
+    u = re.search(r"\(unit\s+(\w+)\s*\)", mask)
+    k = _DSN_UNIT_MM.get(u.group(1) if u else "um")
+    m = re.search(r"\(wiring[\s)]", mask)
+    if k is None or not m:
+        return out
+    try:
+        wend = _sexp_end(scan, m.start())
+        for s, e in _child_spans(scan, m.start(), wend):
+            body = _quote_mask(scan[s:e])
+            if not re.search(r"\(type\s+fix\s*\)", body):
+                continue
+            head = _sexp_head(scan, s, e)
+            if head == "wire":
+                w = _parse_dsn_wire(scan, s, e)
+                if not w:
+                    continue
+                pts = [(x * k, -y * k) for x, y in w["fpts"]]
+                out["segs"] += [(w["layer"], a, b)
+                                for a, b in zip(pts, pts[1:])]
+            elif head == "via":
+                cut = _quote_mask(scan[s + 1:e]).find("(")
+                stop = s + 1 + cut if cut >= 0 else e - 1
+                toks = _DSN_TOKEN_RE.findall(scan[s + 1:stop])
+                try:
+                    out["vias"].append((float(toks[2]) * k,
+                                        -float(toks[3]) * k))
+                except (IndexError, ValueError):
+                    pass
+    except CheckError:
+        return {"segs": [], "vias": []}
+    return out
+
+
 def _cut_span(text: str, s: int, e: int) -> tuple[int, int]:
     """Widen a span to its whole line when nothing else shares that line."""
     ls, le = s, e

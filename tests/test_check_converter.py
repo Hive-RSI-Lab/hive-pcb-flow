@@ -6,6 +6,7 @@ TI SLVA477C eq. 1 to 4 (buck), TI SLVA372D eq. 2 to 4 (boost)."""
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -409,3 +410,110 @@ def test_unmarked_drops_nested_markup_and_keeps_plain_names():
     un = cv.cc.unmarked
     assert un("~{V_{OUT}}") == "VOUT" and un("V_{IN}") == "VIN"
     assert un("V^{2}") == "V2" and un("SW") == "SW" and un("EN_1") == "EN_1"
+
+
+# #1458: an inverter's divider, pin names with pad numbers and subscripts, an
+# RT-set frequency, and the Vref rows read for the not_judged converters.
+
+def test_inverter_ground_off_board_ground_sets_no_rail(tmp_path_factory):
+    # Planted: U1's GND pin on NEG (an inverter's ground is its negative
+    # output), so the 3.33 V its divider would give is not a rail voltage.
+    bg = _board(tmp_path_factory, "fbinv",
+                _rpart("U1", 10, [("IN", "VIN"), ("/SW", "SW"), ("NEG", "GND"),
+                                  ("/FB", "FB")], "LMR54406FDBVR")
+                + _rpart("L1", 20, [("/SW", ""), ("OUT", "")], "10uH")
+                + _rpart("R1", 30, [("OUT", ""), ("/FB", "")], "31.6k")
+                + _rpart("R2", 40, [("/FB", ""), ("GND", "")], "10k"))
+    volts, basis, conflicts = cv.rail_volts(bg, _fb_cons())
+    assert "OUT" not in volts
+    assert conflicts["OUT"].startswith("U1's ground pin is on NEG, not board "
+                                       "ground, so its divider R1 31.6k / R2 "
+                                       "10k")
+    assert conflicts["OUT"].endswith("(an inverting converter)")
+    viols, recs, nj = cv.judge(bg, _fb_cons(), TABLE)
+    assert viols == [] and recs == []
+    assert any("an inverting converter" in n for n in nj)
+    # Quiet twin: the same IC with its GND pin on board ground.
+    volts, basis, conflicts = cv.rail_volts(
+        _fb_buck(tmp_path_factory, "fbinvquiet"), _fb_cons())
+    assert volts["OUT"] == pytest.approx(3.328, abs=1e-3) and conflicts == {}
+    # A declared voltage on the output still stands.
+    cons = _fb_cons()
+    cons["voltages"].append({"net": "OUT", "voltage": -3.3})
+    volts, basis, conflicts = cv.rail_volts(bg, cons)
+    assert volts["OUT"] == -3.3 and "OUT" not in conflicts
+
+
+@pytest.mark.parametrize("name,pad", [("VIN_1", "1"), ("V_{IN}_1", "1"),
+                                      ("~{VIN}", "1"), ("VIN", "1")])
+def test_pin_name_drops_pad_number_and_subscripts(name, pad):
+    class P:
+        pinfunction, number = name, pad
+    assert cv._pin(P) == "VIN" and cv.VIN_PIN.fullmatch(cv._pin(P))
+
+
+def test_pin_name_keeps_a_number_that_is_not_the_pad():
+    class P:
+        pinfunction, number = "VIN_2", "7"
+    assert cv._pin(P) == "VIN_2"
+
+
+def _rt_boost(tmp_path_factory, name, rt="20k", rt_to="GND"):
+    """U9 (LM5158) boosts IN to OUT through L9 and D9; R1 110k / R2 10k on FB
+    (Vref 1.0 V: 12 V); R3 from RT to `rt_to` sets the frequency."""
+    body = (_rpart("U9", 10, [("IN", "VIN"), ("/SW", "SW"), ("/FB", "FB"),
+                              ("/RT", "RT"), ("GND", "AGND")], "LM5158DPRR")
+            + _rpart("L9", 20, [("IN", ""), ("/SW", "")], "10uH")
+            + _rpart("D9", 30, [("/SW", ""), ("OUT", "")])
+            + _rpart("R1", 40, [("OUT", ""), ("/FB", "")], "110k")
+            + _rpart("R2", 45, [("/FB", ""), ("GND", "")], "10k"))
+    if rt:
+        body += _rpart("R3", 50, [("/RT", ""), (rt_to, "")], rt)
+    return _board(tmp_path_factory, name, body)
+
+
+def test_rt_resistor_sets_the_frequency_and_quiet_twins(tmp_path_factory):
+    # SNVSBZ7 Eq. 5: fsw = 2.21e10 / (20000 + 955) = 1.0546 MHz. 5 V to 12 V
+    # (1.0 * (1 + 110 / 10)), 10 uH: D = 0.5833, dI = 5 * 0.5833 /
+    # (1.0546e6 * 10e-6) = 0.2766 A; Ipeak = 0.1383 + 0.5 / 0.4167 = 1.338 A,
+    # under the 3.26 A minimum switch limit.
+    cons = {"voltages": [{"net": "IN", "voltage": 5.0}],
+            "power": [{"net": "OUT", "current_a": 0.5}]}
+    bg = _rt_boost(tmp_path_factory, "rt20k")
+    viols, recs, nj = cv.judge(bg, cons, TABLE)
+    rec, = recs
+    assert rec["vout_v"] == pytest.approx(12.0) and rec["vout_source"] == "divider"
+    assert rec["fsw_hz"] == pytest.approx(2.21e10 / 20955, rel=1e-9)
+    assert rec["fsw_source"].startswith("R3 20000 ohm on U9's RT pin: fsw = "
+                                        "2.21e+10 / (R + 955) (TI SNVSBZ7")
+    assert rec["ripple_a"] == pytest.approx(0.2766, abs=1e-3)
+    assert rec["limits_row"] == "LM5158"
+    # Planted: 4.7 k gives 2.21e10 / 5655 = 3.908 MHz, past the 2.2 MHz top.
+    viols, recs, nj = cv.judge(_rt_boost(tmp_path_factory, "rt4k7", rt="4.7k"),
+                               cons, TABLE)
+    assert viols == [] and recs == []
+    assert any("U9's RT resistor R3 4700 ohm gives 3908 kHz, outside the "
+               "datasheet's 100-2200 kHz" in n for n in nj)
+    # No resistor on RT, or one to a rail rather than ground: not judged.
+    for nm, kw in (("rtnone", {"rt": ""}), ("rtrail", {"rt_to": "IN"})):
+        viols, recs, nj = cv.judge(_rt_boost(tmp_path_factory, nm, **kw),
+                                   cons, TABLE)
+        assert viols == [] and recs == [], nm
+        assert any("isn't one fitted resistor to ground" in n for n in nj), nm
+
+
+VREF_ROWS = {"TLV61070ADBVR": 0.5, "SY7208DBC": 0.6, "SY8301ABC": 0.8,
+             "SY7208BDBC": None, "SY7200AAAC": None}
+
+
+def test_vref_rows_read_for_the_not_judged_converters():
+    import check_ratings as cr
+    rows = cr.load_vrefs()
+    for mpn, want in VREF_ROWS.items():
+        got = cr.find_vref([mpn], rows)
+        if want is None:
+            assert got is None, mpn
+            continue
+        vref, tol, src, verified = got
+        assert vref == want and verified is True, mpn
+        assert "sha256" in src and "p." in src, mpn
