@@ -2090,7 +2090,8 @@ def sense_keepout(bg: geom.BoardGeom, net: str, new_uuids: set[str], sense,
                   tap, clearance: float) -> list[dict]:
     """aiee_sense_* rule areas (pours not allowed) round a laid sense line:
     its new tracks and vias and its sense pad, grown by clearance, less the
-    ring round its tap pad where the pour meets the rail anyway. Also the
+    ring round its tap pad where the pour meets the rail anyway (on the tap
+    pad's own layers only, #1356). Also the
     line's aiee_sensew_* marks (#1042): its new tracks grown by
     SENSE_MARK_MM, nothing disallowed, for rules_gen's sense width rule."""
     by_layer: dict[str, list] = {}
@@ -2114,7 +2115,12 @@ def sense_keepout(bg: geom.BoardGeom, net: str, new_uuids: set[str], sense,
     areas += sense_mark.mark_areas(
         [t for t in bg.tracks_of(net=net) if t.uuid in new_uuids], tag)
     for ly in sorted(by_layer):
-        shape = unary_union(by_layer[ly]).difference(cut)
+        # the ring is cut only on the tap pad's own layers: on another layer
+        # (an SMD tap's back or inner pour) nothing of the tap is there, and
+        # a cut let that pour meet the line's via beside the pad (#1356)
+        shape = unary_union(by_layer[ly])
+        if ly in tap.layers:
+            shape = shape.difference(cut)
         polys = getattr(shape, "geoms", [shape])
         for k, poly in enumerate(q for q in polys
                                  if q.geom_type == "Polygon" and not q.is_empty):

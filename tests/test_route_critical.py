@@ -1467,6 +1467,35 @@ def test_sense_keepout_covers_the_line_not_the_tap(tmp_path):
         != areas[0]["poly"]
 
 
+def test_sense_keepout_keeps_a_back_pour_off_the_via_by_the_tap(tmp_path):
+    """#1356: the line comes back up to F.Cu on a via 0.15 mm off C911.1.
+    The ring cut round the tap holds on F.Cu (C911.1's layer) only: on B.Cu
+    the keepout covers the whole via, so the back pour can't meet the line
+    there."""
+    from shapely.geometry import Point, Polygon
+    from shapely.ops import unary_union
+    import check_kelvin
+    via = ('  (via (at {} {}) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") '
+           '(net "KP") (uuid "{}"))\n')
+    line = (_seg(15, 17.5, 19, 17.5, "KP", "n1") + via.format(19, 17.5, "w1")
+            + _seg(19, 17.5, 22, 18.55, "KP", "n2").replace('"F.Cu"', '"B.Cu"')
+            + via.format(22, 18.55, "w2") + _seg(22, 18.55, 22, 19.5, "KP", "n3"))
+    bg = geom.BoardGeom.from_file(_sense_board(tmp_path, "back", line))
+    sense = check_kelvin._pad_named(bg, "R911.1")
+    tap = check_kelvin._pad_named(bg, "C911.1")
+    every = rc.sense_keepout(bg, "KP", {"n1", "n2", "n3", "w1", "w2"},
+                             sense, tap, 0.2)
+    keep = {ly: unary_union([Polygon(a["poly"]) for a in every
+                             if a["layers"] == [ly]
+                             and not a["name"].startswith("aiee_sensew_")])
+            for ly in ("F.Cu", "B.Cu")}
+    assert keep["B.Cu"].contains(Point(22, 18.55).buffer(0.3 + 0.15))
+    assert keep["B.Cu"].contains(Point(20, 17.85))        # the B.Cu run
+    assert not keep["F.Cu"].intersects(tap.poly)          # the tap stays poured
+    assert not keep["F.Cu"].contains(Point(22, 18.8))     # F.Cu ring still cut
+    assert keep["B.Cu"].contains(Point(22, 18.8))
+
+
 def test_sense_width_mark_hugs_the_line_only(tmp_path):
     """#1042: the aiee_sensew_* mark rules_gen's sense width rule reads
     holds the new line's tracks (tap end included) and disallows nothing;

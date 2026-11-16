@@ -23,6 +23,19 @@ mutants:
     expect:
       kind: sense_tap_off_pad
       refs: [C911, R911]
+  sense-tap-back-pour-via:
+    board: blinky2
+    script: mutations/sense_tap_back_pour_via.py
+    check: check_kelvin
+    defect: >-
+      MEASUREMENT fault (#1356): a feedback divider's sense line comes back up to
+      the SMD output capacitor's pad on a via 0.15 mm off it, and a rail pour on the
+      back layer reaches that via, so the line reads the pour, not the pad. The via
+      sat inside the tap's slack on every layer, so nothing saw it. Quiet twins:
+      tests/test_kelvin.py
+    expect:
+      kind: sense_tap_off_pad
+      refs: [C911, R911]
   sense-pair-apart:
     board: blinky2
     script: mutations/sense_pair_apart.py
