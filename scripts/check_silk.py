@@ -970,6 +970,24 @@ def _corner_pads(cv, fp) -> set[str]:
             for cx, cy in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))}
 
 
+KICAD_POLAR_NAME = re.compile(r"^(D_|LED_|CP_|C_Elec)")
+
+
+def _roles_guessed(cv, fp) -> bool:
+    """True where board_roles' K/A comes only from its last resort: an
+    imported "LED..." footprint read with KiCad's numbering (pin 1 = K). No
+    pin function, no A/K pad names, no KiCad library name: an imported
+    library may number it the other way (hifi-receiver-2's LCSC
+    LED-SMD_L1.6-W0.8-R-RD has its anode net on pad 1 and the cut corner by
+    pad 2, on GND), so a band read against that guess says nothing."""
+    if any(cv.role(p.function) for p in fp.pads):
+        return False
+    named = {p.number.upper() for p in fp.pads}
+    if named in ({"A", "C"}, {"A", "K"}):
+        return False
+    return not KICAD_POLAR_NAME.match(fp.name)
+
+
 def polarity_mark_of(cv, fp) -> dict:
     """{"state": "ok"|"wrong"|"not_judged"|None, "why", ...} for one part's
     silk polarity mark against its pads, from the board alone. cpl_verify's
@@ -983,6 +1001,12 @@ def polarity_mark_of(cv, fp) -> dict:
     m = cv.silk_mark(fp)
     st = m["state"]
     nums = {p.number for p in fp.pads if p.number}
+    if m.get("basis") == "polarity" and _roles_guessed(cv, fp):
+        return {"state": "not_judged",
+                "why": "which pad is the cathode is only guessed from an "
+                       "imported LED footprint's name (no pin function or "
+                       "A/K pad names); its library may number it the "
+                       "other way"}
     if st is None:
         if (len(nums) != 2 or not cv.is_polar(fp) or cv.is_keyed(fp)
                 or cv.is_switch(fp)):

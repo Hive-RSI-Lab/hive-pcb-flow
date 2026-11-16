@@ -113,6 +113,24 @@ def test_unknown_pad_roles_are_not_judged(tmp_path):
     assert row["refs"] == ["D1"] and "not known" in row["why"]
 
 
+@pytest.mark.parametrize("sx", [1, -1])
+def test_an_imported_led_named_only_led_is_not_judged(sx, tmp_path):
+    """An LCSC LED-SMD_... footprint, pads unnamed: KiCad's pin 1 = K is only
+    a guess for it (hifi-receiver-2's has its anode on pad 1), so its cut
+    corner is not judged at either end, rather than called wrong."""
+    pads = [("1", 0.75, 0), ("2", -0.75, 0)]
+    cut = [(-1.7, -0.4, -1.7, 0.4), (-1.7, 0.4, -1.4, 0.7),
+           (-1.4, -0.7, -1.7, -0.4), (-1.4, 0.7, -0.3, 0.7),
+           (-0.3, -0.7, -1.4, -0.7), (0.2, -0.7, 1.47, -0.7),
+           (1.47, -0.7, 1.47, 0.7), (1.47, 0.7, 0.2, 0.7)]
+    refs, fact = _polarity(_board(tmp_path, _fp(
+        "D3", "X:LED-SMD_L1.6-W0.8-R-RD", pads, _lines(cut, sx=sx),
+        size=(0.6, 0.8))))
+    assert refs == [] and fact["ok"] == 0 and fact["not_judged"] == 1
+    (row,) = fact["not_judged_refs"]
+    assert "guessed" in row["why"]
+
+
 # An electrolytic: pad 1 is +, and a "+" is drawn beside it.
 CPELEC = [("1", -1.8, 0), ("2", 1.8, 0)]
 CPELEC_PLUS = [(-3, -1.56, -2.5, -1.56), (-2.75, -1.81, -2.75, -1.31)]
