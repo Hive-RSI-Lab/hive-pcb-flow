@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import sexpdata
 from shapely.geometry import box
 
 REPO = Path(__file__).resolve().parents[1]
@@ -193,3 +194,24 @@ def test_silk_legend_unmirrored_mutant_and_twin(tmp_path, mirrored, fires):
     assert bool(hits) is fires
     if fires:
         assert hits[0]["form"] == "mirrored"
+
+
+def _kicad6_fp(hide):
+    # KiCad 6 marks a hidden text with a bare `hide` atom at the end
+    return sexpdata.loads(
+        '(kicad_pcb (footprint "TestPoint:TP" (layer "F.Cu") (at 50 50)'
+        ' (fp_text reference "REF**5" (at 0 0) (layer "F.SilkS")'
+        + (" hide" if hide else "") +
+        ' (effects (font (size 1 1) (thickness 0.15))))))')
+
+
+def test_kicad6_hidden_reference_is_not_silk():
+    # #1429: the bare `hide` was missed and read as the text, so every
+    # hidden REF** printed as silk "hide" over its own pad
+    assert [s for s in cs.parse_silk(_kicad6_fp(True))
+            if s.kind == "text"] == []
+
+
+def test_kicad6_shown_reference_is_silk_with_its_own_text():
+    t = [s for s in cs.parse_silk(_kicad6_fp(False)) if s.kind == "text"]
+    assert [s.text for s in t] == ["REF**5"]

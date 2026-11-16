@@ -100,6 +100,9 @@ def board_models(pcb: Path) -> list[tuple[str, tuple, str]]:
             if h == "property" and len(sub) >= 3 \
                     and _sval(sub[1]) == "Reference":
                 ref = _sval(sub[2])
+            elif h == "fp_text" and len(sub) >= 3 and ref is None \
+                    and _sval(sub[1]) == "reference":  # KiCad 6 (#1429)
+                ref = _sval(sub[2])
             elif h == "at" and len(sub) >= 3:
                 pos = (float(sub[1]), float(sub[2]))
             elif h == "model" and len(sub) >= 2:

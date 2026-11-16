@@ -700,3 +700,69 @@ def test_fp_graphics_still_runs_unbound():
     got = list(geom.BoardGeom._fp_graphics(None, fp, 5, 5, 0, {"F.Fab"}))
     assert [ln for ln, _ in got] == ["F.Fab"]
     assert got[0][1].area < 1.0          # an outline: the modern reading
+
+
+# ============================================================ pure: KiCad 6 refs (#1429)
+
+def _kicad6(src: str) -> str:
+    """SYN4 as KiCad 6 writes it: ref and value as fp_text, no property."""
+    return (src.replace('(property "Reference" "R1" (at 0 0 0))',
+                        '(fp_text reference "R1" (at 0 0) (layer "F.SilkS"))'
+                        ' (fp_text value "10k" (at 0 1) (layer "F.Fab"))'
+                        ' (fp_text user "${REFERENCE}" (at 0 2) (layer "F.Fab"))')
+               .replace('(property "Reference" "R2" (at 0 0 0))',
+                        '(fp_text reference "R2" (at 0 0) (layer "B.SilkS"))'))
+
+
+def test_kicad6_fp_text_reference(tmp_path):
+    # read only from (property "Reference"), every part on a KiCad 6 board
+    # was ref "?" and bg.footprints kept the last of them
+    p = tmp_path / "k6.kicad_pcb"
+    p.write_text(_kicad6(SYN4), encoding="utf-8")
+    bg = geom.BoardGeom.from_file(p)
+    assert sorted(bg.footprints) == ["R1", "R2"]
+    assert bg.footprints["R1"]["value"] == "10k"
+    assert sorted({pd.ref for pd in bg.pads_of()}) == ["R1", "R2"]
+
+
+def test_kicad6_refs_match_kicad7_twin(tmp_path, syn):
+    # quiet twin: the same board with properties reads the same parts and
+    # pads, and a property wins over an fp_text when a footprint has both
+    p = tmp_path / "k6.kicad_pcb"
+    p.write_text(_kicad6(SYN4), encoding="utf-8")
+    old = geom.BoardGeom.from_file(p)
+    assert sorted(old.footprints) == sorted(syn.footprints)
+    assert (sorted((pd.ref, pd.number) for pd in old.pads_of())
+            == sorted((pd.ref, pd.number) for pd in syn.pads_of()))
+    both = SYN4.replace('(property "Reference" "R1" (at 0 0 0))',
+                        '(property "Reference" "R1" (at 0 0 0))'
+                        ' (fp_text reference "X9" (at 0 0) (layer "F.SilkS"))')
+    q = tmp_path / "both.kicad_pcb"
+    q.write_text(both, encoding="utf-8")
+    assert sorted(geom.BoardGeom.from_file(q).footprints) == ["R1", "R2"]
+
+
+def test_kicad6_refs_in_every_reader(tmp_path):
+    # the readers outside BoardGeom that key on refs read KiCad 6's fp_text
+    # too: each one read every part of such a board as "?" or skipped it
+    import castellation
+    from lib import edasrc
+    import check_testpoints
+    import vendor
+    p = tmp_path / "k6.kicad_pcb"
+    p.write_text(_kicad6(SYN4), encoding="utf-8")
+    fps = geom._kids(geom.sexpdata.loads(p.read_text()), "footprint")
+    assert [geom.fp_field(f, "Reference") for f in fps] == ["R1", "R2"]
+    assert geom.fp_field(fps[0], "Value") == "10k"
+    assert [check_testpoints._ref(f) for f in fps] == ["R1", "R2"]
+    for rx in (castellation._REF, vendor._REF):
+        assert rx.findall(p.read_text()) == ["R1", "R2"]
+        # the KiCad 8 twin reads the same
+        assert rx.findall(SYN4) == ["R1", "R2"]
+    assert vendor._refs_without_mpn(p) == ["R1", "R2"]
+    k = tmp_path / "fmt.kicad_pcb"         # edasrc reads KiCad's own layout
+    k.write_text('(kicad_pcb (version 20211014)\n\t(footprint "R"\n'
+                 '\t\t(fp_text reference "R1" (at 0 0) (layer "F.SilkS"))\n'
+                 '\t\t(pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))\n'
+                 '\t)\n)\n', encoding="utf-8")
+    assert edasrc.read_board(k).refs == ["R1"]

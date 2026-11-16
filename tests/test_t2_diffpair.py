@@ -602,3 +602,30 @@ def test_diffpair_unread_ref_is_no_tie(tmp_path_factory):
     bg = _board(tmp_path_factory, "usbc5", body, outline=(95, 75, 105, 95))
     term = check_diffpair.matched_terminals(bg, "/USB_D+", "/USB_D-")
     assert check_diffpair.contact_ties(bg, "/USB_D+", "/USB_D-", term) == {}
+
+
+def test_kicad6_pair_pads_on_two_parts_not_matched(tmp_path):
+    # #1429: on a KiCad 6 board every part read as ref "?", so the same-ref
+    # rule (no distance cap) matched a p pad on U1 with an n pad on U2 8 mm
+    # away. With fp_text refs read, they are two parts and stay unmatched
+    cd = check_diffpair
+    src = """(kicad_pcb (version 20211014) (generator pcbnew)
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "") (net 1 "D_P") (net 2 "D_N")
+  (footprint "t:A" (layer "F.Cu") (at 0 0)
+    (fp_text reference "U1" (at 0 0) (layer "F.SilkS"))
+    (pad "1" smd rect (at 0 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "D_P")))
+  (footprint "t:B" (layer "F.Cu") (at 8 0)
+    (fp_text reference "U2" (at 0 0) (layer "F.SilkS"))
+    (pad "1" smd rect (at 0 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "D_N"))))
+"""
+    p = tmp_path / "k6.kicad_pcb"
+    p.write_text(src, encoding="utf-8")
+    bg = geom.BoardGeom.from_file(p)
+    assert sorted(bg.footprints) == ["U1", "U2"]
+    assert cd.matched_terminals(bg, "D_P", "D_N") == []
+    # twin: the same two pads on one part still match, however far apart
+    one = src.replace('(fp_text reference "U2"', '(fp_text reference "U1"')
+    q = tmp_path / "one.kicad_pcb"
+    q.write_text(one, encoding="utf-8")
+    assert len(cd.matched_terminals(geom.BoardGeom.from_file(q), "D_P", "D_N")) == 1

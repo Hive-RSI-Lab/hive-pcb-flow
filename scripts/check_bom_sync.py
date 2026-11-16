@@ -152,6 +152,9 @@ def board_footprints(pcb: Path) -> dict[str, dict]:
             if h == "property" and len(sub) >= 3 \
                     and _sval(sub[1]) == "Reference":
                 ref = _sval(sub[2])
+            elif h == "fp_text" and len(sub) >= 3 and ref is None \
+                    and _sval(sub[1]) == "reference":  # KiCad 6 (#1429)
+                ref = _sval(sub[2])
             elif h == "at" and len(sub) >= 3:
                 pos = (float(sub[1]), float(sub[2]))
             elif h == "attr":
@@ -209,9 +212,11 @@ def schematic_symbols(sch: Path) -> dict[str, dict]:
                         refs.append(_sval(r[1]))
             if not refs:
                 for sub in node[1:]:
-                    if _head(sub) == "property" and len(sub) >= 3 \
-                            and _sval(sub[1]) == "Reference":
+                    if _head(sub) in ("property", "fp_text") \
+                            and len(sub) >= 3 \
+                            and _sval(sub[1]) in ("Reference", "reference"):
                         refs.append(_sval(sub[2]))
+                        break
             for r in refs:
                 if not r.startswith("#"):
                     out[r] = {"dnp": dnp, "lcsc": lcsc}

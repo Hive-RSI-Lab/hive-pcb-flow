@@ -978,3 +978,37 @@ def test_every_test_board_has_its_lcsc_models_pinned():
     assert left == {"fixtures/fp_board/placed.kicad_pcb": ["U10", "U7", "U8", "U9"]}, (
         "a test board's LCSC model is not pinned: copy <LCSC>.json (or .none) "
         "from ~/.cache/hwde/easyeda into tests/fixtures/easyeda_pinned")
+
+
+
+def _cy_board(tmp_path, *fps):
+    # check_courtyard reads the board through geom, which wants layers
+    pcb = tmp_path / "b.kicad_pcb"
+    pcb.write_text("(kicad_pcb\n\t(version 20240108)\n"
+                   '\t(layers (0 "F.Cu" signal) (31 "B.Cu" signal)'
+                   ' (44 "Edge.Cuts" user))\n' + "".join(fps) + ")\n",
+                   encoding="utf-8")
+    return pcb
+
+def test_courtyard_skips_a_ref_two_parts_share(tmp_path):
+    # #1429: unannotated copies (REF**) share one ref, so both parts' pads
+    # were pooled against one courtyard and read as a 50 mm pad span
+    import check_courtyard as cc
+    tp = pad("1", 0, 0, 1.0, 1.0) + crt("F", -0.75, -0.75, 0.75, 0.75)
+    pcb = _cy_board(tmp_path,
+                footprint("REF**", "TestPoint:TP", tp, at=(50, 50)),
+                footprint("REF**", "TestPoint:TP", tp, at=(100, 50)))
+    v, seen = cc.check(pcb)
+    assert [x for x in v if x["kind"] == "courtyard_pads"] == []
+    assert seen["duplicate_refs"] == ["REF**"]
+
+
+def test_courtyard_still_flags_a_lone_part_with_pads_outside(tmp_path):
+    # the twin: the same part once, with a pad outside its courtyard
+    import check_courtyard as cc
+    tp = pad("1", 0, 0, 1.0, 1.0) + pad("2", 3, 0, 1.0, 1.0) \
+        + crt("F", -0.75, -0.75, 0.75, 0.75)
+    pcb = _cy_board(tmp_path, footprint("TP1", "TestPoint:TP", tp, at=(50, 50)))
+    v, seen = cc.check(pcb)
+    assert [x["refs"] for x in v if x["kind"] == "courtyard_pads"] == [["TP1"]]
+    assert seen["duplicate_refs"] == []

@@ -54,7 +54,8 @@ CORNER_MAX_R_MM = 5.0
 _STRAIGHT_DEG = 0.5  # below this a vertex is straight (noding, float noise)
 # a rounded corner turning more than 150 deg has no useful virtual corner
 _HALF_ROUND_COS = math.cos(math.radians(150.0))
-_REF = re.compile(r'\(property\s+"Reference"\s+"([^"]*)"')
+# KiCad 8 (property "Reference" "U1"), KiCad 6 (fp_text reference "U1") (#1429)
+_REF = re.compile(r'\((?:property\s+"Reference"|fp_text\s+reference)\s+"?([^"\s)]*)')
 _PROP = re.compile(r"\(property\s+pad_prop_castellated\s*\)")
 
 

@@ -145,6 +145,18 @@ def _strs(n) -> list[str]:
             for x in n[1:] if isinstance(x, str)]
 
 
+def fp_field(fp, name: str, default=None):
+    """A footprint's Reference or Value: KiCad 8's (property "Reference" ..)
+    or KiCad 6's (fp_text reference ..); a property wins (#1429)."""
+    for prop in _kids(fp, "property"):
+        if len(pv := _strs(prop)) >= 2 and pv[0] == name:
+            return pv[1]
+    for txt in _kids(fp, "fp_text"):
+        if len(txt) > 2 and str(_tok(txt[1])) == name.lower():
+            return str(_tok(txt[2]))
+    return default
+
+
 def _num_of(n, *names):
     """The first number of n's first child named one of `names`, or None."""
     for name in names:
@@ -833,6 +845,9 @@ class BoardGeom:
         # "graphics" (its drawings on every layer: {"layer", "shape"})}
         self.net_ties: list[dict] = []
         self.footprints: dict[str, dict] = {}  # ref -> {"lib", "value", "props"}
+        # refs two or more footprints share (unannotated REF** copies):
+        # their pads are pooled under one ref, so a per-part check skips them
+        self.dup_refs: set[str] = set()
         self._parse_tracks(root)
         self._parse_vias(root)
         self._parse_footprints(root)
@@ -976,6 +991,14 @@ class BoardGeom:
                     value = pv[1]
                 elif len(pv) >= 2:
                     props[pv[0]] = pv[1]
+            # KiCad 6 and older keep the ref and value as (fp_text
+            # reference "U5" ..) / (fp_text value ..), not properties; read
+            # without this, every part on such a board shared ref "?" (#1429)
+            for txt in _kids(fp, "fp_text"):
+                if len(txt) > 2 and str(_tok(txt[1])) == "reference" and ref == "?":
+                    ref = str(_tok(txt[2]))
+                elif len(txt) > 2 and str(_tok(txt[1])) == "value" and value is None:
+                    value = str(_tok(txt[2]))
             lib = _strs(fp)[0] if _strs(fp) else ""
             # ref -> lib id + Value field (check_current bounds a resistor
             # branch's current from these; check_thermal knows a package by
@@ -983,6 +1006,8 @@ class BoardGeom:
             # attrs: KiCad's (attr smd dnp ...) flags; check_pdn leaves a
             # dnp cap out of a rail's reservoir
             attr = _kid(fp, "attr")
+            if ref in self.footprints:
+                self.dup_refs.add(ref)
             self.footprints[ref] = {"lib": lib, "value": value, "props": props,
                                     "at": (fx, fy), "angle": fangle,
                                     "attrs": tuple(str(_tok(x)) for x in _strs(attr))

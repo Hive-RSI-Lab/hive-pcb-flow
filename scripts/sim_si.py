@@ -335,7 +335,7 @@ def _value(bg, ref):
 def _rail_resistor(bg, pad, power_nets):
     """Ohms of a 2-pad resistor from this pad to a rail, else None."""
     pads = bg.pads_of(ref=pad.ref)
-    if pad.ref[0] != "R" or len(pads) != 2:
+    if not pad.ref.startswith("R") or len(pads) != 2:
         return None
     other = next(q for q in pads if q is not pad)
     if not other.net or not check_si.is_power(other.net, power_nets):
@@ -355,12 +355,12 @@ def side_loads(bg, net, terminals, spec, power_nets):
         if two and p.ref in series:
             continue
         val = _value(bg, p.ref)
-        if two and p.ref[0] == "R":
+        if two and p.ref.startswith("R"):
             ohm = _rail_resistor(bg, p, power_nets)
             if ohm:
                 out.append((p, "r", ohm))
             continue
-        if two and p.ref[0] == "C":
+        if two and p.ref.startswith("C"):
             f = _farads(val)
             if f:
                 out.append((p, "c", f))
@@ -482,7 +482,7 @@ def build_deck(bg, lm, pa, pv, secs, a_driver, v_driver, spec_a, spec_v, swing, 
     for (p, kind, val), s in zip(v_loads, v_marks):
         n = vn["nodes"][vn["snap"](s)]
         (deck.r if kind == "r" else deck.c)(n, 0, val)
-        if kind == "c" and p.ref[0] != "C":
+        if kind == "c" and not p.ref.startswith("C"):
             ends[_pad_name(p)] = {"node": n, "receiver": True}
     delay = sum(sp[2] for sp in pa.spans(0, pa.length)) + sum(sp[2] for sp in pv.spans(0, pv.length))
     rc = 5 * 100 * float(spec_v.get("c_in_pf", C_IN_PF)) * 1e-12

@@ -403,6 +403,9 @@ def board_footprints(pcb: Path) -> dict[str, Footprint]:
         at = _nums(_kid(fp, "at"))
         props = {str(_t(p[1])): str(_t(p[2])) for p in _kids(fp, "property")
                  if len(p) > 2}
+        for txt in _kids(fp, "fp_text"):  # KiCad 6 (#1429)
+            if len(txt) > 2 and str(_t(txt[1])) in ("reference", "value"):
+                props.setdefault(str(_t(txt[1])).capitalize(), str(_t(txt[2])))
         ref = props.get("Reference", "")
         layer = str(_t(_kid(fp, "layer")[1]))
         f = Footprint(ref=ref, fpid=str(_t(fp[1])), x=at[0], y=at[1],
