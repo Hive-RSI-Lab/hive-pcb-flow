@@ -629,6 +629,35 @@ def test_a_module_listed_only_with_its_fit_code_is_read(stand_ins, no_table):
                                    "Systems's module fit code -N8")
 
 
+def test_a_part_listed_only_as_a_dev_board_is_left_out(
+        stand_ins, no_table, monkeypatch):
+    """#1521 planted fault: a Value whose one exact JLC row is under
+    Development Boards & Kits (ABX00027) is left out as abs_max_batch
+    leaves it, the resolver not asked, nothing read. Quiet twin: the same
+    MPN with a chip's row beside the board's goes on to the resolver."""
+    import dsresolve
+    out, store, reader, calls, _, _ = stand_ins
+    asked = []
+
+    def resolve(mpn, brand, dest):
+        asked.append(mpn)
+        return {"maker": "Acme", "miss": "not found", "tried": []}
+    monkeypatch.setattr(dsresolve, "resolve", resolve)
+    board = {**SO8X_ROW, "datasheet": "", "brand": "Arduino",
+             "category": "Development Boards & Kits"}
+    _value_rows(store, "SO8X", [board])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "left out: a board"
+    assert rep["why"] == ("its JLC listing (C999008, Arduino) is under "
+                          "Development Boards & Kits")
+    assert asked == [] and calls == []
+
+    chip = {**board, "lcsc": "C999009", "category": "Microcontrollers"}
+    _value_rows(store, "SO8X", [board, chip])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] != "left out: a board" and asked == ["SO8X"]
+
+
 def test_a_modules_own_listing_wins_over_its_fit_code(
         stand_ins, no_table, monkeypatch):
     """#1481: a module listed as itself with no datasheet and with a fit
