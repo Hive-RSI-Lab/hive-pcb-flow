@@ -158,10 +158,10 @@ def test_unverified_row_is_not_judged(tmp_path_factory, tmp_path):
     assert any("[unverified:" in n for n in nj)
 
 
-def _boost(tmp_path_factory, name):
-    """U9 boosts IN (5 V) to OUT (12 V) through L9 (10 uH) and D9."""
+def _boost(tmp_path_factory, name, ic=""):
+    """U9 boosts IN to OUT through L9 (10 uH) and D9."""
     return _board(tmp_path_factory, name,
-                  _rpart("U9", 10, [("IN", "VIN"), ("/SW", "SW")])
+                  _rpart("U9", 10, [("IN", "VIN"), ("/SW", "SW")], ic)
                   + _rpart("L9", 20, [("IN", ""), ("/SW", "")], "10uH")
                   + _rpart("D9", 30, [("/SW", ""), ("OUT", "")]))
 
@@ -211,3 +211,83 @@ def test_golden_quiet_twin():
     assert recs[0]["peak_a"] == pytest.approx(0.5085, abs=1e-3) and nj == []
     cons["blocks"][0]["operating_point"]["inductor_isat_a"] = 3.0
     assert cv.judge(bg, cons, TABLE)[0] == []
+
+
+# The rows added for switcher families the corpus had none for. Each figure
+# is worked from the row and the formulas above.
+
+NEW_ROWS = ("TLV62569DBV/TLV62569PDDC", "TLV62569DRL/TLV62569PDRL", "TPS629203",
+            "TPS62A01/TPS62A01A", "SY7208C", "LM5158", "LM51581", "LMR54406",
+            "TLV61070A", "LMR38010", "SY8301", "SY7200A")
+
+
+def test_new_rows_are_verified_and_cite_a_hashed_datasheet():
+    by = {r["mpn"]: r for r in TABLE}
+    for mpn in NEW_ROWS:
+        r = by[mpn]
+        assert r["verified"] is True and "sha256" in r["source"], mpn
+        assert r.get("peak_limit_a") or r.get("valley_limit_a"), mpn
+
+
+def test_tps629203_overload_and_quiet_twin(tmp_path_factory):
+    # 5 V to 3.3 V, 1 uH at 2.5 MHz (set by the MODE pin, so no fsw row and
+    # the block states it): dI = 1.7 * 3.3 / (5 * 2.5e6 * 1e-6) = 0.4488 A.
+    # Peak limit 0.8 A min less dI/2 = 0.5756 A (valley 0.5 + 0.2244 is more).
+    bg = _buck(tmp_path_factory, "tps629203", ic="TPS629203DRL", henries="1uH")
+    over = _cons(iout=0.7, inductor_isat_a=2.0, vin_max_v=5.5, fsw_khz=2500)
+    viols, recs, nj = cv.judge(bg, over, TABLE)
+    hit, = _kinds(viols, "converter_overload")
+    assert hit["iout_max_a"] == pytest.approx(0.5756, abs=1e-3)
+    assert recs[0]["limits_row"] == "TPS629203"
+    quiet = _cons(iout=0.3, inductor_isat_a=2.0, vin_max_v=5.5, fsw_khz=2500)
+    viols, recs, nj = cv.judge(bg, quiet, TABLE)
+    assert viols == [] and nj == []
+    # 240 ns on at 5.5 V in clears the 40 ns typical minimum.
+    assert recs[0]["ton_s"] == pytest.approx(3.3 / (5.5 * 2.5e6), rel=1e-6)
+
+
+def test_tlv62569_package_sets_the_limit(tmp_path_factory):
+    # 1.5 MHz from converter_fsw.yaml; 2.2 uH: dI = 5.61 / 16.5 = 0.34 A.
+    # At 2.5 A out the DBV's 3.0 A limit allows 2.83 A, the DRL's 2.5 A only
+    # 2.33 A.
+    cons = _cons(iout=2.5, inductor_isat_a=4.0, vin_max_v=5.5)
+    dbv = _buck(tmp_path_factory, "dbv", ic="TLV62569DBVR", henries="2.2uH")
+    viols, recs, _ = cv.judge(dbv, cons, TABLE)
+    assert not _kinds(viols, "converter_overload")
+    assert recs[0]["fsw_hz"] == 1.5e6
+    assert recs[0]["iout_max_a"] == pytest.approx(2.83, abs=1e-3)
+    drl = _buck(tmp_path_factory, "drl", ic="TLV62569DRLR", henries="2.2uH")
+    hit, = _kinds(cv.judge(drl, cons, TABLE)[0], "converter_overload")
+    assert hit["iout_max_a"] == pytest.approx(2.33, abs=1e-3)
+
+
+def test_valley_only_boost_overload_and_quiet_twin(tmp_path_factory):
+    # TLV61070A, 3.3 V to 5 V, 10 uH at 1 MHz: D = 0.34, dI = 3.3 * 0.34 /
+    # (1e6 * 10e-6) = 0.1122 A. SLVSGK6B eq. 1: (1.80 + 0.0561) * 0.66
+    # = 1.2251 A.
+    bg = _boost(tmp_path_factory, "tlv61070a", ic="TLV61070ADBVR")
+    cons = _cons(vin=3.3, vout=5, iout=1.5, topology="boost", fsw_khz=1000,
+                 inductor_isat_a=3.0)
+    viols, recs, _ = cv.judge(bg, cons, TABLE)
+    hit, = viols
+    assert hit["kind"] == "converter_overload"
+    assert hit["iout_max_a"] == pytest.approx(1.2251, abs=1e-3)
+    assert "SLVSGK6B eq. 1" in hit["msg"] and "valley limit 1.8 A" in hit["msg"]
+    cons["power"][0]["current_a"] = 0.5
+    viols, recs, _ = cv.judge(bg, cons, TABLE)
+    assert viols == [] and recs[0]["limits_row"] == "TLV61070A"
+
+
+def test_lmr54406_isat_floor_and_ripple_band(tmp_path_factory):
+    # 12 V to 3.3 V, 10 uH at 1.1 MHz: dI = 8.7 * 3.3 / (12 * 1.1e6 * 10e-6)
+    # = 0.2175 A, 36 % of the rated 0.6 A (inside p. 20's 20-60 %). p. 20's
+    # floor is the high-side limit, 0.85 A min: Isat 1.0 A passes, 0.8 A
+    # (still above the 0.609 A peak) does not.
+    bg = _buck(tmp_path_factory, "lmr54406", ic="LMR54406FDBVR", henries="10uH")
+    cons = _cons(vin=12, vout=3.3, iout=0.5, inductor_isat_a=1.0, vin_max_v=13)
+    viols, recs, nj = cv.judge(bg, cons, TABLE)
+    assert viols == [] and nj == [] and recs[0]["ripple_in_band"] is True
+    cons["blocks"][0]["operating_point"]["inductor_isat_a"] = 0.8
+    hit, = cv.judge(bg, cons, TABLE)[0]
+    assert hit["kind"] == "converter_isat_below_limit" and hit["limit_a"] == 0.85
+    assert "must be higher than peak" in hit["msg"]

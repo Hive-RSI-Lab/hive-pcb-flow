@@ -58,3 +58,173 @@ regulators:
       typ, 80 max; the larger DDA max is used). pp. 21-22: ripple "in the
       range of 20% to 40% of the maximum output current".
     verified: true
+  - match: '^TLV62569P?(DBV|DDC)'
+    mpn: TLV62569DBV/TLV62569PDDC
+    peak_limit_a: {min: 3.0}
+    iout_rated_a: 2.0
+    source: >-
+      TI TLV62569/TLV62569P datasheet SLVSDG1C, revised October 2017 (sha256
+      1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4,
+      https://www.ti.com/lit/ds/symlink/tlv62569.pdf). p. 5 (VIN = 5.0 V,
+      TJ = 25 °C): "ILIM High-side FET current limit TLV62569DBV,
+      TLV62569PDDC 3 A" in the MIN column (no typical or maximum, so the
+      Isat-against-typical warning does not run). p. 4: "IOUT Output current
+      0 2 A". No minimum on-time is stated. p. 10 asks for an Isat "20% to
+      30% higher than IL,MAX", a margin over the peak, not over the limit.
+    verified: true
+  - match: '^TLV62569P?DRL'
+    mpn: TLV62569DRL/TLV62569PDRL
+    peak_limit_a: {min: 2.5}
+    iout_rated_a: 2.0
+    source: >-
+      TI SLVSDG1C, revised October 2017 (sha256
+      1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4).
+      p. 5 (VIN = 5.0 V, TJ = 25 °C): "ILIM High-side FET current limit
+      TLV62569DRL, TLV62569PDRL 2.5 A" in the MIN column. p. 4: "IOUT Output
+      current 0 2 A". No minimum on-time is stated.
+    verified: true
+  - match: '^TPS629203'
+    mpn: TPS629203
+    peak_limit_a: {min: 0.8, typ: 1.1, max: 1.4}
+    valley_limit_a: {min: 0.5, typ: 0.9, max: 1.3}
+    ton_min_s: {value: 40.0e-9, kind: typ}
+    iout_rated_a: 0.3
+    source: >-
+      TI TPS629203 datasheet SLVSGE2, March 2022 (sha256
+      6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7,
+      https://www.ti.com/lit/ds/symlink/tps629203.pdf). p. 5: "High-side FET
+      current limit 0.8 1.1 1.4 A", "Low-side FET current limit 0.5 0.9
+      1.3 A", "TON(MIN) Minimum on time 40 ns" (typical only). p. 4: "IOUT
+      Output current 0 0.3 A". The switching frequency is 1.0 or 2.5 MHz as
+      the MODE/S-CONF pin sets it (p. 1), so converter_fsw.yaml has no row:
+      state the block's fsw_khz. p. 15 caps the ripple at 1.6 A (a limit
+      for the negative current limit, not a band).
+    verified: true
+  - match: '^TPS62A01'
+    mpn: TPS62A01/TPS62A01A
+    peak_limit_a: {min: 1.3, typ: 1.8}
+    valley_limit_a: {typ: 1.8}
+    iout_rated_a: 1.0
+    source: >-
+      TI TPS62A01x/TPS62A02x datasheet SLUSEG9E, revised June 2024 (sha256
+      cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518,
+      https://www.ti.com/lit/ds/symlink/tps62a01.pdf). p. 5: "IHS(OC)
+      High-side peak current limit TPS62A01 1.3 1.8 A" (min, typ), "ILS(OC)
+      Low-side valley current limit TPS62A01 1.8 A" (typical only). p. 4:
+      "IOUT Output current range TPS62A01 0 1 A". No minimum on-time is
+      stated.
+    verified: true
+  - match: '^SY7208C'
+    mpn: SY7208C
+    peak_limit_a: {min: 0.6}
+    source: >-
+      Silergy SY7208C application note AN_SY7208C Rev. 0.9 (sha256
+      d05f52f8e1d2b83a0557a1f8eacad02e972d17f00c5783ee4cbb3e8f3cd40cbc; the
+      copy LCSC serves for C178234, as Silergy's site refuses automated
+      fetches). p. 3: "Main FET Current Limit ILIM1 600 mA" in the MIN
+      column. A boost: only the overload ((0.6 A - dI/2) * (1 - D)) is
+      judged. p. 6 asks for ripple "about 40% of the average input current"
+      and an Isat "greater than the peak inductor current under full load"
+      (the check's own peak test).
+    verified: true
+  - match: '^LM5158(?![1x])'
+    mpn: LM5158
+    peak_limit_a: {min: 3.26, typ: 3.75, max: 4.24}
+    source: >-
+      TI LM5158/LM51581 datasheet SNVSBZ7, October 2021 (sha256
+      7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f,
+      https://www.ti.com/lit/ds/symlink/lm5158.pdf). p. 8: "ILIM Internal
+      MOSFET current limit LM5158 3.26 3.75 4.24 A". A boost (also SEPIC
+      and flyback); fsw is set by RT, so converter_fsw.yaml has no row.
+    verified: true
+  - match: '^LM51581'
+    mpn: LM51581
+    peak_limit_a: {min: 1.63, typ: 1.875, max: 2.12}
+    source: >-
+      TI SNVSBZ7, October 2021 (sha256
+      7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f).
+      p. 8: "Internal MOSFET current limit LM51581 1.63 1.875 2.12 A".
+    verified: true
+  - match: '^LMR54406'
+    mpn: LMR54406
+    peak_limit_a: {min: 0.85, typ: 1.1, max: 1.3}
+    valley_limit_a: {min: 0.65, typ: 0.8, max: 0.95}
+    isat_floor:
+      limit: peak
+      quote: >-
+        p. 20: "The inductor saturation current must be higher than peak
+        current limit level."
+    ton_min_s: {value: 60.0e-9, kind: typ}
+    iout_rated_a: 0.6
+    ripple_band: {lo: 0.20, hi: 0.60, of: rated}
+    source: >-
+      TI LMR54406/LMR54410 datasheet SLUSEG8E, revised January 2026 (sha256
+      f0dc0ace8430cad919ef1f590d65d217362ee3d3a975406ded57b98f228ffaf7,
+      https://www.ti.com/lit/ds/symlink/lmr54406.pdf). p. 5: "ISC High-side
+      current limit LMR54406 .85 1.1 1.3 A", "ILS-LIMIT Low-side current
+      limit LMR54406 .65 0.8 .95 A". p. 7: "tON-MIN Minimum switch on-time
+      IOUT = 1A 60 ns" (typical only). p. 4: 0.6 A. p. 20: ripple "20% to 60%
+      of maximum IOUT supported by converter".
+    verified: true
+  - match: '^TLV61070A'
+    mpn: TLV61070A
+    valley_limit_a: {min: 1.80, typ: 2.45}
+    source: >-
+      TI TLV61070A datasheet SLVSGK6B, revised July 2026 (sha256
+      1486d1a8c394245eafe18e3259cd24477949f8ef4f3c91d669f66322da5555b2,
+      https://www.ti.com/lit/ds/symlink/tlv61070a.pdf). p. 5: "ILIM_SW Valley
+      current limit 1.80 2.45 A" over temperature (2.00 min at 25 °C). A
+      valley-mode boost with no peak limit: the overload is judged by p. 8
+      Eq. 1, "IOUT(CL) = (1 - D) x (ILIM + 1/2 dIL(P-P))". fsw falls from
+      1 MHz above 1.5 V in to 0.55 MHz below 1 V (p. 8), so converter_fsw.yaml
+      has no row. p. 13: ripple "less than 40% of the average inductor
+      current".
+    verified: true
+  - match: '^LMR38010'
+    mpn: LMR38010
+    peak_limit_a: {min: 1.3, typ: 1.6, max: 1.9}
+    valley_limit_a: {min: 0.9, typ: 1.2, max: 1.5}
+    isat_floor:
+      limit: peak
+      quote: >-
+        p. 20: "Ideally, the saturation current rating of the inductor is at
+        least as large as the high-side switch current limit".
+    ton_min_s: {value: 131.0e-9, kind: max}
+    iout_rated_a: 1.0
+    ripple_band: {lo: 0.20, hi: 0.40, of: rated}
+    source: >-
+      TI LMR38010 datasheet SNVSC73B, revised September 2023 (sha256
+      b8b6dced113ffb83012e0d38187af8b807dab8cbfa8b842e3af54387f98d7418,
+      https://www.ti.com/lit/ds/symlink/lmr38010.pdf). p. 5: "IHS-LIMIT
+      High-side current limit 1A Version 1.3 1.6 1.9 A", "ILS-LIMIT Low-side
+      current limit 1A Version 0.9 1.2 1.5 A", "tON-MIN Minimum switch
+      on-time VIN = 24 V, Iout = 1 A 80 131 ns". fsw is set by RT (200 kHz
+      to 2.2 MHz), so converter_fsw.yaml has no row. p. 20: ripple "in the
+      range of 20% to 40% of the maximum output current".
+    verified: true
+  - match: '^SY8301'
+    mpn: SY8301
+    peak_limit_a: {min: 1.6, max: 2.5}
+    ton_min_s: {value: 80.0e-9, kind: typ}
+    iout_rated_a: 1.0
+    source: >-
+      Silergy SY8301 application note AN_SY8301 Rev. 0.9A (sha256
+      d2a1acae6a41e7e6e62ad498280c74a0fe549e62d20f5176c8367640b77a1621; the
+      copy LCSC serves for C2927130). p. 4: "Top FET Peak Current Limit
+      ILIM,TOP 1.6 2.5 A" (min, max; no typical, so the Isat-against-typical
+      warning does not run), "Min ON Time tON 80 ns" (typical). p. 8 asks
+      for ripple "about 40%" of the maximum output current, a point, not a
+      band.
+    verified: true
+  - match: '^SY7200A'
+    mpn: SY7200A
+    peak_limit_a: {min: 2.0, typ: 2.6, max: 3.5}
+    source: >-
+      Silergy SY7200A datasheet Rev. 1.0 (sha256
+      86fa6eccd7ef812c8ce4b05ba372384f9ba9198b5fbeacfe406756cf9a097dfe; the
+      copy LCSC serves for C107309). p. 3: "Main FET Current Limit ILIM 10%
+      Duty 2 2.6 3.5 A" (stated at 10 % duty). A boost LED driver: its load
+      is the LED string's current.
+    verified: true
+# No row: DRV8662 (TI SLOS709C, sha256 c47fbf59...). Its boost current limit
+# is set by the REXT resistor, so a row would need REXT read off the board.
