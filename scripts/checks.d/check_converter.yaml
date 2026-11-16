@@ -1,0 +1,11 @@
+# check_converter (#355): each buck's or boost's inductor Isat against its
+# peak current, its load against the IC's switch current limits, and a buck's
+# on-time at its highest input against the IC's minimum.
+# reference/converter_limits.yaml holds the IC limits; constraints.json gives
+# voltages, the load (power current_a) and the block's inductor_isat_a and
+# vin_max_v.
+name: check_converter
+needs: []
+args: []
+optional:
+  constraints: [--constraints, "{constraints}"]

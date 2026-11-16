@@ -1,0 +1,15 @@
+# Seeded fault for check_converter (#355).
+mutants:
+  buck-inductor-isat-low:
+    board: usbbuck4
+    script: mutations/buck_inductor_isat_low.py
+    check: check_converter
+    defect: >-
+      SIDECAR fault: U2's buck block states L1's saturation current as 0.45 A,
+      while L1 peaks at 0.509 A at the stated 0.4 A load (0.217 A ripple at
+      1.1 MHz, 4.7 uH, 5 V to 3.3 V).
+    expect:
+      kind: converter_isat_low
+      net: /SW
+      ref: L1
+      severity: error
