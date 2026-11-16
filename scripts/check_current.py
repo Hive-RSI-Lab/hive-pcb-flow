@@ -272,15 +272,23 @@ takes the rail's converter, read from the board and constraints.json, RMS:
     cap on a return net (declared 0 V, or undeclared with a ground name) takes
     the figure of the rail on its other pad. Bulk caps of several rails on one
     branch add in RSS; a decoupling cap's rail adds nothing.
+  boost input (#816): Vin * (Vout - Vin) / (2 * sqrt(3) * Vout * L * fsw), the
+    inductor's triangle. A boost is an inductor from the rail to a switch node
+    that a diode, or the switcher's output pin, lifts onto a declared rail
+    above it; fsw as for a buck, or a boost block's fsw_khz for that Vout.
+  boost output (#816): sqrt((1 - D) * (Iout^2 * D / (1 - D)^2 + dI^2 / 3)),
+    dI = D * Vin / (2 * L * fsw), D = 1 - Vin / Vout, Iout = the rail's power
+    entry. The lossless D understates the figure a little.
 Sources: Freescale/NXP AN4067 rev 1.0 (2010), "Selecting L and C Components in
 the Power Stage of the MC34700 Switching Regulators": section 2.2, output RMS
 dI / sqrt(12); section 3, input RMS Iout * sqrt(D - D^2). dI is the same
 inductor ripple as TI SLVA477C, "Basic Calculation of a Buck Converter's Power
-Stage". The whole figure goes on each capacitor's copper, not shared among
+Stage". Boost: TI LM3478 datasheet SNVS085Y (rev. January 2026), p. 23,
+equations 31 to 33. The whole figure goes on each capacitor's copper, not shared among
 parallel ones: an upper bound. Copper that carries it passes, with the figure
 and its inputs in facts "ripple_caps"; copper that doesn't fails as an error
-with both in the finding, plane-fed or not. A boost, or a figure with any input
-missing, stays in "unjudged" and its "why" says what is missing: no default is
+with both in the finding, plane-fed or not. A figure with any input missing
+stays in "unjudged" and its "why" says what is missing: no default is
 assumed. An inrush is a transient, not judged by this steady-state limit.
 
 CLI: --pcb board.kicad_pcb --constraints constraints.json [--out report.json]
@@ -352,6 +360,7 @@ CONVERTER_FSW_YAML = SWITCH_NODES_YAML.with_name("converter_fsw.yaml")
 BUS_TOPOLOGIES = {"class-d-amp", "half-bridge-inverter"}
 RETURN_NET = re.compile(r"(?:[ADPSC]?GND\w*|VSS\w*|0V)", re.I)
 AN4067 = "NXP AN4067"
+LM3478 = "TI LM3478 SNVS085Y p. 23"        # boost input and output caps
 INFERRED_DT_C = 60.0           # switch-node screen without constraints
 SWITCH_PIN_NAMES = {"SW", "LX", "PH"}  # unrated-part facts (switch_nodes.yaml)
 MPN_PROPS = ("MPN", "Manufacturer Part Number", "Manufacturer_Part_Number",
@@ -1039,24 +1048,12 @@ def _buck_output(bg, net: str, ind: str, node: str, volts: dict, blocks: list):
     vout = volts.get(net)
     if vout is None:
         return f"{net} has no declared voltage for {ind}'s ripple"
-    if any("boost" in str(b.get("topology", "")) and (
-            b.get("operating_point") or {}).get("vin_v") == vout for b in blocks):
-        return f"{ind} is a boost's inductor; only a buck's ripple is read"
-    for pad in bg.pads_of(net=node):
-        if re.fullmatch(r"D\d+", pad.ref) and any(
-                volts.get(n, -math.inf) > vout
-                for n in _other_nets(bg, pad.ref, node)):
-            return f"{ind} is a boost's inductor; only a buck's ripple is read"
     ics = _switchers_on(bg, node)
     if len(ics) != 1:
         return f"{node} has {len(ics)} switcher ICs; can't read {ind}'s input"
     ic = ics[0]
-    above = {}
-    for p in bg.pads_of(ref=ic):
-        if p.net and p.net != node and volts.get(p.net, -math.inf) > vout:
-            if SOURCE_PIN.fullmatch(pin_name(p) or ""):
-                return f"{ind} is a boost's inductor; only a buck's ripple is read"
-            above[p.net] = volts[p.net]
+    above = {p.net: volts[p.net] for p in bg.pads_of(ref=ic)
+             if p.net and p.net != node and volts.get(p.net, -math.inf) > vout}
     if len(above) != 1:
         return (f"{ic} has {len(above)} declared rails above {net}; can't read "
                 f"its input voltage")
@@ -1086,6 +1083,115 @@ def _buck_output(bg, net: str, ind: str, node: str, volts: dict, blocks: list):
                        f"({AN4067} 2.2)",
             "inputs": {"L_h": henries, "fsw_hz": fsw, "vin_v": vin, "vout_v": vout,
                        "inductor": ind, "fsw_source": where}}
+
+
+def _boost_rails(bg, net: str, node: str, volts: dict) -> list[str]:
+    """The declared rails above `net` that switch node `node` lifts it to: a
+    diode from the node, or a switcher's output pin (a synchronous boost)."""
+    vin = volts.get(net)
+    if vin is None:
+        return []
+    outs = {n for pad in bg.pads_of(net=node) if re.fullmatch(r"D\d+", pad.ref)
+            for n in _other_nets(bg, pad.ref, node)
+            if volts.get(n, -math.inf) > vin}
+    outs |= {p.net for ic in _switchers_on(bg, node) for p in bg.pads_of(ref=ic)
+             if p.net and p.net != node and volts.get(p.net, -math.inf) > vin
+             and SOURCE_PIN.fullmatch(pin_name(p) or "")}
+    return sorted(outs)
+
+
+def _boost_inputs(bg, ind: str, node: str, vin: float, vout: float,
+                  blocks: list):
+    """(ic, L, fsw, fsw source) of the boost switching `node` through `ind`,
+    or a string naming the input that's missing."""
+    ics = _switchers_on(bg, node)
+    if len(ics) != 1:
+        return f"{node} has {len(ics)} switcher ICs; can't read {ind}'s boost"
+    ic = ics[0]
+    henries = engcalc.parse_value((bg.footprints.get(ind) or {}).get("value"))
+    if not henries:
+        return f"{ind} has no readable inductance"
+    row = _fsw_row(bg, ic, fsw_rows())
+    if row:
+        return ic, henries, float(row["fsw_hz"]), row["source"]
+    found = [b["operating_point"]["fsw_khz"] for b in blocks
+             if "boost" in str(b.get("topology", ""))
+             and (b.get("operating_point") or {}).get("vout_v") == vout
+             and (b.get("operating_point") or {}).get("fsw_khz")]
+    if len(found) != 1:
+        return (f"{ic}'s switching frequency isn't known: no row in "
+                f"reference/converter_fsw.yaml, no boost block with fsw_khz "
+                f"for {vout:g} V")
+    return ic, henries, float(found[0]) * 1e3, "boost block fsw_khz"
+
+
+def _boost_input(bg, net: str, ind: str, node: str, out: str, volts: dict,
+                 blocks: list):
+    """The ripple term of a boost's input cap on `net`: the inductor's
+    triangle, dI / sqrt(3) with dI half its peak to peak (LM3478 eq. 31), or
+    a string saying what can't be read."""
+    vin, vout = volts[net], volts[out]
+    got = _boost_inputs(bg, ind, node, vin, vout, blocks)
+    if isinstance(got, str):
+        return got
+    ic, henries, fsw, where = got
+    amps = vin * (vout - vin) / (2 * math.sqrt(3) * vout * henries * fsw)
+    return {"from": ic, "amps": amps,
+            "formula": f"Vin * (Vout - Vin) / (2 * sqrt(3) * Vout * L * fsw) "
+                       f"({LM3478} eq. 31)",
+            "inputs": {"L_h": henries, "fsw_hz": fsw, "vin_v": vin,
+                       "vout_v": vout, "inductor": ind, "fsw_source": where}}
+
+
+def _boost_outputs(bg, net: str, volts: dict, cons: dict):
+    """Ripple terms of the boosts lifting a lower rail onto `net`, read at
+    their output cap (LM3478 eq. 32, 33), or a string naming what's missing.
+    The lossless duty 1 - Vin / Vout understates D a little."""
+    vout = volts.get(net)
+    if vout is None:
+        return []
+    nodes = {n for p in bg.pads_of(net=net) if re.fullmatch(r"D\d+", p.ref)
+             for n in _other_nets(bg, p.ref, net)}
+    nodes |= {q.net for p in bg.pads_of(net=net)
+              if _is_ic(p.ref) and SOURCE_PIN.fullmatch(pin_name(p) or "")
+              for q in bg.pads_of(ref=p.ref) if q.net and q.net != net
+              and (pin_name(q) in SWITCH_PIN_NAMES or SWITCH_NET.search(q.net))}
+    terms, seen = [], set()
+    for node in sorted(nodes):
+        if not _switchers_on(bg, node):
+            continue
+        for pad in bg.pads_of(net=node):
+            if not re.fullmatch(r"L\d+", pad.ref) or pad.ref in seen:
+                continue
+            for inn in _other_nets(bg, pad.ref, node):
+                if net not in _boost_rails(bg, inn, node, volts):
+                    continue
+                seen.add(pad.ref)
+                vin = volts[inn]
+                got = _boost_inputs(bg, pad.ref, node, vin, vout,
+                                    cons.get("blocks") or [])
+                if isinstance(got, str):
+                    return got
+                ic, henries, fsw, where = got
+                iout = next((e.get("current_a") for e in cons.get("power") or []
+                             if e.get("net") == net), None)
+                if iout is None:
+                    return f"{net} has no power entry for {ic}'s boost Iout"
+                duty = 1 - vin / vout
+                ripple = duty * vin / (2 * henries * fsw)
+                amps = math.sqrt((1 - duty) * (float(iout) ** 2 * duty
+                                 / (1 - duty) ** 2 + ripple ** 2 / 3))
+                terms.append({
+                    "from": ic, "amps": amps,
+                    "formula": f"sqrt((1 - D) * (Iout^2 * D / (1 - D)^2 + "
+                               f"dI^2 / 3)), dI = D * Vin / (2 * L * fsw), "
+                               f"D = 1 - Vin / Vout, lossless ({LM3478} eq. "
+                               f"32, 33)",
+                    "inputs": {"iout_a": float(iout), "duty": duty,
+                               "L_h": henries, "fsw_hz": fsw, "vin_v": vin,
+                               "vout_v": vout, "inductor": pad.ref,
+                               "fsw_source": where}})
+    return terms
 
 
 def _buck_input(bg, net: str, ic: str, volts: dict, cons: dict):
@@ -1259,11 +1365,20 @@ def cap_ripple(bg: geom.BoardGeom, net: str, far: list, cons: dict | None):
             continue
         for node in _other_nets(bg, pad.ref, net):
             if _switchers_on(bg, node):
-                term = _buck_output(bg, net, pad.ref, node, volts, blocks)
+                outs = _boost_rails(bg, net, node, volts)
+                if len(outs) > 1:
+                    return {"why": f"{node} lifts {net} to {len(outs)} "
+                                   f"rails; can't read {pad.ref}'s boost"}
+                term = (_boost_input(bg, net, pad.ref, node, outs[0], volts,
+                                     blocks) if outs else
+                        _buck_output(bg, net, pad.ref, node, volts, blocks))
                 if isinstance(term, str):
                     return {"why": term}
                 outputs.append(term)
-    terms = buses + outputs
+    boosts = _boost_outputs(bg, net, volts, cons)
+    if isinstance(boosts, str):
+        return {"why": boosts}
+    terms = buses + outputs + boosts
     if not terms:
         for ic in sorted({p.ref for p in bg.pads_of(net=net) if _is_ic(p.ref)
                           and feeds_or_converts(bg, p.ref, net)}):
