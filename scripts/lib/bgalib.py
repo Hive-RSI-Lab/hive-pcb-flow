@@ -13,6 +13,9 @@ disagree about the clearance an escape is laid at:
   fine_via(bga, n, cap, free) -> the fab's smallest filled via for a fine
                                  field on a stack that fills vias free (#1252)
   fine_rule(ref, fv)          -> the courtyard rule that lets that via pass
+  pad_via(bga, n, cap, free, via_d) -> that via for a coarser field's kept
+                                 via-in-pad when the escape via overhangs
+                                 the pad (#552); fine_rule covers it too
 
 The budget (all mm, c = escape clearance):
   via     = max(min via diameter, drill + 2 * min annular ring)
@@ -222,9 +225,49 @@ def fine_via(bga: Bga, n_copper: int, cap: dict | None,
     board never gets one, whatever `free` says. cap: the board's
     jlc_capabilities row; one with no abs_min_via_* floors (another fab)
     gives None. Returns floors keys for escape_params and fine_rule."""
-    if n_copper <= 4 or n_copper not in free or not cap:
-        return None
     if bga.pitch > FINE_PITCH_MM + GRID_TOL:
+        return None
+    return smallest_filled_via(n_copper, cap, free)
+
+
+def pad_via(bga: Bga, n_copper: int, cap: dict | None, free: set[int],
+            via_d: float) -> dict | None:
+    """#552: the via a kept via-in-pad gets in a field coarser than
+    FINE_PITCH_MM, whose escape via (via_d, the dog-bone's) is wider than
+    the ball pad: a 0.45 floor via bulges past a 0.32 mm pad at 0.8 mm onto
+    the stubs KRT threads past the pad. The fab's smallest filled via
+    (smallest_filled_via), when it fits inside the pad; else None (a pad
+    the floor via fits, a 4-layer board, a fab with no abs_min floors)."""
+    if bga.pitch <= FINE_PITCH_MM + GRID_TOL or via_d <= bga.pad_d + 1e-6:
+        return None
+    fv = smallest_filled_via(n_copper, cap, free)
+    if not fv or fv["via_diameter"] > bga.pad_d + 1e-6:
+        return None
+    return fv
+
+
+def holds_pad_vias(bg, bga: Bga, pv: dict) -> bool:
+    """True when some via no wider than the pad via `pv` sits centred in one
+    of the field's own pads on its net: route_escape shrank it there (#552),
+    so the courtyard needs pv's floors (fine_rule) for DRC to pass it."""
+    pads = [p for p in bg.pads_of(ref=bga.ref) if p.net]
+    for v in bg.vias_of():
+        if v.diameter > pv["via_diameter"] + 1e-6:
+            continue
+        for p in pads:
+            if p.net == v.net and math.hypot(v.at[0] - p.center[0],
+                                             v.at[1] - p.center[1]) \
+                    <= min(p.size) / 2 + 1e-4:
+                return True
+    return False
+
+
+def smallest_filled_via(n_copper: int, cap: dict | None,
+                        free: set[int]) -> dict | None:
+    """The fab's absolute-floor via (abs_min_via_*), filled, on a stack
+    whose filled vias cost nothing (`free`); None on 4 layers or a cap row
+    with no abs_min_via_* floors."""
+    if n_copper <= 4 or n_copper not in free or not cap:
         return None
     keys = ("abs_min_via_diameter_mm", "abs_min_via_drill_mm",
             "abs_min_via_hole_to_hole_mm")

@@ -584,6 +584,139 @@ def test_vip_conflicts_floor_via_grazing_a_stub(tmp_path):
 
 
 
+# ---- #552: via-in-pad at 0.8 mm gets the fab's smallest filled via ---------
+
+def test_pad_via_only_where_the_escape_via_overhangs_the_pad():
+    """0.45 in a 0.32 pad at 0.8 mm on 6 layers: the 0.25/0.15 filled via.
+    Not on 4 layers, not where the floor via fits the pad, not at 0.5 mm
+    (fine_via's field), not where it would itself overhang."""
+    pv = bgalib.pad_via(_bga(0.8, 0.32), 6, JLC_ROW, {6, 8}, 0.45)
+    assert (pv["via_diameter"], pv["via_drill"]) == (0.25, 0.15)
+    assert bgalib.pad_via(_bga(0.8, 0.32), 4, JLC_ROW, {4, 6}, 0.45) is None
+    assert bgalib.pad_via(_bga(0.8, 0.5), 6, JLC_ROW, {6}, 0.45) is None
+    assert bgalib.pad_via(_bga(0.5, 0.25), 6, JLC_ROW, {6}, 0.45) is None
+    assert bgalib.pad_via(_bga(0.8, 0.2), 6, JLC_ROW, {6}, 0.45) is None
+    assert bgalib.pad_via(_bga(0.8, 0.32), 6, {}, {6}, 0.45) is None
+    # fine_via still answers its own 0.5 mm field from the same floors
+    assert bgalib.fine_via(_bga(0.5, 0.25), 6, JLC_ROW, {6}) == \
+        bgalib.smallest_filled_via(6, JLC_ROW, {6})
+
+
+def test_shrink_pad_vias_swaps_only_new_through_vias_in_own_pads(tmp_path):
+    vip, old, gap = (UID % k for k in (5521, 5522, 5523))  # pcbnew keeps
+    extra = (_via(18, 13, "/S0_0", vip) + _via(18.8, 13, "/S0_1", old)
+             + _via(18.4, 13.4, "/S1_1", gap))          # only real uuids
+    pcb = board(tmp_path, pad=0.32, layers=6, extra=extra)
+    bg = geom.BoardGeom.from_file(pcb)
+    (b,) = bgalib.find_bgas(bg)
+    pv = bgalib.pad_via(b, 6, JLC_ROW, {6}, 0.45)
+    assert re_.shrink_pad_vias(pcb, bg, b, {vip, gap}, pv) == 1
+    bg2 = geom.BoardGeom.from_file(pcb)
+    sizes = {(v.net, v.at): (round(v.diameter, 3), round(v.drill, 3))
+             for v in bg2.vias_of()}
+    assert sizes == {("/S0_0", (18.0, 13.0)): (0.25, 0.15),
+                     ("/S0_1", (18.8, 13.0)): (0.45, 0.2),
+                     ("/S1_1", (18.4, 13.4)): (0.45, 0.2)}
+    (b2,) = bgalib.find_bgas(bg2)
+    # the shrunk via clears the gap via at the fine floor: no clash left
+    new = {v.uuid for v in bg2.vias_of() if v.net != "/S0_1"}
+    assert re_.vip_conflicts(bg2, b2, new, pv["hole_to_hole"], 0.1) == set()
+
+
+@pytest.mark.parametrize("layers,via,rule", [
+    (6, (0.25, 0.15), True),        # route_escape shrank it: keep its rule
+    (6, None, False),               # nothing shrunk: board floors only
+    (6, (0.45, 0.2), False),        # a floor via in the pad needs no rule
+    (4, (0.25, 0.15), False)])      # 4 layers never get the small via
+def test_rules_gen_keeps_the_pad_via_rule_while_shrunk_vias_stand(
+        tmp_path, layers, via, rule):
+    extra = _via(18, 13, "/S0_0", "vip", *via) if via else ""
+    bg = geom.BoardGeom.from_file(board(tmp_path, pad=0.32, layers=layers,
+                                        extra=extra))
+    cap = {"min_trace_width_mm": 0.0889, "min_clearance_mm": 0.0889,
+           "min_via_diameter_mm": 0.45, "min_via_drill_mm": 0.2,
+           "min_annular_ring_mm": 0.15, **JLC_ROW}
+    rules, (f,) = rules_gen.bga_rules(bg, cap)
+    assert ("aiee_bga_fine_via_U1" in [r.name for r in rules]) is rule
+    assert f["method"] != "underpad"        # still the dog-bone field
+    if rule:
+        assert f["pad_via_mm"] == [0.25, 0.15]
+        (b,) = bgalib.find_bgas(bg)
+        pv = bgalib.pad_via(b, 6, cap, {6}, 0.45)
+        text = "(version 1)\n" + "\n".join(r.render() for r in rules) + "\n"
+        # route_escape's writer sees rules_gen's text as its own
+        assert bgalib.ensure_rules(text, [("U1", f["clearance_mm"], pv)])[1] \
+            == []
+
+
+@pytest.mark.parametrize("layers,pad,flag,pv", [
+    (6, 0.32, "--allow-via-in-pad", True),
+    (6, 0.32, None, True),          # 6 layers keep in-pad vias by default
+    (4, 0.32, "--allow-via-in-pad", False),
+    (6, 0.5, "--allow-via-in-pad", False),
+    (6, 0.32, "--no-via-in-pad", False)])
+def test_plan_names_the_pad_via_and_its_cost(tmp_path, capsys, layers, pad,
+                                             flag, pv):
+    pcb = board(tmp_path, n=8, pad=pad, layers=layers)
+    args = ["--pcb", str(pcb), "--plan", "--method", "underpad"]
+    assert re_.main(args + ([flag] if flag else [])) == 0
+    (b,) = json.loads(capsys.readouterr().out)["facts"]["bgas"]
+    assert bool(b.get("pad_via")) is pv
+    if pv:
+        assert b["pad_via"]["via_mm"] == [0.25, 0.15]
+        assert b["pad_via"]["rule"] == "aiee_bga_fine_via_U1"
+        assert "paid via" in b["pad_via"]["fab_cost"]
+        assert "fine_via" not in b      # the 0.8 mm plan is not #1252's
+
+
+def _pad_via_run(tmp_path, monkeypatch=None):
+    if env.find_kicad_cli() is None or env.find_krt() is None:
+        pytest.skip("needs kicad-cli and KiCadRoutingTools")
+    if monkeypatch:     # the planted fault: main's no-shrink path
+        monkeypatch.setattr(re_, "shrink_pad_vias", lambda *a, **k: 0)
+    pcb = board(tmp_path, n=8, pad=0.32, layers=6)
+    out = tmp_path / "r.json"
+    rc = re_.main(["--pcb", str(pcb), "--allow-via-in-pad", "--method",
+                   "underpad", "--out-report", str(out)])
+    rep = json.loads(out.read_text())
+    assert rc in (0, 1), rep
+    (b,) = rep["facts"]["bgas"]
+    return pcb, rep["facts"], b
+
+
+def test_live_pad_via_0_8mm_keeps_every_ball(tmp_path):
+    """The quiet twin: an 8x8 0.8 mm field with 0.32 pads on 6 layers,
+    underpad with --allow-via-in-pad. Every kept in-pad via is the filled
+    0.25/0.15 one, none clashes with KRT's stubs, all 64 balls escape and
+    DRC is clean under the courtyard's fine rule."""
+    pcb, f, b = _pad_via_run(tmp_path)
+    vip = b["via_in_pad"]
+    assert vip["kept"] and vip["shrunk"] == vip["vias"] >= 4
+    assert not vip.get("clashing") and b["left_for_routers"] == []
+    assert b["kept_nets"] == 64
+    assert f["drc_delta"]["new"] == {}
+    assert "aiee_bga_fine_via_U1" in pcb.with_suffix(".kicad_dru").read_text()
+    bg = geom.BoardGeom.from_file(pcb)
+    (g,) = bgalib.find_bgas(bg)
+    new = {v.uuid for v in bg.vias_of()}
+    assert {(round(v.diameter, 3), round(v.drill, 3))
+            for v in re_.in_pad_vias(bg, g, new)} == {(0.25, 0.15)}
+    assert vip["filled"] == vip["vias"]
+
+
+def test_live_fault_unshrunk_pad_vias_clash(tmp_path, monkeypatch):
+    """The planted fault: with the shrink taken out (main's path) the 0.45
+    vias overhang the 0.32 pads onto KRT's stubs; balls clash and are left
+    for the routers. Shows the quiet twin's 64 come from the shrink."""
+    pcb, f, b = _pad_via_run(tmp_path, monkeypatch)
+    assert b["via_in_pad"].get("clashing")
+    assert b["kept_nets"] < 64
+    assert set(b["via_in_pad"]["clashing"]) <= set(b["left_for_routers"])
+    bg = geom.BoardGeom.from_file(pcb)
+    for net in b["via_in_pad"]["clashing"]:     # the rip leaves no stubs
+        assert not bg.vias_of(net) and not bg.tracks_of(net)
+
+
 # ---- #979: a starved thermal names the pad, never the track ---------------
 
 CAP = ('  (footprint "t:C1" (layer "B.Cu") (at 18.4 13.4)\n'
