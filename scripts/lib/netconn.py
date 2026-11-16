@@ -152,11 +152,30 @@ def build(bg, net: str, include_zones: bool = False, snap: int = SNAP,
                         for k, o in ((ka, nb), (kb, na)):
                             if d < reach[k].get(o, math.inf):
                                 reach[k][o] = d
-        span = {(ends[k][0], ends[k + 1][0]) for k in range(0, len(ends), 2)}
+        span = {(ends[k][0], ends[k + 1][0]): (ends[k][1], ends[k + 1][1])
+                for k in range(0, len(ends), 2)}
+
+        def on_body(p, a, b):
+            # p projects strictly between a and b
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            ll = dx * dx + dy * dy
+            if ll <= 0:
+                return False
+            t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / ll
+            return 0.0 < t < 1.0
+
         kept = []
-        for r in reach:
-            drop = {(x if r[x] > r[y] else y) for x, y in span
-                    if x != y and x in r and y in r}
+        for k, r in enumerate(reach):
+            # only where the end sits on that track: at one of its end nodes
+            # or on its body (a T-tap). Elsewhere, as on a router's staircase
+            # of short steps, the caps' reach is real copper and stays joined.
+            # A stub folded back over a track it starts on (its far node one
+            # of the track's) is in that track's copper: it drops nothing.
+            own, far, at = ends[k][0], ends[k ^ 1][0], ends[k][1]
+            drop = {(x if r[x] > r[y] else y) for (x, y), (pa, pb) in span.items()
+                    if x != y and x in r and y in r
+                    and (own in (x, y) or (far not in (x, y)
+                                           and on_body(at, pa, pb)))}
             kept.append(r.keys() - drop)
         for ka, kb, d in pairs:
             if ends[kb][0] in kept[ka] and ends[ka][0] in kept[kb]:

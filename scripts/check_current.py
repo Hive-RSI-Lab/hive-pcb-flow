@@ -1846,20 +1846,29 @@ def cluster_sides(bg: geom.BoardGeom, net: str, g, bridges: set, eid):
     split there though netconn's graph does (#1336); `eid` itself is then
     not an exit, and the current through it is the current through the
     bridges either side."""
-    todo = [a for a, nbrs in g.adj.items() if any(e == eid for _, _, e in nbrs)]
-    seen, exits = set(todo), set()
-    while todo:
-        u = todo.pop()
-        if u[0] != "pt":
+    ends = [a for a, nbrs in g.adj.items() if any(e == eid for _, _, e in nbrs)]
+    # a bridge `eid` must lie in series: one bridge out on each side of it,
+    # else a side ending in eid's own far end (a branch to a part) is a
+    # third way out the walk can't see
+    starts = [[a] for a in ends] if eid in bridges else [ends]
+    exits = set()
+    for start in starts:
+        todo, seen, out = list(start), set(start), set()
+        while todo:
+            u = todo.pop()
+            if u[0] != "pt":
+                return None
+            for v, _w, e in g.adj[u]:
+                if e == eid:
+                    continue
+                if e in bridges:
+                    out.add(e)
+                elif v not in seen:
+                    seen.add(v)
+                    todo.append(v)
+        if eid in bridges and len(out) != 1:
             return None
-        for v, _w, e in g.adj[u]:
-            if e == eid:
-                continue
-            if e in bridges:
-                exits.add(e)
-            elif v not in seen:
-                seen.add(v)
-                todo.append(v)
+        exits |= out
     if len(exits) != 2:
         return None
     for e in sorted(exits, key=str):
