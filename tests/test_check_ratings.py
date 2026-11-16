@@ -2520,6 +2520,41 @@ def test_suspect_datasheet_facts_are_not_verified(tmp_path):
     assert not _errors({"violations": viol})
 
 
+def test_a_scan_is_not_judged_not_suspect_and_its_facts_wait(tmp_path):
+    # a03cb, hwde-voice-faults: 4 of fmcw-radar's 7 suspect sheets were scans
+    from test_datasheet_fetch import NOTEXT
+    ws = _suspect_ws(tmp_path, {"url": "u", "sha256": "s", "mpn": "TESTMCU"})
+    (ws / "parts" / "datasheets" / "C1.pdf").write_bytes(NOTEXT)
+    viol, facts = cr.run_check(ws / "kicad" / "board.kicad_pcb",
+                               ws / "parts", None, None)
+    assert not [v for v in viol if v["kind"] == "rating_datasheet_suspect"]
+    assert facts["suspect_datasheets"] == {}
+    w = [v for v in viol if v["kind"] == "rating_datasheet_unassessed"]
+    assert len(w) == 1 and "scan" in w[0]["msg"], viol
+    assert facts["unassessed_datasheets"] == ["C1"]
+    for kind in ("rating", "pinout"):
+        f = _u1(facts, kind)
+        assert f["status"] == "unknown", f
+        assert f["value"].startswith("datasheet not judged, not verified"), f
+
+
+def test_a_sheet_that_prints_no_part_number_is_not_judged_too(tmp_path):
+    # a03cb, hwde-voice-faults: the other 3 were sheets naming no part number
+    from test_datasheet_fetch import KENTO_SHEET, _pdf
+    ws = _suspect_ws(tmp_path, {"url": "u", "sha256": "s", "mpn": "TESTMCU"})
+    (ws / "parts" / "datasheets" / "C1.pdf").write_bytes(
+        _pdf([KENTO_SHEET, KENTO_SHEET]))
+    viol, facts = cr.run_check(ws / "kicad" / "board.kicad_pcb",
+                               ws / "parts", None, None)
+    assert not [v for v in viol if v["kind"] == "rating_datasheet_suspect"]
+    assert facts["unassessed_datasheets"] == ["C1"]
+    f = _u1(facts, "rating")
+    assert f["status"] == "unknown", f
+    assert f["value"].startswith("datasheet not judged, not verified"), f
+    assert cr._doubt("MPN not printed: pages 1-2 ...") == "not judged"
+    assert cr._doubt("MPN X is not in the text ...") == "suspect"
+
+
 def test_ok_datasheet_index_still_verifies(tmp_path):
     ws = _suspect_ws(tmp_path, {"status": "ok", "reasons": []})
     viol, facts = cr.run_check(ws / "kicad" / "board.kicad_pcb",

@@ -503,7 +503,8 @@ def fetch_for(rec: dict, stem: str, parts_dir: Path, transport=None) -> dict:
     """Fetch the record's datasheet to parts/datasheets/<stem>.pdf through
     datasheet_extract.fetch_datasheet and enter it in that folder's
     index.json as datasheet_extract --fetch does (url, sha256, verdict).
-    -> {status: fetched|suspect|missing|refused|error|no_url, url, why}."""
+    -> {status: fetched|suspect|not_judged|missing|refused|error|no_url, url,
+    why}."""
     url = datasheet_url(rec, stem, parts_dir)
     if not url:
         return {"status": "no_url",
@@ -531,13 +532,15 @@ def fetch_for(rec: dict, stem: str, parts_dir: Path, transport=None) -> dict:
 
 
 def suspect_pdf(pdf: Path, parts_dir: Path) -> str | None:
-    """Why index.json judged this datasheet suspect, else None: nothing is
-    read from a suspect PDF."""
+    """'suspect: why' or 'not judged: why' (nothing to judge it by) if index.json
+    judged this datasheet so, else None: nothing is read from such a PDF."""
     ent = datasheet_extract._index(parts_dir / "datasheets").get(pdf.stem)
-    if not isinstance(ent, dict) or ent.get("status") != "suspect" or \
+    if not isinstance(ent, dict) or \
+            ent.get("status") not in ("suspect", "not_judged") or \
             Path(str(ent.get("file") or "")).name != pdf.name:
         return None
-    return "; ".join(ent.get("reasons") or []) or "judged suspect"
+    return (f"{ent['status'].replace('_', ' ')}: "
+            + ("; ".join(ent.get("reasons") or []) or "no reason given"))
 
 
 def fetched_title(pdf: Path, parts_dir: Path) -> str | None:
@@ -629,7 +632,7 @@ def main(argv: list[str] | None = None, transport=None) -> int:
         if why:
             report.append({**head, "status": "not_judged", "filled": [],
                            "pdf": str(pdf),
-                           "notes": [f"datasheet suspect, not read: {why}"]})
+                           "notes": [f"datasheet {why.replace(':', ', not read:', 1)}"]})
             continue
         if pdf not in cache:
             cache[pdf] = datasheet_extract.extract_pdf_text(pdf)
