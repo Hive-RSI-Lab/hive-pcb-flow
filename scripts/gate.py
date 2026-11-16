@@ -24,7 +24,10 @@ T6 additions:
    paths outside the workspace are listed in commit_result.excluded_dirty.
  - drc gates with drc_options.require_fresh_fills (drc_routed) refuse a
    stale-fill board with exit 2 instead of grading ~375 phantom zone
-   clearance errors (LEARNINGS 2026-07-29, hand-run KRT board).
+   clearance errors (LEARNINGS 2026-07-29, hand-run KRT board). On a fresh
+   board they also list its stale PATCH_<net> zones (#1424): one that fills
+   nothing is a warning drc_routed fails on, one that holds no via of its
+   net is info; each names the zone_patch --remove that takes it.
  - an erc gate on a schematic reports pin_types: how many pins of its
    multi-pin symbols carry an electrical type, and the symbols with none. With
    every pin passive (lib_pin_types with no datasheet extracts) the result
@@ -266,22 +269,59 @@ def run_report_for_gate(gate: dict, input_file: Path) -> dict:
             # Preflight runs BEFORE kicad-cli resolution so the refusal is
             # deterministic. Gates never mutate the board: no refill/save.
             from lib import geom  # noqa: E402
+            bg = geom.load_board(input_file)
             try:
-                geom.load_board(input_file).assert_fresh()
+                bg.assert_fresh()
             except geom.StaleFillError as exc:
                 raise RuntimeError(
                     "zone fills are stale - refill via kc.py drc "
                     f"--refill --save-board, then re-gate ({exc})") from exc
         cli = kc.resolve_cli()
-        return kc.run_drc(cli, input_file,
-                          parity=bool(opts.get("parity")),
-                          all_track_errors=bool(opts.get("all_track_errors")))
+        rep = kc.run_drc(cli, input_file,
+                         parity=bool(opts.get("parity")),
+                         all_track_errors=bool(opts.get("all_track_errors")))
+        if opts.get("require_fresh_fills"):
+            extra = patch_findings(bg)
+            if extra:
+                rep["violations"] = list(rep.get("violations", [])) + extra
+                rep["counts"] = kc.summarize(rep["violations"])
+        return rep
     cli = kc.resolve_cli()
     if tool == "erc":
         return kc.run_erc(cli, input_file)
     raise RuntimeError(
         "gate tool must be 'erc', 'drc', 'verify', 'place', 'dfm' or 'sim', "
         f"got {tool!r}")
+
+
+def patch_findings(bg) -> list[dict]:
+    """The stale PATCH_<net> zones of a fresh board (geom.stale_patches,
+    #1424) as findings beside its DRC's. One that fills nothing after the
+    refill is a warning (drc_routed fails on it): zone_patch never writes
+    one, so it is left over. One that holds no via of its net but fills is
+    info only: a rip may have left it (route_edit names that at edit time,
+    #1145), but a corridor strip joins pads with no via by design."""
+    from lib import checklib  # noqa: E402
+    out = []
+    for p in bg.stale_patches():
+        where = f"{p['name']} {p['uuid'] or '(no uuid)'}"
+        fix = (f"zone_patch --pcb B --net {p['net']} --layer {{ly}} "
+               f"--region {p['box']} --remove")
+        if p["empty"]:
+            ly = p["empty"][0]
+            out.append(checklib.violation(
+                "stale_patch", "warning", p["at"], ly, p["net"], [],
+                f"{where} fills nothing on {', '.join(p['empty'])} after a "
+                f"refill: left over, remove it ({fix.format(ly=ly)})",
+                "gate", zone=p["uuid"], no_via=p["no_via"]))
+        elif p["no_via"]:
+            ly = p["layers"][0] if p["layers"] else None
+            out.append(checklib.violation(
+                "patch_no_via", "info", p["at"], ly, p["net"], [],
+                f"{where} holds no via of {p['net']}: a via rip may have "
+                f"left it (then {fix.format(ly=ly)}); a strip that joins "
+                f"pads needs none", "gate", zone=p["uuid"]))
+    return out
 
 
 def dfm_vendor(board: Path) -> tuple[str | None, str]:
