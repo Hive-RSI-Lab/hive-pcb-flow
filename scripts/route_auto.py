@@ -1156,6 +1156,59 @@ def _enclosed_balls(bg, b) -> set[str]:
     return out
 
 
+def _needs_hdi(bg, pro: Path, unrouted: list[str]) -> list[dict]:
+    """The unrouted nets no 2-layer-span via can get out (#1539): a ball
+    one ring or more inside a field whose escape budget (bgalib.
+    escape_params at route_escape's fab floors) fails street, gap and
+    channel alike, on a stack with no HDI spans (hdilib.board_build) and
+    no free filled via-in-pad (route_escape.free_filled_via_layers). Such
+    a ball has no track between its outer neighbours and no via beside it,
+    so the router could never finish it: it is not judged ("needs HDI"),
+    not counted unrouted. An HDI build, a stack with free via-in-pad, an
+    outer-ring ball, a field any budget fits and an off-grid field keep
+    their unrouted nets."""
+    import bgalib
+    import route_escape as resc
+    bad = set(unrouted)
+    if not bad or hdilib.board_build(bg)[0]:
+        return []
+    if len(bg.copper_layers) in resc.free_filled_via_layers():
+        return []
+    floors = resc.escape_floors(pro)
+    out = []
+    for b in bgalib.find_bgas(bg):
+        if not bad.intersection(b.nets.values()):
+            continue
+        ep = bgalib.escape_params(b, floors)
+        if any(v["ok"] for v in ep["budget"].values()):
+            continue
+        x0, y0, x1, y1 = b.bbox
+        nr = round((y1 - y0) / b.pitch) + 1
+        nc = round((x1 - x0) / b.pitch) + 1
+        hits = []
+        for pad in bg.pads_of(ref=b.ref):
+            if pad.number not in b.nets:
+                continue
+            c = (pad.center[0] - x0) / b.pitch
+            r = (pad.center[1] - y0) / b.pitch
+            if abs(c - round(c)) > 0.05 or abs(r - round(r)) > 0.05:
+                hits = []
+                break
+            ring = min(round(r), round(c), nr - 1 - round(r),
+                       nc - 1 - round(c))
+            if ring >= 1 and pad.net in bad:
+                hits.append({"net": pad.net, "ref": b.ref,
+                             "ball": pad.number, "ring": ring})
+        why = (f"pitch {b.pitch} mm, pad {b.pad_d} mm: "
+               + ", ".join(f"{k} {v['have']}<{v['need']}"
+                           for k, v in ep["budget"].items())
+               + f" mm at {ep['via_size']}/{ep['via_drill']} vias")
+        out += [dict(h, why=why) for h in hits]
+    seen: set[str] = set()
+    return [h for h in sorted(out, key=lambda h: (h["net"], h["ball"]))
+            if not (h["net"] in seen or seen.add(h["net"]))]
+
+
 def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
     """Escapes that leave their ball cut off after the route (row 129): a
     BGA ball whose net DRC still calls unrouted, sitting on an island that
@@ -1610,6 +1663,10 @@ def run(argv: list[str] | None = None):
     unrouted_nets = _drc_unrouted(drc)
     completion = (1.0 - len(unrouted_nets) / len(routable)) if routable else 1.0
     fully_routed = not unrouted_nets
+    # balls no through via can get out of are not judged, not unrouted
+    needs_hdi = _needs_hdi(bg2, pcb.with_suffix(".kicad_pro"), unrouted_nets)
+    hdi_nets = {h["net"] for h in needs_hdi}
+    unrouted_nets = [n for n in unrouted_nets if n not in hdi_nets]
     clean = drc["counts"]["total"] == 0
     lost = _lost_preexisting(pre, bg2)
     status = ("pass" if (fully_routed and clean and not lost)
@@ -1625,6 +1682,7 @@ def run(argv: list[str] | None = None):
             "completion": round(completion, 4),
             "routable_nets": len(routable),
             "unrouted_nets": unrouted_nets,
+            "needs_hdi": needs_hdi,
             "tracks_before": tracks_before, "tracks_after": tracks_after,
             "ses_items_added": (imported["tracks_after"]
                                 - imported["tracks_before"])
@@ -1660,6 +1718,16 @@ def run(argv: list[str] | None = None):
                                        "lost": lost}
     if layer_warns:
         payload.setdefault("warnings", []).extend(layer_warns)
+    if needs_hdi:
+        by_ref: dict[str, list] = {}
+        for h in needs_hdi:
+            by_ref.setdefault(h["ref"], []).append(h)
+        payload["not_judged"] = [
+            f"needs HDI: {ref} {len(hs)} inner ball net(s) "
+            f"({', '.join(h['net'] for h in hs)}) have no escape on this "
+            f"stack ({hs[0]['why']}); put the board on an HDI build "
+            "(stackups.yaml, microvia-in-pad) to route them"
+            for ref, hs in sorted(by_ref.items())]
     if lost:
         nv = sum(it["kind"] == "via" for it in lost)
         payload.setdefault("warnings", []).extend([

@@ -891,6 +891,49 @@ def test_escape_drop_keeps_an_enclosed_fine_balls_escape(tmp_path):
     assert [d["ball"] for d in esc(0.8, 2, 2, "c3w")] == ["C3"]
 
 
+def test_needs_hdi_takes_inner_balls_of_a_dense_field_off_unrouted(
+        tmp_path):
+    """#1539, planted fault (the 4-layer bench's U2): a 0.5 mm field
+    of 0.25 mm pads fails street, gap and channel at the 0.45/0.2 via
+    floor, on a stack with no HDI spans and paid via-in-pad, so its
+    unrouted inner balls (/S1_1 ring 1, /S2_2 ring 2) are "needs HDI",
+    not unrouted. Quiet twin: an unrouted outer-ring ball (/S0_3) of the
+    same field stays unrouted - a track can leave it on the top layer."""
+    from test_route_escape import board
+    pcb = board(tmp_path, pitch=0.5, pad=0.25, name="hd")
+    bg = geom.BoardGeom.from_file(pcb)
+    got = route_auto._needs_hdi(bg, pcb.with_suffix(".kicad_pro"),
+                                ["/S0_3", "/S1_1", "/S2_2"])
+    assert [(h["net"], h["ball"], h["ring"]) for h in got] \
+        == [("/S1_1", "B2", 1), ("/S2_2", "C3", 2)]
+    assert "gap" in got[0]["why"] and "channel" in got[0]["why"]
+
+
+def test_needs_hdi_leaves_coarse_hdi_and_via_in_pad_boards_unrouted(
+        tmp_path, monkeypatch):
+    """#1539, quiet twins: the same inner balls stay unrouted on a
+    0.8 mm field (a dog-bone fits), on 6 layers (filled via-in-pad is
+    free there) and on a board whose stack is an HDI build (microvias in
+    the pad); nothing unrouted is nothing."""
+    from test_route_escape import board
+    nets = ["/S1_1", "/S2_2"]
+
+    def hdi(**kw):
+        pcb = board(tmp_path, **kw)
+        return route_auto._needs_hdi(geom.BoardGeom.from_file(pcb),
+                                     pcb.with_suffix(".kicad_pro"), nets)
+    assert hdi(pitch=0.8, pad=0.35, name="co") == []
+    assert hdi(pitch=0.5, pad=0.25, layers=6, name="l6") == []
+    pcb = board(tmp_path, pitch=0.5, pad=0.25, name="b4")
+    bg = geom.BoardGeom.from_file(pcb)
+    assert route_auto._needs_hdi(bg, pcb.with_suffix(".kicad_pro"), []) \
+        == []
+    monkeypatch.setattr(route_auto.hdilib, "board_build",
+                        lambda bg, name=None: ("HDI-6", {"hdi": True}))
+    assert route_auto._needs_hdi(bg, pcb.with_suffix(".kicad_pro"),
+                                 nets) == []
+
+
 def test_maze_wide_rip_runs_when_a_pad_needs_up_to_six_nets():
     """#1374: the maze's last pass left U2 /B5_2 refused for the count
     (rip_over_budget 6): the maze runs once more with a budget of 6. Quiet
