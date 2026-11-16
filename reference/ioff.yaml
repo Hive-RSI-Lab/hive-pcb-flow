@@ -1,0 +1,88 @@
+# Parts whose signal pins are rated to sit at a live level while the part's
+# own supply is at 0 V, for check_backfeed.py (#394, power-domain back-feed).
+# A powered domain that drives a pin of a part whose rail can be off feeds
+# that rail through the pin's input protection diode; a part with Ioff
+# ("partial power down") circuitry blocks that path, so its pins are not
+# counted as sinks.
+#
+# parts:
+#   mpn       the part the row was read from
+#   match     regex tried against the part's MPN, then its Value, then its
+#             symbol name (case-insensitive). A family row cites the one
+#             datasheet it was read from; TI states Ioff for the whole
+#             family (LVC1G, LVC...A, AUP, AVC/LVC dual-supply, TXS, TXB).
+#   ioff_ua   µA: the most the datasheet gives a pin taking at VCC = 0 over
+#             the full temperature range (the row's cited Ioff line)
+#   source    the datasheet and table
+# cite / verified as in io_levels.yaml: `bin/hwde part_rows --verify`
+# checks each quote is on its page and each cited number is in the quote.
+# A part with no row is treated as having ordinary clamp diodes to its rail.
+# Left out on purpose: TXS0104E and TXS0108E, whose datasheets give no Ioff
+# line (only an absolute maximum for the power-off state), so their pins
+# count as sinks.
+parts:
+  - mpn: SN74LVC1G34
+    match: '^(SN)?74LVC[123]G\d'
+    verified: true   # TI SCES519O read 2026-11-15 (part_rows --verify)
+    ioff_ua: 10
+    source: TI SN74LVC1G34 datasheet, Features and 6.5 Electrical Characteristics
+    cite:
+      - {doc: sn74lvc1g34.pdf, sha256: 4b14a5427cc72b7d71c4b25352c9a6dfcd9d955e3c0bfe3b5277246a3f20975e, page: 1, table: Features, quote: 'Ioff supports live insertion, partial power down', fields: []}
+      - {doc: sn74lvc1g34.pdf, sha256: 4b14a5427cc72b7d71c4b25352c9a6dfcd9d955e3c0bfe3b5277246a3f20975e, page: 6, table: Electrical Characteristics, quote: 'Ioff VI or VO = 5.5V 0 ±10 ±10 μA', fields: [ioff_ua]}
+
+  - mpn: SN74LVC244A
+    match: '^(SN)?74LVC\d+A'
+    verified: true   # TI SCAS414A read 2026-11-15 (part_rows --verify)
+    ioff_ua: 20
+    source: TI SN74LVC244A datasheet, Features and Electrical Characteristics
+    cite:
+      - {doc: sn74lvc244a.pdf, sha256: 68bbf4a4772b3ee75012d70069a7c8929e8653d05d0225540670bddc2a67c366, page: 1, table: Features, quote: 'Ioff supports live insertion, partial-power-down', fields: []}
+      - {doc: sn74lvc244a.pdf, sha256: 68bbf4a4772b3ee75012d70069a7c8929e8653d05d0225540670bddc2a67c366, page: 7, table: Electrical Characteristics, quote: 'Ioff VI or VO = 5.5V 0 ±1 ±10 ±20 µA', fields: [ioff_ua]}
+
+  - mpn: SN74AUP1G08
+    match: '^(SN)?74AUP\d'
+    verified: true   # TI SCES502Q read 2026-11-15 (part_rows --verify)
+    ioff_ua: 0.6
+    source: TI SN74AUP1G08 datasheet, Features and Electrical Characteristics
+    cite:
+      - {doc: sn74aup1g08.pdf, sha256: 6d3ebde01544528256297fbf38fcbc9b0c09f1d28147a3b911a6aa684c962256, page: 1, table: Features, quote: 'Ioff Supports Live Insertion, Partial-Power-Down', fields: []}
+      - {doc: sn74aup1g08.pdf, sha256: 6d3ebde01544528256297fbf38fcbc9b0c09f1d28147a3b911a6aa684c962256, page: 7, table: Electrical Characteristics, quote: 'Ioff VI or VO = 0 V to 3.6 V 0 V 0.2 0.6 µA', fields: [ioff_ua]}
+
+  - mpn: SN74AVC4T245
+    match: '^(SN)?74AVC\d*T\d'
+    verified: true   # TI SCES576I read 2026-11-15 (part_rows --verify)
+    ioff_ua: 5
+    source: TI SN74AVC4T245 datasheet, Features and Electrical Characteristics
+    cite:
+      - {doc: sn74avc4t245.pdf, sha256: 6d7f0ba1f575afe1b7e05d689a4fd91b1382683cdbe6a53731ac6c2f13db062c, page: 1, table: Features, quote: 'Ioff supports partial power-down-mode operation', fields: []}
+      - {doc: sn74avc4t245.pdf, sha256: 6d7f0ba1f575afe1b7e05d689a4fd91b1382683cdbe6a53731ac6c2f13db062c, page: 9, table: Electrical Characteristics, quote: 'Ioff A or B port VI or VO = 0 to 3.6V 0V 0V to 3.6V ±0.1 ±1 ±5', fields: [ioff_ua]}
+
+  - mpn: SN74LVC2T45
+    match: '^(SN)?74LVC\d*T\d'
+    verified: true   # TI SCES516N read 2026-11-15 (part_rows --verify)
+    ioff_ua: 2
+    source: TI SN74LVC2T45 datasheet, Features and Electrical Characteristics
+    cite:
+      - {doc: sn74lvc2t45.pdf, sha256: f0dc4a7a46a5b2020117e8bec614aec33f4f15784a82ab73dc3fa5f91d5c86bc, page: 1, table: Features, quote: 'Ioff supports Partial-Power-Down mode operation', fields: []}
+      - {doc: sn74lvc2t45.pdf, sha256: f0dc4a7a46a5b2020117e8bec614aec33f4f15784a82ab73dc3fa5f91d5c86bc, page: 6, quote: 'Ioff A port VI or VO = 0 to 5.5V 0V 0 to 5.5V ±1 ±2', fields: [ioff_ua]}
+      - {doc: sn74lvc2t45.pdf, sha256: f0dc4a7a46a5b2020117e8bec614aec33f4f15784a82ab73dc3fa5f91d5c86bc, page: 6, quote: 'B port 0 to 5.5V 0V ±1 ±2', fields: [ioff_ua]}
+
+  - mpn: TXS0102
+    match: '^TXS0102'
+    verified: true   # TI SCES640L read 2026-11-15 (part_rows --verify)
+    ioff_ua: 2
+    source: TI TXS0102 datasheet, Features and Electrical Characteristics
+    cite:
+      - {doc: txs0102.pdf, sha256: 75397ef71b07af6e47b81441a502a224c59b6ac359083d71516465f0c885eaf7, page: 1, table: Features, quote: 'Ioff supports partial-power-down mode operation', fields: []}
+      - {doc: txs0102.pdf, sha256: 75397ef71b07af6e47b81441a502a224c59b6ac359083d71516465f0c885eaf7, page: 6, quote: 'Partial power down current A port 0V 0V to 5.5V ±1 ±2', fields: [ioff_ua]}
+      - {doc: txs0102.pdf, sha256: 75397ef71b07af6e47b81441a502a224c59b6ac359083d71516465f0c885eaf7, page: 6, quote: 'Partial power down current B port 0V to 3.6V 0V ±1 ±2', fields: [ioff_ua]}
+
+  - mpn: TXB0108
+    match: '^TXB01\d\d'
+    verified: true   # TI SCES643L read 2026-11-15 (part_rows --verify)
+    ioff_ua: 2
+    source: TI TXB0108 datasheet, Features and Electrical Characteristics
+    cite:
+      - {doc: txb0108.pdf, sha256: 8f8720b78129d8b4f2ba45ec53cfa16cb511185019ae24eb25253422cf650556, page: 1, table: Features, quote: 'Ioff Supports Partial-Power-Down Mode Operation', fields: []}
+      - {doc: txb0108.pdf, sha256: 8f8720b78129d8b4f2ba45ec53cfa16cb511185019ae24eb25253422cf650556, page: 6, quote: 'Ioff A port 0V 0V to 5.5V ±1 ±2', fields: [ioff_ua]}
+      - {doc: txb0108.pdf, sha256: 8f8720b78129d8b4f2ba45ec53cfa16cb511185019ae24eb25253422cf650556, page: 6, quote: 'B port 0V to 3.6V 0V ±1 ±2', fields: [ioff_ua]}

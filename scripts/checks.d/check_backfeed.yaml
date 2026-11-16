@@ -1,0 +1,11 @@
+# check_backfeed: a powered domain that drives an output, a pull-up or a
+# transistor junction into a domain that can be off, whose input clamp
+# diodes then feed its dead rail (#394). Reads the board's own <board>.net
+# beside it (or the one verify_all exports), through check_straps'
+# resolver; rail volts come from net names and the constraints' voltages.
+name: check_backfeed
+needs: []
+args: []
+optional:
+  netlist: [--netlist, "{netlist}"]
+  constraints: [--constraints, "{constraints}"]
