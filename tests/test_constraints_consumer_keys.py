@@ -89,6 +89,7 @@ _INDEX = "a list taken by index"
 DYNAMIC = {
     ("scripts/check_antenna.py", "antennas"): _REF,
     ("scripts/check_cap_load.py", "cable_pf"): _REF,
+    ("scripts/check_ldo_esr.py", "ldo_caps"): _REF,
     ("scripts/check_rail_budget.py", "rail_budget.sources"): _REF,
     ("scripts/check_rail_budget.py", "rail_budget.series"): _REF,
     ("scripts/check_rail_budget.py", "rail_budget.loads"): _REF,

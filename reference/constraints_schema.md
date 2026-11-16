@@ -503,6 +503,13 @@ Consumers per key (script -> phase):
   // (10 m of audio cable at ~100 pF/m); a board-to-board header is ~20.
   "cable_pf": {"J3": 1000, "J7": 20},
 
+  // check_ldo_esr (#356): the output capacitors of an ESR-compensated LDO
+  // (reference/ldo_output_cap.yaml) by ref, where the footprint and value
+  // don't say the dielectric or the ESR. A string is the dielectric
+  // ("tantalum", "ceramic", "electrolytic", "polymer"); an object gives
+  // dielectric and/or esr_ohm (a series resistor's or the datasheet's ESR).
+  "ldo_caps": {"C5": "tantalum", "C7": {"dielectric": "ceramic", "esr_ohm": 0.5}},
+
   // netlist_audit switched_load_droop (#1093): a capacitive load a bridge
   // or switch steps (a PDLC film, a piezo, an LCD segment), in farads. nets
   // [a, b] for a load across two bridge legs, net for one leg to ground; the
