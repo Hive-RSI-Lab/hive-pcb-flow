@@ -145,6 +145,18 @@ def _strs(n) -> list[str]:
             for x in n[1:] if isinstance(x, str)]
 
 
+def fp_field(fp, name: str, default=None):
+    """A footprint's Reference or Value: KiCad 8's (property "Reference" ..)
+    or KiCad 6's (fp_text reference ..); a property wins (#1429)."""
+    for prop in _kids(fp, "property"):
+        if len(pv := _strs(prop)) >= 2 and pv[0] == name:
+            return pv[1]
+    for txt in _kids(fp, "fp_text"):
+        if len(txt) > 2 and str(_tok(txt[1])) == name.lower():
+            return str(_tok(txt[2]))
+    return default
+
+
 def _num_of(n, *names):
     """The first number of n's first child named one of `names`, or None."""
     for name in names:
@@ -833,6 +845,9 @@ class BoardGeom:
         # "graphics" (its drawings on every layer: {"layer", "shape"})}
         self.net_ties: list[dict] = []
         self.footprints: dict[str, dict] = {}  # ref -> {"lib", "value", "props"}
+        # refs two or more footprints share (unannotated REF** copies):
+        # their pads are pooled under one ref, so a per-part check skips them
+        self.dup_refs: set[str] = set()
         self._parse_tracks(root)
         self._parse_vias(root)
         self._parse_footprints(root)
@@ -976,6 +991,14 @@ class BoardGeom:
                     value = pv[1]
                 elif len(pv) >= 2:
                     props[pv[0]] = pv[1]
+            # KiCad 6 and older keep the ref and value as (fp_text
+            # reference "U5" ..) / (fp_text value ..), not properties; read
+            # without this, every part on such a board shared ref "?" (#1429)
+            for txt in _kids(fp, "fp_text"):
+                if len(txt) > 2 and str(_tok(txt[1])) == "reference" and ref == "?":
+                    ref = str(_tok(txt[2]))
+                elif len(txt) > 2 and str(_tok(txt[1])) == "value" and value is None:
+                    value = str(_tok(txt[2]))
             lib = _strs(fp)[0] if _strs(fp) else ""
             # ref -> lib id + Value field (check_current bounds a resistor
             # branch's current from these; check_thermal knows a package by
@@ -983,6 +1006,8 @@ class BoardGeom:
             # attrs: KiCad's (attr smd dnp ...) flags; check_pdn leaves a
             # dnp cap out of a rail's reservoir
             attr = _kid(fp, "attr")
+            if ref in self.footprints:
+                self.dup_refs.add(ref)
             self.footprints[ref] = {"lib": lib, "value": value, "props": props,
                                     "at": (fx, fy), "angle": fangle,
                                     "attrs": tuple(str(_tok(x)) for x in _strs(attr))
@@ -1424,6 +1449,39 @@ class BoardGeom:
             _cleanup(fresh)
         return self._refill_empty
 
+    def stale_patches(self) -> list[dict]:
+        """The PATCH_<net> zones (zone_patch) that look left behind (#1424):
+        one that holds no via of its net (a via is held when its copper
+        meets the outline on one of the zone's layers, as route_edit's
+        #1145 check reads it), and one with a layer it fills nothing on.
+        Read the second on a fresh board only: after assert_fresh() an
+        empty zone is one KiCad's own refill leaves empty too. Each:
+        {uuid, name, net, layers, at (a point inside the outline), box
+        (patch_region: the outline's bounds for zone_patch), no_via:
+        bool, empty: [layers it fills nothing on]}; a zone with
+        neither is not listed. zone_patch never writes an empty patch, but
+        a strip it pours in corridor mode joins pads and holds no via by
+        design, so no_via alone is a hint, not proof."""
+        from shapely.geometry import Polygon
+        out = []
+        for z in self._zones:
+            if z.teardrop or not z.outline or z.name != f"PATCH_{z.net}":
+                continue
+            ring = Polygon(z.outline)
+            ring = ring if ring.is_valid else ring.buffer(0)
+            lys = [ly for ly in z.layers if ly in self._copper_set]
+            no_via = not any(ring.intersects(v.poly)
+                             for v in self.vias_of(net=z.net)
+                             if any(v.spans(ly) for ly in lys))
+            empty = [ly for ly in lys if z.fill_on(ly).is_empty]
+            if no_via or empty:
+                p = ring.representative_point()
+                out.append({"uuid": z.uuid, "name": z.name, "net": z.net,
+                            "layers": lys, "at": [p.x, p.y],
+                            "box": patch_region(z.outline),
+                            "no_via": no_via, "empty": empty})
+        return out
+
     # -------------------------------------------------- summary
     def summary(self) -> dict:
         nets = {}
@@ -1446,6 +1504,15 @@ class BoardGeom:
                            for ra in self.rule_areas],
             "net_area_mm2": nets,
         }
+
+
+def patch_region(outline) -> str:
+    """A zone outline's bounds as zone_patch --region takes them
+    ("x0,y0,x1,y1", rounded out to 0.01 mm), so the region holds it."""
+    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+    box = [math.floor(min(xs) * 100) / 100, math.floor(min(ys) * 100) / 100,
+           math.ceil(max(xs) * 100) / 100, math.ceil(max(ys) * 100) / 100]
+    return ",".join(f"{v:g}" for v in box)
 
 
 # ============================================================ layer helpers

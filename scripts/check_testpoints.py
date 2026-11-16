@@ -103,7 +103,7 @@ import check_paste  # noqa: E402
 import check_wicking  # noqa: E402
 import checklib  # noqa: E402
 import geom  # noqa: E402
-from geom import _kid, _kids, _nums, _strs, _tok  # noqa: E402
+from geom import _kid, _kids, _nums, _strs, _tok, fp_field  # noqa: E402
 
 SCRIPT = "check_testpoints"
 SOURCE = SCRIPT
@@ -140,9 +140,7 @@ def is_power(net: str) -> bool:
 # ------------------------------------------------------------ board read
 
 def _ref(fp) -> str:
-    return next((pv[1] for prop in _kids(fp, "property")
-                 if len(pv := _strs(prop)) >= 2 and pv[0] == "Reference"),
-                "?")
+    return fp_field(fp, "Reference", "?")
 
 
 def _graphic_points(fp, layer: str) -> list[tuple[float, float]]:

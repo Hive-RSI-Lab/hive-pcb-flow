@@ -86,7 +86,7 @@ import yaml
 from shapely.geometry import LineString, box
 
 import checklib
-from geom import _is_node, _kid, _kids, _nums, _strs, _tok
+from geom import _is_node, _kid, _kids, _nums, _strs, _tok, fp_field
 
 SOURCE = "matinglib"
 TABLE = Path(__file__).resolve().parents[2] / "reference" / "connector_mating.yaml"
@@ -402,7 +402,7 @@ def board_meta(pcb: Path) -> dict[str, dict]:
             s = _strs(prop)
             if len(s) >= 2:
                 props.setdefault(s[0], s[1])
-        ref = props.get("Reference")
+        ref = props.get("Reference") or fp_field(fp, "Reference")
         if not ref:
             continue
         sides = set()

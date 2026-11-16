@@ -257,6 +257,10 @@ def _shape_geom(node, kind, width, fx, fy, fangle):
 
 
 def _hidden(node) -> bool:
+    # KiCad 6 writes a bare `hide` atom at the end of an fp_text (#1429)
+    if any(isinstance(x, sexpdata.Symbol) and x.value() == "hide"
+           for x in node[1:]):
+        return True
     h = _kid(node, "hide")
     if h is not None:
         return not _nums(h) and "no" not in [_tok(x) for x in h[1:]]
@@ -350,8 +354,12 @@ def parse_silk(root) -> list[Silk]:
                 if side is None:
                     continue
                 if kind == "fp_text":
+                    # (fp_text KIND "TEXT" ...): KiCad 6 may end it with
+                    # a bare `hide`, so the text is the second atom, not
+                    # the last
+                    st = _strs(node)
                     it = _text_item(node, fx, fy, fangle, side,
-                                    _strs(node)[-1] if _strs(node) else "")
+                                    st[1] if len(st) > 1 else "")
                     if it is not None:
                         items.append(it)
                 else:

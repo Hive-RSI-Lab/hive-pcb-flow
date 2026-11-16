@@ -961,15 +961,42 @@ def _skipped(rows: list[str]) -> list[str]:
             if chr(c) not in one]
 
 
-def _ccw_turn(got: dict) -> float | None:
+def _apart(copper: list[fplib.Pad]) -> set[str]:
+    """Numbers carried by pads in two places: pads of one number that don't
+    touch (SOT-223's tab repeating pin 2 across the body), not one land
+    drawn in pieces. Such a number has no one place to turn about."""
+    by: dict[str, list[fplib.Pad]] = {}
+    for p in copper:
+        if p.number:
+            by.setdefault(p.number, []).append(p)
+    out = set()
+    for num, ps in by.items():
+        for i, a in enumerate(ps):
+            for b in ps[i + 1:]:
+                reach = (math.hypot(*a.size) + math.hypot(*b.size)) / 2
+                if math.dist(a.center, b.center) > reach:
+                    out.add(num)
+    return out
+
+
+def _ccw_turn(got: dict, apart: set[str] = frozenset()) -> float | None:
     """Sum of the turn from pad k to pad k+1 about the pads' centroid over
     the numeric pads in order: negative is counter-clockwise seen from the
-    top in KiCad's y-down frame. None with fewer than three numeric pads."""
-    order = sorted((k for k in got if k.isdigit()), key=int)
+    top in KiCad's y-down frame. Numbers in `apart` (pads in two places)
+    are left out: their mean is no pin's place. None with fewer than three
+    numeric pads left, or when they lie on one line (SOT-223's 1, 2, 3 with
+    the tab left out), which runs neither way."""
+    order = sorted((k for k in got if k.isdigit() and k not in apart), key=int)
     if len(order) < 3:
         return None
     cx = sum(got[k][0] for k in order) / len(order)
     cy = sum(got[k][1] for k in order) / len(order)
+    # twice the area the pads enclose, against the square of their spread
+    area = sum(got[a][0] * got[b][1] - got[b][0] * got[a][1]
+               for a, b in zip(order, order[1:] + order[:1]))
+    spread = max(math.hypot(got[k][0] - cx, got[k][1] - cy) for k in order)
+    if abs(area) <= 1e-3 * spread * spread:
+        return None
     tot = 0.0
     for a, b in zip(order, order[1:]):
         ax, ay = got[a][0] - cx, got[a][1] - cy
@@ -1275,7 +1302,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               "letters downwards. Here they run the other way round, so the "
               "balls were numbered from the bottom view",
               "pad_numbering", hint="bottom_view_numbering")
-    elif declared and (t := _ccw_turn(got)) is not None:
+    elif declared and (t := _ccw_turn(got, _apart(copper))) is not None:
         ccw = declared == "ccw_top"
         numbering_fact = {"from": "numbering", "fit": t < 0 if ccw else t > 0}
         if ccw and t > 0:
@@ -1293,6 +1320,11 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               "LGA-8): check the record, else the footprint is numbered the "
               "wrong way round",
               "pad_numbering", hint="numbers_differ")
+    elif declared and len(got) >= 2:
+        unplaced = (
+            f"the record says {declared}, but the numbered pads don't go "
+            "round the body (fewer than three in one place each, or all in "
+            "one line), so no direction can be read from them")
     elif len(got) >= 2:
         unplaced = (
             "the record states no pad positions (land_pattern.pads) and no "

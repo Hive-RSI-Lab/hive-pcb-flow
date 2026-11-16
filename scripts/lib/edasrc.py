@@ -635,7 +635,7 @@ def read_board(path: Path) -> Board:
             m = _LAYER.search(head)
             if m and m.group(1) == "B.Cu":
                 b.footprints_bottom += 1
-            r = re.search(r'\(property "Reference" "([^"]*)"', blk)
+            r = re.search(r'\((?:property "Reference"|fp_text reference) "?([^"\s)]*)', blk)
             ref = r.group(1) if r else ""
             b.refs.append(ref)
             if re.search(r"\(attr[^)]*\bboard_only\b", blk) or not re.search(r"\n\t\t\(pad ", blk):

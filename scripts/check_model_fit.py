@@ -89,7 +89,7 @@ sys.path.insert(0, str(HERE / "lib"))
 import checklib  # noqa: E402
 import kc  # noqa: E402
 import modelgeom  # noqa: E402
-from geom import _kid, _kids, _nums, _strs, _tok  # noqa: E402
+from geom import _kid, _kids, _nums, _strs, _tok, fp_field  # noqa: E402
 
 SCRIPT = "check_model_fit"
 SOURCE = SCRIPT
@@ -211,8 +211,7 @@ def footprints(pcb: Path):
     for every footprint with a shown model."""
     tree = sexpdata.loads(pcb.read_text(encoding="utf-8"))
     for fp in _kids(tree, "footprint"):
-        ref = next((_strs(p)[1] for p in _kids(fp, "property")
-                    if len(_strs(p)) >= 2 and _strs(p)[0] == "Reference"), "?")
+        ref = fp_field(fp, "Reference", "?")
         at = _nums(_kid(fp, "at")) if _kid(fp, "at") is not None else [0, 0]
         angle = at[2] if len(at) > 2 else 0.0
         layer = _kid(fp, "layer")
