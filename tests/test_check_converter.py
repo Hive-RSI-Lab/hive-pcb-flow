@@ -480,3 +480,103 @@ def test_vref_rows_read_for_the_not_judged_converters():
         vref, tol, src, verified = got
         assert vref == want and verified is True, mpn
         assert "sha256" in src and "p." in src, mpn
+
+
+# #1459: a converter's input read across a net tie from the rail upstream.
+def _chain(tmp_path_factory, name, up_in="+24V", tie=True, up_top="140k",
+           extra=""):
+    """U2 (LMR54406) bucks up_in to MID, 0.8 * (1 + 140 / 10) = 12 V by its
+    divider R3 / R4; NT1 ties MID to VSUP, the input of the _fb_buck U1."""
+    return _board(tmp_path_factory, name,
+                  _rpart("U1", 10, [("VSUP", "VIN"), ("/SW", "SW"),
+                                    ("GND", "GND"), ("/FB", "FB")],
+                         "LMR54406FDBVR")
+                  + _rpart("L1", 20, [("/SW", ""), ("OUT", "")], "10uH")
+                  + _rpart("R1", 30, [("OUT", ""), ("/FB", "")], "31.6k")
+                  + _rpart("R2", 40, [("/FB", ""), ("GND", "")], "10k")
+                  + _rpart("U2", 50, [(up_in, "VIN"), ("/SW2", "SW"),
+                                      ("GND", "GND"), ("/FB2", "FB")],
+                           "LMR54406FDBVR")
+                  + _rpart("L2", 60, [("/SW2", ""), ("MID", "")], "10uH")
+                  + _rpart("R3", 70, [("MID", ""), ("/FB2", "")], up_top)
+                  + _rpart("R4", 80, [("/FB2", ""), ("GND", "")], "10k")
+                  + (_rpart("NT1", 90, [("MID", ""), ("VSUP", "")])
+                     if tie else "") + extra)
+
+
+def test_input_tied_to_an_upstream_divider_planted_and_quiet(tmp_path_factory):
+    # Planted: 12 V to 3.328 V, 10 uH, 1.1 MHz: dI = 8.672 * 3.328 / (12 *
+    # 1.1e6 * 10e-6) = 0.2186 A; 0.85 - 0.1093 = 0.7407 A allowed, under 0.8.
+    bg = _chain(tmp_path_factory, "tieover")
+    viols, recs, _ = cv.judge(bg, _fb_cons(vin=None, iout=0.8), TABLE)
+    hit, = viols
+    assert hit["kind"] == "converter_overload" and hit["severity"] == "error"
+    assert hit["iout_max_a"] == pytest.approx(0.7407, abs=1e-3)
+    assert hit["voltage_basis"] == {"vin": "divider", "vout": "divider"}
+    assert ("Vin 12 V on VSUP inferred from U2's divider R3 140k / R4 10k"
+            in hit["msg"])
+    assert "carried from MID across NT1" in hit["msg"]
+    rec = next(r for r in recs if r["ic"] == "U1")
+    inf = rec["vin_inferred"]
+    assert inf["ic"] == "U2" and inf["parts"] == ["R3", "R4"]
+    assert inf["tied_from"] == "MID" and inf["ties"] == "NT1"
+    # Quiet twin: the same chain at 0.5 A out.
+    viols, recs, _ = cv.judge(bg, _fb_cons(vin=None, iout=0.5), TABLE)
+    assert viols == []
+    assert next(r for r in recs if r["ic"] == "U1")["vin_v"] == \
+        pytest.approx(12.0, abs=1e-3)
+    # Without the tie the input has no voltage, as before.
+    bg = _chain(tmp_path_factory, "tienone", tie=False)
+    viols, recs, nj = cv.judge(bg, _fb_cons(vin=None, iout=0.8), TABLE)
+    assert viols == [] and not any(r["ic"] == "U1" for r in recs)
+    assert any("VSUP has no voltage" in n for n in nj)
+
+
+def test_input_tied_to_a_name_only_rail_is_a_warning(tmp_path_factory):
+    # +12V is read from its name only, so the overload is a warning.
+    bg = _board(
+        tmp_path_factory, "tiename",
+        _rpart("U1", 10, [("VSUP", "VIN"), ("/SW", "SW"), ("GND", "GND"),
+                          ("/FB", "FB")], "LMR54406FDBVR")
+        + _rpart("L1", 20, [("/SW", ""), ("OUT", "")], "10uH")
+        + _rpart("R1", 30, [("OUT", ""), ("/FB", "")], "31.6k")
+        + _rpart("R2", 40, [("/FB", ""), ("GND", "")], "10k")
+        + _rpart("NT1", 50, [("+12V", ""), ("VSUP", "")]))
+    hit, = cv.judge(bg, _fb_cons(vin=None, iout=0.8), TABLE)[0]
+    assert hit["kind"] == "converter_overload" and hit["severity"] == "warning"
+    assert hit["voltage_basis"] == {"vin": "net name", "vout": "divider"}
+    assert ("read from the net name +12V only, carried from +12V across NT1"
+            in hit["msg"])
+    assert "it rests on VSUP read from the net name only" in hit["msg"]
+
+
+def test_tied_rails_that_disagree_are_not_judged(tmp_path_factory):
+    # NT1 ties VSUP to +12V and NT2 to +5V: two names, no voltage.
+    bg = _board(
+        tmp_path_factory, "tienames",
+        _rpart("U1", 10, [("VSUP", "VIN"), ("/SW", "SW"), ("GND", "GND"),
+                          ("/FB", "FB")], "LMR54406FDBVR")
+        + _rpart("L1", 20, [("/SW", ""), ("OUT", "")], "10uH")
+        + _rpart("R1", 30, [("OUT", ""), ("/FB", "")], "31.6k")
+        + _rpart("R2", 40, [("/FB", ""), ("GND", "")], "10k")
+        + _rpart("NT1", 50, [("+12V", ""), ("VSUP", "")])
+        + _rpart("NT2", 60, [("+5V", ""), ("VSUP", "")]))
+    volts, basis, conflicts = cv.rail_volts(bg, _fb_cons(vin=None))
+    assert "VSUP" not in volts
+    assert conflicts["VSUP"] == (
+        "VSUP is tied to nets that disagree: +12V 12 V (net name, across "
+        "NT1), +5V 5 V (net name, across NT2), so its voltage is unknown")
+    viols, recs, nj = cv.judge(bg, _fb_cons(vin=None, iout=0.8), TABLE)
+    assert viols == [] and recs == []
+    assert any("VSUP is tied to nets that disagree" in n for n in nj)
+    # MID is 12 V by U2's divider, but NT2 also ties VSUP to +5V, whose name
+    # then clashes with that divider: VSUP gets no voltage either.
+    bg = _chain(tmp_path_factory, "tieclash",
+                extra=_rpart("NT2", 100, [("+5V", ""), ("VSUP", "")]))
+    volts, basis, conflicts = cv.rail_volts(bg, _fb_cons(vin=None))
+    assert "VSUP" not in volts and volts["MID"] == pytest.approx(12.0)
+    assert conflicts["VSUP"].startswith(
+        "VSUP is tied across NT2 to +5V, whose voltage is unknown: +5V's "
+        "name says 5 V but U2's divider R3 140k / R4 10k")
+    viols, recs, nj = cv.judge(bg, _fb_cons(vin=None, iout=0.8), TABLE)
+    assert viols == [] and not any(r["ic"] == "U1" for r in recs)
