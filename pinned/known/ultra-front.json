@@ -237,6 +237,546 @@
    "kind": "dfm_slot_size_preferred",
    "verdict": "real",
    "reason": "plated slots shorter than twice their width (JLC asks for length >= 2x width); the slots in the footprint are drawn that way"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "C1"
+   ],
+   "pos": [
+    0.655,
+    30.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "C2"
+   ],
+   "pos": [
+    0.355,
+    53.4
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "C3"
+   ],
+   "pos": [
+    -1.645,
+    53.4
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "C4"
+   ],
+   "pos": [
+    -5.945,
+    53.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "C5"
+   ],
+   "pos": [
+    82.355,
+    31.6
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "C6"
+   ],
+   "pos": [
+    91.455,
+    37.9
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "C7"
+   ],
+   "pos": [
+    94.655,
+    37.9
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "D1"
+   ],
+   "pos": [
+    88.055,
+    60.4
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    4.055,
+    62.4
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    -6.645,
+    47.0
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "Q1"
+   ],
+   "pos": [
+    3.055,
+    53.1
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R1"
+   ],
+   "pos": [
+    81.855,
+    37.9
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R2"
+   ],
+   "pos": [
+    85.055,
+    37.9
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R3"
+   ],
+   "pos": [
+    88.255,
+    37.9
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R4"
+   ],
+   "pos": [
+    79.555,
+    34.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R5"
+   ],
+   "pos": [
+    79.555,
+    46.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R6"
+   ],
+   "pos": [
+    79.555,
+    58.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R7"
+   ],
+   "pos": [
+    12.055,
+    31.3
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R8"
+   ],
+   "pos": [
+    1.055,
+    40.2
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R9"
+   ],
+   "pos": [
+    82.355,
+    33.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R10"
+   ],
+   "pos": [
+    82.355,
+    29.4
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R11"
+   ],
+   "pos": [
+    -5.945,
+    56.2
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R12"
+   ],
+   "pos": [
+    3.055,
+    55.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R13"
+   ],
+   "pos": [
+    13.255,
+    58.15
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R14"
+   ],
+   "pos": [
+    91.255,
+    63.6
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R15"
+   ],
+   "pos": [
+    87.255,
+    63.6
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R16"
+   ],
+   "pos": [
+    84.055,
+    63.6
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R17"
+   ],
+   "pos": [
+    13.255,
+    61.2
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R18"
+   ],
+   "pos": [
+    13.255,
+    64.25
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "R19"
+   ],
+   "pos": [
+    0.655,
+    34.2
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "SW1"
+   ],
+   "pos": [
+    74.055,
+    34.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "SW2"
+   ],
+   "pos": [
+    74.055,
+    46.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "SW3"
+   ],
+   "pos": [
+    74.055,
+    58.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "SW4"
+   ],
+   "pos": [
+    89.055,
+    47.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "U1"
+   ],
+   "pos": [
+    6.055,
+    31.4
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_bom_sync",
+   "net": null,
+   "refs": [
+    "U2"
+   ],
+   "pos": [
+    89.055,
+    32.8
+   ],
+   "kind": "bom_lcsc_unsynced",
+   "verdict": "real",
+   "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
   }
  ]
 }
