@@ -502,14 +502,17 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
                                          breakout_region(bg, p, n))
     # the part of a mixed pair drawn as zones on a layer both nets fill:
     # judged per layer as a zone pair, its strips' uncoupled length added
-    zone_vs, zone_rows, zone_strips_ = [], {}, {}
+    zone_vs, zone_rows, zone_strips_, zone_unc_why = [], {}, {}, []
     fp, fn = zone_fills(bg, p), zone_fills(bg, n)
     if set(fp) & set(fn):
         zone_vs, zone_rows, zone_strips_ = zone_layers(bg, spec, p, n, fp, fn,
                                                        coupling_max)
-        _, _, zup, zun, _ = strips_measure(p, n, zone_strips_, coupling_max)
+        _, _, zup, zun, zwhy = strips_measure(p, n, zone_strips_,
+                                              coupling_max)
         unc_p += zup or 0.0
         unc_n += zun or 0.0
+        if zup is None or zun is None:
+            zone_unc_why = zwhy or ["a side is wider than a strip"]
 
     eps = _pair_epsilon(bg, p, n)
     skew_ps = skew * math.sqrt(eps) / C_MM_PER_PS
@@ -630,6 +633,9 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
         facts.pop("skew_mm")
         facts.pop("skew_ps")
         not_judged.append("skew: " + "; ".join(zone_why))
+    if zone_unc_why:
+        not_judged.append("uncoupled length: only the tracks' share is "
+                          "counted; " + "; ".join(zone_unc_why))
     if through_zone:
         facts["trunk_through_zone"] = through_zone
         if not sense:
@@ -1014,8 +1020,9 @@ def zone_layers(bg, spec, p, n, fp, fn, coupling_max):
 
 def strips_measure(p, n, strips, coupling_max):
     """(len_p, len_n, unc_p, unc_n, why) summed over zone_layers' strips;
-    a length is None when a strip on its net is not one width (why says
-    where)."""
+    a length, and so its uncoupled length (area over width), is None when a
+    strip on its net is not one width (why says where): a pour named like a
+    pair has no length to read (#1000)."""
     lp = ln = 0.0
     up = un = 0.0
     why = []
@@ -1027,10 +1034,12 @@ def strips_measure(p, n, strips, coupling_max):
         if ln is not None:
             ln = None if bad_n else ln + sum(L for _, L, _ in sn)
         if up is not None:
-            up = None if any(not w for _, _, w in sp) else up + strip_uncoupled(
+            up = None if bad_p or any(not w for _, _, w in sp) \
+                else up + strip_uncoupled(
                 sp, unary_union([x for x, _, _ in sn]), wn, coupling_max)
         if un is not None:
-            un = None if any(not w for _, _, w in sn) else un + strip_uncoupled(
+            un = None if bad_n or any(not w for _, _, w in sn) \
+                else un + strip_uncoupled(
                 sn, unary_union([x for x, _, _ in sp]), wp, coupling_max)
     return lp, ln, up, un, why
 
@@ -1116,7 +1125,8 @@ def zone_pair(bg, spec, p, n, fp, fn, coupling_max) -> tuple[list, dict]:
     if (lp is None or ln is None) and not sense:
         not_judged.append("skew: " + "; ".join(why))
     if up is None or un is None:
-        not_judged.append("uncoupled length: a side is wider than a strip")
+        not_judged.append("uncoupled length: " + ("; ".join(why) or
+                                                  "a side is wider than a strip"))
     if not sense:
         not_judged.append(PHASE_ZONES)
     facts = {"pair": [p, n], "kind": "sense" if sense else "diff",

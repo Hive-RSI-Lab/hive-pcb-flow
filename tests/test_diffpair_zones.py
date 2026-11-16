@@ -242,3 +242,22 @@ def test_mixed_pair_with_a_long_n_exit_is_skew(tmp_path_factory):
     assert "diffpair_open_trunk" not in _kinds(vs)
     (v,) = [v for v in vs if v["kind"] == "diffpair_skew"]
     assert v["skew_mm"] == pytest.approx(1.81, abs=0.1)
+
+
+def test_pours_named_like_a_pair_leave_uncoupled_not_judged(
+        tmp_path_factory):
+    # two supply pours that happen to be named _P/_N (a converter's LED
+    # outputs, as on a training board): area over width is no length, so
+    # neither skew nor uncoupled length is read from them
+    body = (_zone("/D_P", [(2, 1), (18, 1), (18, 5.15), (9, 5.15), (9, 3),
+                           (2, 3)])
+            + _zone("/D_N", [(2, 5.45), (18, 5.45), (18, 9), (12, 9),
+                             (12, 6.5), (2, 6.5)]))
+    bg = _board(tmp_path_factory, "zpour", body)
+    vs, facts = check_diffpair.check_pair(bg, SPEC)
+    assert "diffpair_uncoupled" not in _kinds(vs)
+    assert "diffpair_skew" not in _kinds(vs)
+    assert "uncoupled_p_mm" not in facts and "skew_mm" not in facts
+    nj = facts["not_judged"]
+    assert nj[0].startswith("skew: /D_P on F.Cu is not one width")
+    assert nj[1].startswith("uncoupled length: /D_P on F.Cu is not one width")
