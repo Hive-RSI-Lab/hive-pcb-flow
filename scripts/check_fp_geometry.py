@@ -1073,20 +1073,26 @@ def _common(a: str, b: str) -> str:
     return a[:n]
 
 
+def _covers(a: str, b: str) -> bool:
+    """a is b's start, or b's family with X standing for any one character
+    (RFM9XW covers RFM95W, LM78XX covers LM7805)."""
+    return len(a) <= len(b) and all(x == y or x == "X" for x, y in zip(a, b))
+
+
 def name_vs_part(fp: FP) -> tuple[str, str, str] | None:
     """(name token, part token, field) where the footprint's name (library
     aside) carries a part number of the part's family that is not the
     part's: the two share a prefix of four or more characters with a letter
     and a digit in it (EC11E18...), and neither is the start of the other.
-    A family name (EC11) or the name's own part (TPS7A20 for TPS7A2033PDBVR)
-    is not a disagreement."""
+    A family name (EC11, RFM9XW for RFM95W) or the name's own part (TPS7A20
+    for TPS7A2033PDBVR) is not a disagreement."""
     names = _mpn_tokens(fp.name)
     for k in _NAME_FIELDS:
         for b in _mpn_tokens(fp.fields.get(k, "")):
             for a in names:
                 c = _common(a, b)
                 if (len(c) >= 4 and re.search(r"[A-Z]", c) and re.search(r"\d", c)
-                        and not a.startswith(b) and not b.startswith(a)):
+                        and not _covers(a, b) and not _covers(b, a)):
                     return a, b, k
     return None
 

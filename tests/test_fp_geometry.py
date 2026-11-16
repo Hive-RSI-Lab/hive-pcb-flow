@@ -279,6 +279,11 @@ def test_name_vs_part_tokens():
     assert g.name_vs_part(fp("TPS7A20_SOT-23-5", MPN="TPS7A2033PDBVR")) is None
     assert g.name_vs_part(fp("SOIC-8_3.9x4.9mm_P1.27mm", Value="LM358")) is None
     assert g.name_vs_part(fp("R0805", Value="10k 1% 0805")) is None
+    # X stands for any one character in a family name (rf4's U1)
+    assert g.name_vs_part(fp("HOPERF_RFM9XW_SMD", Value="RFM95W")) is None
+    assert g.name_vs_part(fp("TO-220_LM78XX", Value="LM7805")) is None
+    assert g.name_vs_part(fp("SW-TH_EC11E1820402", Value="EC11X1834403")) == (
+        "EC11E1820402", "EC11X1834403", "Value")
 
 
 def test_name_pitch_and_pins(tmp_path, stock):
