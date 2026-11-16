@@ -164,6 +164,8 @@ PINS = '''(kicad_symbol_lib
     ("VCC", True), ("VDD", True), ("AVDD", True), ("VDDIO", True), ("VCC1", True),
     ("VDD_3V3", True), ("GND", True), ("AGND", True), ("PGND", True), ("VSS", True),
     ("vss", True), ("V+", True), ("V-", True),
+    ("USB_VDD", True), ("ADC_VDD", True), ("VDD_1V1", True),   # RP2040, #528
+    ("USB_DP", False), ("ADC_AVREF", False), ("VBUS_DET", False),
     ("SDA", False), ("VOUT", False), ("VIN", False), ("~{INT}", False), ("EP", False),
     ("1", False)])
 def test_supply_and_ground_names(name, power):
