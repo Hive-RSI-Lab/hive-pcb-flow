@@ -847,9 +847,10 @@ def test_i2c_strap_pins_sharing_the_name(tmp_path):
     opts = {"i2c_cb_pf": None, "i2c_khz": 400}
     vios, facts = [], {}
     sim_board.i2c_findings(b, rails, model, opts, vios, [], facts)
-    # one IC and no connector: a port with no peer, not judged (#1063)
+    # pulled down with no pull-up: straps, not judged (#511; before it, one
+    # IC and no connector made them ports with no peer, #1063)
     assert vios == [] and facts["i2c"] == []
-    assert sorted(n for x in facts["i2c_no_peer"] for n in x["nets"]) == \
+    assert sorted(n for x in facts["i2c_straps"] for n in x["nets"]) == \
         ["/HUB_CFG_SEL0", "/HUB_NON_REM1"]
     vios = []
     sim_board.i2c_findings(b, rails, model, {**opts, "pin_modes":
@@ -1011,6 +1012,61 @@ def test_i2c_off_board_bus_judged_with_capacitance_unknown(tmp_path):
     assert all(r["off_board"] == ["J5"] for r in facts["i2c"])
     assert any(u["what"] == "I2C bus capacitance off the board"
                and "J5" in u["why"] for u in unknowns)
+
+
+
+# --- #511: an SDA/SCL pin held low by a pull-down is a strap, not a bus ---
+
+def _hub_strap(tmp_path, extra, down="100k"):
+    """USB2514B-style: U5's SCL/SMBCLK/CFG_SEL0 on /HUB_CFG_SEL0, pulled to
+    GND through R5, plus whatever extra puts on the net."""
+    hub = ("U5", "USB2514B", "QFN-36", {
+        "1": ("+3V3", "VDD33"), "2": ("GND", "GND"),
+        "24": ("/HUB_CFG_SEL0", "SCL/SMBCLK/CFG_SEL0")})
+    rows = [hub]
+    if down:
+        rows.append(("R5", down, "R_0402_1005Metric",
+                     {"1": ("/HUB_CFG_SEL0", ""), "2": ("GND", "")}))
+    return _i2c_board(tmp_path, rows + extra)
+
+
+GPIO = ("U6", "MCU", "QFN-24", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                                "7": ("/HUB_CFG_SEL0", "PA5")})
+TP = ("TP5", "TestPoint", "TestPoint_Pad_D1.0mm",
+      {"1": ("/HUB_CFG_SEL0", "1")})
+
+
+@pytest.mark.parametrize("extra", [[GPIO], [TP], [GPIO, TP]],
+                         ids=["gpio", "testpoint", "both"])
+def test_i2c_strap_with_a_second_ic_or_test_point_is_quiet(tmp_path, extra):
+    # quiet twin: on main the GPIO (or test point) made this a "bus" and it
+    # fired i2c_pullup_missing on the hub's strap
+    vios, unknowns, facts = _hub_strap(tmp_path, extra)
+    assert [v for v in vios if v["net"] == "/HUB_CFG_SEL0"] == []
+    (x,) = facts["i2c_straps"]
+    assert x["nets"] == ["/HUB_CFG_SEL0"] and x["pulldowns"] == ["R5"]
+    (u,) = [u for u in unknowns if u["what"] == "I2C pin used as a strap"]
+    assert "R5" in u["why"] and "not judged" in u["why"]
+
+
+def test_i2c_two_sda_scl_pins_with_no_pull_up_still_fire(tmp_path):
+    # planted fault kept: a pull-down does not make a real bus a strap when
+    # two SDA/SCL pins share it and nothing pulls it up
+    peer = ("U7", "SENSOR", "DFN-8", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                                      "3": ("/HUB_CFG_SEL0", "SCL")})
+    vios, _, facts = _hub_strap(tmp_path, [peer])
+    assert [v["kind"] for v in vios if v["net"] == "/HUB_CFG_SEL0"] == \
+        ["i2c_pullup_missing"]
+    assert facts["i2c_straps"] == []
+
+
+def test_i2c_no_pull_down_and_a_gpio_still_fires(tmp_path):
+    # fault kept: with no pull-down nothing says strap, and a hub SCL shared
+    # with a GPIO and no pull-up is still judged as before
+    vios, _, facts = _hub_strap(tmp_path, [GPIO], down=None)
+    assert [v["kind"] for v in vios if v["net"] == "/HUB_CFG_SEL0"] == \
+        ["i2c_pullup_missing"]
+    assert facts["i2c_straps"] == []
 
 
 # --- #1232: cap_dc_bias warns on a rail's stated floor, not a flat 50 % ---
