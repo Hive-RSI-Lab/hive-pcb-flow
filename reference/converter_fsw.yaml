@@ -33,3 +33,27 @@ regulators:
     fsw_hz: 2100000
     source: TI SNVSAN3F p. 8, "ƒSW Switching frequency "C" Version 1.8 2.1 2.4 MHz" (DDA; RNX 2.3 max)
     verified: true
+  - match: '^TLV62569'
+    fsw_hz: 1500000
+    source: TI SLVSDG1C p. 5, "fSW Switching frequency VOUT = 2.5 V 1.5 MHz" (typical only)
+    verified: true
+  - match: '^TPS62A01'
+    fsw_hz: 2400000
+    source: TI SLUSEG9E p. 5, "fSW(FCCM) Switching frequency, FPWM operation VIN = 5 V; VOUT = 1.8 V 2400 kHz"
+    verified: true
+  - match: '^LMR54406'
+    fsw_hz: 1100000
+    source: TI SLUSEG8E p. 5, "FOSC Internal oscillator frequency 0.935 1.1 1.265 MHz"
+    verified: true
+  - match: '^SY7208C'
+    fsw_hz: 1000000
+    source: Silergy AN_SY7208C Rev. 0.9 p. 3, "Switching Frequency Fsw 0.8 1 1.2 MHz" (LCSC C178234)
+    verified: true
+  - match: '^SY8301'
+    fsw_hz: 2000000
+    source: Silergy AN_SY8301 Rev. 0.9A p. 4, "Switching Frequency fSW 1.6 2 2.4 MHz" (LCSC C2927130)
+    verified: true
+  - match: '^SY7200A'
+    fsw_hz: 1000000
+    source: Silergy SY7200A Rev. 1.0 p. 3, "Oscillator Frequency FOSC IOUT=100mA 0.8 1.0 1.2 MHz" (LCSC C107309)
+    verified: true
