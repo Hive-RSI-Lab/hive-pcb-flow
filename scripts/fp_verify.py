@@ -138,12 +138,20 @@ PAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,7}$")
 BALL = re.compile(r"^([A-Z]{1,2})(\d{1,3})$")
 
 
-# A copper dot under this on its longest side is no land (an esp32c3's
-# 0.005 mm marker numbered 49): neither a pad to count nor a size (#1379)
+# A plain copper dot under this on its longest side is no land: neither a
+# pad to count nor a size (#1379). A custom pad is another matter: its size
+# is only the anchor under its primitives (EasyEDA draws an exposed pad as
+# a 0.005 mm anchor and a polygon: an esp32c3's 49, a DFN5x6's 5, a QFN's
+# 17), so it is a land to count but has no size to judge
 SLIVER_MM = 0.05
 
 def _sliver(p) -> bool:
-    return max(p.size) < SLIVER_MM
+    return p.shape != "custom" and max(p.size) < SLIVER_MM
+
+
+def _sized(p) -> bool:
+    """A pad whose size is its land's: not a dot, not a custom anchor"""
+    return p.shape != "custom" and not _sliver(p)
 
 
 def _exposed_pads(copper: list) -> set[str]:
@@ -157,7 +165,8 @@ def _exposed_pads(copper: list) -> set[str]:
         if q.number and not _sliver(q):
             by.setdefault(q.number, []).append(q)
     areas = Counter(round(q.size[0] * q.size[1], 4)
-                    for qs in by.values() if len(qs) == 1 for q in qs)
+                    for qs in by.values() if len(qs) == 1 for q in qs
+                    if _sized(q))
     common = areas.most_common(1)[0][0] if areas else 0.0
     out = set()
     for n, ps in by.items():
@@ -169,7 +178,8 @@ def _exposed_pads(copper: list) -> set[str]:
         x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
         inside = all(x0 + 0.01 < q.center[0] < x1 - 0.01
                      and y0 + 0.01 < q.center[1] < y1 - 0.01 for q in ps)
-        big = common > 0 and any(q.size[0] * q.size[1] >= 2.5 * common
+        big = common > 0 and any(_sized(q) and
+                                 q.size[0] * q.size[1] >= 2.5 * common
                                  for q in ps)
         if inside and (len(ps) > 1 or big):
             out.add(n)
@@ -189,7 +199,7 @@ def _cover(copper: list, ep: set[str], land: dict, exp: float,
     except (KeyError, TypeError, ValueError):
         return None
     sides = Counter(round(max(q.size), 3) for q in copper
-                    if q.number not in ep and not _sliver(q))
+                    if q.number not in ep and _sized(q))
     if not sides or not measured or lr <= 0:
         return None
     lb = sides.most_common(1)[0][0]
@@ -695,7 +705,8 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
             "fp_verify", sev, pos, "F.Cu", None, refs, msg, SOURCE, kind=kind, **extra))
 
     # --- pad count. A record counts pins: an exposed pad split for paste
-    # is one pin on many pads, a copper dot is none, and many records leave
+    # is one pin on many pads, a plain copper dot is none (a custom pad's
+    # tiny anchor is one: its land is its polygon), and many records leave
     # the exposed pad out of the count. So the count matches on raw pads or
     # on distinct numbers (with no gap in 1..max), a miss by just the
     # exposed pad is info, and an error names the numbers skipped (#1379)
@@ -1087,7 +1098,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
     # (LEARNINGS 2026-07-28 [librarian][easyeda2kicad]). Sorted, so blind to
     # a pad turned a quarter: pads judged axis by axis above are left out
     rest = [p for p in copper if id(p) not in size_judged
-            and p.number not in ep and not _sliver(p)]
+            and p.number not in ep and _sized(p)]
     if land.get("pad_size_mm") and rest:
         exp = tuple(sorted(float(x) for x in land["pad_size_mm"]))
         distinct = sorted({tuple(round(v_, 3) for v_ in sorted(p.size))

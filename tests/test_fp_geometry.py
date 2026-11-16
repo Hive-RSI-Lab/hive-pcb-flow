@@ -880,6 +880,28 @@ def test_record_pad_count_reads_numbers_and_leaves_out_the_ep(tmp_path, stock):
     assert v[0]["exposed"] == ["9"] and "leaves out the exposed pad 9" in v[0]["msg"]
 
 
+# an exposed pad drawn the EasyEDA way: a 0.005 mm anchor under a polygon
+EP_CUSTOM = ('\t\t(pad "9" smd custom (at 0 0) (size 0.005 0.005) '
+             '(layers "F.Cu" "F.Paste" "F.Mask") (options (clearance outline) '
+             '(anchor rect)) (primitives (gr_poly (pts (xy -1.05 -1.5) '
+             '(xy 1.05 -1.5) (xy 1.05 1.5) (xy -1.05 1.5)) (width 0) '
+             '(fill yes))))\n')
+
+
+def test_record_custom_ep_anchor_is_a_pad_but_no_size(tmp_path, stock):
+    """#1379 quiet twin from the sweep: a custom exposed pad's 0.005 mm
+    anchor is a land (bldc's DFN5x6 pin 5, lipo's QFN pin 17), so a record
+    of 9 that counts it is quiet, and its anchor is no pad size. Planted
+    twin: the same footprint against a record of 10 is still an error"""
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8EP", pads_of(SOIC) + EP_CUSTOM,
+                                    props=PART))
+    k, judged, _, _ = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=9)))
+    assert k == [] and judged == {"record": 1}
+    k, _, _, v = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=10)))
+    assert ("U1", "fp_pad_count_vs_record", "error") in k
+    assert "fp_pad_size_vs_record" not in {x[1] for x in k}
+
+
 def test_record_pad_count_names_a_missing_pin_beside_a_split_ep(tmp_path, stock):
     """#1379 planted: pin 3 gone from an SO-8-EP. Its 11 pads, 8 numbers
     or 7 without the EP match no count, and the gap in 1..9 is named"""
