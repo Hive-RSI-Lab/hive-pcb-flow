@@ -1516,6 +1516,57 @@ def test_switch_node_screen_without_load(tmp_path_factory):
     assert "no declared load; judged at the part's rated current" in v["msg"]
 
 
+def _buck_via(width: float) -> str:
+    # _buck_out's node dropped to B.Cu through one via at x=7 and back up
+    # through one at x=11, so each layer change carries the node's current
+    return _buck_out(width).replace(
+        """  (segment (start 4 5) (end 14 5)""",
+        f"""  (segment (start 4 5) (end 7 5) (width {width}) (layer "F.Cu")
+    (net "/pwr/SWN"))
+  (via (at 7 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu")
+    (net "/pwr/SWN"))
+  (segment (start 7 5) (end 11 5) (width {width}) (layer "B.Cu")
+    (net "/pwr/SWN"))
+  (via (at 11 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu")
+    (net "/pwr/SWN"))
+  (segment (start 11 5) (end 14 5)""")
+
+
+def test_switch_node_screen_keeps_transition_vias(tmp_path_factory):
+    # digits v1 U1: the signal-width node changes layer through one via; with
+    # no load stated the screen keeps the via finding beside the track one
+    # (#1277 had dropped it to no_declared_load)
+    p = _sw_run(tmp_path_factory, "swscreenvia", _buck_via(0.25))
+    kinds = sorted({v["kind"] for v in p["violations"]})
+    assert kinds == ["insufficient_transition_vias", "undersized_track"]
+    [v] = [v for v in p["violations"]
+           if v["kind"] == "insufficient_transition_vias"
+           and abs(v["pos"][0] - 7) < 0.5]
+    assert v["severity"] == "warning" and v["from_part"] == "U1"
+    assert "no declared load; judged at the part's rated current" in v["msg"]
+    assert "no_declared_load" not in p
+
+
+def test_switch_node_screen_via_twin_small_declared_load(tmp_path_factory):
+    # quiet twin: the same node with +3V3 stated at 0.3 A needs one via
+    p = _sw_run(tmp_path_factory, "swscreenviatwin", _buck_via(0.25),
+                {"power": [{"net": "+3V3", "current_a": 0.3}]})
+    assert p["violations"] == []
+
+
+def test_digits_v1_keeps_its_transition_via():
+    # the pinned errata board itself: the score's known insufficient_
+    # transition_vias on Net-(D1-K) at U1 (16.42, 35.77)
+    pcb = REPO / "pinned" / "digits-v1" / "kicad" / "digits-pcb.kicad_pcb"
+    p = check_current.run(["--pcb", str(pcb)])[0]
+    vias = [v for v in p["violations"]
+            if v["kind"] == "insufficient_transition_vias"
+            and v["net"] == "Net-(D1-K)"]
+    assert any(abs(v["pos"][0] - 16.4243) < 0.05
+               and abs(v["pos"][1] - 35.7725) < 0.05 for v in vias)
+    assert "U1" in vias[0]["refs"]
+
+
 def test_switch_node_block_iout_is_a_declared_load(tmp_path_factory):
     blk = {"blocks": [{"block": "B3", "name": "U1 TPS563201 3.3 V",
                        "operating_point": {"iout_a": 0.3}}]}
