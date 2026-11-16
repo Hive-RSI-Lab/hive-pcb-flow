@@ -246,7 +246,7 @@ class Fanout:
         pc = pad.center
         tg = [v.at for v in self.bg.vias_of(net=net)]
         for t in self.bg.tracks_of(net=net, layer=layer):
-            tg += [t.start, t.end]
+            tg += [t.shape.coords[0], t.shape.coords[-1]]
         tg += [p.center for p in self.bg.pads_of(net=net)
                if layer in p.layers
                and not (p.ref == pad.ref and p.number == pad.number)]

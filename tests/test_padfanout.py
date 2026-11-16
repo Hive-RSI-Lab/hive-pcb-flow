@@ -432,3 +432,22 @@ def test_live_plane_balls_filled_and_drc_clean(kicad, tmp_path):
     filled = {f"{v['ref']}.{v['pad']}" for v in f["in_pad"] if v["filled"]}
     assert filled == IN_PAD
     assert _drc(kicad, pcb) == []
+
+
+def test_join_reaches_a_track_of_the_net(tmp_path, monkeypatch):
+    """The planted fault: VIN has a track 1 mm out from U1.2 on F.Cu and no
+    via spot is free, so the pad joins the track's end (join read geom's
+    tracks as if they had .start/.end and raised AttributeError). Its quiet
+    twin is test_walled_pad_has_no_spot_without_via_in_pad, where VIN has no
+    copper to join."""
+    import route_edit
+    pcb = _board(tmp_path)
+    route_edit.apply_ops(pcb, [{"op": "add_track", "start": [7.5, 10.0],
+                                "end": [6.5, 10.0], "width": 0.2,
+                                "layer": "F.Cu", "net": "VIN"}])
+    monkeypatch.setattr(padfanout.Fanout, "spot", lambda *a: None)
+    ops, rows = padfanout.Fanout(geom.BoardGeom.from_file(pcb)).fan(["U1.2"])
+    assert rows[0]["result"] == "join" and rows[0]["to"] == [7.5, 10.0]
+    (trk,) = ops
+    assert (trk["op"], trk["start"], trk["end"], trk["net"]) == \
+        ("add_track", [8.5, 10.0], [7.5, 10.0], "VIN")
