@@ -275,16 +275,15 @@ def value_listing(value: str, store: Path, table: Path | None = None,
         return rows[0], ""
     kept, why = by_footprint(rows, footprints)
     if not kept:
-        return None, (f"{len(rows)} JLC listings have exactly that MPN, in "
-                      f"{len(pkgs)} packages; {why}")
-    return kept[0], (f"{kept[0].get('package')}, of {len(pkgs)} packages "
-                     "listed, the one its footprint fits")
+        return None, (f"{len(rows)} JLC listings have exactly that MPN, under "
+                      f"{len(pkgs)} package names; {why}")
+    return kept[0], f"{kept[0].get('package')}, {why}, the one its footprint fits"
 
 
 def by_footprint(rows: list[dict], footprints: list[tuple[str, int]]
                  ) -> tuple[list[dict], str]:
     """The rows (in their order) of the one package every footprint fits,
-    else ([], why). Packages are told apart by what lib/pkgname reads from
+    with how many packages and names there were, else ([], why). Packages are told apart by what lib/pkgname reads from
     their names (SOT-23-6 and SOT-23-6L are one package), and a footprint
     fits a package when pkgname.compare finds nothing they disagree on.
     Any package name or footprint name it can't read, no footprint, none
@@ -310,7 +309,11 @@ def by_footprint(rows: list[dict], footprints: list[tuple[str, int]]
     def names(gs) -> str:
         return ", ".join(sorted({r.get("package") or "" for g in gs for r in g}))
     if len(fit) == 1:
-        return fit[0], ""
+        spell = len({r.get("package") or "" for r in rows})
+        if len(groups) == 1:
+            return fit[0], f"its one package, listed under {spell} names"
+        return fit[0], (f"of {len(groups)} packages listed"
+                        + (f" ({spell} names)" if spell != len(groups) else ""))
     if not fit:
         return [], f"its footprint fits none of them ({names(groups.values())})"
     return [], f"its footprint fits more than one ({names(fit)})"

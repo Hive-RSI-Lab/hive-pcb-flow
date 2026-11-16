@@ -429,7 +429,7 @@ def test_a_value_no_one_source_names_is_left_out(stand_ins, tmp_path,
                                            "package": "SOP-8"}])
     rep = lb.read_part("mpn:SO8X", board, out, store, reader)
     assert rep["status"] == "not one listing for its Value"
-    assert "in 2 packages" in rep["why"]
+    assert "under 2 package names" in rep["why"]
 
     entry = ("  - mpns: [SO8X]\n    brand: Maker Inc\n    package: SOIC-8\n"
              "    url: https://maker.example.com/{}.pdf\n")
@@ -482,6 +482,8 @@ def test_one_package_under_two_spellings_is_one_package(stand_ins, no_table):
                                            "package": "SOP-8"}])
     rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
     assert rep["status"] == "kept" and rep["lcsc"] == "C999008"
+    assert rep["package_from"] == ("SOIC-8, its one package, listed under 2 "
+                                   "names, the one its footprint fits")
 
 
 @pytest.mark.parametrize("rows, foots, why", [
@@ -509,7 +511,7 @@ def test_a_footprint_that_does_not_settle_the_package_leaves_it_out(
     rep = lb.read_part("mpn:SO8X", [_on(f, f"U{i}") for i, f in enumerate(foots)],
                        out, store, reader)
     assert rep["status"] == "not one listing for its Value"
-    assert "in 2 packages" in rep["why"] and why in rep["why"]
+    assert "under 2 package names" in rep["why"] and why in rep["why"]
     assert calls == [] and not (out / "ext" / "SO8X.json").exists()
 
 
