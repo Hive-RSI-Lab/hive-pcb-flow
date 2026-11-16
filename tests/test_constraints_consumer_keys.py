@@ -104,6 +104,8 @@ DYNAMIC = {
     ("scripts/check_si.py", "si.nets"): _NET,
     ("scripts/check_si.py", "si.victims"): _NET,
     ("scripts/check_surge.py", "surge.abs_max"): "keyed by REF.PAD or REF",
+    ("scripts/check_surge.py", "surge.abs_min"): "keyed by REF.PAD or REF",
+    ("scripts/check_surge.py", "surge.series"): _REF,
     ("scripts/check_surge.py", "surge.ports"): _REF,
     ("scripts/check_surge.py", "surge.clamps"): _REF,
     ("scripts/check_testpoints.py", "testpoints"):
