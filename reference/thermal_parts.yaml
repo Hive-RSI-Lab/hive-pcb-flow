@@ -33,8 +33,15 @@
 # For a no-pad buck, to judge it from a stated load (check_thermal module
 # doc): r_on_ohm [high side, low side] typical at 25 C (or one figure),
 # r_on_max: true when the figures are maxima at temperature, and
-# i_limit_a, the datasheet's maximum current limit (left out when the
-# datasheet gives no maximum). A package entry may carry its own r_on_ohm.
+# i_limit_a, the datasheet's current limit: its maximum, or with
+# i_limit_kind (typical, minimum, typical valley) a figure that is not a
+# maximum, so it can show a part over at its limit but never clear it.
+# A package entry may carry its own r_on_ohm and i_limit_a. topology: boost
+# for a step-up: its switch carries the inductor current, not the load's,
+# so it is screened only at its current limit (I^2 x the larger switch's
+# on-resistance bounds its conduction loss). no_loss_model: why the
+# datasheet gives no figure a load turns into heat (a gate driver, a
+# bipolar switch); the candidate says it.
 # source / verified / cite as in source_limits.yaml (part_rows.py --verify
 # checks each cite against its PDF; a package's cite is its theta_ja_c_w).
 #
@@ -106,6 +113,8 @@ parts:
       pkg: DDC|TSOT|SOT-?23-?THIN
       theta_ja_c_w: 106.2
       exposed_pad: false
+      i_limit_a: 3
+      i_limit_kind: typical
       cite:
       - doc: tlv62569.pdf
         sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
@@ -114,10 +123,19 @@ parts:
         quote: RθJA Junction-to-ambient thermal resistance 188.2 106.2 146.3 °C/W
         fields:
         - theta_ja_c_w
+      - doc: tlv62569.pdf
+        sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+        page: 5
+        table: Electrical Characteristics
+        quote: 'ILIM High-side FET current limit TLV62569DBV, TLV62569PDDC 3'
+        fields:
+        - i_limit_a
     - name: DBV SOT-23
       pkg: DBV|SOT-?23
       theta_ja_c_w: 188.2
       exposed_pad: false
+      i_limit_a: 3
+      i_limit_kind: typical
       cite:
       - doc: tlv62569.pdf
         sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
@@ -126,10 +144,19 @@ parts:
         quote: RθJA Junction-to-ambient thermal resistance 188.2 106.2 146.3 °C/W
         fields:
         - theta_ja_c_w
+      - doc: tlv62569.pdf
+        sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+        page: 5
+        table: Electrical Characteristics
+        quote: 'ILIM High-side FET current limit TLV62569DBV, TLV62569PDDC 3'
+        fields:
+        - i_limit_a
     - name: DRL SOT-563
       pkg: DRL|SOT-?563
       theta_ja_c_w: 146.3
       exposed_pad: false
+      i_limit_a: 2.5
+      i_limit_kind: typical
       cite:
       - doc: tlv62569.pdf
         sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
@@ -138,6 +165,13 @@ parts:
         quote: RθJA Junction-to-ambient thermal resistance 188.2 106.2 146.3 °C/W
         fields:
         - theta_ja_c_w
+      - doc: tlv62569.pdf
+        sha256: 1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4
+        page: 5
+        table: Electrical Characteristics
+        quote: 'TLV62569DRL, TLV62569PDRL 2.5'
+        fields:
+        - i_limit_a
     source: 'TI TLV62569 datasheet: 6.3 Recommended Operating Conditions, 6.4 Thermal Information'
     verified: true
     cite:
@@ -157,6 +191,8 @@ parts:
       - r_on_ohm
   - match: ^TPS62A01
     kind: switcher
+    i_limit_a: 1.8
+    i_limit_kind: typical
     tj_max_c: 125
     packages:
     - name: DRL SOT-563
@@ -209,6 +245,13 @@ parts:
       quote: TJ Operating junction temperature –40 125 °C
       fields:
       - tj_max_c
+    - doc: tps62a01.pdf
+      sha256: cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518
+      page: 5
+      table: Electrical Characteristics
+      quote: 'IHS(OC) High-side peak current limit TPS62A01 1.3 1.8 A'
+      fields:
+      - i_limit_a
   - match: ^TPS561201
     kind: switcher
     r_on_ohm: [0.14, 0.084]
@@ -295,6 +338,10 @@ parts:
       - i_limit_a
   - match: ^TLV61070
     kind: switcher
+    topology: boost
+    r_on_ohm: [0.089, 0.069]
+    i_limit_a: 2.45
+    i_limit_kind: typical valley
     tj_max_c: 125
     packages:
     - name: DBV SOT-23-6
@@ -319,6 +366,20 @@ parts:
       quote: TJ Operating junction temperature –40 125 °C
       fields:
       - tj_max_c
+    - doc: tlv61070a.pdf
+      sha256: 1486d1a8c394245eafe18e3259cd24477949f8ef4f3c91d669f66322da5555b2
+      page: 5
+      table: Electrical Characteristics
+      quote: 'High-side MOSFET on resistance VOUT = 5.0 V 89 mohm Low-side MOSFET on resistance VOUT = 5.0 V 69 mohm'
+      fields:
+      - r_on_ohm
+    - doc: tlv61070a.pdf
+      sha256: 1486d1a8c394245eafe18e3259cd24477949f8ef4f3c91d669f66322da5555b2
+      page: 5
+      table: Electrical Characteristics
+      quote: 'ILIM_SW Valley current limit VIN = 3.6 V, VOUT = 5.0 V,TJ = 25°C 2.00 2.45 A'
+      fields:
+      - i_limit_a
   - match: ^LM5158
     kind: switcher
     tj_max_c: 125
@@ -596,6 +657,10 @@ parts:
       - i_limit_a
   - match: ^LM2596
     kind: switcher
+    no_loss_model: >-
+      a nonsynchronous buck with a bipolar switch: its datasheet gives a
+      saturation voltage (VSAT), not an on-resistance, and its catch diode
+      carries the off-time current outside the part
     tj_max_c: 125
     packages:
     - name: KTT TO-263
@@ -634,6 +699,10 @@ parts:
       - tj_max_c
   - match: ^SY7208
     kind: switcher
+    topology: boost
+    r_on_ohm: 0.15
+    i_limit_a: 0.6
+    i_limit_kind: minimum
     tj_max_c: 125
     packages:
     - name: SOT23-6
@@ -658,6 +727,20 @@ parts:
       quote: Junction Temperature Range ----------------------------------------------------------------------------------------- 125°C
       fields:
       - tj_max_c
+    - doc: sy7208.pdf
+      sha256: d05f52f8e1d2b83a0557a1f8eacad02e972d17f00c5783ee4cbb3e8f3cd40cbc
+      page: 3
+      table: Electrical Characteristics
+      quote: 'Low Side Main FET Rds(on) 150 mΩ'
+      fields:
+      - r_on_ohm
+    - doc: sy7208.pdf
+      sha256: d05f52f8e1d2b83a0557a1f8eacad02e972d17f00c5783ee4cbb3e8f3cd40cbc
+      page: 3
+      table: Electrical Characteristics
+      quote: 'LIM1 600 mA'
+      fields:
+      - i_limit_a
   - match: ^SY8301
     kind: switcher
     r_on_ohm: [0.38, 0.18]
@@ -696,6 +779,9 @@ parts:
       - i_limit_a
   - match: ^SY7200
     kind: switcher
+    topology: boost
+    r_on_ohm: 0.2
+    i_limit_a: 3.5
     tj_max_c: 125
     packages:
     - name: SOT23-6
@@ -720,8 +806,26 @@ parts:
       quote: Junction Temperature Range ------------------------------------------------------------------------ -40° C to 125° C
       fields:
       - tj_max_c
+    - doc: sy7200a.pdf
+      sha256: 86fa6eccd7ef812c8ce4b05ba372384f9ba9198b5fbeacfe406756cf9a097dfe
+      page: 3
+      table: Electrical Characteristics
+      quote: 'Low Side Main FET RON RDS(ON) 140 200 230 mΩ'
+      fields:
+      - r_on_ohm
+    - doc: sy7200a.pdf
+      sha256: 86fa6eccd7ef812c8ce4b05ba372384f9ba9198b5fbeacfe406756cf9a097dfe
+      page: 3
+      table: Electrical Characteristics
+      quote: 'Main FET Current Limit ILIM 10% Duty 2 2.6 3.5 A'
+      fields:
+      - i_limit_a
   - match: ^IX44(27|28|26)
     kind: driver
+    no_loss_model: >-
+      a gate driver, not a converter: its datasheet gives output resistance
+      (ROH, ROL) into a gate, but its heat is gate charge x switching
+      frequency x VCC, and the board states neither
     tj_max_c: 150
     packages:
     - name: 8-pin DFN
