@@ -155,6 +155,14 @@ NAME_RULES = [
     (r"(^|_)(MOSI|MISO|SDO|SDI|COPI|CIPO)$", "spi"),
     (r"^USB\d?_?(D[PM]|DP|DN|D_?P|D_?N|D\+|D-)$", "usb_fs"),
     (r"^(ETH|PHY|MDI)\d?_?(TX|RX|TD|RD)[PN+-]$", "eth_mdi"),
+    # 1000BASE-T's four bidirectional pairs A-D (#510): MDI1_A_P, BI_DA+,
+    # TRD0_P, TXRX1P_A (Microchip switches), MDI0+ (Realtek), and the line
+    # side after the magnetics as a port's L1_A_P
+    (r"^((ETH|PHY)\d?_?)?MDI\d?_?([A-D]|[0-3])_?[PN+-]$", "eth_mdi"),
+    (r"^((ETH|PHY)\d?_?)?(BI_?D[A-D][PN+-]|D[A-D][+-])$", "eth_mdi"),
+    (r"^((ETH|PHY)\d?_?)?TRD\d_?[PN+-]$", "eth_mdi"),
+    (r"^TXRX\d?_?[PM]_[A-D]$", "eth_mdi"),
+    (r"^L\d_[A-D]_[PN]$", "eth_mdi"),
 ]
 
 POWER_RE = re.compile(r"^(GND|AGND|DGND|PGND|EARTH|VSS|VCC|VDD|VBUS|VIN|VBAT|"
@@ -476,12 +484,19 @@ def pair_of(net, specs) -> str | None:
     name = net
     for a, b in (("DP", "DM"), ("DP", "DN"), ("D+", "D-"), ("TXP", "TXN"),
                  ("RXP", "RXN"), ("TDP", "TDN"), ("RDP", "RDN"), ("TX+", "TX-"),
-                 ("RX+", "RX-"), ("_P", "_N")):
+                 ("RX+", "RX-"), ("_P", "_N"), ("+", "-"), ("P", "N")):
         for x, y in ((a, b), (b, a)):
             if name.upper().endswith(x):
                 cand = name[: -len(x)] + (y if name[-len(x):].isupper() else y.lower())
                 if cand in specs:
                     return cand
+    # a pair letter after the polarity: TXRX1P_A / TXRX1M_A (#510)
+    m = re.search(r"([PMpm])(_[A-Da-d])$", name)
+    if m:
+        y = {"P": "M", "M": "P", "p": "m", "m": "p"}[m.group(1)]
+        cand = name[: m.start()] + y + m.group(2)
+        if cand in specs:
+            return cand
     return None
 
 
