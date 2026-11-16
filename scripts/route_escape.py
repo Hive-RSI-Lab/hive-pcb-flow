@@ -81,14 +81,18 @@ aiee_pwr_neck, lib/necklib) is judged at its neck width there (#937), and
 --pads lays a stub that stays in the zone at the neck width. The 150+ track_dangling warnings after an escape are the kept
 stubs themselves (open until routed), not rip leftovers.
 
---toward-partner (#547, opt-in): the constraints' diff-pair and
+--toward-partner near|all|off (#547): the constraints' diff-pair and
 length_groups nets escape out of the field sides facing the nearest pad of
 the same net on another part (partner_sides; krt_launch --escape-open
 re-compiles KRT's dog-bone engine with a per-net goal). It costs gap sites:
-a closed side sends more balls to via-in-pad. On linux-computer it is worse
-than the default (U100's DDR balls are in its bottom-right corner, U200 is
-up-left: forcing 48 nets out left/up loses most of them); it pays where a
-field's balls already face their partner.
+a closed side sends more balls to via-in-pad. near (the default, with a
+constraints.json) steers a net only when its partner side is at most
+NEAR_SLACK ball rows deeper than its nearest side, so a ball by its
+partner's side leaves by it and a ball across the field still takes KRT's
+nearer edge. all (the bare flag) steers every such net: on linux-computer
+that is worse (U100's DDR balls are in its bottom-right corner, U200 is
+up-left: forcing 48 nets out left/up loses most of them), and near steers
+none of U100's. off: KRT's nearer edge for every ball.
 
 HDI builds (#477): on a board whose stack is an HDI build of stackups.yaml,
 every field escapes through lib/hdilib.py instead of KRT: a microvia in the
@@ -281,6 +285,7 @@ def field_region(bga: bgalib.Bga):
 
 SIDE_NORMALS = {"left": (-1.0, 0.0), "right": (1.0, 0.0),
                 "up": (0.0, -1.0), "down": (0.0, 1.0)}
+TOWARD_DEFAULT = "near"
 OPEN_COS = 0.38            # a side opens when the partner lies within ~67 deg of it
 
 
@@ -294,9 +299,26 @@ def open_sides(dx: float, dy: float) -> tuple[str, ...]:
                  if (nx * dx + ny * dy) / d >= OPEN_COS)
 
 
-def partner_sides(bg, bga: bgalib.Bga, nets) -> dict[str, tuple[str, ...]]:
+NEAR_SLACK = 2   # rows: "near" steers a net only this much deeper (#547)
+
+
+def side_depths(bga: bgalib.Bga, x: float, y: float) -> dict[str, int]:
+    """Ball rows from (x, y) to each field side (0: on the outer row)."""
+    x0, y0, x1, y1 = bga.bbox
+    return {s: round(d / bga.pitch) for s, d in
+            (("left", x - x0), ("right", x1 - x), ("up", y - y0),
+             ("down", y1 - y))}
+
+
+def partner_sides(bg, bga: bgalib.Bga, nets, slack: int | None = None
+                  ) -> dict[str, tuple[str, ...]]:
     """net -> the field sides facing that net's nearest pad on another part
-    (#547). Nets with no pad off this BGA are left out."""
+    (#547). Nets with no pad off this BGA are left out. With a slack (rows),
+    a side stays open only when it is at most that much deeper than the
+    ball's nearest side, and a net with no such side is not steered: forcing
+    a ball 4+ rows across the field to its partner's side costs the gap
+    sites of every ball it passes (linux-computer U100, all 49 nets 4-15
+    rows deeper; the default steers none of them there)."""
     own: dict[str, list] = {}
     for pd in bg.pads_of(ref=bga.ref):
         if pd.net in nets:
@@ -311,6 +333,10 @@ def partner_sides(bg, bga: bgalib.Bga, nets) -> dict[str, tuple[str, ...]]:
             continue
         tx, ty = min(far, key=lambda q: (q[0] - cx) ** 2 + (q[1] - cy) ** 2)
         sides = open_sides(tx - cx, ty - cy)
+        if sides and slack is not None:
+            d = side_depths(bga, cx, cy)
+            near = min(d.values())
+            sides = tuple(x for x in sides if d[x] <= near + slack)
         if sides:
             out[net] = sides
     return out
@@ -1090,10 +1116,14 @@ def run(argv: list[str] | None = None):
                     help="a pairs-only KRT pass before the rest, so pair balls "
                          "take the gap sites first (more pairs coupled, often "
                          "fewer single balls escaped)")
-    ap.add_argument("--toward-partner", action="store_true",
+    ap.add_argument("--toward-partner", nargs="?", const="all",
+                    default=TOWARD_DEFAULT, choices=["near", "all", "off"],
                     help="escape the constraints' diff-pair and length_groups "
                          "nets out of the field sides facing the part each "
-                         "one goes to (#547)")
+                         "one goes to (#547). near: only a net whose "
+                         f"partner side is at most {NEAR_SLACK} ball rows "
+                         "deeper than its nearest side; all (the bare flag):"
+                         " every such net; off: KRT's nearer edge")
     ap.add_argument("--hdi", choices=["auto", "on", "off"], default="auto",
                     help="auto (default): microvia-in-pad escape when the "
                          "board's stack is an HDI build; on: refuse a board "
@@ -1156,7 +1186,7 @@ def run(argv: list[str] | None = None):
             specs = all_specs
     else:
         all_specs = []
-    if args.toward_partner and not cons_data:
+    if args.toward_partner == "all" and not cons_data:
         raise CheckError("--toward-partner needs constraints.json (its diff "
                          "pairs and length_groups name the nets)")
     geo = zrules.board_layer_geometry(pcb)
@@ -1278,7 +1308,8 @@ def run(argv: list[str] | None = None):
     necks = necklib.board_necks(staged, bg0,
                                 rc.dru_neck_rules(dru, "track_width"))
     toward = set(toward_nets(cons_data, bg0.nets, all_specs)) \
-        if args.toward_partner else set()
+        if args.toward_partner != "off" and cons_data else set()
+    slack = NEAR_SLACK if args.toward_partner == "near" else None
     keys = ("requested", "escaped", "failed", "unescaped_nets",
             "drc_grazes", "deferred_fanout_nets")
     results = []
@@ -1302,7 +1333,8 @@ def run(argv: list[str] | None = None):
         only = allowed if held else None    # None: KRT's own net choice
         aset = set(allowed)
         first = None
-        sides = (partner_sides(bg0, b, toward & aset) if toward else {})
+        sides = (partner_sides(bg0, b, toward & aset, slack) if toward
+                 else {})
         if p["pairs"] and args.pairs_first:
             # pairs first: their balls claim the dog-bone gap sites before
             # the single balls do (a full field otherwise leaves a deep pair

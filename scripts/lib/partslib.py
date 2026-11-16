@@ -193,6 +193,12 @@ def _as_float(v: Any) -> float | None:
 
 _WWW_DATASHEET = re.compile(
     r"^https?://www\.lcsc\.com/datasheet/lcsc_datasheet_(.+\.pdf)$", re.I)
+# the older datasheet.lcsc.com/lcsc/<stem>.pdf (and /szlcsc/) form now
+# redirects to www.lcsc.com/datasheet/C<code>.pdf, the same viewer shell
+# (#1476: 6 of 9 training "datasheet refused" parts); its stem is the
+# wmsc file's name too. One path segment only, no query.
+_OLD_DATASHEET = re.compile(
+    r"^https?://datasheet\.lcsc\.com/(?:lcsc|szlcsc)/([^/?#]+\.pdf)$", re.I)
 
 
 def fix_datasheet_url(url: str) -> str:
@@ -202,9 +208,11 @@ def fix_datasheet_url(url: str) -> str:
     (HTML, curl exit 0) to any non-browser client; the same file is a real PDF
     at wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/<stem>.pdf (LEARNINGS
     2026-07-28 [parts][datasheet]: 7/7 + 18/18 recovered on first retry).
+    The older datasheet.lcsc.com/lcsc/<stem>.pdf and /szlcsc/ forms now
+    redirect to that shell too, and are rewritten the same way (#1476).
     Pure string transform, idempotent; wmsc-form and other hosts pass through.
     """
-    m = _WWW_DATASHEET.match(url or "")
+    m = _WWW_DATASHEET.match(url or "") or _OLD_DATASHEET.match(url or "")
     if m:
         return "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/" + m.group(1)
     return url or ""

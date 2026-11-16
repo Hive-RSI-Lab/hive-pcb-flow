@@ -133,6 +133,9 @@ worker ops above, so they share the atomic apply + verify:
     pads: ["REF" | "REF.PAD"], radius (0)   an end within radius of one of
                                 those pads' copper, on the pad's own net
     uuid_prefix: S | [S...]     the item's uuid starts with one of these
+    max_width / min_width: MM   tracks at or under / at or over this width
+                                (vias are never selected): rip a too-thin
+                                reroute and keep the net's vias (#853)
   A selector that matches nothing is "absent" (a no-op, like remove), so a
   re-run is idempotent. Items without a uuid (synthetic boards) can't be
   selected.
@@ -220,7 +223,9 @@ OP_FIELDS = {  # op -> (required, optional)
     "set_point": ({"uuid", "which", "to"}, set()),
 }
 SELECT_KEYS = {"net", "layer", "kind", "region", "at", "radius", "touch",
-               "pads", "uuid_prefix"}
+               "pads", "uuid_prefix", "max_width", "min_width"}
+WIDTH_KEYS = ("max_width", "min_width")   # tracks only, like layer (#853)
+WIDTH_TOL = 1e-6   # mm: a track at the bound is in (the file holds nm)
 SCOPE_KEYS = {"net", "pads", "at", "region", "uuid_prefix"}
 ECO_FIELDS = {  # selector ops, resolved by the driver into OP_FIELDS ops
     "rip": (set(), SELECT_KEYS | {"patches"}),
@@ -427,13 +432,30 @@ def _validate_selector(i: int, op: dict) -> None:
         raise CheckError(f"ops[{i}]: radius must be >= 0")
     if "radius" in op and not op.keys() & {"at", "pads"}:
         raise CheckError(f"ops[{i}]: radius goes with at or pads")
+    for k in WIDTH_KEYS:
+        if k in op and not (_num(op[k]) and not isinstance(op[k], bool)
+                            and op[k] > 0):
+            raise CheckError(f"ops[{i}]: {k} must be a positive number (mm)")
+    if "max_width" in op and "min_width" in op \
+            and op["min_width"] > op["max_width"] + WIDTH_TOL:
+        raise CheckError(f"ops[{i}]: min_width is over max_width, so "
+                         "nothing could match")
+    if op.keys() & set(WIDTH_KEYS) and (
+            op["op"] == "fill_vias" or op.get("kind") == "via"):
+        raise CheckError(f"ops[{i}]: max_width/min_width select tracks, "
+                         "never vias")
+
+
+def _track_only(op: dict) -> bool:
+    """A layer or a width bound selects tracks alone (a via has neither)."""
+    return bool(op.get("layer")) or any(k in op for k in WIDTH_KEYS)
 
 
 def select_items(bg, op: dict) -> list:
     """Tracks/vias (geom items with a uuid) an ECO selector picks, in board
     order. Pure: the venv-side twin of the hi-fi boards' rip_* scripts."""
     keep = _selector(bg, op)
-    kind = "track" if op.get("layer") else op.get("kind", "any")
+    kind = "track" if _track_only(op) else op.get("kind", "any")
     items = []
     if kind in ("track", "any"):
         items += bg.tracks_of(layer=op.get("layer"))
@@ -471,7 +493,8 @@ def _selector(bg, op: dict):
 
     nets = set(_strs(op["net"])) if "net" in op else None
     layer = op.get("layer")
-    kind = "track" if layer else op.get("kind", "any")
+    kind = "track" if _track_only(op) else op.get("kind", "any")
+    wmax, wmin = op.get("max_width"), op.get("min_width")
     prefixes = tuple(_strs(op["uuid_prefix"])) if "uuid_prefix" in op \
         else None
     region = op.get("region")
@@ -496,6 +519,9 @@ def _selector(bg, op: dict):
                 kind == "via" and not isinstance(it, geom.Via):
             return False
         if layer and getattr(it, "layer", None) != layer:
+            return False
+        if wmax is not None and not it.width <= wmax + WIDTH_TOL or \
+                wmin is not None and not it.width >= wmin - WIDTH_TOL:
             return False
         if nets is not None and it.net not in nets:
             return False

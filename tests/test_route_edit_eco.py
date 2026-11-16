@@ -96,7 +96,7 @@ def test_place_edit_validates_pad_and_dnp():
         {"op": "set_dnp", "ref": "R1", "dnp": True}]}
     assert len(place_edit.validate_ops(ok)) == 3
     for op, msg in (({"op": "set_pad", "ref": "R1", "pad": "1"},
-                     "needs net, size and/or zone_connection"),
+                     "needs one of net, size, zone_connection"),
                     ({"op": "set_pad", "ref": "R1", "pad": 1, "net": "A"},
                      "pad must be"),
                     ({"op": "set_pad", "ref": "R1", "pad": "1", "size": 0},
@@ -702,3 +702,65 @@ def test_route_edit_fill_vias_picking_nothing_warns(kicad, pd, capsys):
                                  '{"op": "fill_vias", "net": "/CC1"}'])
     assert "warning" not in payload["results"][0]
     assert "warnings" not in payload
+
+
+# ------------------------------------------------------------ width (#853)
+# rip a too-thin reroute and keep the net's vias: the selector that replaces
+# the boards' kicad/gen/ripnet_width.py stand-in (tracks <= MAX_WIDTH_MM)
+
+@pytest.mark.parametrize("op, msg", [
+    ({"op": "rip", "net": "A", "max_width": 0}, "max_width must be a pos"),
+    ({"op": "rip", "net": "A", "min_width": -0.1}, "min_width must be a pos"),
+    ({"op": "rip", "net": "A", "max_width": "0.2"}, "max_width must be"),
+    ({"op": "rip", "net": "A", "max_width": True}, "max_width must be"),
+    ({"op": "rip", "net": "A", "min_width": 0.3, "max_width": 0.2},
+     "min_width is over max_width"),
+    ({"op": "rip", "net": "A", "kind": "via", "max_width": 0.2},
+     "never vias"),
+    ({"op": "fill_vias", "net": "A", "max_width": 0.2}, "never vias"),
+])
+def test_validate_refuses_width(op, msg):
+    with pytest.raises(CheckError, match=msg):
+        _v(op)
+
+
+def test_select_max_width_takes_thin_tracks_and_keeps_vias(bg):
+    # the fault: on main a width bound is an unknown key; GND has 0.2 and
+    # 0.3 mm tracks and vias, and the bound takes the 0.2 mm tracks alone
+    thin = route_edit.select_items(bg, {"net": "GND", "max_width": 0.2})
+    want = [t for t in bg.tracks_of(net="GND") if t.width <= 0.2 + 1e-9]
+    assert thin and len(thin) == len(want)
+    assert all(isinstance(t, geom.Track) for t in thin)
+    assert len(thin) < len(bg.tracks_of(net="GND"))
+    wide = route_edit.select_items(bg, {"net": "GND", "min_width": 0.25})
+    assert {t.uuid for t in wide} | {t.uuid for t in thin} \
+        == {t.uuid for t in bg.tracks_of(net="GND")}
+    assert not {t.uuid for t in wide} & {t.uuid for t in thin}
+    band = route_edit.select_items(
+        bg, {"net": "VBUS", "min_width": 1.75, "max_width": 2.0})
+    assert band and {round(t.width, 3) for t in band} <= {1.75, 2.0}
+
+
+def test_select_width_quiet_twins(bg):
+    every = route_edit.select_items(bg, {"net": "GND"})
+    assert any(isinstance(t, geom.Via) for t in every)
+    assert route_edit.select_items(bg, {"net": "GND", "max_width": 0.05}) \
+        == []
+    # a bound over every width is the net's tracks, still no vias
+    allt = route_edit.select_items(bg, {"net": "GND", "max_width": 50})
+    assert len(allt) == len(bg.tracks_of(net="GND"))
+
+
+def test_route_edit_rip_max_width_apply(kicad, pd):
+    before = geom.BoardGeom.from_file(pd)
+    thin = [t for t in before.tracks_of(net="GND") if t.width <= 0.2 + 1e-9]
+    keep = len(before.tracks_of(net="GND")) - len(thin)
+    payload, _ = route_edit.run([
+        "--pcb", str(pd),
+        "--op", '{"op": "rip", "net": "GND", "max_width": 0.2}'])
+    (rip,) = payload["results"]
+    assert rip["status"] == "removed" and rip["count"] == len(thin)
+    after = geom.BoardGeom.from_file(pd)
+    assert len(after.tracks_of(net="GND")) == keep > 0
+    assert all(t.width > 0.2 for t in after.tracks_of(net="GND"))
+    assert len(after.vias_of(net="GND")) == len(before.vias_of(net="GND"))

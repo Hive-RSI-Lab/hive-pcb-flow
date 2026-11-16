@@ -280,6 +280,39 @@ def check_url(url: str, domains: dict | None = None) -> dict:
     return out
 
 
+def hop_refusal(hops: list[str], domains: dict | None = None) -> str | None:
+    """Why a redirect chain is refused, or None when every hop may be read
+    (#1476). Each hop must pass check_url, with one exception: an http hop
+    that is only a step to https, so that LCSC's datasheet links, which
+    pass through http, can be read. The exception holds only when the hop is
+    not the last, its https form passes check_url, and the next hop is
+    either (a) the same URL with only the scheme upgraded, or (b) from an
+    lcsc.com host, an https URL on a vendor (maker) host on the list. Any
+    other http hop is refused as before."""
+    domains = domains or load_domains()
+    for i, hop in enumerate(hops):
+        hk = check_url(hop, domains)
+        if hk["ok"]:
+            continue
+        why = f"redirect to {hop} refused: {hk['reason']}"
+        parts = urlsplit(hop.strip())
+        if parts.scheme.lower() != "http" or i == len(hops) - 1:
+            return why
+        up = check_url(parts._replace(scheme="https").geturl(), domains)
+        if not up["ok"]:
+            return why
+        nxt = urlsplit(hops[i + 1].strip())
+        same = (nxt.scheme.lower() == "https"
+                and (nxt.netloc.lower(), nxt.path, nxt.query)
+                == (parts.netloc.lower(), parts.path, parts.query))
+        nk = check_url(hops[i + 1], domains)
+        to_maker = (_host_matches(up["host"], "lcsc.com") and nk["ok"]
+                    and nk["entry"]["kind"] == "vendor")
+        if not (same or to_maker):
+            return why
+    return None
+
+
 def effective_tier(declared: str, forced: str | None) -> str:
     if declared not in TIER_RANK:
         raise ValueError(f"unknown tier {declared!r} (one of {', '.join(TIERS)})")

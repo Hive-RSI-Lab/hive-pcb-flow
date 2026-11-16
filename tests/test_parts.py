@@ -1418,6 +1418,18 @@ def test_partslib_rewrites_www_datasheet_urls():
     assert partslib.fix_datasheet_url(_WMSC_URL) == _WMSC_URL      # idempotent
     assert partslib.fix_datasheet_url("https://x.com/a.pdf") == "https://x.com/a.pdf"
     assert partslib.fix_datasheet_url("") == ""
+    # #1476: the older datasheet.lcsc.com forms, which redirect to the shell
+    stem = "1912111437_STMicroelectronics-LPS25HBTR_C87898.pdf"
+    wmsc = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/" + stem
+    for old in ("https://datasheet.lcsc.com/szlcsc/", "https://datasheet.lcsc.com/lcsc/",
+                "http://datasheet.lcsc.com/lcsc/"):
+        assert partslib.fix_datasheet_url(old + stem) == wmsc
+    # planted faults: the stub's own target, a deeper path, a query, another host
+    for keep in ("https://datasheet.lcsc.com/datasheet/pdf/b576f6.pdf?productCode=C87898",
+                 "https://datasheet.lcsc.com/lcsc/x/" + stem,
+                 "https://datasheet.lcsc.com/lcsc/" + stem + "?a=1",
+                 "https://datasheet.lcsc.com.evil.example/lcsc/" + stem):
+        assert partslib.fix_datasheet_url(keep) == keep
     # applied inside normalize so no agent ever sees the unfetchable form
     row = partslib.normalize({"lcsc": "C142961", "datasheet": _WWW_URL})
     assert row["datasheet"] == _WMSC_URL
@@ -1756,8 +1768,9 @@ def test_lib_pin_types_dry_run_and_stale_extract(tmp_path, capsys):
 def _imported_sch(tmp_path: Path, io: str = "bidirectional",
                   gnd: str = "power_in", flag: str = "power_out") -> Path:
     """A schematic as eda_io import-sch leaves an Eagle board (#528): its
-    lib_symbols name symbols "LIB:SYM", the IC's pins all typed from Eagle's
-    `io`, and a GND symbol and a PWR_FLAG carrying KiCad's power flag."""
+    lib_symbols name symbols "LIB:SYM" (LIB as KiCad's importer names it,
+    "<stem>-eagle-import"), the IC's pins all typed from Eagle's `io`, and a
+    GND symbol and a PWR_FLAG carrying KiCad's power flag."""
     ic = "\n".join([_pin("1", "VDDIO", io), _pin("2", "USB_VDD", io),
                     _pin("3", "ADC_VDD", io), _pin("4", "VDD_1V1", io),
                     _pin("5", "GND", io), _pin("6", "GPIO0", io),
@@ -1766,7 +1779,7 @@ def _imported_sch(tmp_path: Path, io: str = "bidirectional",
     sch.write_text(
         '(kicad_sch (version 20231120) (generator eda_io)\n'
         ' (lib_symbols\n'
-        '  (symbol "pro-micro:RP2040" (property "Reference" "U" (at 0 0 0))\n'
+        '  (symbol "pro-micro-eagle-import:RP2040" (property "Reference" "U" (at 0 0 0))\n'
         '    (property "Value" "RP2040 (\\"B2\\")" (at 0 0 0))\n'
         '    (property "Description" "(pin number consists of a letter)" (at 0 0 0))\n'
         '    (symbol "RP2040_1_1"\n' + ic + '))\n'
@@ -1774,7 +1787,7 @@ def _imported_sch(tmp_path: Path, io: str = "bidirectional",
         '    (symbol "GND_0_1"\n' + _pin("1", "GND", gnd) + '))\n'
         '  (symbol "power:PWR_FLAG" (power) (property "Reference" "#FLG" (at 0 0 0))\n'
         '    (symbol "PWR_FLAG_0_1"\n' + _pin("1", "pwr", flag) + ')))\n'
-        ' (symbol (lib_id "pro-micro:RP2040") (at 50 50 0)\n'
+        ' (symbol (lib_id "pro-micro-eagle-import:RP2040") (at 50 50 0)\n'
         '  (property "Reference" "U1" (at 0 0 0))\n'
         '  (pin "1" (uuid "a")) (pin "6" (uuid "b"))))\n', encoding="utf-8")
     return sch
@@ -1796,7 +1809,7 @@ def test_lib_pin_types_on_an_imported_schematic(tmp_path, capsys):
     # typed power_out is a library slip and becomes power_in
     assert _sch_types(sch) == ["power_in"] * 5 + [
         "passive", "power_out", "power_in", "power_in", "power_out"]
-    assert {c["symbol"] for c in payload["changes"]} == {"pro-micro:RP2040"}
+    assert {c["symbol"] for c in payload["changes"]} == {"pro-micro-eagle-import:RP2040"}
     assert sch.read_text(encoding="utf-8").split("(symbol (lib_id")[1] == tail
     assert "(pin number consists" in sch.read_text(encoding="utf-8")
 
@@ -1810,6 +1823,104 @@ def test_lib_pin_types_leaves_a_typed_schematic_alone(tmp_path, capsys):
                              capsys, name="again")
     assert code == 0 and payload["changed"] == 0
     assert sch.read_text(encoding="utf-8") == before
+
+
+def _two_symbol_sch(tmp_path: Path, first: str, first_pins: str,
+                    second: str = "", second_pins: str = "",
+                    footprint: str = "") -> Path:
+    """A schematic whose lib_symbols hold one or two Reference-U symbols."""
+    def sym(name: str, pins: str) -> str:
+        unit = name.split(":")[-1]
+        return (f'  (symbol "{name}" (property "Reference" "U" (at 0 0 0))\n'
+                f'    (property "Footprint" "{footprint}" (at 0 0 0))\n'
+                f'    (symbol "{unit}_1_1"\n{pins}))\n')
+    body = sym(first, first_pins) + (sym(second, second_pins) if second else "")
+    sch = tmp_path / "board.kicad_sch"
+    sch.write_text('(kicad_sch (version 20231120) (generator eeschema)\n'
+                   ' (lib_symbols\n' + body + ' ))\n', encoding="utf-8")
+    return sch
+
+
+def _hidden(pin: str, style: str = "(hide yes)") -> str:
+    return pin.replace("(length 2.54)", f"(length 2.54) {style}")
+
+
+def test_lib_pin_types_keeps_a_kicad_drawn_schematic(tmp_path, capsys):
+    # planted (#1494, bedlift): a symbol drawn in KiCad keeps its types; main
+    # made the MCU's bidirectional SPAN_SCS passive and pin_state fired. The
+    # imported symbol beside it is still retyped (quiet twin of the gate).
+    mcu = "\n".join([_pin("1", "SPAN_SCS", "bidirectional"),
+                     _pin("2", "VDD", "power_in"), _pin("3", "PA0", "input")])
+    imp = "\n".join([_pin("1", "SCS", "bidirectional"),
+                     _pin("2", "VDD", "bidirectional")])
+    sch = _two_symbol_sch(tmp_path, "MCU_ST_STM32F0:STM32F030F4Px", mcu,
+                          "board-eagle-import:ATTINY", imp)
+    code, payload = run_main(lib_pin_types, ["--lib", str(sch)], tmp_path, capsys)
+    assert code == 0 and payload["kept_kicad_drawn"] == 1
+    assert _sch_types(sch) == ["bidirectional", "power_in", "input",
+                               "passive", "power_in"]
+    assert {c["symbol"] for c in payload["changes"]} == {"board-eagle-import:ATTINY"}
+
+
+def test_lib_pin_types_imported_name_is_read_from_the_file():
+    assert lib_pin_types.imported("x-eagle-import:R")
+    assert lib_pin_types.imported("SparkFun_ProMicro-RP2040-altium-import:U")
+    # a KiCad library, or a library merely named "import", is not imported
+    assert not lib_pin_types.imported("Device:R")
+    assert not lib_pin_types.imported("import:R")
+    assert not lib_pin_types.imported("my-import-lib:R")
+
+
+def test_lib_pin_types_hidden_supply_not_judged(tmp_path, capsys):
+    # planted (#1494, glasgow rev_b): a hidden VCC made power_in is joined by
+    # KiCad into a net named VCC; it keeps its type. Twin: the same pin shown
+    # becomes power_in. Both hide spellings, and a hidden NAME text (inside
+    # the name's effects) does not hide the pin.
+    pins = "\n".join([
+        _hidden(_pin("1", "VCC", "bidirectional")),
+        _hidden(_pin("2", "VDD", "bidirectional"), "hide"),
+        _pin("3", "VCC", "bidirectional"),
+        _pin("4", "VDDIO", "bidirectional").replace(
+            "(size 1.27 1.27)))", "(size 1.27 1.27)) (hide yes))", 1)])
+    sch = _two_symbol_sch(tmp_path, "b-eagle-import:LDO", pins)
+    code, payload = run_main(lib_pin_types, ["--lib", str(sch)], tmp_path, capsys)
+    assert code == 0
+    assert _sch_types(sch) == ["bidirectional", "bidirectional",
+                               "power_in", "power_in"]
+    assert [(u["pin"], u["why"]) for u in payload["not_judged"]] == [
+        ("1", "hidden"), ("2", "hidden")]
+
+
+def test_lib_pin_types_module_supply_not_judged(tmp_path, capsys):
+    # planted (#1494, the Pro Micro and zxdiag's Pico): a module's VCC or 3V3
+    # is its input or its regulator's output, so the name alone does not make
+    # it power_in; its ground and signals are still retyped
+    pins = "\n".join([_pin("1", "VCC", "bidirectional"),
+                      _pin("2", "GND", "bidirectional"),
+                      _pin("3", "D2", "bidirectional")])
+    sch = _two_symbol_sch(tmp_path, "pm-eagle-import:PRO_MICRO", pins)
+    code, payload = run_main(lib_pin_types, ["--lib", str(sch)], tmp_path, capsys)
+    assert code == 0
+    assert _sch_types(sch) == ["bidirectional", "power_in", "passive"]
+    assert payload["not_judged"] == [{
+        "symbol": "pm-eagle-import:PRO_MICRO", "pin": "1", "name": "VCC",
+        "type": "bidirectional", "why": "module supply"}]
+    # by footprint too: a Pico footprint on a plainly named symbol
+    sch2 = _two_symbol_sch(tmp_path, "pm-eagle-import:U1", pins,
+                           footprint="pm-eagle-import:RPI_PICO_W")
+    run_main(lib_pin_types, ["--lib", str(sch2)], tmp_path, capsys, name="fp")
+    assert _sch_types(sch2)[0] == "bidirectional"
+
+
+def test_lib_pin_types_plain_ic_supply_still_judged(tmp_path, capsys):
+    # quiet twin: an IC that is not a module, its library named after a
+    # module's source file, still gets power_in on VCC
+    pins = "\n".join([_pin("1", "VCC", "bidirectional"),
+                      _pin("2", "NANOAMP", "bidirectional")])
+    sch = _two_symbol_sch(tmp_path, "pro-micro-eagle-import:ATMEGA32U4", pins)
+    code, payload = run_main(lib_pin_types, ["--lib", str(sch)], tmp_path, capsys)
+    assert code == 0 and payload["not_judged"] == []
+    assert _sch_types(sch) == ["power_in", "passive"]
 
 
 def test_lib_pin_types_keeps_power_symbols_in_a_library(tmp_path, capsys):

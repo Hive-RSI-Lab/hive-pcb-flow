@@ -25,7 +25,17 @@ leaves the original board byte-identical. Re-applying the same op list is
 idempotent (ops are absolute). exit 0 applied+verified / 2 error (rolled back).
 
 set_pad re-nets ("" clears), resizes and/or sets the zone connection
-(solid|thermal|none|inherit) of a footprint's pads; set_dnp sets
+(solid|thermal|none|inherit) of a footprint's pads, and re-holes them:
+`drill` (mm, or [w, h] - w != h is an oval slot), `shape` (circle|oval|rect|
+roundrect) and `at` (one pad's [x, y] in the part's frame, as the board file
+stores it) - a slot or a grown hole on a placed part (#855). After a hole or
+copper change it refuses a plated pad whose hole breaks out of its copper or
+whose ring falls below the .kicad_pro min_via_annular_width, and a hole
+closer to another hole than min_hole_to_hole (0.25 mm absent) - only a pair
+that is new or got closer: a part's own close holes stay as they were. It
+refuses an edited pad whose copper newly touches another net's (pad, track,
+via): a short. Clearance short of that is DRC's - run drc_routed after.
+pad "" names a part's unnumbered pads (NPTH snap-in legs). set_dnp sets
 its do-not-populate flag. --op JSON (repeatable) takes ops inline instead of
 --ops FILE. --refill refills zones on the staged copy before the swap (with
 the board's .kicad_pro/.kicad_dru beside it), as route_edit --refill does.
@@ -114,7 +124,11 @@ OP_FIELDS = {  # op -> (required, optional)
     # zone_connection: solid|thermal|none|inherit per pad (the boards'
     # pad_zone_full / j1_shell_solid scripts: a USB-C power pin or a
     # connector shell joined to its plane without thermal spokes)
-    "set_pad": ({"ref", "pad"}, {"net", "size", "zone_connection"}),
+    # drill / shape / at (#855, was lite-main's eco_rca.py): an RCA jack's
+    # round pins made plated slots, its snap-in leg holes grown, on the
+    # routed board - checked for annular ring and hole-to-hole after
+    "set_pad": ({"ref", "pad"}, {"net", "size", "zone_connection", "drill",
+                                 "shape", "at"}),
     "set_dnp": ({"ref", "dnp"}, set()),
     # re-pad a placed part (part_repair's ops): swap_fp loads a .kicad_mod
     # file in place of its footprint (x/y/deg/side: where it goes, default
@@ -145,6 +159,11 @@ SIZE_TOL = 1e-3  # mm
 # set_pad zone_connection -> the pad's saved (zone_connect N), None = absent
 # (inherit). Same numbers as KiCad 10's ZONE_CONNECTION enum.
 ZONE_CONNECT = {"inherit": None, "none": 0, "thermal": 1, "solid": 2}
+PAD_SHAPES = ("circle", "oval", "rect", "roundrect")
+SET_PAD_FIELDS = ("net", "size", "zone_connection", "drill", "shape", "at")
+# set_pad fields that move a hole or its copper: the hole check runs after
+HOLE_FIELDS = ("size", "drill", "shape", "at")
+HOLE_TOL = 0.005  # mm: shapely's polygon circles read a hair inside
 
 
 def silk_text_floor() -> tuple[float, float]:
@@ -375,11 +394,37 @@ def _validate_set_pad(i: int, op: dict) -> None:
     pad = op["pad"]
     pads = [pad] if isinstance(pad, str) else pad
     if not (isinstance(pads, list) and pads
-            and all(isinstance(p, str) and p for p in pads)):
-        raise CheckError(f"ops[{i}]: pad must be a pad number or a list")
-    if not op.keys() & {"net", "size", "zone_connection"}:
-        raise CheckError(f"ops[{i}] (set_pad): needs net, size and/or "
-                         "zone_connection")
+            and all(isinstance(p, str) for p in pads)):
+        raise CheckError(f"ops[{i}]: pad must be a pad number or a list "
+                         "(\"\" = the part's unnumbered pads)")
+    if not op.keys() & set(SET_PAD_FIELDS):
+        raise CheckError(f"ops[{i}] (set_pad): needs one of "
+                         + ", ".join(SET_PAD_FIELDS))
+    if "" in pads and "net" in op:
+        raise CheckError(f"ops[{i}] (set_pad): pad \"\" (unnumbered, "
+                         "unplated) pads carry no net")
+    if "shape" in op and op["shape"] not in PAD_SHAPES:
+        raise CheckError(f"ops[{i}]: shape must be one of "
+                         f"{list(PAD_SHAPES)}")
+    if "drill" in op:
+        dr = op["drill"]
+        dr = [dr, dr] if not isinstance(dr, list) else dr
+        if not (len(dr) == 2 and all(isinstance(v, (int, float))
+                                     and not isinstance(v, bool)
+                                     and 0 < v < 20 for v in dr)):
+            raise CheckError(f"ops[{i}]: drill must be mm or [w, h] mm "
+                             "(w != h: an oval slot), 0 < drill < 20")
+    if "at" in op:
+        at = op["at"]
+        if not (isinstance(at, list) and len(at) == 2
+                and all(isinstance(v, (int, float))
+                        and not isinstance(v, bool) and abs(v) < 200
+                        for v in at)):
+            raise CheckError(f"ops[{i}]: at must be [x, y] mm in the "
+                             "part's frame")
+        if len(pads) != 1 or pads[0] == "":
+            raise CheckError(f"ops[{i}] (set_pad): at moves one pad - "
+                             "name a single numbered pad")
     if "zone_connection" in op and op["zone_connection"] not in ZONE_CONNECT:
         raise CheckError(f"ops[{i}]: zone_connection must be one of "
                          f"{sorted(ZONE_CONNECT)}")
@@ -735,7 +780,181 @@ def _verify_parts(pcb: Path, ops: list[dict]) -> list[str]:
                         or abs(p.size[1] - sz[1]) > SIZE_TOL:
                     problems.append(f"set_pad {op['ref']}.{n}: size "
                                     f"{p.size} != {tuple(sz)}")
+        for p in _all_pads(bg):
+            if p.ref != op["ref"] or p.number not in nums:
+                continue
+            n = p.number
+            if "drill" in op:
+                dr = op["drill"] if isinstance(op["drill"], list) \
+                    else [op["drill"]] * 2
+                if p.drill is None or abs(p.drill[0] - dr[0]) > SIZE_TOL \
+                        or abs(p.drill[1] - dr[1]) > SIZE_TOL:
+                    problems.append(f"set_pad {op['ref']}.{n}: drill "
+                                    f"{p.drill} != {tuple(dr)}")
+            if "shape" in op and p.shape != op["shape"]:
+                problems.append(f"set_pad {op['ref']}.{n}: shape "
+                                f"{p.shape} != {op['shape']}")
+        if "at" in op:
+            fp = placelib.PlaceModel(pcb).footprints[op["ref"]]
+            dx, dy = geom._rot(op["at"][0], op["at"][1], -fp.angle)
+            want = (fp.pos[0] + dx, fp.pos[1] + dy)
+            p = got.get(nums[0])
+            if p is not None and math.dist(p.center, want) > POS_TOL:
+                problems.append(f"set_pad {op['ref']}.{nums[0]}: at "
+                                f"{p.center} != {want} (board)")
     return problems
+
+
+def _hole_floors(pcb: Path) -> tuple[float, float]:
+    """(min annular ring, min hole-to-hole) mm from the .kicad_pro beside
+    the board: (0, 0.25) - KiCad's stock values - where it states none."""
+    ring, h2h = 0.0, 0.25
+    pro = pcb.with_suffix(".kicad_pro")
+    try:
+        rules = json.loads(pro.read_text(encoding="utf-8"))["board"][
+            "design_settings"]["rules"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ring, h2h
+    v = rules.get("min_via_annular_width")
+    if isinstance(v, (int, float)) and v > 0:
+        ring = float(v)
+    v = rules.get("min_hole_to_hole")
+    if isinstance(v, (int, float)) and v > 0:
+        h2h = float(v)
+    return ring, h2h
+
+
+def _all_pads(bg) -> list:
+    """Every pad, a copper-less NPTH leg (geom's npth only) included, in
+    the board's own order."""
+    have = {id(p) for p in bg.pads_of()}
+    return bg.pads_of() + [p for p in bg.npth if id(p) not in have]
+
+
+def _holes(bg) -> dict:
+    """{key: drill polygon} of every pad hole and non-micro via on a board;
+    a pad is keyed (ref, number, its index among the part's pads), a via
+    ("via", x, y) - stable across a set_pad, which reorders nothing."""
+    from shapely.geometry import Point
+    out = {}
+    seen: dict[str, int] = {}
+    for p in _all_pads(bg):
+        k = seen[p.ref] = seen.get(p.ref, -1) + 1
+        if p.drill is not None:
+            out[(p.ref, p.number, k)] = p.drill_poly
+    for v in bg.vias_of():
+        if v.kind != "micro" and v.drill > 0:
+            out[("via", round(v.at[0], 4), round(v.at[1], 4))] = \
+                Point(v.at).buffer(v.drill / 2.0, quad_segs=24)
+    return out
+
+
+def _check_holes(pcb: Path, staged: Path, ops: list[dict]) -> None:
+    """After a set_pad hole or copper change (#855): refuse a plated pad
+    whose hole breaks out of its copper or whose ring is below the fab's
+    floor, an edited hole closer to another hole than min_hole_to_hole, and
+    an edited pad's copper newly touching another net's (a short; the
+    clearance short of touching is DRC's, run drc_routed after).
+    Only a breach the edit made counts - new, or worse than it was - so a
+    part's own close holes (a jack's legs) don't block an unrelated edit."""
+    edits = [op for op in ops
+             if op["op"] == "set_pad" and op.keys() & set(HOLE_FIELDS)]
+    if not edits:
+        return
+    import geom
+    ring_floor, h2h_floor = _hole_floors(pcb)
+    before, after = geom.BoardGeom.from_file(pcb), \
+        geom.BoardGeom.from_file(staged)
+    hb, ha = _holes(before), _holes(after)
+    pads_b = {(p.ref, p.number): p for p in _all_pads(before)}
+    touched = set()
+    for op in edits:
+        nums = [op["pad"]] if isinstance(op["pad"], str) else op["pad"]
+        touched |= {k for k in ha if k[0] == op["ref"] and k[1] in nums}
+    problems = []
+    for p in _all_pads(after):
+        key = (p.ref, p.number)
+        if p.drill is None or p.kind != "thru_hole" or p.custom is not None \
+                or not any(k[:2] == key for k in touched):
+            continue
+        cu, hole = p.poly, p.drill_poly
+        if not cu.buffer(HOLE_TOL).contains(hole):
+            problems.append(f"{p.ref}.{p.number}: its {p.drill[0]:g} x "
+                            f"{p.drill[1]:g} mm hole breaks out of its "
+                            f"{p.size[0]:g} x {p.size[1]:g} mm copper")
+            continue
+        ring = hole.exterior.distance(cu.exterior)
+        if ring < ring_floor - HOLE_TOL:
+            ob = pads_b.get(key)
+            was = (ob.drill_poly.exterior.distance(ob.poly.exterior)
+                   if ob is not None and ob.drill is not None
+                   and ob.poly.contains(ob.drill_poly) else None)
+            if was is None or ring < was - HOLE_TOL:
+                problems.append(f"{p.ref}.{p.number}: annular ring "
+                                f"{ring:.3f} mm < min_via_annular_width "
+                                f"{ring_floor:g} mm")
+    done = set()
+    for k in sorted(touched):
+        for o, other in ha.items():
+            if o == k or (o, k) in done:
+                continue
+            done.add((k, o))
+            d = ha[k].distance(other)
+            if d >= h2h_floor - HOLE_TOL:
+                continue
+            was = hb[k].distance(hb[o]) if k in hb and o in hb else None
+            if was is not None and d >= was - HOLE_TOL:
+                continue
+            name = lambda q: "via at (%g, %g)" % q[1:] if q[0] == "via" \
+                else f"{q[0]}.{q[1] or '(unnumbered)'}"
+            problems.append(f"{name(k)} hole is {d:.3f} mm from "
+                            f"{name(o)}'s < min_hole_to_hole {h2h_floor:g}"
+                            " mm" + (f" (was {was:.3f})" if was is not None
+                                     else ""))
+    problems += _new_shorts(before, after, touched)
+    if problems:
+        raise CheckError("set_pad hole check failed (rolled back): "
+                         + "; ".join(problems))
+
+
+def _copper_hits(bg, pad) -> set:
+    """What other-net copper a pad's copper touches: other pads, tracks and
+    vias on a layer it is on (zones are refilled around it, so not them)."""
+    net = pad.net or ""
+    hits = set()
+    for layer in pad.layers:
+        for q in bg.pads_of(layer=layer):
+            if (q.ref, q.number) != (pad.ref, pad.number) \
+                    and (q.net or "") != net and pad.poly.intersects(q.poly):
+                hits.add(f"pad {q.ref}.{q.number or '(unnumbered)'} "
+                         f"[{q.net or 'no net'}]")
+        for tr in bg.tracks_of(layer=layer):
+            if (tr.net or "") != net and pad.poly.intersects(tr.poly):
+                hits.add(f"a {layer} track [{tr.net}]")
+        for v in bg.vias_of(layer=layer):
+            if (v.net or "") != net and pad.poly.intersects(v.poly):
+                hits.add(f"via at ({v.at[0]:g}, {v.at[1]:g}) [{v.net}]")
+    return hits
+
+
+def _new_shorts(before, after, touched: set) -> list[str]:
+    """An edited pad's copper newly touching another net's - a short the
+    grown pad, its new shape or its move made (pre-existing contact, a
+    footprint's own design, stays as it was)."""
+    keys = {k[:2] for k in touched}
+    was = {(p.ref, p.number): _copper_hits(before, p)
+           for p in before.pads_of() if (p.ref, p.number) in keys}
+    out = []
+    for p in after.pads_of():
+        key = (p.ref, p.number)
+        if key not in keys or p.custom is not None:
+            continue
+        new = _copper_hits(after, p) - was.get(key, set())
+        if new:
+            out.append(f"{p.ref}.{p.number or '(unnumbered)'} "
+                       f"[{p.net or 'no net'}] copper now touches "
+                       + ", ".join(sorted(new)))
+    return out
 
 
 def _refuse_routed_renet(pcb: Path, ops: list[dict]) -> None:
@@ -1154,6 +1373,7 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
         if problems:
             raise CheckError("post-apply verify failed (rolled back): "
                              + "; ".join(problems))
+        _check_holes(pcb, staged, ops)
         if refill:  # a pad's zone connection or size changes the fill
             if str(SCRIPTS) not in sys.path:
                 sys.path.insert(0, str(SCRIPTS))

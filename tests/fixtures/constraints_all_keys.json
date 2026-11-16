@@ -181,7 +181,8 @@
     "connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
     "clamps": ["D1"], "level_kv": 8, "corridor_mm": 10, "corridor_v": 30,
     "victim_abs_max_v": {"/USB*": 6},
-    "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/USB_D*": 3.3}
+    "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/USB_D*": 3.3},
+    "bipolar_v": {"/E1_*": 3.3}
   },
   "teardrops": {
     "enabled": true, "required": null, "vias": true, "pth": true,
@@ -221,8 +222,12 @@
                      "level_kv": 0.5, "earthed": false, "eft_kv": 0.5,
                      "nets": ["+12V"]}},
     "clamps": {"D1": {"vrwm": 15, "vbr": 16.7, "vc": 24, "ipp_a": 25,
-                      "ppk_w": 600}},
-    "abs_max": {"U2.3": 30}
+                      "ppk_w": 600, "bidirectional": false, "vf_v": 3.5,
+                      "vf_a": 50}},
+    "abs_max": {"U2.3": 30},
+    "abs_min": {"U2.3": -0.3},
+    "series": {"R4": {"pulse_w": 150}, "F1": {"i2t_a2s": 0.02},
+               "L2": {"ipk_a": 30}}
   },
   "isolation": {
     "domains": {"A": {"nets": ["+12V", "GND"]},

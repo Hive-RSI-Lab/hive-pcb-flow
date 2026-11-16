@@ -6181,6 +6181,756 @@
    ],
    "verdict": "real",
    "reason": "the TCA9555 expander U3 has no RESET pin, so an ESP32 reset (EN, watchdog) leaves its outputs where firmware last set them; only a power cycle clears them (hwde #885: verify_all exports the schematic netlist, so check_straps/check_reset_drive read minuet's straps; judged against the v3 schematic)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/keypad/LED_AUTO",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    74.0,
+    55.0
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J10 is the on-board keypad header (same nets as J11/J12): internal to the fan housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/keypad/LED_RAIN",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    72.204,
+    56.796
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J10 is the on-board keypad header (same nets as J11/J12): internal to the fan housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO6",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    68.612,
+    60.388
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J10 is the on-board keypad header (same nets as J11/J12): internal to the fan housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO2",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    66.816,
+    62.184
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J10 is the on-board keypad header (same nets as J11/J12): internal to the fan housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO4",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    65.02,
+    63.98
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J10 is the on-board keypad header (same nets as J11/J12): internal to the fan housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO3",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    63.224,
+    65.776
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J10 is the on-board keypad header (same nets as J11/J12): internal to the fan housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO5",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    61.428,
+    67.572
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J10 is the on-board keypad header (same nets as J11/J12): internal to the fan housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/keypad/LED_AUTO",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    74.43,
+    97.75
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/keypad/LED_RAIN",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    73.16,
+    95.21
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO6",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    70.62,
+    95.21
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO2",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    69.35,
+    97.75
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO4",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    68.08,
+    95.21
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO3",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    66.81,
+    97.75
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO5",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    65.54,
+    95.21
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO5",
+   "refs": [
+    "J12"
+   ],
+   "pos": [
+    88.405,
+    97.75
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO3",
+   "refs": [
+    "J12"
+   ],
+   "pos": [
+    87.135,
+    95.21
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "XIO7",
+   "refs": [
+    "J12"
+   ],
+   "pos": [
+    84.595,
+    95.21
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "keypad / wall-control line at the RJ modular jack: a field cable to a wall unit, touched, and nothing clamps it"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "BOOT",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    66.69,
+    72.885
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "RESET",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    64.894,
+    71.089
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "GPIO1",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    68.486,
+    71.089
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "GPIO0",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    66.69,
+    69.293
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "GPIO6",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    70.282,
+    69.293
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "GPIO5",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    68.486,
+    67.496
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "SCL",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    72.078,
+    67.496
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "SDA",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    70.282,
+    65.7
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "UART_RXD",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    73.874,
+    65.7
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "UART_TXD",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    72.078,
+    63.904
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "LOCK",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    73.874,
+    62.108
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J4 is the 2x8 expansion socket (PPPC082): board-to-board"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/core/CC1",
+   "refs": [
+    "J6"
+   ],
+   "pos": [
+    54.25,
+    104.57
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB-C CC at the receptacle: D2 (PESD3V3S2UT) clamps only the data pair"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/core/CC2",
+   "refs": [
+    "J6"
+   ],
+   "pos": [
+    57.25,
+    104.57
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB-C CC at the receptacle: D2 (PESD3V3S2UT) clamps only the data pair"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "SDA",
+   "refs": [
+    "J7"
+   ],
+   "pos": [
+    38.4,
+    102.5
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "Qwiic JST SH port: short harness to a module inside the housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "SCL",
+   "refs": [
+    "J7"
+   ],
+   "pos": [
+    38.4,
+    103.5
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "Qwiic JST SH port: short harness to a module inside the housing"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/fan/A",
+   "refs": [
+    "J8"
+   ],
+   "pos": [
+    107.7,
+    59.96
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/fan/B",
+   "refs": [
+    "J8"
+   ],
+   "pos": [
+    107.7,
+    56.0
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/fan/C",
+   "refs": [
+    "J8"
+   ],
+   "pos": [
+    107.7,
+    52.04
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/12V_IN",
+   "refs": [
+    "D1",
+    "F1",
+    "J1"
+   ],
+   "pos": [
+    86.7,
+    46.55
+   ],
+   "kind": "esd_behind_series",
+   "verdict": "false",
+   "reason": "F1 is the 4 A input polyfuse ahead of the TVS: the standard power-input order (the fuse opens if the TVS fails short) and a PPTC passes an ESD edge without harm"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+3.3V",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    70.408,
+    58.592
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+3.3V",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    71.89,
+    97.75
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+3.3V",
+   "refs": [
+    "J12"
+   ],
+   "pos": [
+    89.675,
+    95.21
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+3.3V",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    75.67,
+    60.312
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+12V",
+   "refs": [
+    "D1",
+    "F1",
+    "J4"
+   ],
+   "pos": [
+    85.111,
+    52.71
+   ],
+   "kind": "esd_branch_first",
+   "verdict": "false",
+   "reason": "J4 is the internal expansion socket, not the power input: the 12 V there is a supply pin of a board-to-board connector"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+12V",
+   "refs": [
+    "D1",
+    "J4"
+   ],
+   "pos": [
+    94.275,
+    48.525
+   ],
+   "kind": "esd_clamp_far",
+   "verdict": "false",
+   "reason": "J4 is the internal expansion socket, not the power input: D1 is the input TVS and is not meant to clamp J4"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+3.3V",
+   "refs": [
+    "J7"
+   ],
+   "pos": [
+    38.4,
+    101.5
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "GPIO3",
+   "refs": [
+    "D1",
+    "J4"
+   ],
+   "pos": [
+    76.702,
+    55.398
+   ],
+   "kind": "esd_corridor_coupled",
+   "verdict": "false",
+   "reason": "the 'strike' stretch is J4 pin 16, an internal expansion socket: no ESD enters there"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "LOCK",
+   "refs": [
+    "D1",
+    "J4"
+   ],
+   "pos": [
+    84.96,
+    43.04
+   ],
+   "kind": "esd_corridor_coupled",
+   "verdict": "false",
+   "reason": "the 'strike' stretch is J4 pin 16, an internal expansion socket: no ESD enters there"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/core/CC1",
+   "refs": [
+    "D2",
+    "J6"
+   ],
+   "pos": [
+    54.25,
+    104.57
+   ],
+   "kind": "esd_corridor_coupled",
+   "verdict": "real",
+   "reason": "CC1 runs 0.3 mm beside the USB D- stretch from J6 to D2 and is itself unclamped: a D- strike couples ~9 V into the CC pin"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "GND",
+   "refs": [],
+   "pos": [
+    47.0,
+    100.0
+   ],
+   "kind": "dfm_copper_to_edge",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "GND",
+   "refs": [],
+   "pos": [
+    93.414,
+    33.586
+   ],
+   "kind": "dfm_copper_to_edge",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "GND",
+   "refs": [],
+   "pos": [
+    102.0,
+    45.0
+   ],
+   "kind": "dfm_copper_to_edge",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "GND",
+   "refs": [],
+   "pos": [
+    102.0,
+    100.0
+   ],
+   "kind": "dfm_copper_to_edge",
+   "verdict": "?",
+   "reason": ""
   }
  ]
 }
