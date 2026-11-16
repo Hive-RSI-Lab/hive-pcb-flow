@@ -277,7 +277,9 @@ Release refuses while any fact is failed or unknown. A listed fact passes and
 `attest` names it, with a `rating_no_datasheet_read` warning saying how to read
 the datasheet. Where a part has both, a listing that differs from the datasheet
 by over 10 % gets a `rating_listing_disagrees` warning that says which number the
-check used; `listing_survey.py <boards>` measures the rate by part class. Stock older than 72 h reads unknown, so re-run `stock_check.py --workspace <ws>` before the order.
+check used; `listing_survey.py <boards> [--corpus DIR] [--sample FILE]` measures the rate by
+part class. A connector's listed voltage is often its dielectric withstand (1000 V AC), not its
+rating (250 V), and LCSC sometimes serves another maker's PDF: read the rating row on the part's own sheet. Stock older than 72 h reads unknown, so re-run `stock_check.py --workspace <ws>` before the order.
 On a rail a unidirectional TVS holds (or a constraints `voltages` entry gives a `clamp_v`),
 `check_ratings` judges each part at the TVS's breakdown max and at its clamping voltage, not at
 the rail's nominal, and warns `rating_over_clamp` for a part the surge can break: pick a TVS whose

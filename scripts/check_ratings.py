@@ -800,6 +800,23 @@ def parse_term(term: str, scale: float):
     return (name, off)
 
 
+def _row_words(p: str) -> str:
+    """The param's wording less a note's own figures: a 'min' after a voltage
+    inside a parenthesis qualifies that voltage, not the row (IRF640's VDSS
+    row notes "(headline p.1; V(BR)DSS 200 V min at VGS=0 V ...)"). Outside
+    a parenthesis it stays the row's: "VIN 4.5 V min" is a minimum."""
+    out, depth, last = [], 0, 0
+    for m in re.finditer(r"[()]|\d(?:\.\d+)?\s*[KM]?V\s+MIN(?![A-Z])", p):
+        if m.group(0) == "(":
+            depth += 1
+        elif m.group(0) == ")":
+            depth = max(0, depth - 1)
+        elif depth:
+            out.append(p[last:m.start()] + " ")
+            last = m.end()
+    return "".join(out) + p[last:]
+
+
 def parse_bounds(value, param: str, scale: float, rec: bool = False,
                  kind: str = "voltage"):
     """(lo, hi) from an abs_max value; either side None, a float or an expr.
@@ -818,7 +835,7 @@ def parse_bounds(value, param: str, scale: float, rec: bool = False,
         m = re.search(r"\(MIN\s+(-\d+(?:\.\d+)?|0(?:\.0+)?)\)", p)
         if m:
             return float(m.group(1)) * scale, v
-        if re.search(r"(?<![A-Z])MIN(?![A-Z])", p):
+        if re.search(r"(?<![A-Z])MIN(?![A-Z])", _row_words(p)):
             return (v, None) if v <= 0 or rec else (None, None)
         if re.search(r"(?<![A-Z])MAX(?![A-Z])", p):
             return None, v
