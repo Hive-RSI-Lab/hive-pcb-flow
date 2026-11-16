@@ -758,11 +758,16 @@ Consumers per key (script -> phase):
   // none}, the budget a clamp's capacitance is judged against (else by name;
   // USB D+/D- is taken as full speed). line_v: the line's working voltage, a
   // number or {net glob: V}, judged against the clamp's VRWM (else USB 2.0
-  // VOH on D+/D-, VBUS, or the volts in a rail's name). Clamp ratings come
+  // VOH on D+/D-, VBUS, or the volts in a rail's name). bipolar_v: a line
+  // that swings both sides of ground (E1/T1, RS-232, audio), a number or
+  // {net glob: peak V}; a one-way clamp with its ground pin on ground fails
+  // when the peak passes its forward drop, a two-way one when its VRWM is
+  // below the peak (no line is taken as bipolar by name). Clamp ratings come
   // from reference/esd_clamps.yaml; a clamp with no row is not judged.
   "esd": {"connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
           "clamps": ["D1"], "level_kv": 8, "victim_abs_max_v": {"/USB*": 6},
-          "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/RS485*": 12}},
+          "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/RS485*": 12},
+          "bipolar_v": {"/E1_*": 3.3}},
 
   // check_mate_pins (MECH-05): a connector and its mate. ref and one of
   // mate_ref or mate_standard are required; mate_standard: a mate with no

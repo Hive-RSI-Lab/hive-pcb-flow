@@ -16,6 +16,11 @@
 # sheet's VRWM), vdc (a polymer clamp's rated DC voltage) or abs_max (the
 # sheet gives only an absolute maximum input voltage; the stand-off is
 # taken as that, an upper bound).
+# polarity: uni (one way: a diode from GND to the line, so the line clamps
+# at -vf below ground; rail-to-rail steering arrays are uni) or bi (blocks
+# both ways up to vrwm), as the sheet says. vf: the forward drop, GND to
+# I/O, vf_kind which figure (typ, max at IF). check_esd judges a line marked
+# bipolar (esd.bipolar_v) against these; a row without them is not judged.
 parts:
   - match: 'ESD441'
     maker: TI
@@ -23,6 +28,7 @@ parts:
     vrwm: 5.5
     vrwm_kind: vrwm
     source: TI ESD441 datasheet SLVSH26C, CL 1 pF typ (IO to GND), VRWM 5.5 V, ti.com/lit/ds/symlink/esd441.pdf
+    polarity: uni    # SLVSH26C p1: "a unidirectional ESD protection diode"; no VF on the sheet
     verified: true
   - match: 'ESD321'
     maker: TI
@@ -31,6 +37,9 @@ parts:
     vrwm: 3.6
     vrwm_kind: vrwm
     source: TI ESD321 datasheet SLVSEN8C, CL 0.9 pF typ / 1.1 pF max, VRWM 3.6 V, ti.com/lit/ds/symlink/esd321.pdf
+    polarity: uni    # SLVSEN8C p1: "a uni-directional TVS"
+    vf: 0.8
+    vf_kind: VFWD GND to I/O at 1 mA (SLVSEN8C 5.6)
     verified: true
   - match: 'ESD5Z5\.0'
     maker: onsemi
@@ -38,6 +47,9 @@ parts:
     vrwm: 5.0
     vrwm_kind: vrwm
     source: onsemi ESD5Z2.5T1/D Rev 16, ESD5Z5.0 C 80 pF typ (0 V bias, 1 MHz), VRWM 5.0 V, onsemi.com/download/data-sheet/pdf/esd5z2.5t1-d.pdf
+    polarity: uni    # ESD5Z2.5T1/D p3: Uni-Directional
+    vf: 1.1
+    vf_kind: max at IF 10 mA (ESD5Z2.5T1/D p3)
     verified: true
   # TI's own part only: TPD1E04U04DPLR-TP (the -TP suffix) is MCC's second
   # source, with its own sheet
@@ -48,6 +60,9 @@ parts:
     vrwm: 3.6
     vrwm_kind: vrwm
     source: TI TPD1E04U04 datasheet, CIO 0.5 pF typ / 0.65 pF max, VRWM 3.6 V, ti.com/lit/ds/symlink/tpd1e04u04.pdf
+    polarity: uni    # p1: "a unidirectional TVS ESD protection diode"
+    vf: 0.8
+    vf_kind: VF GND to IO at 1 mA (electrical characteristics)
     verified: true
   - match: 'IP4220CZ6'
     maker: NXP
@@ -55,6 +70,9 @@ parts:
     vrwm: 5.5
     vrwm_kind: abs_max
     source: NXP IP4220CZ6 product data sheet Rev 5 (2011), C(I/O-GND) 1.0 pF typ; VI 5.5 V max (no VRWM row), datasheet.chipsmall.com/IP4220CZ6-125/530008.pdf
+    polarity: uni    # rail-to-rail diode pairs plus a Zener; VI 0 to 5.5 V (no negative input)
+    vf: 0.7
+    vf_kind: typ (Rev 5 characteristics)
     verified: true
   - match: 'PESD0402-140'
     maker: Littelfuse
@@ -62,6 +80,7 @@ parts:
     vrwm: 14
     vrwm_kind: vdc
     source: Littelfuse PESD0402-140 datasheet, capacitance 0.25 pF typ, 14 VDC max, farnell.com/datasheets/3672977.pdf
+    polarity: bi     # features: "Bi-directional protection"
     verified: true
   - match: 'SRV05-4'
     lcsc: C85364
@@ -73,6 +92,9 @@ parts:
     vrwm: 5.0
     vrwm_kind: vrwm
     source: ProTek SRV05-4 datasheet 05150.R16 (LCSC C85364), I/O-GND 3.5 pF typ / 5.0 pF max, I/O-I/O 2.5 / 4.0 pF, VWM 5.0 V, datasheet.lcsc.com/datasheet/pdf/0b2cf2fdd2f14e66be3175076b23ed3e.pdf
+    polarity: uni    # 05150.R16 p1: steering diode/TVS array
+    vf: 1.2
+    vf_kind: max at IF 10 mA (05150.R16, 0.5 V min)
     verified: true
   - match: 'USBLC6-2'
     lcsc: C2827654

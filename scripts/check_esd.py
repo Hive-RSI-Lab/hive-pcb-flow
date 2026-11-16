@@ -61,6 +61,11 @@ Findings:
                        use
   esd_pair_mismatch    warning: the two clamps on a USB D+/D- pair differ in
                        capacitance by more than PAIR_TOL (USB 2.0 7.1.6.1)
+  esd_clamp_bipolar    error: a line marked bipolar (esd.bipolar_v) swings
+                       below ground past a one-way clamp's forward drop
+                       while the clamp's ground pin is on ground, so its
+                       ground-side diode conducts every negative half-cycle;
+                       or a two-way clamp stands off less than the peak
 
 Clamp ratings (#310) come only from reference/esd_clamps.yaml, rows read from
 each maker's datasheet (an LCSC row for a second source's own sheet first,
@@ -73,6 +78,17 @@ working voltage: constraints esd.line_v (a number or {net glob: V}), else
 USB 2.0 VOH max on D+/D-, VBUS (or pd_source.contract_v), or the volts in a
 power rail's name; CC and other signals are not judged. Every clamped line
 carries fact["rating"].
+
+A bipolar line (one that swings both sides of ground: E1/T1, RS-232, audio,
+a transformer's line side) is marked by constraints esd.bipolar_v (a number
+or {net glob: peak V}); no line is taken as bipolar by its name. The row's
+polarity (uni: one way, a diode from ground to the line, forward drop vf;
+bi: blocks both ways up to its stand-off) is the datasheet's. A one-way
+clamp with a pin on ground fails when the negative peak passes vf; one with
+no pin on ground (its GND pin left floating, as on a transformer's line
+side) clamps only line to line through its diodes and Zener, and is not
+judged. A two-way clamp fails when its VRWM is below the peak. No polarity
+or no vf in the row: not judged, and it says so.
 
 The corridor (ESD-9): every segment of the routed connector-to-clamp path is
 the aggressor. A victim piece is another net's track segment on the same or
@@ -599,6 +615,19 @@ def working_v(net: str, power: bool, iface: str | None, cfg: dict,
     return None, "no voltage in the rail's name (esd.line_v sets one)"
 
 
+def bipolar_v(net: str, cfg: dict) -> tuple[float | None, str | None]:
+    """The peak a line marked bipolar swings to on each side of ground:
+    constraints esd.bipolar_v (a number, or {net glob: peak V}), else None."""
+    bv = cfg.get("bipolar_v")
+    if isinstance(bv, (int, float)) and not isinstance(bv, bool):
+        return float(bv), "esd.bipolar_v"
+    if isinstance(bv, dict):
+        for glob, v in bv.items():
+            if fnmatch.fnmatchcase(net, glob) or fnmatch.fnmatchcase(_leaf(net), glob):
+                return float(v), f"esd.bipolar_v {glob}"
+    return None, None
+
+
 def clamp_row(fp: dict, rows: list[dict]) -> dict | None:
     """An LCSC row for the part's LCSC code first, else a maker row (no
     lcsc) matching its value or MPN."""
@@ -615,6 +644,72 @@ def clamp_row(fp: dict, rows: list[dict]) -> dict | None:
         if not r.get("lcsc") and r["_m"].search(text):
             return r
     return None
+
+
+def _rate_bipolar(bg, fact, r, row, vrwm, vfrom, cfg, at) -> list:
+    """A line marked bipolar against the clamp's polarity (the row's, from
+    its datasheet): r["bipolar_check"] pass / fail / not_judged, or None on
+    a line not marked bipolar."""
+    bv, bfrom = bipolar_v(fact["net"], cfg)
+    r["bipolar_v"], r["bipolar_v_from"] = bv, bfrom
+    r["polarity"] = row.get("polarity") if row else None
+    if bv is None:
+        r["bipolar_check"] = None
+        return []
+    ref, net = fact["clamp"], fact["net"]
+    gnd = sorted({p.net for p in bg.pads_of(ref=ref) if is_ground(p.net)})
+    r["ground_pins_on"] = gnd
+    pol = r["polarity"]
+    if not row:
+        r["bipolar_check"] = "not_judged"
+        return []
+    if pol not in ("uni", "bi"):
+        r["bipolar_check"] = "not_judged"
+        r["why_not"].append("bipolar: the row gives no polarity")
+        return []
+    head = (f"{fact['connector']} pin {fact['pin']} ({net}): the clamp {ref} "
+            f"({r['part']})")
+    if pol == "bi":
+        if vrwm is None:
+            r["bipolar_check"] = "not_judged"
+            r["why_not"].append("bipolar: the row gives no stand-off voltage")
+            return []
+        r["bipolar_check"] = "fail" if vrwm < bv else "pass"
+        if vrwm >= bv:
+            return []
+        return [checklib.violation(
+            SCRIPT, "error", at(fact), None, net, [fact["connector"], ref],
+            f"{head} is two-way but stands off only {vrwm:g} V ({vfrom}) on "
+            f"a line that swings to +/-{bv:g} V ({bfrom}): it conducts on "
+            "both peaks; use a clamp whose VRWM is at least the peak",
+            SOURCE, kind="esd_clamp_bipolar", polarity=pol, vrwm=vrwm,
+            bipolar_v=bv, bipolar_v_from=bfrom)]
+    if not gnd:
+        r["bipolar_check"] = "not_judged"
+        r["why_not"].append(
+            "bipolar: no pin of the one-way clamp is on ground, so it clamps "
+            "only line to line (diodes and Zener in series): not judged")
+        return []
+    vf = row.get("vf")
+    if vf is None:
+        r["bipolar_check"] = "not_judged"
+        r["why_not"].append("bipolar: the row gives no forward drop (vf)")
+        return []
+    vf = float(vf)
+    r["vf"] = vf
+    r["bipolar_check"] = "fail" if bv > vf else "pass"
+    if bv <= vf:
+        return []
+    return [checklib.violation(
+        SCRIPT, "error", at(fact), None, net, [fact["connector"], ref],
+        f"{head} is one-way with its ground pin on {', '.join(gnd)}, and the "
+        f"line swings to -{bv:g} V ({bfrom}), past the clamp's {vf:g} V "
+        f"forward drop (esd_clamps.yaml, {row.get('vf_kind', 'vf')}): its "
+        "ground-side diode conducts every negative half-cycle and clips the "
+        "signal; use a two-way clamp rated for the peak, or clamp line to "
+        "line with its ground pin left off ground", SOURCE,
+        kind="esd_clamp_bipolar", polarity=pol, vf=vf, bipolar_v=bv,
+        bipolar_v_from=bfrom, ground_pins_on=gnd)]
 
 
 def rate_clamps(bg, lines: list, cfg: dict, constraints: dict,
@@ -708,6 +803,7 @@ def rate_clamps(bg, lines: list, cfg: dict, constraints: dict,
                     "in normal use; use a clamp whose VRWM is at least the "
                     "line's voltage", SOURCE, kind="esd_clamp_vrwm",
                     vrwm=vrwm, working_v=wv, working_v_from=wfrom))
+        viols += _rate_bipolar(bg, fact, r, row, vrwm, vfrom, cfg, at)
         pol = usb_data_pol(net) if iface in ("usb_fs", "usb_hs") else None
         if pol:
             pairs.setdefault(pol[0], {})[pol[1]] = fact

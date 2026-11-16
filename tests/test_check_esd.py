@@ -512,3 +512,93 @@ def test_usb_names_pair_up():
         a, b = check_esd.usb_data_pol(p), check_esd.usb_data_pol(n)
         assert a and b and a[0] == b[0] and {a[1], b[1]} == {"P", "N"}, (p, n)
     assert check_esd.usb_data_pol("/FPGA/TDI") is None
+
+
+# ---- bipolar lines: the clamp's polarity against a line that swings both
+# sides of ground (esd.bipolar_v)
+
+def _two_lines(tmp_path, part: dict, gnd_b: str = "GND", net_a="/E1_RX",
+               net_b="/LINE_B") -> Path:
+    """J1 pins 1 / 2 on net_a / net_b, the same clamp part D1 / D2 straight
+    on each, on to U1; D2's ground pin on gnd_b."""
+    j = _fp("J1", "RJ45", "5 10", [("1", 0, 0, net_a), ("2", 0, 4, net_b),
+                                   ("3", 0, 8, "GND")])
+    u = _fp("U1", "LIU", "30 10", [("1", 0, 0, net_a), ("2", 0, 4, net_b)])
+    d2 = _fp("D2", part.get("Value", "ESD"), "8 14",
+             [("1", 0, 0, net_b), ("2", 0, 2, gnd_b)])
+    extra = "".join(f'    (property "{k}" "{v}" (at 0 0 0) (layer "F.Fab"))\n'
+                    for k, v in part.items() if k != "Value")
+    head, tail = d2.split("    (pad", 1)
+    body = (j + u + _clamp_p("D1", net_a, 10, dict(part))
+            + head + extra + "    (pad" + tail
+            + _seg(5, 10, 8, 10, net_a) + _seg(8, 10, 30, 10, net_a)
+            + _seg(5, 14, 8, 14, net_b) + _seg(8, 14, 30, 14, net_b)
+            + _via(8, 13) + _via(8, 17))
+    return _pcb(tmp_path, body)
+
+
+IP4220 = {"Value": "IP4220CZ6"}
+
+
+def test_one_way_clamp_to_ground_on_a_bipolar_line_is_an_error(tmp_path):
+    """The planted fault: a steering array (IP4220CZ6, one way, VF 0.7 V)
+    with its ground pin on GND on an E1 line swinging +/-3.3 V; its twin on
+    a line not marked bipolar is quiet."""
+    payload, kinds = _run(_two_lines(tmp_path, IP4220),
+                          {"esd": {"bipolar_v": {"/E1_*": 3.3}}})
+    bad = [v for v in payload["violations"] if v["kind"] == "esd_clamp_bipolar"]
+    assert len(bad) == 1, json.dumps(bad)
+    v = bad[0]
+    assert v["severity"] == "error" and v["net"] == "/E1_RX"
+    assert v["vf"] == 0.7 and v["bipolar_v"] == 3.3 and v["polarity"] == "uni"
+    assert v["ground_pins_on"] == ["GND"] and "ground-side diode" in v["msg"]
+    r = _ratings(payload)
+    assert r["/E1_RX"]["bipolar_check"] == "fail"
+    assert r["/LINE_B"]["bipolar_check"] is None    # the quiet twin
+    assert r["/LINE_B"]["bipolar_v"] is None
+
+
+def test_peak_under_the_forward_drop_passes(tmp_path):
+    payload, kinds = _run(_two_lines(tmp_path, IP4220),
+                          {"esd": {"bipolar_v": {"/E1_*": 0.5}}})
+    assert "esd_clamp_bipolar" not in kinds
+    assert _ratings(payload)["/E1_RX"]["bipolar_check"] == "pass"
+
+
+def test_one_way_clamp_with_no_ground_pin_is_not_judged(tmp_path):
+    """A transformer's line side: the array's GND pin left floating, so
+    it clamps only line to line (as ice1usb's U7 / U12)."""
+    payload, kinds = _run(_two_lines(tmp_path, IP4220, gnd_b="unconnected-(D2-Pad2)",
+                                     net_a="/LINE_A", net_b="/E1_TIP"),
+                          {"esd": {"bipolar_v": {"/E1_*": 3.3}}})
+    assert "esd_clamp_bipolar" not in kinds
+    r = _ratings(payload)["/E1_TIP"]
+    assert r["bipolar_check"] == "not_judged" and r["ground_pins_on"] == []
+    assert any("line to line" in w for w in r["why_not"])
+
+
+def test_two_way_clamp_is_judged_on_its_stand_off(tmp_path):
+    pesd = {"Value": "PESD0402-140"}
+    pcb = _two_lines(tmp_path, pesd)
+    payload, kinds = _run(pcb, {"esd": {"bipolar_v": {"/E1_*": 12}}})
+    assert "esd_clamp_bipolar" not in kinds
+    assert _ratings(payload)["/E1_RX"]["bipolar_check"] == "pass"
+    payload, kinds = _run(pcb, {"esd": {"bipolar_v": {"/E1_*": 15}}})
+    v = [x for x in payload["violations"] if x["kind"] == "esd_clamp_bipolar"]
+    assert len(v) == 1 and v[0]["polarity"] == "bi" and v[0]["vrwm"] == 14
+
+
+def test_bipolar_line_without_polarity_or_vf_is_not_judged(tmp_path):
+    # ESD441: one way, but its sheet gives no forward drop
+    payload, kinds = _run(_two_lines(tmp_path, {"MPN": "ESD441DPLR"}),
+                          {"esd": {"bipolar_v": 3.3}})
+    assert "esd_clamp_bipolar" not in kinds
+    r = _ratings(payload)["/E1_RX"]
+    assert r["bipolar_check"] == "not_judged"
+    assert any("forward drop" in w for w in r["why_not"])
+    # USBLC6-2 (Msksemi): the row carries no polarity
+    usb = {"Value": "USBLC6-2SC6", "LCSC": "C2827654"}
+    payload, kinds = _run(_two_lines(tmp_path, usb), {"esd": {"bipolar_v": 3.3}})
+    r = _ratings(payload)["/LINE_B"]
+    assert r["bipolar_check"] == "not_judged"
+    assert any("no polarity" in w for w in r["why_not"])
