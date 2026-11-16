@@ -9,7 +9,7 @@ ever writing to the source.
 
     intake.py --source DIR|FILE [--board NAME] [--pn PCB-NNNN-R]
               [--workspace DIR] [--project STEM]
-              [--force] [--no-upgrade] [--no-gates] [--no-renders] [--no-report]
+              [--force [--keep-foreign]] [--no-upgrade] [--no-gates] [--no-renders] [--no-report]
               [--views top,bottom,iso] [--out report.json]
 
 What it does, in order:
@@ -52,6 +52,10 @@ failures - a foreign board with 40 DRC errors is a successful intake. Exit 1
 run, an unresolvable library, a missing schematic, a degraded design document.
 Exit 2 is a refusal: unusable source, a format the pin cannot read, a
 mixed-version project, or a workspace that already exists (use --force).
+--force replaces only the files intake wrote (listed in
+reports/intake-files.json, plus state.json and reports/); it refuses, naming
+them, when the workspace holds anything else (fw/, import/, kicad/gen/, a
+README), unless --keep-foreign says to leave those in place (#536).
 
 Gate results are recorded honestly: a `verify` pass on a project with no
 constraints.json means "no check had inputs", so the digest and the report
@@ -69,6 +73,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -545,6 +550,116 @@ def check_version_consistency(formats: list[dict],
                 "open the project in KiCad 10 once and save it.")
 
 
+# ------------------------------------------------------- workspace ownership
+# --force replaces only what intake writes (#536: a rerun used to rmtree the
+# whole workspace and took fw/, import/, kicad/gen/ and the README with it).
+# Intake's own files are: the ones its previous run listed in MANIFEST_REL,
+# the ones this run is about to copy in, state.json (and its lock), the
+# netlist, KiCad's regenerable UI state, and everything under reports/ (the
+# generated gate, render and design-document outputs). Anything else is
+# foreign.
+MANIFEST_REL = "reports/intake-files.json"
+OWNED_DIRS = ("reports",)
+_KICAD_UI_STATE = (".kicad_prl",)
+_KICAD_CACHES = ("fp-info-cache",)
+
+
+def workspace_files(ws: Path) -> list[str]:
+    """Every file (and symlink) under `ws`, as sorted POSIX paths relative to
+    it. Empty directories are not listed: intake recreates its scaffold and a
+    foreign empty directory is left where it is."""
+    out: list[str] = []
+    for root, dirs, files in os.walk(ws):
+        rel_root = Path(root).relative_to(ws)
+        for d in dirs:
+            if (Path(root) / d).is_symlink():      # os.walk does not descend
+                out.append((rel_root / d).as_posix())
+        out.extend((rel_root / f).as_posix() for f in files)
+    return sorted(out)
+
+
+def read_manifest(ws: Path) -> set[str]:
+    """The files the previous intake run wrote (empty for a workspace made
+    before the manifest existed, or one whose manifest is unreadable)."""
+    try:
+        doc = json.loads((ws / MANIFEST_REL).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    files = doc.get("files") if isinstance(doc, dict) else None
+    return {str(f) for f in files or [] if isinstance(f, str)}
+
+
+def intake_owned(copies: list[dict], project: str,
+                 manifest: set[str]) -> Callable[[str], bool]:
+    """A predicate: is this workspace-relative POSIX path one intake writes?"""
+    files = set(manifest) | {"state.json", "state.json.lock",
+                             f"kicad/{project}.net"}
+    dirs = list(OWNED_DIRS)
+    for c in copies:
+        dest = Path(c["dest"]).as_posix()
+        if Path(c["src"]).is_dir():
+            dirs.append(dest)
+        else:
+            files.add(dest)
+
+    def owned(rel: str) -> bool:
+        if rel in files or any(rel == d or rel.startswith(d + "/")
+                               for d in dirs):
+            return True
+        p = Path(rel)
+        return (p.parent.as_posix() == "kicad"
+                and (p.suffix in _KICAD_UI_STATE or p.name in _KICAD_CACHES))
+    return owned
+
+
+def summarize_paths(paths: list[str], everything: list[str]) -> list[str]:
+    """Fold `paths` for a message: a directory all of whose files are in
+    `paths` is named once (`fw/ (5 files)`), the rest file by file."""
+    def prefixes(rel: str) -> list[str]:
+        parts = rel.split("/")
+        return ["/".join(parts[:i]) + "/" for i in range(1, len(parts))]
+    total: dict[str, int] = {}
+    chosen: dict[str, int] = {}
+    for rel in everything:
+        for pre in prefixes(rel):
+            total[pre] = total.get(pre, 0) + 1
+    for rel in paths:
+        for pre in prefixes(rel):
+            chosen[pre] = chosen.get(pre, 0) + 1
+    out: list[str] = []
+    seen: set[str] = set()
+    for rel in sorted(paths):
+        top = next((pre for pre in prefixes(rel)
+                    if chosen.get(pre) == total.get(pre)), None)
+        if top is None:
+            out.append(rel)
+        elif top not in seen:
+            seen.add(top)
+            n = total[top]
+            out.append(f"{top} ({n} file{'s' if n != 1 else ''})")
+    return out
+
+
+def merge_into(ws: Path, stage: Path, owned: Callable[[str], bool]) -> None:
+    """Replace intake's files in `ws` with the staged ones and leave every
+    other file where it is: delete the owned files, then move the stage in
+    file by file. A crash part-way leaves the foreign files untouched."""
+    present = workspace_files(ws)
+    staged = workspace_files(stage)
+    clash = sorted(set(staged) & {r for r in present if not owned(r)})
+    if clash:                      # cannot happen: every staged path is owned
+        raise CheckError(f"intake would overwrite files it did not write in "
+                         f"{ws}: {', '.join(clash[:5])}")
+    for rel in present:
+        if owned(rel):
+            (ws / rel).unlink()
+    for rel in staged:
+        dest = ws / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(stage / rel, dest)
+    shutil.rmtree(stage)
+
+
 # ------------------------------------------------------------- baseline gates
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -728,8 +843,13 @@ def run(argv=None):
                                  "workspace takes that rev's `dir` from "
                                  "register.yaml (it must be listed there)")
     ap.add_argument("--force", action="store_true",
-                    help="replace an existing workspace (refuses a directory "
-                         "that is not one)")
+                    help="replace the files intake wrote in an existing "
+                         "workspace (refuses a directory that is not one, "
+                         "and one holding files intake did not write)")
+    ap.add_argument("--keep-foreign", action="store_true",
+                    help="with --force: leave the files intake did not write "
+                         "(fw/, import/, kicad/gen/, ...) in place and "
+                         "replace only intake's own")
     ap.add_argument("--no-upgrade", action="store_true",
                     help="do not run kicad-cli upgrade on the copies")
     ap.add_argument("--no-gates", action="store_true",
@@ -785,6 +905,20 @@ def run(argv=None):
 
     copies, libs, findings = plan_copy(spec, project, kicad_share_dir(cli),
                                        pin_major)
+
+    # ---- what --force may replace (#536) ----------------------------------
+    owned = intake_owned(copies, project, read_manifest(ws)) \
+        if ws.is_dir() else None
+    present = workspace_files(ws) if owned else []
+    foreign = [r for r in present if not owned(r)] if owned else []
+    if foreign and not args.keep_foreign:
+        listed = summarize_paths(foreign, present)
+        more = f" and {len(listed) - 20} more" if len(listed) > 20 else ""
+        raise CheckError(
+            f"--force refuses to replace {ws}: it holds files intake did not "
+            f"write: {', '.join(listed[:20])}{more}. Move them out, or re-run "
+            "with --force --keep-foreign to replace only intake's own files "
+            "and leave these in place")
     src_hashes = source_fingerprint([Path(c["src"]) for c in copies])
 
     # ---- stage ------------------------------------------------------------
@@ -829,10 +963,13 @@ def run(argv=None):
         raise
 
     # ---- materialize ------------------------------------------------------
-    if ws.exists():
-        shutil.rmtree(ws)
-    ws.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(stage, ws)
+    if foreign:                    # --keep-foreign: swap intake's files only
+        merge_into(ws, stage, owned)
+    else:
+        if ws.exists():
+            shutil.rmtree(ws)
+        ws.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(stage, ws)
 
     pcb = ws / "kicad" / f"{project}.kicad_pcb"
     sch = ws / "kicad" / f"{project}.kicad_sch"
@@ -1033,6 +1170,13 @@ def run(argv=None):
     _write_json(ws / "reports" / "intake.json", payload)
     st.set_artifact("intake_report", digest_rel)
     st.save()
+    # what this run wrote, so the next --force knows what is intake's
+    kept = set(foreign)
+    _write_json(ws / MANIFEST_REL, {
+        "note": "files intake wrote; --force replaces only these, "
+                "state.json and reports/",
+        "files": [r for r in workspace_files(ws)
+                  if r not in kept and r != MANIFEST_REL]})
     return payload, args.out
 
 
