@@ -1198,6 +1198,26 @@ def test_unchanged_rebuild_files_once(tmp_path, capsys, monkeypatch):
     assert len(log.read_text().splitlines()) == 2
 
 
+def test_rebuild_a_minute_later_is_unchanged(tmp_path, capsys, monkeypatch):
+    """The title block's build time is no change to the document: a rebuild
+    whose clock reads the next minute files nothing (#1255, the flaky
+    test_file_with_note_passes_it_to_cc_docs when CI crossed a minute)."""
+    log = _fake_cc_docs(tmp_path, monkeypatch)
+    _stub_compile(tmp_path, monkeypatch)
+    monkeypatch.setenv("DOC_PROJECT", "Boards")
+    ws = make_workspace(tmp_path)
+    real, base = report_gen.time.strftime, report_gen.time.time()
+    for i, name in enumerate(("a", "b")):
+        monkeypatch.setattr(report_gen.time, "strftime",
+                            lambda f, t=None, i=i: real(
+                                f, t or report_gen.time.localtime(base + 60 * i)))
+        _, p = run_main(["--workspace", str(ws)], tmp_path, capsys, name=name)
+    tex = (ws / p["tex"]).read_text(encoding="utf-8")
+    assert re.search(r"generated \d{4}-\d\d-\d\d \d\d:\d\d\b", tex)
+    assert p["unchanged"] is True
+    assert len(log.read_text().splitlines()) == 1
+
+
 def test_failed_filing_leaves_no_stamp(tmp_path, capsys, monkeypatch):
     log = _fake_cc_docs(tmp_path, monkeypatch)
     (tmp_path / "bin" / "cc-docs").write_text(f'#!/bin/sh\necho "$@" >> {log}\nexit 3\n')
