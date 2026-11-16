@@ -78,6 +78,7 @@ import math
 import os
 import re
 import shutil
+import statistics
 import sys
 import tempfile
 from pathlib import Path
@@ -93,7 +94,8 @@ import kc  # noqa: E402
 import route_edit  # noqa: E402
 import routelib  # noqa: E402
 from checklib import CheckError  # noqa: E402
-from shapely.geometry import MultiPolygon, Point, Polygon, box  # noqa: E402
+from shapely.geometry import (MultiPoint, MultiPolygon, Point, Polygon,  # noqa: E402
+                              box)
 from shapely.ops import unary_union  # noqa: E402
 
 INSET_MM = 0.5          # default pour inset from the outline bbox
@@ -532,6 +534,27 @@ def ep_pads(bg: geom.BoardGeom, nets: set[str],
     return out
 
 
+def _is_exposed_pad(bg: geom.BoardGeom, ep) -> bool:
+    """Whether `ep` is its footprint's exposed pad by check_paste's rule
+    (the one check_wicking exempts): at least EP_MIN_OTHERS other SMD pads
+    on its side, EP_AREA_FACTOR x their median area, its centre inside
+    their hull. Pads that overlap it (a stock EP's sub-segments) are not
+    others."""
+    import check_paste
+    poly = ep.poly
+    others = [p for p in bg.pads_of(ref=ep.ref)
+              if p is not ep and p.drill is None
+              and tuple(p.layers) == tuple(ep.layers)
+              and not p.poly.is_empty and not p.poly.intersects(poly)]
+    if len(others) < check_paste.EP_MIN_OTHERS:
+        return False
+    med = statistics.median(_pad_area(p) for p in others)
+    if _pad_area(ep) < check_paste.EP_AREA_FACTOR * med:
+        return False
+    hull = MultiPoint([p.center for p in others]).convex_hull
+    return hull.geom_type == "Polygon" and hull.contains(poly.centroid)
+
+
 def _pad_area(p) -> float:
     try:
         a = p.poly.area
@@ -614,6 +637,16 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
     pads: list[dict] = []
     keepouts = via_keepouts(bg)
     for ep in ep_pads(bg, plane_nets, ep_min_mm2):
+        if not _is_exposed_pad(bg, ep):
+            # #636: a big pad that is not a belly (an inductor's, a
+            # DPAK tab's) is a solder joint; a via in its opening drains
+            # it, and check_wicking judges it so
+            pads.append({"ref": ep.ref, "pad": ep.number, "net": ep.net,
+                         "vias": 0,
+                         "note": "not an exposed pad (check_paste rule); a "
+                                 "via in its mask opening wicks the joint; "
+                                 "grid skipped"})
+            continue
         if min_vias.get(ep.ref) == 0:
             pads.append({"ref": ep.ref, "pad": ep.number, "net": ep.net,
                          "vias": 0,

@@ -35,6 +35,14 @@ def _fp(ref: str, x: float, y: float, pads: str = "") -> str:
             f'    (property "Reference" "{ref}" (at 0 0 0))\n{pads})\n')
 
 
+def _ring(net: str | None = None) -> str:
+    """Four corner pins round a 4x4 mm pad at the origin: what makes it an
+    exposed pad (check_paste's rule) rather than a lone big pad (#636)."""
+    return "".join(_pad(f"r{i}", x, y, net, 0.5, 0.5) for i, (x, y) in
+                   enumerate([(-2.8, -2.8), (2.8, -2.8), (2.8, 2.8),
+                              (-2.8, 2.8)]))
+
+
 def _pad(num: str, x: float, y: float, net: str | None = None,
          w: float = 0.6, h: float = 0.6, kind: str = "smd rect",
          layers: str = '"F.Cu"') -> str:
@@ -358,11 +366,11 @@ def test_via_grid_math():
 
 def test_ep_candidates(tmp_path):
     body = _fp("U1", 20, 20,                       # EP on GND, 16 mm2
-               _pad("9", 0, 0, "GND", 4, 4)
+               _pad("9", 0, 0, "GND", 4, 4) + _ring()
                + _pad("", 0, 0, None, 5, 5)        # bigger NO-NET overlap
                + _pad("1", -3, 0, "SIG"))          # must not deter
     body += _fp("U2", 45, 20,                      # EP on VCC -> skipped
-                _pad("9", 0, 0, "VCC", 4, 4) + _pad("1", -3, 0, "GND", 3, 3))
+                _pad("9", 0, 0, "VCC", 4, 4) + _ring() + _pad("1", -3, 0, "GND", 3, 3))
     body += _fp("C1", 10, 35, _pad("1", 0, 0, "GND", 0.5, 0.5))  # under floor
     body += _fp("J1", 50, 35,                      # THT only -> no SMD EP
                 _pad("1", 0, 0, "GND", 3, 3, kind="thru_hole circle",
@@ -379,8 +387,27 @@ def test_ep_candidates(tmp_path):
     eps2 = planes_gen.ep_pads(bg, {"GND"}, min_mm2=0.2)
     assert {p.ref for p in eps2} == {"U1", "C1"}
     ops2, pads2 = planes_gen.thermal_via_ops(bg, {"GND"}, ep_min_mm2=0.2)
-    assert {p["ref"] for p in pads2} == {"U1"}
+    # C1's lone pad is no exposed pad: skipped with a note (#636)
+    assert {p["ref"]: p["vias"] for p in pads2} == {"U1": 9, "C1": 0}
     assert len(ops2) == 9
+
+
+def test_thermal_grid_skips_a_big_pad_that_is_no_exposed_pad(tmp_path):
+    """#636: planes_gen stitched vias into an inductor's big plane pad,
+    inside its mask opening, where they drain the joint (check_wicking
+    wick_via_in_pad; it exempts only check_paste's exposed pad). Planted:
+    a two-pad 4x4 mm inductor on GND gets no grid and says why. Twin: the
+    same pad with a ring of pins round it is an exposed pad and keeps its
+    3x3 grid."""
+    body = _fp("L1", 20, 20, _pad("1", 0, 0, "GND", 4, 4)
+               + _pad("2", 6, 0, "SW", 3, 4))
+    body += _fp("U1", 45, 20, _pad("9", 0, 0, "GND", 4, 4) + _ring())
+    bg = _bg(tmp_path, body=body)
+    ops, pads = planes_gen.thermal_via_ops(bg, {"GND"})
+    by = {p["ref"]: p for p in pads}
+    assert by["L1"]["vias"] == 0 and "not an exposed pad" in by["L1"]["note"]
+    assert by["U1"] == {"ref": "U1", "pad": "9", "net": "GND", "vias": 9}
+    assert len(ops) == 9 and all(abs(o["at"][0] - 45) < 2.1 for o in ops)
 
 
 _VIA = ('  (via (at {x} {y}) (size 0.6) (drill 0.3)'
@@ -391,7 +418,7 @@ def test_thermal_grid_avoids_existing_drills(tmp_path):
     """T6 (P7A-5a / LEARNINGS 1327a): grid points inside the hole floor of
     drills already in the land are dropped (U22 shipped 15 vias-in-pad;
     planes_gen stacked 21 more on top -> 24 hole_to_hole)."""
-    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4))
+    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4) + _ring())
     for dx in (-1.2, 0.0, 1.2):
         body += _VIA.format(x=20 + dx, y=20)
     bg = _bg(tmp_path, body=body)
@@ -403,7 +430,7 @@ def test_thermal_grid_avoids_existing_drills(tmp_path):
 
 
 def test_thermal_grid_skips_land_with_own_via_array(tmp_path):
-    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4))
+    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4) + _ring())
     for dx, dy in ((-1.2, 0), (0, 0), (1.2, 0), (0, 1.2)):
         body += _VIA.format(x=20 + dx, y=20 + dy)
     bg = _bg(tmp_path, body=body)
@@ -419,7 +446,7 @@ def test_thermal_grid_counts_same_footprint_tht_pads(tmp_path):
     tht = ('    (pad "{n}" thru_hole circle (at {x} {y}) (size 0.6 0.6)'
            ' (drill 0.3) (layers "*.Cu") (net "GND"))\n')
     spots = ((-1.2, 0), (1.2, 0), (0, -1.2), (0, 1.2))
-    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4)
+    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4) + _ring()
                + "".join(tht.format(n=10 + i, x=x, y=y)
                          for i, (x, y) in enumerate(spots)))
     bg = _bg(tmp_path, body=body)
@@ -431,8 +458,8 @@ def test_thermal_grid_counts_same_footprint_tht_pads(tmp_path):
 def test_thermal_grid_respects_via_keepouts(tmp_path):
     """#435 (hc-power): a rule area that forbids vias (a top-only heater
     coupon) gets no thermal vias; a rule area that allows them does."""
-    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4))
-    body += _fp("U2", 45, 20, _pad("9", 0, 0, "GND", 4, 4))
+    body = _fp("U1", 20, 20, _pad("9", 0, 0, "GND", 4, 4) + _ring())
+    body += _fp("U2", 45, 20, _pad("9", 0, 0, "GND", 4, 4) + _ring())
     ra = ('  (zone (net 0) (net_name "") (layers "In1.Cu" "B.Cu") (name "{n}")'
           ' (hatch edge 0.5) (keepout (tracks allowed) (vias {v}) (pads allowed)'
           ' (copperpour allowed) (footprints allowed))'
@@ -455,7 +482,7 @@ def test_thermal_grid_measures_custom_pads_by_their_copper(tmp_path):
               ' (net "GND") (options (clearance outline) (anchor rect))'
               ' (primitives (gr_poly (pts (xy -1.5 -1.25) (xy 1.5 -1.25)'
               ' (xy 1.5 1.25) (xy -1.5 1.25)) (width 0) (fill yes))))\n')
-    bg = _bg(tmp_path, body=_fp("U1", 20, 20, custom))
+    bg = _bg(tmp_path, body=_fp("U1", 20, 20, custom + _ring()))
     eps = planes_gen.ep_pads(bg, {"GND"})
     assert [(p.ref, p.number) for p in eps] == [("U1", "9")]
     ops, _ = planes_gen.thermal_via_ops(bg, {"GND"})
@@ -465,7 +492,7 @@ def test_thermal_grid_measures_custom_pads_by_their_copper(tmp_path):
 def test_thermal_grid_needs_a_pour_on_another_layer(tmp_path):
     """#435: vias from an F.Cu pad to a net poured only on F.Cu connect
     nothing (hc-power load bank LDk)."""
-    bg = _bg(tmp_path, body=_fp("U1", 20, 20, _pad("9", 0, 0, "LDK", 4, 4)))
+    bg = _bg(tmp_path, body=_fp("U1", 20, 20, _pad("9", 0, 0, "LDK", 4, 4) + _ring()))
     ops, pads = planes_gen.thermal_via_ops(
         bg, {"LDK"}, pour_layers={"LDK": {"F.Cu"}})
     assert ops == [] and "no pour on another" in pads[0]["note"]
@@ -482,8 +509,8 @@ def test_thermal_grid_honours_min_vias(tmp_path):
     """#967: constraints.thermal[ref].min_vias 0 must stop the grid (an
     LDO's live VOUT tab on the plane net would be drilled into GND), and a
     grid short of a positive floor says so."""
-    body = _fp("U1", 20, 20, _pad("4", 0, 0, "+3V3", 4, 4))
-    body += _fp("U2", 45, 20, _pad("9", 0, 0, "+3V3", 4, 4))
+    body = _fp("U1", 20, 20, _pad("4", 0, 0, "+3V3", 4, 4) + _ring())
+    body += _fp("U2", 45, 20, _pad("9", 0, 0, "+3V3", 4, 4) + _ring())
     bg = _bg(tmp_path, body=body)
     mv = planes_gen.thermal_min_vias(
         {"thermal": [{"ref": "U1", "power_w": 0.5, "min_vias": 0},
@@ -817,6 +844,10 @@ _EP_FP = '''  (footprint "aiee:EPTEST"
       (effects (font (size 1 1) (thickness 0.15)))
     )
     (pad "9" smd rect (at 0 0) (size 4 4) (layers "F.Cu") (net "GND"))
+    (pad "1" smd rect (at -2.8 -2.8) (size 0.5 0.5) (layers "F.Cu"))
+    (pad "2" smd rect (at 2.8 -2.8) (size 0.5 0.5) (layers "F.Cu"))
+    (pad "3" smd rect (at 2.8 2.8) (size 0.5 0.5) (layers "F.Cu"))
+    (pad "4" smd rect (at -2.8 2.8) (size 0.5 0.5) (layers "F.Cu"))
   )
 '''
 

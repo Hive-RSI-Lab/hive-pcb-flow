@@ -267,6 +267,105 @@ def test_via_in_pad_refs_take_a_via_in_their_pads(tmp_path):
             assert max(abs(x - 25) - 1.0, abs(y - 15) - 1.0) >= keep - 0.05
 
 
+def _mpad(ref, x, y, net, size, margin=None):
+    m = f" (solder_mask_margin {margin})" if margin is not None else ""
+    return (f'  (footprint "t:{ref}" (layer "F.Cu") (at {x} {y})\n'
+            f'    (property "Reference" "{ref}" (at 0 0 0))\n'
+            f'    (pad "1" smd rect (at 0 0) (size {size} {size})'
+            f' (layers "F.Cu" "F.Mask") (net "{net}"){m}))\n')
+
+
+def _ringed(tmp_path, margin=None, setup="(setup)"):
+    """U1 walled in on F.Cu by a +3V3 ring 0.4 mm off its 2 mm pad: the
+    route has to drop to B.Cu close beside both pads."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    body = _mpad("U1", 5, 15, "SIG", 2.0, margin) \
+        + _mpad("U2", 25, 15, "SIG", 2.0, margin)
+    ring = [(2.6, 12.6), (7.4, 12.6), (7.4, 17.4), (2.6, 17.4), (2.6, 12.6)]
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+        body += _seg(x1, y1, x2, y2, 0.25, "F.Cu", "+3V3")
+    pcb = _board(tmp_path, body)
+    if setup != "(setup)":
+        pcb.write_text(pcb.read_text("utf-8").replace("(setup)", setup, 1),
+                       encoding="utf-8")
+    rules, jobs = _plan(pcb, [_pair("SIG", (5, 15), (25, 15))])
+    job = jobs[0]
+    assert job["status"] == "routed", job
+    vias = [op for op in job["ops"] if op["op"] == "add_via"]
+    text = pcb.read_text("utf-8").rstrip()[:-1]
+    for v in vias:
+        text += (f'  (via (at {v["at"][0]} {v["at"][1]}) (size {v["size"]})'
+                 f' (drill {v["drill"]}) (layers "F.Cu" "B.Cu")'
+                 f' (net "SIG"))\n')
+    pcb.write_text(text + ")\n", encoding="utf-8")
+    import check_wicking
+    vios, _ = check_wicking.check(pcb)
+    return rules, vias, vios
+
+
+def test_a_via_keeps_its_hole_out_of_a_pad_mask_opening(tmp_path):
+    """#636: route_finish kept a via 0.1 mm off its own net's pad copper,
+    but a pad whose mask opens 0.2 mm wider than its copper then held the
+    via's hole in the opening (check_wicking wick_via_in_pad, as on
+    twin-side). Planted: margin 0.2, the via moves out and the check is
+    quiet. Twin: no margin, the via sits where it always did."""
+    rules, vias, vios = _ringed(tmp_path / "m", margin=0.2)
+    assert vios == [], vios
+    assert rules.pad_via_keep("U2", "1", 0.3, 0.3) == pytest.approx(0.45)
+    near2 = max(v["at"][0] for v in vias)
+    assert 24.0 - near2 >= 0.45 - 0.05
+    rules0, vias0, vios0 = _ringed(tmp_path / "q")
+    assert vios0 == []
+    assert rules0.mask is None          # nothing to read: the fast path
+    assert rules0.pad_via_keep("U2", "1", 0.3, 0.3) == pytest.approx(0.25)
+    assert max(v["at"][0] for v in vias0) > near2
+
+
+def test_an_untented_via_keeps_a_mask_dam_from_a_pad(tmp_path):
+    """#636: with vias untented, the via's own opening must keep a full
+    dam from the pad's (wick_via_mask_web). Planted: untented, the keep
+    grows to the via's ring plus the dam, and the check is quiet. Twin:
+    the same board tented keeps the plain hole keep."""
+    open_ = "(setup (tenting (front no) (back no)))"
+    rules, vias, vios = _ringed(tmp_path / "u", setup=open_)
+    assert vios == [], vios
+    assert rules.mask["open"] == {"F": True, "B": True}
+    keep = rules.pad_via_keep("U2", "1", 0.3, 0.3)
+    assert keep > 0.3
+    rules_t, _, vios_t = _ringed(
+        tmp_path / "t", setup="(setup (tenting (front yes) (back yes)))")
+    assert vios_t == []
+    assert rules_t.pad_via_keep("U2", "1", 0.3, 0.3) == pytest.approx(0.25)
+
+
+def test_a_route_that_needs_a_via_in_a_pad_names_the_pad(tmp_path):
+    """#636: a route that only goes through with a via in a pad fails, as
+    #912 has it (via-in-pad is a paid fab option), but says which pad and
+    how to allow it. Twin: a net walled in on both layers fails with no
+    pad named."""
+    body = _pad("U1", 5, 15, "SIG", size=2.0) + _pad("U2", 25, 15, "SIG",
+                                                       size=2.0)
+    ring = [(3.6, 13.6), (6.4, 13.6), (6.4, 16.4), (3.6, 16.4), (3.6, 13.6)]
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+        body += _seg(x1, y1, x2, y2, 0.25, "F.Cu", "+3V3")
+    (tmp_path / "p").mkdir()
+    (tmp_path / "q").mkdir()
+    pcb = _board(tmp_path / "p", body)
+    _, jobs = _plan(pcb, [_pair("SIG", (5, 15), (25, 15))], rip_board=False)
+    job = jobs[0]
+    assert job["status"] == "failed"
+    assert job["via_in_pad"] == ["U1 pad 1"]
+    assert "--via-in-pad-refs U1" in job["reason"]
+    assert not [op for op in job.get("ops") or () if op["op"] == "add_via"]
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+        body += _seg(x1, y1, x2, y2, 0.25, "B.Cu", "+3V3")
+    pcb = _board(tmp_path / "q", body)
+    _, jobs = _plan(pcb, [_pair("SIG", (5, 15), (25, 15))], rip_board=False)
+    assert jobs[0]["status"] == "failed"
+    assert "via_in_pad" not in jobs[0]
+    assert "via-in-pad" not in jobs[0]["reason"]
+
+
 def test_via_in_pad_refs_is_a_routing_flag():
     import argparse
     ap = argparse.ArgumentParser()
