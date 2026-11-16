@@ -493,21 +493,7 @@ def krt_widths(wide: dict[str, float], necks: dict) -> dict[str, float]:
     return out
 
 
-def _narrow_new_tracks(staged: Path, widths: dict[str, float],
-                       before: set, necks: dict | None = None) -> list[str]:
-    """uuids of tracks not on the board before that sit under their net's
-    width rule. A track wholly in its net's neck zone at no less than the
-    neck width keeps (#937): DRC's courtyard-held rule passes it."""
-    out = []
-    for t in geom.BoardGeom.from_file(staged).tracks_of():
-        if t.uuid in before or not t.uuid:
-            continue
-        if t.width >= widths.get(t.net, 0.0) - 1e-4:
-            continue
-        nw = necklib.neck_width(necks or {}, t.net, t.layer, t.shape)
-        if nw is None or t.width < nw - 1e-4:
-            out.append(t.uuid)
-    return out
+_narrow_new_tracks = necklib.narrow_new_tracks   # #1153: route_edit shares it
 
 
 NECKDOWN_TOL_MM = 0.005   # #998: Freerouting's pin neckdown runs this far
