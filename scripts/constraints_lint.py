@@ -193,7 +193,8 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
     # that knowledge.py --coverage tests against record envelopes.
     "blocks": {
         "required": {"topology": "str"},
-        "optional": {"block": "str", "name": "str", "operating_point": "map"},
+        "optional": {"block": "str", "name": "str", "operating_point": "map",
+                     "ref": "str", "refs": "str_list"},
     },
     # check_creepage: a net's working voltage beside voltages[]; an entry
     # without a voltage is skipped

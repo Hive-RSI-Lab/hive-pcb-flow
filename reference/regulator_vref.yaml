@@ -12,13 +12,24 @@ regulators:
   - match: '^TPS5430[0-9]'      # TPS54302 / TPS54308
     vref: 0.596
     tol: 0.025
-    source: TI SLVSDN4 (TPS54302) 7.5 Electrical Characteristics, VFB 0.581-0.611
-    verified: false
+    source: >-
+      TI SLVSDG6C, p.5, 6.5 Electrical Characteristics: 'VFB Feedback
+      Voltage VIN = 12V 0.581 0.596 0.611 V'. URL
+      https://www.ti.com/lit/ds/symlink/tps54302.pdf sha256
+      d81679ba6ba0a366e372ff8184c4e4b6c20383bdad41c90d636b75d097ae51b8.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^AP6320[01]'        # AP63200 / AP63201; AP63203/5 are fixed
     vref: 0.8
-    tol: 0.015
-    source: Diodes AP63200/AP63201/AP63203/AP63205 datasheet, VFB 0.788-0.812
-    verified: false
+    tol: 0.01
+    source: >-
+      Diodes DS41326 Rev. 3-2, p.5, Electrical Characteristics: 'VFB
+      Feedback Voltage CCM, AP63200/AP63201 792 800 808 mV'. URL
+      https://www.diodes.com/assets/Datasheets/AP63200-AP63201-AP63203-AP63205.pdf
+      sha256
+      ef99daa3789d835bc025dfcb4c605c5c2e6d3e7223e86d40b33e6b497ea5a722.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^SY8089'
     vref: 0.6
     tol: 0.015
@@ -40,34 +51,90 @@ regulators:
     verified: true
   - match: '^SY8113'
     vref: 0.6
-    tol: 0.02
-    source: Silergy SY8113B datasheet, VFB
-    verified: false
-  - match: '^TPS56320[0-9]'     # TPS563200 / TPS563201
+    tol: 0.015
+    source: >-
+      Silergy AN_SY8113B Rev.0.1, p.3, Electrical Characteristics:
+      'Feedback Reference Voltage VREF 0.591 0.6 0.609 V'. A third-party
+      copy; the A/C/G/I suffixes were not re-read. URL
+      https://static.chipdip.ru/lib/093/DOC006093957.pdf sha256
+      3980c472d3a89e755ea05566e827c83eeffbed805d024bd2725d3a0fa458b7aa.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^TPS563200'
+    vref: 0.765
+    tol: 0.015
+    source: >-
+      TI SLVSCB0E, p.7, 6.5 Electrical Characteristics: 'VFB ... TA =
+      25°C, VO = 1.05 V, continuous mode operation 758 765 772 mV'. The
+      sheet gives the band at 25 °C only; tol 0.015 widens it a little for
+      temperature (a judgement call, not a datasheet figure). URL
+      https://www.ti.com/lit/ds/symlink/tps563200.pdf sha256
+      ec98a636c386d233ed2dfa01cc84cb6c73cd3cc25b0cadd27a2f1c6ca4a45df2.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^TPS563201'
     vref: 0.768
-    tol: 0.02
-    source: TI TPS563201 datasheet, VFB
-    verified: false
+    tol: 0.025
+    source: >-
+      TI SLVSD90B, p.6, 6.5 Electrical Characteristics: 'VFB threshold
+      voltage VO = 1.05 V, continuous mode operation 749 768 787 mV'. URL
+      https://www.ti.com/lit/ds/symlink/tps563201.pdf sha256
+      059bd87ea2b72aee784fab23632bf296ccc03791d68c5578955bee8453fe0015.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^TPS561201'
+    vref: 0.768
+    tol: 0.025
+    source: >-
+      TI SLVSC95A, p.5, 6.5 Electrical Characteristics: 'VFBTH VFB
+      threshold voltage VO = 1.05 V, continuous mode operation 749 768 787
+      mV'. URL https://www.ti.com/lit/ds/symlink/tps561201.pdf sha256
+      54e5a4f272c638b385ec0d66867891cdc2f94974269a2400e80ecb4279b94e2f.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^TPS5433[01]'
     vref: 0.8
-    tol: 0.02
-    source: TI TPS54331 datasheet, VFB
-    verified: false
+    tol: 0.035
+    source: >-
+      TI SLVS839H (TPS54331), p.5, Electrical Characteristics: 'Voltage
+      reference 0.772 0.8 0.828 V'. URL
+      https://www.ti.com/lit/ds/symlink/tps54331.pdf sha256
+      cf72dfd0ac69eec645b7b493de628dc1c3aa66f5f925a2ea9be6bb5c38260730.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^TPS5430($|[^0-9])'
     vref: 1.221
-    tol: 0.015
-    source: TI TPS5430 datasheet, VSENSE
-    verified: false
+    tol: 0.021
+    source: >-
+      TI SLVS632L, p.5, Electrical Characteristics: 'VFB FB voltage TJ =
+      -40°C to 125°C 1.196 1.221 1.245 V'. URL
+      https://www.ti.com/lit/ds/symlink/tps5430.pdf sha256
+      78a50620c7ce4b116244964347627364f2b816888e3aa46413fa4adbc71bb6a5.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^TPS6213[0-3]'
     vref: 0.8
-    tol: 0.02
-    source: TI TPS62130 datasheet, VFB
-    verified: false
+    tol: 0.028
+    source: >-
+      TI SLVSAG7F, p.5, Electrical Characteristics, feedback voltage
+      accuracy: 'PWM mode operation, VIN ≥ VOUT +1V 785.6 800 814.4' and
+      'Power Save Mode operation 781.6 800 822.4' mV; tol covers the PSM
+      band. URL https://www.ti.com/lit/ds/symlink/tps62130.pdf sha256
+      f9b1af285622c0cf1a5991f9641a6e64c5e6d899e52cc0b1632808742019579f.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^TLV6256[89]'
     vref: 0.6
     tol: 0.02
-    source: TI TLV62569 datasheet, VFB
-    verified: false
+    source: >-
+      TI SLVSD89B (TLV62568) p.5 and SLVSDG1C (TLV62569) p.4, Electrical
+      Characteristics: 'VFB Feedback regulation voltage 0.588 0.6 0.612
+      V'. URLs https://www.ti.com/lit/ds/symlink/tlv62568.pdf sha256
+      fa2ae3f5343f767f19f93532be18987ace26afc14b1c5b8f5258413a9f8dd0d9 and
+      URL https://www.ti.com/lit/ds/symlink/tlv62569.pdf sha256
+      1ba6f55dfe678d06d563acd6632f1f950a497d812270806021097b55cd81d3c4.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^TLV62595($|[^0-9])'   # TLV62595DMQR
     vref: 0.6
     tol: 0.01
@@ -91,38 +158,143 @@ regulators:
       https://www.ti.com/lit/ds/symlink/tps56637.pdf
       sha256 18edaff6769b0d5c3d0cdef66df1232538cd357bbaac214df138969f9b0d6745
     verified: true
+  - match: '^TPS629203'
+    vref: 0.6
+    tol: 0.01
+    source: >-
+      TI SLVSGE2, p.6, 7.5 Electrical Characteristics: 'VFB Feedback
+      regulation voltage Adjustable configuration selected 0.6 V' and 'VFB
+      Feedback voltage regulation FB option selected, -40°C ≤ TJ ≤ 125°C
+      -1% +0.5%'; tol is the wider (-1 %) side. URL
+      https://www.ti.com/lit/ds/symlink/tps629203.pdf sha256
+      6259170f807fe9c84a89eed09ac613757b27a574d1daf708fa2e36d070dae7f7.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^TPS62A0[12]'
+    vref: 0.6
+    tol: 0.01
+    source: >-
+      TI SLUSEG9E, p.5, Electrical Characteristics: 'VFB FB voltage TJ =
+      0°C to 125°C, PWM mode 594 600 606 mV'. URL
+      https://www.ti.com/lit/ds/symlink/tps62a01.pdf sha256
+      cad0b23ab86368916991fc9bb2840df5f9b8013320eb8b62b28ae517e53f6518.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^LMR54406'
+    vref: 0.8
+    tol: 0.0125
+    source: >-
+      TI SLUSEG8E, p.5, Electrical Characteristics: 'VFB Feedback voltage
+      0.79 0.8 0.81 V'. URL https://www.ti.com/lit/ds/symlink/lmr54406.pdf
+      sha256
+      f0dc0ace8430cad919ef1f590d65d217362ee3d3a975406ded57b98f228ffaf7.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^LMR38010'
+    vref: 1.0
+    tol: 0.015
+    source: >-
+      TI SNVSC73B, p.5, Electrical Characteristics: 'VREF Feedback
+      reference voltage FPWM 0.985 1 1.015 V'. URL
+      https://www.ti.com/lit/ds/symlink/lmr38010.pdf sha256
+      b8b6dced113ffb83012e0d38187af8b807dab8cbfa8b842e3af54387f98d7418.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^LM5158'
+    vref: 1.0
+    tol: 0.01
+    source: >-
+      TI SNVSBZ7, p.8, Electrical Characteristics: 'VREF FB reference 0.99
+      1 1.01 V'. URL https://www.ti.com/lit/ds/symlink/lm5158.pdf sha256
+      7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^MP1584'
     vref: 0.8
-    tol: 0.02
-    source: MPS MP1584 datasheet, VFB
-    verified: false
+    tol: 0.03
+    source: >-
+      MPS MP1584 Rev. 1.0, p.3, Electrical Characteristics: 'Feedback
+      Voltage VFB 4.5V < VIN < 28V 0.776 0.8 0.824 V'. A mirror copy
+      (monolithicpower.com refuses scripted downloads). URL
+      https://cdn.eicom.ru/media/PDF24/6516.pdf sha256
+      35531f55780da30d91aadd24d004c5ca0858831d458af2c574b6c609b13b518c.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^MP2307'
     vref: 0.925
-    tol: 0.02
-    source: MPS MP2307 datasheet, VFB
-    verified: false
+    tol: 0.027
+    source: >-
+      MPS MP2307 Rev. 1.1, p.2, Electrical Characteristics: 'Feedback
+      Voltage VFB 4.75V ≤ VIN ≤ 23V 0.900 0.925 0.950 V'. A mirror copy
+      (monolithicpower.com refuses scripted downloads). URL
+      https://static.assets-stash.eet-china.com/album/old-resources/uploadfile/20110705085326975.pdf
+      sha256
+      42d9d9fd61e103b0dd328cb2dd3cf6d400cbe13790f08ef980574e1dea5a241f.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^MT3608'
     vref: 0.6
-    tol: 0.03
-    source: Aerosemi MT3608 datasheet, VFB
-    verified: false
+    tol: 0.02
+    source: >-
+      Aerosemi MT3608B datasheet, p.2, Electrical Characteristics (TA =
+      25°C): 'FB Voltage 0.588 0.6 0.612 V'. The MT3608B sheet; the plain
+      MT3608 sheet was not re-read. URL
+      https://atta.szlcsc.com/upload/public/pdf/source/20231108/A2E6FFA724546D8334EF0FC1E6740EDE.pdf
+      sha256
+      f61bb3a3f618a0b6cebf7e2b80a60ef0ed92ede3798ad8f117b3e6e2fc950323.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^LM2596.*ADJ'
     vref: 1.23
-    tol: 0.02
-    source: TI LM2596 datasheet, VFB (ADJ)
-    verified: false
+    tol: 0.041
+    source: >-
+      TI SNVS124G, p.6, Electrical Characteristics LM2596-ADJ: 'VFB
+      Feedback voltage ... TJ = 25°C 1.193 1.267 V; -40°C ≤ TJ ≤ 125°C
+      1.18 1.28', typ 1.23 V. URL
+      https://www.ti.com/lit/ds/symlink/lm2596.pdf sha256
+      2eec90879908cf711b84d4f0c5d534c3cd12c576d25254b7019247435af4ab0f.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^XL4015'
     vref: 1.25
     tol: 0.02
-    source: XLSEMI XL4015 datasheet, VFB
-    verified: false
-  - match: '^(AMS1117|LM1117).*ADJ'
+    source: >-
+      XLSEMI XL4015 Datasheet Rev 1.4, p.5, Electrical Characteristics (Ta
+      = 25°C): 'VFB Feedback Voltage Vin = 8V to 40V, Vout=5V, Iload=0.5A
+      to 5A 1.225 1.25 1.275 V'. A mirror copy. URL
+      https://ge.voron.ua/files/pdf/XLSEMI/xl4015.pdf sha256
+      abdd9a1081a21ed7412f25295ccd94c8e68095bd52559f468b52ee75ebb035b4.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^LM1117.*ADJ'
     vref: 1.25
     tol: 0.02
-    source: AMS1117 datasheet, VREF (ADJ)
-    verified: false
+    source: >-
+      TI SNOS412Q, p.5, Electrical Characteristics: 'VREF Reference
+      voltage LM1117-ADJ ... over the junction temperature range 1.225
+      1.27', typ 1.25 V. URL https://www.ti.com/lit/ds/symlink/lm1117.pdf
+      sha256
+      c117f5dd97fd15e62c0dee3adbf1af60480a128a10a0f9a9c28aafb8220ec3aa.
+      Re-read 2026-11-15.
+    verified: true
+  - match: '^AMS1117.*ADJ'
+    vref: 1.25
+    tol: 0.03
+    source: >-
+      Advanced Monolithic Systems AMS1117 datasheet, p.2, Electrical
+      Characteristics: 'Reference Voltage (Note 2) 1.5V≤ (VIN - VOUT) ≤
+      12V 1.2125 1.250 1.2875 V'. URL
+      http://www.advanced-monolithic.com/pdf/ds1117.pdf sha256
+      189a2651878a87d590b768eaa9b44217a3fdf460352ce6ecaff127221282a3f0.
+      Re-read 2026-11-15.
+    verified: true
   - match: '^LM317'
     vref: 1.25
     tol: 0.04
-    source: TI LM317 datasheet, VREF 1.20-1.30
-    verified: false
+    source: >-
+      TI SLVS044Z, p.8, Electrical Characteristics: 'Reference voltage 3V
+      ≤ (VIN - VOUT) ≤ 40V ... 1.2 1.25 1.3 V'. URL
+      https://www.ti.com/lit/ds/symlink/lm317.pdf sha256
+      1646fb2e4f8cf8c2cbd93aaf22edad368571619ad062476deca8ee29f95c65d3.
+      Re-read 2026-11-15.
+    verified: true

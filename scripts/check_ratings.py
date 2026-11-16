@@ -317,7 +317,9 @@ def load_parts_on_board(pcb: Path) -> list[dict]:
             if num and net and not net.startswith("unconnected-"):
                 pads.setdefault(num, net)
         attrs = {str(_t(x)) for a in _kids(fp, "attr") for x in a[1:]}
-        out.append({"ref": props.get("Reference", "?"),
+        dnp = "dnp" in attrs or any(str(_t(x)).lower() == "yes"
+                                    for a in _kids(fp, "dnp") for x in a[1:])
+        out.append({"ref": props.get("Reference", "?"), "dnp": dnp,
                     "in_bom": not (attrs & {"exclude_from_bom", "board_only"}),
                     "lcsc": (props.get("LCSC") or props.get("LCSC Part")
                              or "").strip(),
@@ -1471,7 +1473,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
             netfns[ref] = {moved.get(k, k): v for k, v in netfns[ref].items()}
     fb_ctx = {"board": board, "bom_by_lcsc": bom_by_lcsc, "volts": volts,
               "vsrc": vsrc, "blocks": block_vouts(constraints),
-              "vrefs": load_vrefs()}
+              "vrefs": load_vrefs(), "not_judged": []}
     diodes = {b["ref"]: d for b in board
               if (d := diode_reverse(b, exts.get(b["lcsc"]),
                                      bom_by_lcsc.get(b["lcsc"]), netfns))}
@@ -1934,7 +1936,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                  f"not compared ({', '.join(pins[:6])}"
                  f"{' ...' if len(pins) > 6 else ''})"
                  for net, pins in sorted(unknown_rails.items())]
-             + clamp_not_judged,
+             + clamp_not_judged + fb_ctx["not_judged"],
              "nothing_to_judge": nothing,
              "parts_not_compared": unjudged,
              "ambient": amb, "fuses": fuse_facts,
@@ -2416,61 +2418,329 @@ def find_vref(texts: list[str], table: list[dict]):
     return None
 
 
+BLOCK_REF_KEYS = ("name", "block", "ref", "refs")
+
+
 def block_vouts(constraints: dict | None) -> dict[str, tuple[float, str]]:
-    """ref -> (vout_v, block) from the constraints blocks that name a ref in
-    their name ("U2 TPS54302 5 V") and give an operating_point vout_v."""
+    """ref -> (vout_v, block) from the constraints blocks that name a ref
+    (in BLOCK_REF_KEYS) and give an operating_point vout_v."""
     out: dict[str, tuple[float, str]] = {}
     for blk in (constraints or {}).get("blocks") or []:
         v = (blk.get("operating_point") or {}).get("vout_v")
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             continue
         label = str(blk.get("block") or blk.get("name") or "")
-        for ref in re.findall(r"\b([A-Z]{1,3}\d+)\b", str(blk.get("name")
-                                                            or "")):
+        # the ref may sit in the name ("U2 TPS54302 5 V") or a field of its
+        # own (#847)
+        text = " ".join(str(blk.get(k) or "") for k in BLOCK_REF_KEYS)
+        for ref in re.findall(r"\b([A-Z]{1,3}\d+)\b", text):
             out.setdefault(ref, (float(v), label))
     return out
 
 
+# --- the FB network (#847) ---------------------------------------------------
+# Refdes classes on an FB network. A resistor is R plus an optional letter
+# tag (RA1, Rfbt1), not a pot (RV), array (RN), relay (RLY) or thermistor
+# (RT/RTH); a cap is C plus a tag, not a connector (CN/CON) or diode (CR).
+FB_RES_RE = re.compile(r"^R[A-Za-z_]*\d")
+FB_NOT_RES_RE = re.compile(r"^(RV|RN|RLY|RT|RTH)\d", re.I)
+FB_CAP_RE = re.compile(r"^C[A-Za-z_]*\d")
+FB_NOT_CAP_RE = re.compile(r"^(CN|CON|CR)\d", re.I)
+FB_POT_RE = re.compile(r"^(RV|VR|POT|TRIM)\d", re.I)
+FB_POT_FP_RE = re.compile(r"Potentiometer|Trimmer", re.I)
+FB_TIE_FP_RE = re.compile(r"NetTie", re.I)
+FB_DNP_VALUE_RE = re.compile(r"^(DNP|DNF|DNI|NC|N/C|NF|NP|NOPOP)\b", re.I)
+FB_BEAD_RE = re.compile(r"^(L|FB|FL)\d")
+FB_MAX_PARTS = 16
+POT_TOL = 0.20      # a trim pot's end-to-end tolerance when none is stated
+POT_STEPS = 20
+
+
+def _is_dnp(r: dict) -> bool:
+    return bool(r.get("dnp")) or bool(FB_DNP_VALUE_RE.match(
+        str(r.get("value") or "").strip()))
+
+
+def _fb_kind(r: dict) -> str:
+    """res / pot / cap / tie / other: how a part reads on an FB network."""
+    ref, fp = r["ref"], str(r.get("footprint") or "")
+    pads = set(r["pads"])
+    if re.match(r"^NT\d", ref) or FB_TIE_FP_RE.search(fp):
+        return "tie"
+    if (FB_POT_RE.match(ref) or FB_POT_FP_RE.search(fp)) and \
+            pads <= {"1", "2", "3"} and len(r.get("nums") or pads) == 3:
+        return "pot"
+    if FB_RES_RE.match(ref) and not FB_NOT_RES_RE.match(ref):
+        return "res"
+    if FB_CAP_RE.match(ref) and not FB_NOT_CAP_RE.match(ref):
+        return "cap"
+    return "other"
+
+
+def _r_tol(r: dict, ctx: dict) -> float:
+    """A resistor's tolerance band as a fraction (1 % floor)."""
+    try:
+        import tolerance
+        p = tolerance.part_tolerance(
+            "R", r["value"], _attr(ctx["bom_by_lcsc"].get(r["lcsc"]),
+                                   TOL_ATTR_RE), nom=1.0)
+        if p is not None:
+            return max(0.01, 1 - p.lo, p.hi - 1)
+    except Exception:  # noqa: BLE001 - a band we can't read: 1 %
+        pass
+    return 0.01
+
+
+def _solve_fb(edges: list[tuple[str, str, float]], fixed: dict[str, float],
+              fb: str) -> float | None:
+    """V(fb) of a resistor network (edges: net, net, ohms) with the fixed
+    nets held at their volts and no current out of the rest (nodal analysis,
+    Gaussian elimination). None when fb floats."""
+    nodes = sorted({n for a, b, _ in edges for n in (a, b)} - set(fixed))
+    if fb in fixed:
+        return fixed[fb]
+    if fb not in nodes:
+        return None
+    ix = {n: i for i, n in enumerate(nodes)}
+    k = len(nodes)
+    g = [[0.0] * (k + 1) for _ in range(k)]
+    for a, b, ohm in edges:
+        y = 1.0 / max(ohm, 1e-6)
+        for p, q in ((a, b), (b, a)):
+            if p in ix:
+                g[ix[p]][ix[p]] += y
+                if q in ix:
+                    g[ix[p]][ix[q]] -= y
+                else:
+                    g[ix[p]][k] += y * fixed[q]
+    for c in range(k):
+        piv = max(range(c, k), key=lambda i: abs(g[i][c]))
+        if abs(g[piv][c]) < 1e-15:
+            return None
+        g[c], g[piv] = g[piv], g[c]
+        for i in range(k):
+            if i != c and g[i][c]:
+                f = g[i][c] / g[c][c]
+                g[i] = [x - f * y for x, y in zip(g[i], g[c])]
+    return g[ix[fb]][k] / g[ix[fb]][ix[fb]]
+
+
+def _fb_network(b: dict, fb: str, ctx: dict) -> dict:
+    """Walk the resistor network hanging off a regulator's FB net. Caps are
+    open at DC, net ties and 0 ohm parts merge nets, DNP parts are open; a net
+    that carries only resistors, caps and ties is internal, any other net
+    (ground, a stated rail, a net with another part on it) is a terminal.
+    {'reason': why not judged} or {fb, out, how, ratio_lo, ratio_nom,
+    ratio_hi, notes}: the ratio Vout/Vfb with every resistor at the edge of
+    its band and any trim pot over its whole travel."""
+    board = ctx["board"]
+    if ctx["vsrc"].get(fb) in RAIL_SOURCES:
+        return {"fb": fb, "out": fb, "how": f"FB on {fb}", "plain": False,
+                "ratio_lo": 1.0, "ratio_nom": 1.0, "ratio_hi": 1.0,
+                "notes": [], "top": None, "pots": False}
+    parent: dict[str, str] = {}
+
+    def find(n: str) -> str:
+        while parent.get(n, n) != n:
+            n = parent[n]
+        return n
+
+    notes: list[str] = []
+    elems = []          # (part, kind)
+    for r in board:
+        if r["ref"] == b["ref"] or not r["pads"]:
+            continue
+        kind = _fb_kind(r)
+        if kind == "other":
+            continue
+        if _is_dnp(r):
+            elems.append((r, "dnp"))
+            continue
+        nets = set(r["pads"].values())
+        if kind == "tie" or (kind == "res" and len(nets) == 2 and
+                             engcalc.parse_value(r["value"]) == 0 and
+                             re.match(r"^\s*0", str(r["value"]))):
+            if len(nets) == 2:
+                a, c = (find(x) for x in sorted(nets))
+                if a != c:
+                    parent[max(a, c)] = min(a, c)
+            continue
+        elems.append((r, kind))
+    fbn = find(fb)
+    by_net: dict[str, list] = {}
+    for r, kind in elems:
+        for n in {find(x) for x in r["pads"].values()}:
+            by_net.setdefault(n, []).append((r, kind))
+    others: dict[str, list[str]] = {}
+    for r in board:
+        if (_fb_kind(r) != "other" or _is_dnp(r)) and r["ref"] != b["ref"]:
+            continue
+        for p, n in r["pads"].items():
+            if r["ref"] == b["ref"] and find(n) == fbn:
+                continue        # the regulator's own FB pad
+            others.setdefault(find(n), [])
+            if r["ref"] not in others[find(n)]:
+                others[find(n)].append(r["ref"])
+    if others.get(fbn):
+        return {"reason": f"{fb} also carries {', '.join(others[fbn][:3])}, "
+                f"which can move the output, so the divider alone doesn't "
+                f"set it"}
+    stated = {find(n) for n, s in ctx["vsrc"].items() if s in RAIL_SOURCES}
+
+    def terminal(n: str) -> bool:
+        # a net reached by one resistor and nothing else is where the
+        # divider senses the output (an unnamed rail with no other part)
+        return n != fbn and (
+            is_ground(n) or bool(others.get(n)) or n in stated
+            or len([e for e in by_net.get(n, []) if e[1] != "dnp"]) == 1)
+
+    seen, todo, used = {fbn}, [fbn], {}
+    while todo:
+        n = todo.pop()
+        if n != fbn and terminal(n):
+            continue
+        for r, kind in by_net.get(n, []):
+            if kind in ("cap",) or r["ref"] in used:
+                continue
+            if kind == "dnp":
+                notes.append(f"{r['ref']} is DNP (left open)")
+                used[r["ref"]] = (r, kind)
+                continue
+            used[r["ref"]] = (r, kind)
+            for m in {find(x) for x in r["pads"].values()}:
+                if m not in seen:
+                    seen.add(m)
+                    todo.append(m)
+        if len(used) > FB_MAX_PARTS:
+            return {"reason": f"the network on {fb} has more than "
+                    f"{FB_MAX_PARTS} parts, more than this check solves"}
+    res = [(r, k) for r, k in used.values() if k in ("res", "pot")]
+    if not res:
+        return {}
+    edges0, tols, pots = [], [], []
+    for r, kind in res:
+        v = engcalc.parse_value(r["value"])
+        if not v:
+            return {"reason": f"{r['ref']}'s value {r['value']!r} doesn't "
+                    f"parse, so the divider's ratio is unknown"}
+        if kind == "res":
+            nets = sorted({find(x) for x in r["pads"].values()})
+            if len(nets) != 2:
+                continue
+            edges0.append((nets[0], nets[1], v))
+            tols.append(_r_tol(r, ctx))
+        else:
+            pots.append((r, v))
+    terms = sorted(n for n in seen if n != fbn and terminal(n))
+    gnd = [n for n in terms if is_ground(n)]
+    tops = [n for n in terms if not is_ground(n)]
+    if not tops:
+        return {"reason": f"no resistor on {fb} reaches an output or rail "
+                f"(only {', '.join(gnd) or 'nothing'}), so there is no "
+                f"divider to read"}
+    if len(tops) > 1:
+        return {"reason": f"the network on {fb} is fed from "
+                f"{', '.join(tops[:4])}, so its output depends on more than "
+                f"one source"}
+    out = tops[0]
+    rtol = max(tols or [0.01])
+
+    def ratio(scale: list[float], wipers: list[float],
+              pot_scale: float = 1.0) -> float | None:
+        edges = [(a, c, ohm * s) for (a, c, ohm), s in zip(edges0, scale)]
+        for (r, tot), w in zip(pots, wipers):
+            p = {k: find(n) for k, n in r["pads"].items()}
+            tot *= pot_scale
+            if "2" not in p:            # wiper open: the whole track
+                if "1" in p and "3" in p:
+                    edges.append((p["1"], p["3"], tot))
+                continue
+            for end, part in (("1", w), ("3", 1 - w)):
+                if end in p:
+                    edges.append((p[end], p["2"], max(tot * part, 1e-3)))
+        fixed = {n: 0.0 for n in gnd}
+        fixed[out] = 1.0
+        v = _solve_fb(edges, fixed, fbn)
+        return 1.0 / v if v and v > 1e-9 else None
+
+    nom_w = [0.5] * len(pots)
+    nom = ratio([1.0] * len(edges0), nom_w)
+    if nom is None:
+        return {"reason": f"{fb} sits at 0 V through the network, so no "
+                f"output sets it"}
+    # each resistor at the band edge that pushes the ratio up (or down)
+    signs = []
+    for i in range(len(edges0)):
+        s = [1.0] * len(edges0)
+        s[i] = 1.0 + rtol
+        up = ratio(s, nom_w)
+        signs.append(1.0 if up is not None and up >= nom else -1.0)
+    grid = [[]]
+    for _ in pots:
+        grid = [g + [i / POT_STEPS] for g in grid for i in range(POT_STEPS + 1)]
+    los, his = [], []
+    for w in grid:
+        for d, ps in ((1.0, 1 + POT_TOL), (-1.0, 1 - POT_TOL),
+                      (1.0, 1 - POT_TOL), (-1.0, 1 + POT_TOL)):
+            if not pots and ps != 1 + POT_TOL:
+                continue
+            x = ratio([1 + d * sg * rtol for sg in signs], w,
+                      ps if pots else 1.0)
+            if x is not None:
+                (his if d > 0 else los).append(x)
+    if not los or not his:
+        return {"reason": f"{fb}'s network can't be solved at its corners"}
+    parts = sorted(r["ref"] for r, _ in res)
+    plain = not pots and len(res) == 2 and len(gnd) == 1
+    if plain:
+        top = next(r for r, _ in res if out in {find(x) for x in
+                                                 r["pads"].values()})
+        bot = next(r for r, _ in res if r is not top)
+        how = f"{top['ref']} {top['value']} / {bot['ref']} {bot['value']} " \
+              f"on {fb}"
+    else:
+        names = ", ".join(f"{r['ref']} {r['value']}" for r, _ in
+                          sorted(res, key=lambda x: x[0]["ref"]))
+        trims = ", ".join(r["ref"] for r, _ in pots)
+        how = (f"the network {names} on {fb}"
+               + (f" (trim {trims} over its whole travel)" if pots else ""))
+    return {"fb": fb, "out": out, "how": how, "plain": plain,
+            "ratio_lo": min(los), "ratio_nom": nom, "ratio_hi": max(his),
+            "notes": notes, "top": parts, "pots": bool(pots)}
+
+
+def _rail_beyond(net: str, b: dict, ctx: dict) -> str | None:
+    """A stated rail one 2-pad bead or inductor beyond net, when the
+    regulator itself has no pad on net (else net may be its switch node)."""
+    if net in b["pads"].values():
+        return None
+    for r in ctx["board"]:
+        nets = set(r["pads"].values())
+        if FB_BEAD_RE.match(r["ref"]) and len(r["pads"]) == 2 and \
+                len(nets) == 2 and net in nets and not _is_dnp(r):
+            (o,) = nets - {net}
+            if ctx["vsrc"].get(o) in RAIL_SOURCES:
+                return o
+    return None
+
+
 def fb_divider(b: dict, fb_pins: list[str], ctx: dict) -> dict | None:
-    """The divider on a regulator's FB pad: {fb, out, r_top, r_bot, ratio,
-    rtol}; out is the net the top resistor's other end sits on, and an FB pad
-    straight on a rail the board states has ratio 1. None when the FB net has
-    no plain one-top/one-bottom divider of parsed values."""
+    """The divider on a regulator's FB pad (_fb_network): {fb, out, rail,
+    how, ratio_lo, ratio_nom, ratio_hi, notes}, or {reason} when the network
+    can't be read, or None when the FB pad has no resistor on it."""
+    first = None
     for fb in sorted({b["pads"][p] for p in fb_pins if p in b["pads"]}):
         if is_ground(fb):
             continue
-        if ctx["vsrc"].get(fb) in RAIL_SOURCES:
-            return {"fb": fb, "out": fb, "ratio": 1.0, "rtol": 0.0,
-                    "r_top": None, "r_bot": None}
-        tops, bots = [], []
-        for r in ctx["board"]:
-            nets = set(r["pads"].values())
-            if not re.match(r"^R\d", r["ref"]) or len(nets) != 2 or \
-                    fb not in nets:
-                continue
-            (other,) = nets - {fb}
-            (bots if is_ground(other) else tops).append((r, other))
-        if len(tops) != 1 or len(bots) != 1:
-            continue
-        (rt, out), (rb, _) = tops[0], bots[0]
-        vt, vb = (engcalc.parse_value(x["value"]) for x in (rt, rb))
-        if not vt or not vb:
-            continue
-        rtol = 0.01
-        for r in (rt, rb):
-            try:
-                import tolerance
-                p = tolerance.part_tolerance(
-                    "R", r["value"], _attr(ctx["bom_by_lcsc"].get(r["lcsc"]),
-                                           TOL_ATTR_RE), nom=1.0)
-                if p is not None:
-                    rtol = max(rtol, 1 - p.lo, p.hi - 1)
-            except Exception:  # noqa: BLE001 - a band we can't read: 1 %
-                pass
-        return {"fb": fb, "out": out, "ratio": 1 + vt / vb, "rtol": rtol,
-                "r_top": f"{rt['ref']} {rt['value']}",
-                "r_bot": f"{rb['ref']} {rb['value']}"}
-    return None
+        net = _fb_network(b, fb, ctx)
+        if net.get("out"):
+            out = net["out"]
+            net["rail"] = out if ctx["vsrc"].get(out) in RAIL_SOURCES else \
+                _rail_beyond(out, b, ctx)
+            return net
+        if net.get("reason") and first is None:
+            first = {**net, "fb": fb}
+    return first
 
 
 def worst_case_top(fbv: dict) -> float:
@@ -2509,11 +2779,20 @@ def divider_findings(b: dict, part: str, texts: list[str],
     if div is None:
         return False, False
     ref = b["ref"]
+    if div.get("reason"):
+        if fixed:       # FB may be a fixed part's output sense
+            return False, False
+        emit("rating_regulator_output_unjudged", "warning", ref, div["fb"],
+             f"{part}'s output wasn't judged from its FB divider: "
+             f"{div['reason']}")
+        ctx.setdefault("not_judged", []).append(
+            f"{ref} output: {div['reason']}")
+        return True, False
     vr = find_vref(texts, ctx["vrefs"])
-    if not div["r_top"] and (fixed or vr is None):
+    if not div["top"] and (fixed or vr is None):
         return False, False
-    how = (f"{div['r_top']} / {div['r_bot']} on {div['fb']}"
-           if div["r_top"] else f"FB on {div['fb']}")
+    how = div["how"] + "".join(f"; {n}" for n in div["notes"])
+    rail = div.get("rail")
     if vr is None:
         emit("rating_regulator_output_unjudged", "warning", ref, div["out"],
              f"{part} sets its output with {how}, but its Vref isn't in "
@@ -2521,27 +2800,28 @@ def divider_findings(b: dict, part: str, texts: list[str],
              f"Add a row with the datasheet's VFB")
         return True, False
     vref, vtol, src, verified = vr
-    if div["r_top"]:
-        rt = div["ratio"] - 1.0
-        fbv = engcalc.fb_vout(vref, rt, 1.0, div["rtol"], vtol)
-    else:
-        fbv = {"nom": vref, "min": vref * (1 - vtol), "max": vref * (1 + vtol)}
+    # engcalc.fb_vout's corners, over the whole network (_fb_network)
+    fbv = {"nom": vref * div["ratio_nom"],
+           "min": vref * (1 - vtol) * div["ratio_lo"],
+           "max": vref * (1 + vtol) * div["ratio_hi"]}
     lo, hi = fbv["min"], fbv["max"]
     rating = f"Vref {_fmt(vref)} V ±{_fmt(vtol * 100)}% ({src}" + \
         ("" if verified else "; unverified") + ")"
     stated = []
-    if ctx["vsrc"].get(div["out"]) in RAIL_SOURCES:
-        v = ctx["volts"][div["out"]]
-        if ctx["vsrc"][div["out"]] == "constraints":
-            stated.append((div["out"], v, True,
-                           f"constraints give {div['out']} a worst case of "
+    via = (f" (through the bead or inductor from {div['out']})"
+           if rail and rail != div["out"] else "")
+    if rail:
+        v = ctx["volts"][rail]
+        if ctx["vsrc"][rail] == "constraints":
+            stated.append((rail, v, True,
+                           f"constraints give {rail}{via} a worst case of "
                            f"{_fmt(v)} V (over this divider it may be "
                            f"{_fmt(lo)}-{_fmt(worst_case_top(fbv))} V)"))
         else:
-            stated.append((div["out"], v, False, f"{div['out']} = {_fmt(v)} V"))
+            stated.append((rail, v, False, f"{rail}{via} = {_fmt(v)} V"))
     if ref in ctx["blocks"]:
         v, blk = ctx["blocks"][ref]
-        stated.append((div["out"], v, False,
+        stated.append((rail or div["out"], v, False,
                        f"constraints {blk} vout_v = {_fmt(v)} V"))
     on = sorted(p for p, n in b["pads"].items() if n == div["fb"])
     emitted = False
@@ -2549,8 +2829,10 @@ def divider_findings(b: dict, part: str, texts: list[str],
         if worst_case_fits(fbv, v) if worst else lo - EPS <= abs(v) <= hi + EPS:
             continue
         emit("rating_regulator_output", "error", ref, net,
-             f"{part} makes {_fmt(fbv['nom'])} V ({_fmt(lo)}-{_fmt(hi)} V) "
-             f"from {how}, but {what} [{rating}]",
+             (f"{part} can be trimmed to {_fmt(lo)}-{_fmt(hi)} V "
+              if div.get("pots") else
+              f"{part} makes {_fmt(fbv['nom'])} V ({_fmt(lo)}-{_fmt(hi)} V) ")
+             + f"from {how}, but {what} [{rating}]",
              pin=f"{ref}.{on[0]}" if on else None, net_v=v,
              limit_v=fbv["nom"], rating=rating)
         emitted = True
@@ -2561,7 +2843,8 @@ def fb_pins_unextracted(b: dict, names: dict, mpn: str) -> list[str]:
     """An unextracted adjustable part's FB pads, by pad name."""
     if reg_fixed_part(mpn) is not None:
         return []
-    return [p for p, n in names.items() if FB_PAD_RE.match(n)]
+    return [p for p, n in names.items()
+            if any(FB_PAD_RE.match(a) for a in aliases(n))]
 
 
 def fb_pins_extracted(b: dict, ext: dict, mpn: str) -> list[str]:

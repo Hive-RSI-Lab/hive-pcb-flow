@@ -128,7 +128,8 @@
      "offsets": [{"dx": 20, "dy": 0, "rot": 180}], "origin": [10, 10]}
   ],
   "blocks": [
-    {"topology": "buck", "block": "input", "name": "main buck",
+    {"topology": "buck", "block": "input", "name": "main buck", "ref": "U1",
+     "refs": ["U1"],
      "operating_point": {"vin_v": 12, "vout_v": 5, "fsw_khz": 500,
                          "iout_a": 2, "duty": 0.42, "bus_net": "+12V"}},
     {"topology": "buck", "block": "bus",

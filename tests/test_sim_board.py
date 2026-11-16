@@ -323,8 +323,10 @@ def test_engine_fb_divider(report):
     # 0.596 * (1 + 100k/15k) = 4.57 V against +5V: -8.6 %
     assert v["severity"] == "error" and v["refs"] == ["R1", "R2", "U1"]
     assert v["vout"]["nom"] == pytest.approx(4.569, abs=1e-3)
-    assert any(u["ref"] == "U1" and "Vref" in u["what"]
-               for u in report["known_unknowns"])
+    # #847 re-read the TPS5430x Vref in its datasheet, so it is no longer
+    # an unknown
+    assert not any(u["ref"] == "U1" and "Vref" in u["what"]
+                   for u in report["known_unknowns"])
 
 
 def test_engine_i2c(report):
