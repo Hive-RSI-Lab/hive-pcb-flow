@@ -523,8 +523,6 @@ def test_a_footprint_that_does_not_settle_the_package_leaves_it_out(
     ([{**SO8X_ROW, "mpn": "ZZTOP", "lcsc": "C5"}],
      "no JLC listing has exactly that MPN, nor one near it"),
     ([], "no JLC listing has exactly that MPN, nor one near it"),
-    ([{**SO8X_ROW, "datasheet": ""}],
-     "1 JLC listings have exactly that MPN, none with a datasheet"),
 ])
 def test_no_exact_listing_names_the_nearest_and_reads_nothing(
         stand_ins, no_table, rows, why):
@@ -537,6 +535,97 @@ def test_no_exact_listing_names_the_nearest_and_reads_nothing(
     assert rep["status"] == "not one listing for its Value"
     assert rep["why"] == why
     assert calls == [] and not (out / "ext" / "SO8X.json").exists()
+
+
+@pytest.mark.parametrize("value, mpn, brand, code", [
+    # #1471 quiet twins: the Value plus its maker's packing code alone
+    ("LPS25HB", "LPS25HBTR", "STMicroelectronics", "TR"),
+    ("SN74LV1T34DBV", "SN74LV1T34DBVR", "Texas Instruments", "R"),
+    ("TLV320AIC3104IRHB", "TLV320AIC3104IRHBT", "Texas Instruments", "T"),
+    ("74LVC1G3157GW", "74LVC1G3157GW,125", "Nexperia", ",125"),
+    ("74LVC1G3157DW", "74LVC1G3157DW-7", "Diodes Incorporated", "-7"),
+    ("ISL29035IROZ", "ISL29035IROZ-T7", "RENESAS", "-T7"),
+    ("AD8605ART", "AD8605ART-REEL7", "Analog Devices", "-REEL7"),
+    # planted faults: a package, grade or other code, a code under another
+    # brand, a TI R not after a TI package code: a near miss, not taken
+    ("PCM5102A", "PCM5102APW", "Texas Instruments", ""),
+    ("PCM5102A", "PCM5102APWR", "Texas Instruments", ""),
+    ("W25Q128JVS", "W25Q128JVSIQ", "Winbond Elec", ""),
+    ("LPS25HB", "LPS25HBTR", "TECH PUBLIC", ""),
+    ("SN74LV1T34DBV", "SN74LV1T34DBVR-TP", "TECH PUBLIC", ""),
+    ("SN74LV1T34DBV", "SN74LV1T34DBVRG4", "Texas Instruments", ""),
+    ("TPS7A20", "TPS7A20R", "Texas Instruments", ""),
+    ("ISL29035", "ISL29035IROZ-T7", "RENESAS", ""),
+    ("LPS25HB", "LPS25HB", "STMicroelectronics", ""),
+])
+def test_only_a_makers_packing_code_is_the_same_part(value, mpn, brand, code):
+    assert lb.packing_suffix(value, {"mpn": mpn, "brand": brand}) == code
+
+
+def test_a_value_listed_only_on_a_reel_is_read(stand_ins, no_table):
+    """#1471 quiet twin: SO8X listed only as SO8XTR by ST, the maker whose
+    tape-and-reel code TR is: read as SO8X, the report naming the listing.
+    Planted fault: the same row under another brand stays a near miss."""
+    out, store, reader, calls, _, _ = stand_ins
+    reel = {**SO8X_ROW, "mpn": "SO8XTR", "brand": "STMicroelectronics"}
+    _value_rows(store, "SO8X", [{**reel, "brand": "Acme"}])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "not one listing for its Value"
+    assert rep["why"].startswith("no JLC listing has exactly that MPN; nearest: SO8XTR")
+    assert calls == []
+
+    _value_rows(store, "SO8X", [reel])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "kept" and rep["lcsc"] == "C999008"
+    assert rep["mpn"] == "SO8X"
+    assert rep["listing_from"] == ("SO8XTR: the Value with STMicroelectronics's "
+                                   "packing code TR")
+    assert (out / "ext" / "SO8X.json").is_file()
+
+
+def test_an_exact_listing_with_no_datasheet_goes_to_the_resolver(
+        stand_ins, no_table, monkeypatch):
+    """#1471: an exact listing that names no datasheet is no longer left out
+    as no listing: the resolver looks the Value up, a JLCPCB Assembly
+    listing's brand dropped so the MPN's family names the maker. Its twin,
+    a miss, is left out with the resolver's reason."""
+    import dsresolve
+    out, store, reader, calls, _, _ = stand_ins
+    asked = []
+    url = "https://maker.example.com/so8x.pdf"
+
+    def resolve(mpn, brand, dest):
+        asked.append((mpn, brand))
+        if brand:
+            return {"maker": None, "miss": "maker not known", "tried": []}
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 SO8X")
+        return {"maker": "Maker", "url": url, "via": "Maker URL pattern for SO8X",
+                "got": {"url": url, "status": "fetched", "file": str(dest)},
+                "tried": []}
+    monkeypatch.setattr(dsresolve, "resolve", resolve)
+    _value_rows(store, "SO8X", [{**SO8X_ROW, "datasheet": "", "brand": "Acme"}])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "no listing with a datasheet URL"
+    assert rep["resolver"] == "maker not known" and calls == []
+
+    _value_rows(store, "SO8X", [{**SO8X_ROW, "datasheet": "",
+                                 "brand": "JLCPCB Assembly"}])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "kept", rep
+    assert rep["datasheet_from"] == "Maker URL pattern for SO8X"
+    assert asked == [("SO8X", "Acme"), ("SO8X", "")]
+
+
+def test_lqfn_is_a_no_lead_package():
+    """#1471: RP2040 is listed as LQFN-56(7x7) and QFN-56-EP(7x7), one
+    package, which its QFN-56 footprint fits."""
+    rows = [{"lcsc": "C2040", "package": "LQFN-56(7x7)"},
+            {"lcsc": "C2961140", "package": "QFN-56-EP(7x7)"}]
+    kept, why = lb.by_footprint(
+        rows, [("Package_DFN_QFN:QFN-56-1EP_7x7mm_P0.4mm_EP3.2x3.2mm", 56)])
+    assert [r["lcsc"] for r in kept] == ["C2040", "C2961140"]
+    assert why == "its one package, listed under 2 names"
 
 
 def test_a_part_with_an_mpn_somewhere_keeps_the_mpn_listing(stand_ins):
