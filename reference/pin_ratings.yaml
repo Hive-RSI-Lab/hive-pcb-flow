@@ -22,46 +22,140 @@
 # Pins named for a switch node or bootstrap (HB HS HO BST BOOT SW LX PH)
 # track the switch node by design and are listed, not judged.
 parts:
+  # Current-sense amps and power monitors (#521): the shunt inputs ride the
+  # bus, not VS. Pin forms seen in KiCad's own symbols and on boards: IN+,
+  # INP, Vin+ (INA226/228/233), bare + and - (INA240), per-channel IN+1 or
+  # IN1+, SENSE1+ (PAC193x/195x), +IN (NCS21x). Re-read 2026-11-16 from the TI,
+  # Microchip and onsemi PDFs named in each source.
   - match: '^INA240'
-    pins: '^(IN[+-]|IN[PN])$'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-])$'
     max_v: 80
-    source: TI SBOS662 (INA240) recommended common-mode input -4 to 80 V
-    verified: false
+    source: >-
+      TI SBOS662C (INA240, rev. Dec 2021) 6.3 recommended VCM -4 to 80 V
+      (6.1 absolute maximum common-mode -6 to 90 V)
+    verified: true
   - match: '^INA2(28|29|37|38|39)'
-    pins: '^(IN[+-]|IN[PN]|VBUS)$'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-]|VBUS)$'
     max_v: 85
-    source: TI SBOSA20/SBOS959 (INA237/INA228 family) common-mode and VBUS 0 to 85 V
-    verified: false
+    source: >-
+      TI SBOSA20A (INA237) and the INA228/229/238/239 data sheets, 6.3
+      recommended VCM -0.3 to 85 V; VBUS 0 to 85 V
+    verified: true
   - match: '^INA226'
-    pins: '^(IN[+-]|IN[PN]|VBUS)$'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-]|VBUS)$'
     max_v: 36
-    source: TI SBOS547 (INA226) common-mode 0 to 36 V
-    verified: false
+    source: >-
+      TI SBOS547C (INA226, rev. Aug 2026) 6.5 bus voltage input range and
+      CMRR 0 to 36 V (6.1 absolute maximum common-mode and VBUS -0.3 to 40 V)
+    verified: true
+  - match: '^INA233'
+    pins: '(?i)^(V?IN\d?[+-]\d?|IN[PN]|VBUS)$'
+    max_v: 36
+    abs_max_v: 40
+    source: >-
+      TI SBOS790A (INA233, rev. Mar 2025) 5.3 recommended VCM 0 to 36 V; 5.1
+      absolute maximum IN+, IN- common-mode and VBUS -0.3 to 40 V
+    verified: true
+  - match: '^INA260'
+    pins: '(?i)^(V?IN\d?[+-]\d?|IN[PN]|VBUS)$'
+    max_v: 36
+    abs_max_v: 40
+    source: >-
+      TI SBOS656C (INA260) 6.3 recommended VCM 0 to 36 V; 6.1 absolute
+      maximum IN+, IN- common-mode and VBUS -0.3 to 40 V
+    verified: true
+  - match: '^INA234'
+    pins: '(?i)^(V?IN\d?[+-]\d?|IN[PN])$'
+    max_v: 28
+    abs_max_v: 30
+    source: >-
+      TI SBOS844D (INA234) 5.3 recommended VCM GND - 0.3 to 28 V; 5.1
+      absolute maximum VIN+, VIN- common-mode GND - 0.3 to 30 V
+    verified: true
+  - match: '^INA3221'
+    pins: '(?i)^(V?IN[+-][123]|V?IN[123][+-]|VPU|TC)$'
+    max_v: 26
+    abs_max_v: 26
+    source: >-
+      TI SBOS576C (INA3221, rev. Sep 2026) 6.1 absolute maximum IN+, IN-
+      -0.3 to 26 V regardless of VS (note 2), VPU 26 V, timing control 26 V;
+      7.1 CMR is specified over VIN+ 0 to 26 V
+    verified: true
   - match: '^INA219'
-    pins: '^(IN[+-]|IN[PN])$'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-])$'
     max_v: 26
-    source: TI SBOS448 (INA219) common-mode 0 to 26 V
-    verified: false
-  - match: '^INA(18[01]|185|199|21[0-5])'
-    pins: '^(IN[+-]|IN[PN])$'
+    source: >-
+      TI SBOS448G (INA219) 7.1 absolute maximum IN+, IN- common-mode -0.3 to
+      26 V; CMRR specified over VIN+ 0 to 26 V
+    verified: true
+  - match: '^INA([24]?18[01]|185|199|21[0-5])'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-])$'
     max_v: 26
-    source: TI INA180/INA199/INA21x common-mode -0.2/-0.3 to 26 V
-    verified: false
+    source: >-
+      TI SBOS741H (INAx180) and SBOS793H (INAx181) 6.3 recommended VCM -0.2
+      to 26 V; SBOS378A (INA185) the same; SBOS469H (INA199) and SBOS437K
+      (INA210-215) absolute maximum common-mode GND - 0.3 to 26 V
+    verified: true
   - match: '^INA(186|190)'
-    pins: '^(IN[+-]|IN[PN])$'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-])$'
     max_v: 40
-    source: TI SBOS850 (INA186) / SBOS863 (INA190) common-mode to 40 V
-    verified: false
+    source: >-
+      TI SBOS318B (INA186) and SBOS863D (INA190) recommended common-mode
+      input range GND - 0.2 to 40 V
+    verified: true
   - match: '^INA28[1]|^INA293'
-    pins: '^(IN[+-]|IN[PN])$'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-])$'
     max_v: 110
-    source: TI INA281/INA293 common-mode -4 to 110 V
-    verified: false
+    source: >-
+      TI SBOSA29A (INA281-Q1) and SBOS470B (INA293) recommended common-mode
+      input range -4 to 110 V (survival -20 to 120 V)
+    verified: true
   - match: '^INA290'
-    pins: '^(IN[+-]|IN[PN])$'
+    pins: '^(V?IN\d?[+-]\d?|IN[PN]|[+-])$'
     max_v: 120
-    source: TI SBOS948 (INA290) common-mode 2.7 to 120 V
-    verified: false
+    source: >-
+      TI SBOS961C (INA290) common-mode input range VS (2.7) to 120 V
+    verified: true
+  - match: '^INA20[012]'
+    pins: '^(V_?\{?IN[+-]|IN[+-]|IN[PN])$'
+    max_v: 80
+    source: >-
+      TI SBOS374E (INA200/201/202, rev. Sep 2017) recommended VCM -16 to 80 V
+      (absolute maximum common-mode -16 to 80 V)
+    verified: true
+  - match: '^INA225'
+    pins: '^(V?IN[+-]|IN[PN])$'
+    max_v: 36
+    source: >-
+      TI SBOS612A (INA225, rev. Mar 2014) common-mode input range 0 to 36 V
+      (absolute maximum GND - 0.3 to 40 V)
+    verified: true
+  - match: '^INA253'
+    pins: '^(V?IN[+-]|IS[+-]|SH[+-])$'
+    max_v: 80
+    source: >-
+      TI INA253 data sheet (rev. Dec 2018) 7.3 recommended VCM -4 to 80 V;
+      7.1 absolute maximum IS+, IS-, VIN+, VIN-, SH+, SH- GND - 6 to 90 V
+    verified: true
+  - match: '^PAC19[35][1-4]'
+    pins: '(?i)^SENSE ?[1-4]?[+-]$'
+    max_v: 32
+    abs_max_v: 40
+    source: >-
+      Microchip DS20005850E (PAC1931/2/3/4) VBUS range -0.2 to 32 V
+      (common-mode range for SENSE+), pin table "0-32V range"; absolute
+      maximum SENSE+ and SENSE- -0.3 to 40 V. DS20006539A (PAC1951/2/3/4)
+      the same: VBUS -0.2 to 32 V, SENSE+ and SENSE- -0.3 to 40 V
+    verified: true
+  - match: '^NC[SV]21[0-4]'
+    pins: '(?i)^([+-]IN|V?IN[+-])$'
+    max_v: 26
+    abs_max_v: 30
+    source: >-
+      onsemi NCS210R/D (NCS210R-214R, NCV21xR, rev. 9 Jun 2023) recommended
+      common-mode input voltage -0.3 to 26 V; maximum ratings common-mode
+      GND - 0.3 to +30 V
+    verified: true
   - match: '^BQ7695[02]|^BQ76942'
     pins: '^(BAT|PACK|LD|CHG|DSG|PCHG|PDSG|VC\d+)$'
     max_v: 85
