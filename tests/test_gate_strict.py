@@ -971,13 +971,14 @@ def test_verify_all_strict_with_declared_na_passes(tmp_path, monkeypatch,
     # also warns that +3V3/+5V aren't declared in this constraints file
     # (#877). Without KiCad there is no netlist to export, so check_straps
     # says it couldn't judge blinky2's STM32F103 (no_netlist, #885).
-    # Nothing else.
+    # check_ldo_esr warns that the AMS1117's +3V3 output has only ceramic
+    # caps where its datasheet asks for 22 uF tantalum (#356). Nothing else.
     assert summary["status"] in ("pass", "violations")
     audit = 0 if no_models else 2
     straps = 1 if no_models else 0
-    assert summary["counts"]["by_severity"] == {"warning": 2 + audit + straps}
+    assert summary["counts"]["by_severity"] == {"warning": 3 + audit + straps}
     assert {k for k, v in summary["counts"]["by_check"].items() if v} \
-        == {"check_connector_fit"} | ({"netlist_audit"} if audit else set()) \
+        == {"check_connector_fit", "check_ldo_esr"} | ({"netlist_audit"} if audit else set()) \
         | ({"check_straps"} if straps else set())
     cov = summary["coverage"]
     board_only = ["check_diffpair", "check_silk", "check_courtyard", "check_route_style",
@@ -986,7 +987,7 @@ def test_verify_all_strict_with_declared_na_passes(tmp_path, monkeypatch,
                   "check_model_paths", "check_antenna", "check_straps",
                   "check_model_fit", "check_usb_phy", "check_vias",
                   "check_reset_drive", "check_si", "check_fp_attr", "check_fp_package",
-                  "check_fp_geometry", "check_converter",
+                  "check_fp_geometry", "check_converter", "check_ldo_esr",
                   "check_length_groups", "check_cap_load",
                   "check_wicking", "check_ddr_timing",
                   "check_testpoints", "check_rf_match", "check_surge",

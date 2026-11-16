@@ -1,0 +1,16 @@
+# Seeded fault for check_ldo_esr (#356).
+mutants:
+  ldo-esr-ceramic-only:
+    board: blinky2
+    script: mutations/ldo_esr_ceramic_only.py
+    check: check_ldo_esr
+    defect: >-
+      PART fault: U2 is an LM1117-3.3 whose +3V3 output has only ceramic
+      capacitors (C1 to C5, up to 10 uF). The LM1117 datasheet asks for an
+      output capacitor ESR of 0.3 to 22 ohm; a ceramic over 1 uF is a few
+      milliohms (TI SNVA167A p. 5), so the loop can oscillate.
+    expect:
+      kind: ldo_esr_low
+      net: +3V3
+      ref: U2
+      severity: error

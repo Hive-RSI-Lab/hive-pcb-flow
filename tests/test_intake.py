@@ -490,10 +490,12 @@ def _demo_dir() -> Path | None:
 # warnings, so the gates still pass. check_ratings: no datasheet extractions, so
 # the scaffold's empty parts/ leaves every part unrated, never a silent pass (#32).
 # check_connector_fit: KiCad's stock 1.0 mm header drill under IPC-2222 (#474, the
-# same known warning as test_checks_s5.GOLDEN_KNOWN_WARNINGS).
+# same known warning as test_checks_s5.GOLDEN_KNOWN_WARNINGS). check_ldo_esr:
+# the AMS1117 (U2) has only ceramics on +3V3 (#356, recorded real in triage.yaml).
 GOLDEN_WARNINGS = {
     "check_ratings": ("rating_unrated", {"C1", "D1", "J1", "J2"}),
     "check_connector_fit": ("tht_hole_ipc2222", {"J1", "J2"}),
+    "check_ldo_esr": ("ldo_esr_low", {"U2", "C5"}),
 }
 # check_straps and check_reset_drive know blinky2's STM32F103 since #885 (the
 # STM32F1 row in reference/reset_states.yaml) and must pass it, as below.

@@ -337,7 +337,7 @@ SCHEMA_TOP_KEYS = set(SECTIONS) | set(TOP_OBJECTS) | TOP_NUMBERS | {
     "pin_modes", "io_supply", "ddr", "testpoints", "rf_match", "surge",
     "isolation", "mechanical", "transformers", "pinouts",
     "design_intent", "switched_loads", "rail_budget",
-    "connector_pinouts"}
+    "connector_pinouts", "ldo_caps"}
 PROSE_KEYS = {"note", "notes"}
 ENVELOPE_ALIASES = {"power_constraints": "power",
                     "thermal_constraints": "thermal",

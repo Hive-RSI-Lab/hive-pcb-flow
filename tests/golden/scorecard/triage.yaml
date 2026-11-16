@@ -708,3 +708,17 @@ entries:
     net: "/IN_P"
     verdict: fp
     reason: "bb-amp LEARNINGS.md 2026-08-17: /IN_P//IN_N is a low-frequency precision DC pair that needs equality, not coupling or a controlled impedance, and there is no controlled impedance anywhere on the board; the same entry records check_diffpair failing the verify gate on the same pair. gate-verify.json (P8) passes with check_diffpair 0. fp (impedance target does not apply)."
+  - board: golden:blinky2
+    check: check_ldo_esr
+    kind: ldo_esr_low
+    net: "+3V3"
+    refs: [U2]
+    verdict: real
+    reason: >-
+      U2 is an AMS1117-3.3 whose +3V3 output has only chip ceramics (C1 to
+      C4 0.1 uF, C5 10 uF). The AMS1117 datasheet (p. 4) makes the output
+      capacitor part of the frequency compensation and states stability for
+      all operating conditions only with 22 uF solid tantalum; it gives no
+      ESR bound for a ceramic. A warning that the board departs from the
+      datasheet's stable condition is true; it is a warning, not an error,
+      because the AMS1117 states no ESR window (#356).

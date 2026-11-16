@@ -6,6 +6,7 @@
   "coating": "soldermask",
   "antennas": {"AE1": "pcb", "AE2": "external"},
   "cable_pf": {"J1": 50, "J2": 0},
+  "ldo_caps": {"C1": "tantalum", "C2": {"dielectric": "ceramic", "esr_ohm": 0.5}},
   "switched_loads": [{"nets": ["/PANEL_A", "/PANEL_B"], "capacitance_f": 1.4e-7},
                      {"net": "/PANEL_A", "capacitance_f": 1e-7}],
   "rail_budget": {"sources": {"U2": {"pins": "VOUT", "vout_v": 1.8, "vout_min_v": 1.782}},
