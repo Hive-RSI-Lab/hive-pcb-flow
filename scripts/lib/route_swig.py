@@ -44,6 +44,9 @@ job JSON: {"verb": ..., "result": out.json, ...} with verbs:
             #   out takes the default on a new via and keeps its value on a
             #   via already there, whose "exists" result says
             #   "teardrops": "set" when anything changed
+            # optional (#1147): "filled": bool sets filling + capping as
+            #   set_via_fill does; an "exists" result says "filled": "set"
+            #   when that changed the via
         {"op": "remove", "uuid": "..."}        # track, via or zone; absent = no-op
         {"op": "set_net", "uuid": "...", "net": "NAME"}   # renet one item
         {"op": "set_width", "uuid": "...", "width": mm}   # a track or arc
@@ -113,6 +116,21 @@ def _layer_id(board, name):
     if lid < 0:
         raise ValueError("unknown layer: %s" % name)
     return lid
+
+
+def _set_fill(pcbnew, via, filled):
+    """Filling + capping (IPC-4761 Type VII) on or off; True if it changed
+    the via."""
+    if filled:
+        fm, cm = pcbnew.FILLING_MODE_FILLED, pcbnew.CAPPING_MODE_CAPPED
+    else:
+        fm = pcbnew.FILLING_MODE_NOT_FILLED
+        cm = pcbnew.CAPPING_MODE_NOT_CAPPED
+    if via.GetFillingMode() == fm and via.GetCappingMode() == cm:
+        return False
+    via.SetFillingMode(fm)
+    via.SetCappingMode(cm)
+    return True
 
 
 def _net(board, name):
@@ -276,6 +294,8 @@ def verb_apply_ops(job):
             td = op.get("teardrops")
             if hit is not None:
                 res = {"op": kind, "status": "exists"}
+                if "filled" in op and _set_fill(pcbnew, hit, op["filled"]):
+                    res["filled"] = "set"     # a fill_vias in the list (#1147)
                 if td is not None:
                     # merged onto the via's own settings: a key left out
                     # keeps its value, not the default (#1138)
@@ -296,6 +316,8 @@ def verb_apply_ops(job):
             if td is not None:
                 teardrop_swig.set_params(
                     v, dict(teardrop_swig.ITEM_DEFAULTS, **td), iu)
+            if "filled" in op:
+                _set_fill(pcbnew, v, op["filled"])
             board.Add(v)
             via_index[(at.x, at.y, op["net"], top, bot)] = v
             results.append({"op": kind, "status": "added",
@@ -341,15 +363,7 @@ def verb_apply_ops(job):
             if item is None or item.GetClass() != "PCB_VIA":
                 raise ValueError("ops[%d]: via %s not on board"
                                  % (i, op["uuid"]))
-            if op["filled"]:
-                fm, cm = pcbnew.FILLING_MODE_FILLED, pcbnew.CAPPING_MODE_CAPPED
-            else:
-                fm = pcbnew.FILLING_MODE_NOT_FILLED
-                cm = pcbnew.CAPPING_MODE_NOT_CAPPED
-            same = item.GetFillingMode() == fm and item.GetCappingMode() == cm
-            if not same:
-                item.SetFillingMode(fm)
-                item.SetCappingMode(cm)
+            same = not _set_fill(pcbnew, item, op["filled"])
             results.append({"op": kind, "status": "exists" if same
                             else "changed"})
         elif kind == "rename_net":
