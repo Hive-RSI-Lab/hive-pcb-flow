@@ -69,6 +69,32 @@ def test_class_falls_back_to_the_description():
     assert ls.part_class({}) == "other"
 
 
+def test_the_category_names_an_ic_before_its_feature_words():
+    # #1435: TCA6416's description lists "Built-in LED driver" and LP2985's
+    # "Noise bypass terminal"; LCSC's category says what each part is
+    tca = {"category": "I/O Expanders",
+           "description": "I/O expander, 16-bit, I2C, built-in LED driver, TSSOP-24"}
+    lp = {"category": "Voltage Regulators - Linear, Low Drop Out (LDO) Regulators",
+          "description": "150mA LDO, 3.3V output, noise bypass terminal, SOT-23-5"}
+    assert ls.part_class(tca) == "ic"
+    assert ls.part_class(lp) == "ic"
+    assert ls.part_class({"category": "Gate Drivers",
+                          "description": "Half-bridge MOSFET gate driver"}) == "ic"
+    assert ls.part_class({"category": "LED Drivers", "description": "LED diode driver"}) == "ic"
+
+
+def test_a_passive_category_still_names_its_class():
+    assert ls.part_class({"category": "Pin Headers", "description": "2.54mm"}) == "connector"
+    assert ls.part_class({"category": "TVS", "description": "SMA"}) == "diode"
+    # a reference designator still wins over the category
+    assert ls.part_class({"refdes": ["D1"], "category": "LED Drivers"}) == "diode"
+
+
+def test_a_part_with_no_category_reads_its_description_as_before():
+    assert ls.part_class({"description": "Buck converter 2A SOT-23-6"}) == "ic"
+    assert ls.part_class({"description": "LED driver with connector"}) == "connector"
+
+
 def test_wilson_upper_limit():
     assert ls.wilson_upper(0, 0) == 1.0
     assert 0.05 < ls.wilson_upper(0, 60) < 0.07
