@@ -35,3 +35,14 @@ PDFs are not committed (copyright). The URL and sha256 let anyone fetch the
 same copy and re-check it.
 `tests/test_check_ratings.py::test_library_entry_is_valid_and_cites_its_datasheet`
 checks every entry for schema, LCSC, URL, sha256 and page citations.
+
+## Batch readings (not in this folder)
+
+`scripts/abs_max_batch.py` reads the absolute-maximum ratings of a board
+set's ICs in bulk (#1339), one model reading per datasheet that a fixed
+check then trims to what the PDF text shows. Its files go in the corpus
+cache (`<cache>/abs-max/<set>/ext/`), never here, and check_ratings reads
+them only when it is given `--extractions`: this library and a board's own
+`parts/` both win over them. They follow the rules above except that a pin
+the reader was not sure of is left unrated, and a supply row that names no
+pin rates the part's single power input.
