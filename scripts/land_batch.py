@@ -37,7 +37,8 @@ under that maker's brand, is the same part on a reel, and is taken under
 the same package rule when no exact listing names a datasheet; so is an
 Espressif module's fit code after its name (`ESPRESSIF_FITS`, #1481:
 ESP32-S3-WROOM-1 as ESP32-S3-WROOM-1-N8, flash size only), never its
-antenna variant U, a module of another size. An exact
+antenna variant U, a module of another size, and only when no listing is
+the module itself. An exact
 listing that names no datasheet goes to the resolver like any other: a
 "JLCPCB Assembly" listing (JLC's own, for a consigned part) names no
 maker, so the MPN's family decides it (ESP32-C3-WROOM-02: Espressif).
@@ -263,7 +264,8 @@ def value_listing(value: str, store: Path, table: Path | None = None,
     the one package all of them fit (`by_footprint`), and the note says so.
     No exact row with a datasheet: the rows whose MPN is the Value plus
     its maker's packing code (`packing_suffix`) and that name one, under
-    the same rule (#1471); else the exact rows, or those packing-code rows,
+    the same rule (#1471), a module's fit code only with no exact row
+    (#1481); else the exact rows, or those packing-code rows,
     with no datasheet, for fetch_pages's resolver to find the maker's (a
     brand in NOT_MAKERS dropped, so the MPN's family names the maker). No
     row at all: the why names the nearest MPN the search found
@@ -290,7 +292,11 @@ def value_listing(value: str, store: Path, table: Path | None = None,
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(hits, ensure_ascii=False), encoding="utf-8")
     exact = [h for h in hits if norm(h.get("mpn")) == norm(value)]
-    reel = [h for h in hits if packing_suffix(value, h)]
+    # a module's fit-code rows only when no row is the module itself: an
+    # exact row with no datasheet goes to the resolver for the maker's
+    # (ESP32-C3-WROOM-02: Espressif's PDF, not a -N4 row's scanned one)
+    reel = [h for h in hits if packing_suffix(value, h)
+            and not (exact and packing_suffix(value, h) in ESPRESSIF_FITS)]
 
     def by_code(rs):
         return sorted(rs, key=lambda h: (len(h.get("lcsc") or ""), h.get("lcsc") or ""))

@@ -629,6 +629,40 @@ def test_a_module_listed_only_with_its_fit_code_is_read(stand_ins, no_table):
                                    "Systems's module fit code -N8")
 
 
+def test_a_modules_own_listing_wins_over_its_fit_code(
+        stand_ins, no_table, monkeypatch):
+    """#1481: a module listed as itself with no datasheet and with a fit
+    code (-N4) that names one: the module's own row goes to the resolver
+    for the maker's datasheet, the fit-code row is not taken (its PDF may
+    be a scan, ESP32-C3-WROOM-02's C2934560). Twin: with no row of its own
+    the fit-code row is read."""
+    import dsresolve
+    out, store, reader, calls, pages, readings = stand_ins
+    value = "ESP32-C3-WROOM-02"
+    pages[value], readings[value] = SO8_PAGES, so8_reading()
+    url = "https://maker.example.com/esp.pdf"
+
+    def resolve(mpn, brand, dest):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(f"%PDF-1.4 {value}".encode())
+        return {"maker": "Espressif", "url": url, "via": "Espressif URL pattern",
+                "got": {"url": url, "status": "fetched", "file": str(dest)},
+                "tried": []}
+    monkeypatch.setattr(dsresolve, "resolve", resolve)
+    own = {**SO8X_ROW, "mpn": value, "lcsc": "C9900152434", "datasheet": "",
+           "brand": "JLCPCB Assembly"}
+    fit = {**SO8X_ROW, "mpn": value + "-N4", "brand": "Espressif Systems"}
+    _value_rows(store, value, [fit, own])
+    rep = lb.read_part("mpn:" + value, [_on(SO8_FP)], out, store, reader)
+    assert rep["lcsc"] == "C9900152434" and "listing_from" not in rep, rep
+    assert rep["datasheet_from"] == "Espressif URL pattern"
+
+    _value_rows(store, value, [fit])
+    rep = lb.read_part("mpn:" + value, [_on(SO8_FP)], out, store, reader)
+    assert rep["lcsc"] == SO8X_ROW["lcsc"]
+    assert rep["listing_from"].endswith("module fit code -N4")
+
+
 def test_an_exact_listing_with_no_datasheet_goes_to_the_resolver(
         stand_ins, no_table, monkeypatch):
     """#1471: an exact listing that names no datasheet is no longer left out
