@@ -566,3 +566,12 @@ def test_pair_target_takes_stats_from_coupling_stats_tuple(monkeypatch):
     monkeypatch.setattr(check_diffpair, "pair_impedance", impedance)
     assert check_si.pair_target(None, "P", "N", {"zdiff": 90}, {}, [0, 0]) == []
     assert seen["gap"] == 0.2
+
+
+def test_rail_resistor_takes_a_pad_with_an_empty_ref():
+    """A footprint whose reference is "" (KiCad 6's fp_text, read since
+    #1429) is no resistor; the end-element search must not index ref[0]."""
+    from types import SimpleNamespace
+    pad = SimpleNamespace(ref="", net="A")
+    bg = SimpleNamespace(pads_of=lambda ref=None, **_: [pad, SimpleNamespace(ref="", net="+3V3")])
+    assert sim_si._rail_resistor(bg, pad, {"+3V3"}) is None
