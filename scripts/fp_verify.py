@@ -224,7 +224,9 @@ def _clusters(vals: list[float], tol: float = 0.02) -> list[list[float]]:
 def _row_spacings(centers: list[tuple[float, float]]) -> list[float]:
     """Centre-to-centre spacing of the two pad rows, one per axis that has
     them: an axis qualifies when exactly two coordinate groups hold the most
-    pads (a SOIC's columns; a QFP's left/right and top/bottom). An axis of
+    pads (a SOIC's columns; a QFP's left/right and top/bottom), or when all
+    the pads lie in two groups of two or more (a SOT-5X3's three and two,
+    whose other axis would otherwise be measured as the rows). An axis of
     equal small groups (a SOIC's pitch axis) or a lone biggest group
     (SOT-23) has no row pair."""
     spacings = []
@@ -234,6 +236,8 @@ def _row_spacings(centers: list[tuple[float, float]]) -> list[float]:
             continue
         top = max(len(g) for g in groups)
         rows = [g for g in groups if len(g) == top]
+        if len(groups) == 2 and min(len(g) for g in groups) >= 2:
+            rows = groups
         if len(rows) != 2:
             continue
         a, b = (sum(g) / len(g) for g in rows)

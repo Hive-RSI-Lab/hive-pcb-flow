@@ -656,3 +656,320 @@ def test_coverage_counts_an_uncached_model_and_fill_cache_waits_out_the_limit(
     finally:
         easyeda.reset_rate_limit()
     assert f["left"] == ["C900779"] and len(waits) == 1
+
+
+# --- the board's own part records (#1332): parts/<MPN>.json land_pattern,
+# judged before the stock footprint, cited by its pads_source
+
+def record(tmp_path, name, land, **top):
+    d = tmp_path / "parts"
+    d.mkdir(exist_ok=True)
+    import json
+    (d / f"{name}.json").write_text(json.dumps(
+        {"mpn": top.pop("mpn", name), "land_pattern": land, **top}), encoding="utf-8")
+    return d
+
+
+def rkinds(pcb, parts, stock=None, trace=None):
+    v, judged, nj = g.check(pcb, stock=stock or g.Stock(None), rows=[],
+                            parts=parts, trace=trace)
+    return sorted((x["refs"][0], x["kind"]) for x in v), judged, nj, v
+
+
+SOIC_PADS = [{"number": k, "at_mm": list(c)} for k, c in SOIC.items()]
+
+
+def test_record_pads_quiet_twin_and_mirrored_numbering(tmp_path, stock):
+    """The planted fault: the same SO8 numbered as its mirror image is
+    caught against the record's pad places; its quiet twin, numbered as the
+    record, passes, and the record is judged before KiCad's stock copy."""
+    parts = record(tmp_path, "C123", {"pad_count": 8, "pitch_mm": 1.27,
+                                      "pads": SOIC_PADS, "pads_source": "datasheet p.9"})
+    cw = {k: (-x, y) for k, (x, y) in SOIC.items()}
+    pcb = board(tmp_path,
+                footprint("U1", SO, pads_of(SOIC), props={"LCSC": "C123"}),
+                footprint("U2", SO, pads_of(cw), at=(70, 50), props={"LCSC": "C123"}))
+    trace = []
+    k, judged, nj, v = rkinds(pcb, parts, stock, trace)
+    assert ("U1", "fp_pin_order_vs_record") not in k
+    assert ("U2", "fp_pin_order_vs_record") in k
+    assert not [x for x in k if x[0] == "U1"]
+    assert judged == {"record": 2} and nj == {}
+    [bad] = [x for x in v if x["kind"] == "fp_pin_order_vs_record"]
+    assert bad["pads_source"] == "datasheet p.9" and bad["record"] == "C123.json"
+    assert "C123.json, datasheet p.9" in bad["msg"]
+    by = {t["ref"]: t for t in trace}
+    assert by["U1"]["why"] is None and "record" in by["U1"]["sources"]
+
+
+def test_record_pitch_and_pad_count_without_pad_places(tmp_path):
+    """A record with only pad_count and pitch (no at_mm): a footprint drawn
+    at 0.65 mm where the record says 1.27, and one with ten pads where it
+    says eight, are caught; the matching one is quiet. The footprint is
+    named for nothing stock knows, so without the record it would be
+    not_judged."""
+    parts = record(tmp_path, "SO8X", {"pad_count": 8, "pitch_mm": 1.27,
+                                      "pad_size_mm": [1.95, 0.6],
+                                      "pads_source": "land drawing"})
+    fine = {str(i + 1): (-2.475, -0.975 + 0.65 * i) for i in range(4)}
+    fine.update({str(8 - i): (2.475, -0.975 + 0.65 * i) for i in range(4)})
+    ten = dict(SOIC, **{"9": (0.0, -3.0), "10": (0.0, 3.0)})
+    lib = "Mine:ODD8"
+    pcb = board(tmp_path,
+                footprint("U1", lib, pads_of(SOIC), props={"MPN": "SO8X"}),
+                footprint("U2", lib, pads_of(fine), at=(70, 50), props={"MPN": "SO8X"}),
+                footprint("U3", lib, pads_of(ten), at=(90, 50), props={"Value": "so8x"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    assert k == [("U2", "fp_pitch_vs_record"), ("U3", "fp_pad_count_vs_record")]
+    assert judged == {"record": 3} and nj == {}
+    assert all(x["pads_source"] == "land drawing" for x in v)
+    # without --parts all three are not judged, and said so
+    k, judged, nj, _ = rkinds(pcb, None)
+    assert k == [] and sum(len(r) for r in nj.values()) == 3
+
+
+def test_record_pad_size_is_a_warning_and_its_twin_quiet(tmp_path):
+    parts = record(tmp_path, "SO8X", {"pad_count": 8, "pitch_mm": 1.27,
+                                      "pad_size_mm": [1.95, 0.6], "pads_source": "p.12"})
+    pcb = board(tmp_path,
+                footprint("U1", "Mine:ODD8", pads_of(SOIC, w=1.0, h=0.3), props={"MPN": "SO8X"}),
+                footprint("U2", "Mine:ODD8", pads_of(SOIC), at=(70, 50), props={"MPN": "SO8X"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    assert k == [("U1", "fp_pad_size_vs_record")]
+    assert v[0]["severity"] == "warning"
+
+
+def test_record_found_by_parts_json_row(tmp_path):
+    """No part field on the footprint: its parts.json row names the MPN."""
+    import json
+    parts = record(tmp_path, "SO8X", {"pad_count": 10, "pads_source": "p.3"})
+    (parts / "parts.json").write_text(json.dumps(
+        {"parts": [{"refdes": ["U1"], "mpn": "SO8X"}]}), encoding="utf-8")
+    pcb = board(tmp_path, footprint("U1", "Mine:ODD8", pads_of(SOIC)))
+    k, judged, nj, _ = rkinds(pcb, parts)
+    assert k == [("U1", "fp_pad_count_vs_record")] and nj == {}
+
+
+def test_record_cli_and_registered(tmp_path):
+    import json
+    import yaml
+    parts = record(tmp_path, "SO8X", {"pad_count": 10, "pads_source": "p.3"})
+    pcb = board(tmp_path, footprint("U1", "Mine:ODD8", pads_of(SOIC), props={"MPN": "SO8X"}))
+    out = tmp_path / "r.json"
+    assert g.main(["--pcb", str(pcb), "--parts", str(parts), "--out", str(out)]) == 1
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert [v["kind"] for v in rep["violations"]] == ["fp_pad_count_vs_record"]
+    spec = yaml.safe_load((HERE.parent / "scripts" / "checks.d" /
+                           "check_fp_geometry.yaml").read_text(encoding="utf-8"))
+    assert spec["optional"]["parts"] == ["--parts", "{parts}"]
+
+
+# --- fp_verify's findings read for a board (#1332): pads that take no lead,
+# a second pad kind, an odd end pad and KiCad's stock land, each beside the
+# fault it must still catch
+
+def _sizes(v):
+    return {(x["refs"][0], x["kind"]): x["severity"] for x in v}
+
+
+def test_record_pad_size_leaves_out_exposed_pad_and_sizes_one_kind(tmp_path):
+    """An exposed pad is no pad of the wrong size (quiet twin U1); leads of
+    the wrong size beside it still are (U2, warning); a second pad kind
+    beside pads of the record's size (wide ground pads, U3) is an info."""
+    parts = record(tmp_path, "SO8X", {"pad_count": 9, "pitch_mm": 1.27,
+                                      "pad_size_mm": [1.95, 0.6], "pads_source": "p.12"})
+    ep = pad("9", 0, 0, 2.4, 3.1)
+    wide = "".join(pad(k, x, y, h=(1.0 if k in ("2", "7") else 0.6))
+                   for k, (x, y) in SOIC.items())
+    pcb = board(tmp_path,
+                footprint("U1", "Mine:ODD8", pads_of(SOIC) + ep, props={"MPN": "SO8X"}),
+                footprint("U2", "Mine:ODD8", pads_of(SOIC, w=1.0, h=0.3) + ep,
+                          at=(70, 50), props={"MPN": "SO8X"}),
+                footprint("U3", "Mine:ODD8", wide + ep, at=(90, 50), props={"MPN": "SO8X"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    assert _sizes(v) == {("U2", "fp_pad_size_vs_record"): "warning",
+                         ("U3", "fp_pad_size_vs_record"): "info"}
+    [u3] = [x for x in v if x["refs"] == ["U3"]]
+    assert u3["pads"] == ["2", "7"] and "second pad kind" in u3["msg"]
+    assert judged == {"record": 3} and nj == {}
+
+
+def test_record_drill_on_a_lead_not_on_a_shield(tmp_path):
+    """A shield post's 2.3 mm hole is no lead's (quiet twin J1); a lead's
+    0.8 mm hole where the record says 1.0 is caught (J2)."""
+    parts = record(tmp_path, "HDR3", {"pad_count": 4, "pitch_mm": 2.54, "drill_mm": 1.0,
+                                      "pads_source": "p.2"})
+    leads = {str(i + 1): (0.0, 2.54 * i) for i in range(3)}
+
+    def hdr(d):
+        return ("".join(pad(k, x, y, 1.7, 1.7, drill=d, kind="thru_hole")
+                        for k, (x, y) in leads.items())
+                + pad("SH1", 4.0, 2.54, 3.5, 3.5, drill=2.3, kind="thru_hole"))
+    pcb = board(tmp_path,
+                footprint("J1", "Mine:HDR", hdr(1.0), props={"MPN": "HDR3"}),
+                footprint("J2", "Mine:HDR", hdr(0.8), at=(70, 50), props={"MPN": "HDR3"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    assert k == [("J2", "fp_drill_vs_record")]
+
+
+def test_record_pitch_odd_end_pad_is_a_warning_moved_pad_an_error(tmp_path):
+    """Eight contacts at the record's 1.1 mm and a card-detect pad 0.95 mm
+    past the end: a warning to list it (J1). The twin with pad 4 moved
+    0.15 mm along the row is a wrong land, an error (J2)."""
+    parts = record(tmp_path, "SDX", {"pad_count": 9, "pitch_mm": 1.1,
+                                     "pads_source": "p.5"})
+    row = {str(i + 1): (round(-1.1 * i, 3), 0.0) for i in range(8)}
+    end = dict(row, **{"9": (round(-1.1 * 7 - 0.95, 3), 0.0)})
+    moved = dict(end, **{"4": (round(-1.1 * 3 + 0.15, 3), 0.0)})
+    pcb = board(tmp_path,
+                footprint("J1", "Mine:SD", pads_of(end, w=0.7, h=1.2), props={"MPN": "SDX"}),
+                footprint("J2", "Mine:SD", pads_of(moved, w=0.7, h=1.2), at=(70, 50),
+                          props={"MPN": "SDX"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    assert _sizes(v) == {("J1", "fp_pitch_vs_record"): "warning",
+                         ("J2", "fp_pitch_vs_record"): "error"}
+    [j1] = [x for x in v if x["refs"] == ["J1"]]
+    assert j1["pads"] == ["9", "8"] and "pitches_mm" in j1["msg"]
+
+
+def test_record_stock_land_a_little_off_is_info_a_wrong_land_is_not(tmp_path):
+    """KiCad's stock 0402 land beside the maker's (a wider gap, longer
+    pads, 0.16 mm more pitch) is an info on C1; the same pads drawn for the
+    board (C2, not the stock land) keep their severities; a stock 6.3 mm
+    can's land for an 8 mm part (C3, 0.8 mm off in pitch) stays an error."""
+    d = tmp_path / "stk" / "Capacitor_SMD.pretty"
+    d.mkdir(parents=True)
+    c0402 = {"1": (-0.48, 0.0), "2": (0.48, 0.0)}
+    can = {"1": (-2.7, 0.0), "2": (2.7, 0.0)}
+    (d / "C_0402_1005Metric.kicad_mod").write_text(
+        '(footprint "C_0402_1005Metric"\n' + pads_of(c0402, w=0.56, h=0.62) + ")\n",
+        encoding="utf-8")
+    (d / "CP_Elec_6.3x7.7.kicad_mod").write_text(
+        '(footprint "CP_Elec_6.3x7.7"\n' + pads_of(can, w=3.5, h=1.6) + ")\n",
+        encoding="utf-8")
+    stk = g.Stock(tmp_path / "stk")
+    parts = record(tmp_path, "GRM155X", {"pad_count": 2, "pitch_mm": 0.8,
+                                         "pad_size_mm": [0.4, 0.5], "pads_source": "p.1"})
+    record(tmp_path, "CAN8", {"pad_count": 2, "pitch_mm": 6.2, "gap_mm": [2.1, 2.3],
+                              "pads_source": "p.4"})
+    pcb = board(tmp_path,
+                footprint("C1", "Capacitor_SMD:C_0402_1005Metric",
+                          pads_of(c0402, w=0.56, h=0.62), props={"MPN": "GRM155X"}),
+                footprint("C2", "Mine:C0402", pads_of(c0402, w=0.56, h=0.62),
+                          at=(60, 50), props={"MPN": "GRM155X"}),
+                footprint("C3", "Capacitor_SMD:CP_Elec_6.3x7.7",
+                          pads_of(can, w=3.5, h=1.6), at=(80, 50), props={"MPN": "CAN8"}))
+    k, judged, nj, v = rkinds(pcb, parts, stk)
+    sev = _sizes(v)
+    assert sev[("C1", "fp_pitch_vs_record")] == "info"
+    assert sev[("C1", "fp_pad_size_vs_record")] == "info"
+    assert sev[("C2", "fp_pitch_vs_record")] == "error"
+    assert sev[("C2", "fp_pad_size_vs_record")] == "warning"
+    assert sev[("C3", "fp_pitch_vs_record")] == "error"
+    assert sev[("C3", "fp_land_gap_vs_record")] == "info"   # 1.9 vs 2.1: within 0.5
+    assert "stock land" in [x for x in v if x["refs"] == ["C1"]][0]["msg"]
+
+
+def test_record_row_spacing_on_three_and_two_pad_rows(tmp_path):
+    """A SOT-5X3 (pads 1-3 in one column, 4-5 in the other): its rows are
+    the two columns, 1.48 mm apart, not the 1.0 mm from pin 1 to pin 3
+    (quiet twin D1); columns drawn 1.0 mm apart are caught (D2)."""
+    parts = record(tmp_path, "TPDX", {"pad_count": 5, "pitch_mm": 0.5,
+                                      "row_spacing_mm": 1.48, "pads_source": "p.18"})
+
+    def sot(x):
+        return {"1": (-x, -0.5), "2": (-x, 0.0), "3": (-x, 0.5), "4": (x, 0.5), "5": (x, -0.5)}
+    pcb = board(tmp_path,
+                footprint("D1", "Mine:DRL5", pads_of(sot(0.74), w=0.67, h=0.3),
+                          props={"MPN": "TPDX"}),
+                footprint("D2", "Mine:DRL5", pads_of(sot(0.4), w=0.67, h=0.3),
+                          at=(70, 50), props={"MPN": "TPDX"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    assert k == [("D2", "fp_row_spacing_vs_record")]
+
+
+def _so8(x, w=1.5, h=0.6):
+    """An SO-8's lead pads, rows at +-x (pads 1-4 left, top to bottom)."""
+    ys = (-1.905, -0.635, 0.635, 1.905)
+    c = {str(i + 1): (-x, y) for i, y in enumerate(ys)}
+    c.update({str(8 - i): (x, y) for i, y in enumerate(ys)})
+    return pads_of(c, w=w, h=h)
+
+
+def test_record_pad_count_split_exposed_pad_the_record_leaves_out(tmp_path):
+    """An SO-8 PowerPAD whose exposed pad 9 is split in four for paste,
+    against a record of the 8 leads: the extra number is the exposed pad,
+    an info (quiet twin U1); a ninth pad out on a row is a wrong land, an
+    error (planted U2)."""
+    parts = record(tmp_path, "LMX", {"pad_count": 8, "pitch_mm": 1.27,
+                                     "row_spacing_mm": 5.4, "pad_size_mm": [0.6, 1.5],
+                                     "pads_source": "p.30"})
+    ep = "".join(pad("9", x, y, w=0.9, h=0.9) for x in (-0.5, 0.5) for y in (-0.6, 0.6))
+    pcb = board(tmp_path,
+                footprint("U1", "Mine:SO8EP", _so8(2.7) + ep, props={"MPN": "LMX"}),
+                footprint("U2", "Mine:SO8EP", _so8(2.7) + pad("9", 2.7, 3.175, w=1.5, h=0.6),
+                          at=(80, 50), props={"MPN": "LMX"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    sev = _sizes(v)
+    assert sev[("U1", "fp_pad_count_vs_record")] == "info"
+    assert "exposed" in [x for x in v if x["refs"] == ["U1"]][0]["msg"]
+    assert ("U1", "fp_pad_size_vs_record") not in sev   # the split pad is no lead
+    assert sev[("U2", "fp_pad_count_vs_record")] == "error"
+
+
+def test_record_row_spacing_covering_the_land_is_info(tmp_path):
+    """Against the maker's rows 5.4 mm apart with 1.5 mm pads, rows at
+    5.6 mm with the same pads cover 93% of its land along the lead, an info
+    (quiet twin U1); rows at 7.4 mm cover 33%, they miss the lead feet, an
+    error (planted U2)."""
+    parts = record(tmp_path, "OPX", {"pad_count": 8, "pitch_mm": 1.27,
+                                     "row_spacing_mm": 5.4, "pad_size_mm": [0.6, 1.5],
+                                     "pads_source": "p.28"})
+    pcb = board(tmp_path,
+                footprint("U1", "Mine:SO8", _so8(2.8), props={"MPN": "OPX"}),
+                footprint("U2", "Mine:SO8", _so8(3.7), at=(80, 50), props={"MPN": "OPX"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    sev = _sizes(v)
+    assert sev[("U1", "fp_row_spacing_vs_record")] == "info"
+    assert "cover" in [x for x in v if x["refs"] == ["U1"]][0]["msg"]
+    assert sev[("U2", "fp_row_spacing_vs_record")] == "error"
+
+
+def test_record_leaded_pad_size_a_little_off_is_info_gross_is_not(tmp_path):
+    """A library SO-8 land's pads 0.6 x 1.9 against the maker's 0.6 x 1.5
+    (0.4 mm, within GROSS_MM) are an info (quiet twin U1); pads 0.6 x 2.2
+    (0.7 mm off) stay a warning (planted U2)."""
+    parts = record(tmp_path, "OPY", {"pad_count": 8, "pitch_mm": 1.27,
+                                     "row_spacing_mm": 5.4, "pad_size_mm": [0.6, 1.5],
+                                     "pads_source": "p.28"})
+    pcb = board(tmp_path,
+                footprint("U1", "Mine:SO8", _so8(2.7, w=1.9), props={"MPN": "OPY"}),
+                footprint("U2", "Mine:SO8", _so8(2.7, w=2.2), at=(80, 50),
+                          props={"MPN": "OPY"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    sev = _sizes(v)
+    assert sev[("U1", "fp_pad_size_vs_record")] == "info"
+    assert sev[("U2", "fp_pad_size_vs_record")] == "warning"
+
+
+def test_record_row_spacing_without_pad_size_on_the_pads_is_info(tmp_path):
+    """A record with no land (no pad_size_mm) whose row_spacing_mm 6.0 is
+    the SOIC lead span tip to tip: a stock-like land at 5.42 mm with 1.95 mm
+    pads puts the record's row line on the middle half of its pads, an info
+    (quiet twin U1); rows at 7.4 mm or 4.9 mm leave it off that half, an
+    error (planted U2, U3)."""
+    parts = record(tmp_path, "INA", {"pad_count": 8, "pitch_mm": 1.27,
+                                     "row_spacing_mm": 6.0})
+    pcb = board(tmp_path,
+                footprint("U1", "Mine:SO8", _so8(2.71, w=1.95), props={"MPN": "INA"}),
+                footprint("U2", "Mine:SO8", _so8(3.7, w=1.95), at=(80, 50),
+                          props={"MPN": "INA"}),
+                footprint("U3", "Mine:SO8", _so8(2.45, w=1.95), at=(110, 50),
+                          props={"MPN": "INA"}))
+    k, judged, nj, v = rkinds(pcb, parts)
+    sev = _sizes(v)
+    assert sev[("U1", "fp_row_spacing_vs_record")] == "info"
+    assert "middle half" in [x for x in v if x["refs"] == ["U1"]
+                             and x["kind"] == "fp_row_spacing_vs_record"][0]["msg"]
+    assert sev[("U2", "fp_row_spacing_vs_record")] == "error"
+    assert sev[("U3", "fp_row_spacing_vs_record")] == "error"

@@ -14,23 +14,50 @@ footprint can be held to:
   1. reference/land_patterns.yaml: a part's land pattern read off its maker's
      package drawing (pad centres by number in the top view), each row with
      a cite. The part is found by its MPN, Value or LCSC field.
-  2. KiCad's stock footprint of the same name. A stock name is a promise of
+  2. The board's own part record (--parts DIR: parts/<MPN or LCSC>.json),
+     found by the same fields, its LCSC number or its parts.json row: its
+     land_pattern's pad places by number (pads[].at_mm, cited by
+     pads_source), pad count, pitch, row spacing, gap, pad size and hole
+     (fp_verify's rules, on the footprint taken back to its library form).
+     A footprint whose record states any of these is never in not_judged.
+  3. KiCad's stock footprint of the same name. A stock name is a promise of
      its geometry (KLC: the name states the package, pitch and pad count),
      so a footprint called Package_SO:SOIC-8_3.9x4.9mm_P1.27mm whose pads are
      not the stock one's is either an edited copy or a different part.
-  3. The LCSC/EasyEDA model of the part's LCSC number (the land pattern LCSC
-     draws from the maker's drawing), fitted as cpl_verify fits it.
-  4. The footprint's own name: the pitch (_P1.27mm) and the pin count
+  4. The LCSC/EasyEDA model of the part's LCSC number (the land pattern LCSC
+     draws from the maker's drawing), fitted as cpl_verify fits it; not
+     where a drawing or a record's pad places judged the pads.
+  5. The footprint's own name: the pitch (_P1.27mm) and the pin count
      (SOIC-8, PinHeader_2x05) it states.
+
+Each record finding cites the record file and its pads_source.
 
 Kinds (one per ref and source; the worst first):
   fp_pin_order_vs_drawing  error    pads land on the drawing's only with
-  fp_pin_order_vs_stock    error    their numbers permuted (pin 1 on another
-                                    corner, numbered round the wrong side)
-  fp_pads_vs_drawing       error    a numbered pad is not where the drawing
-  fp_pads_vs_stock         error    or the stock footprint puts it (pitch,
-                                    row spacing), by more than a quarter of
-                                    the pad pitch
+  fp_pin_order_vs_record   error    their numbers permuted (pin 1 on another
+  fp_pin_order_vs_stock    error    corner, numbered round the wrong side)
+  fp_pads_vs_drawing       error    a numbered pad is not where the drawing,
+  fp_pads_vs_record        error    the record or the stock footprint puts
+  fp_pads_vs_stock         error    it (pitch, row spacing), by more than a
+                                    quarter of the pad pitch
+  fp_pad_count_vs_record   error    neither its pad numbers nor its copper
+                                    pads count the record's pad_count (an
+                                    info when the extra is an exposed pad
+                                    the record leaves out)
+  fp_row_spacing_vs_record error    the rows sit apart other than the
+                                    record's row_spacing_mm (+-0.1 mm); an
+                                    info when the pads still cover 75% of
+                                    the record's land along the lead, or
+                                    (a record with no pad_size_mm) its row
+                                    line falls on the middle half of the
+                                    board's pads
+  fp_land_gap_vs_record    error    a two-terminal land's gap is not the
+                                    record's gap_mm
+  fp_pad_turned_vs_record  error    a pad is the record's size turned a quarter
+  fp_pad_size_vs_record    warning  a pad's size is not the record's (on a
+                                    leaded package, an info within GROSS_MM)
+  fp_drill_vs_record       error    a hole or annulus is not the record's
+  fp_annulus_vs_record     error    drill_mm or annulus_mm
   fp_pad_numbers_vs_stock  warning  the pad numbers differ from the stock
                                     footprint's (an extra or missing pin)
   fp_pad_small_vs_stock    warning  a pad under half the stock one's area
@@ -51,9 +78,11 @@ Kinds (one per ref and source; the worst first):
   fp_pin_order_vs_model    warning  the LCSC model's pads land only with
   fp_pads_vs_model         warning  numbers permuted / not at all
   fp_pitch_vs_drawing      error    the pitch along a row of three or more
-  fp_pitch_vs_stock        warning  pads is not the drawing's, the stock
-  fp_pitch_vs_model        warning  footprint's or the LCSC model's, by more
-                                    than 0.03 mm (a pitch is a datasheet
+  fp_pitch_vs_record       error    pads is not the drawing's, the record's,
+  fp_pitch_vs_stock        warning  the stock footprint's or the LCSC
+  fp_pitch_vs_model        warning  model's, by more than 0.03 mm (0.05 mm
+                                    for a record's pitch_mm, fp_verify's
+                                    rule; a pitch is a datasheet
                                     fact no library varies; a short row a
                                     step off stays inside the quarter-pitch
                                     pad tolerance above)
@@ -74,7 +103,8 @@ A part with an LCSC number whose model is not cached says so (the gate never
 fetches): fp_geometry_coverage --fill-cache fetches those into the shared
 cache, and counts each source's share per board.
 
-CLI: --pcb board.kicad_pcb [--live] [--easyeda-cache DIR] [--out report.json]
+CLI: --pcb board.kicad_pcb [--parts DIR] [--live] [--easyeda-cache DIR]
+     [--out report.json]
      --live fetches LCSC models not in the cache (else only cached ones are
      read). exit 0 pass / 1 violations / 2 error, per SPEC section 6.
 """
@@ -132,6 +162,7 @@ class FP:
     crtyd: tuple | None = None
     rot: float = 0.0
     marks: list = field(default_factory=list)  # pin-1 marks, own frame
+    node: list | None = field(default=None, repr=False, compare=False)  # its board sexp
 
     @property
     def connector(self) -> bool:
@@ -294,7 +325,7 @@ def board_footprints(pcb: Path) -> list[FP]:
         out.append(FP(props.get("Reference", "?"), str(_t(node[1])),
                       "bottom" if layer.startswith("B.") else "top",
                       (at[0], at[1]) if len(at) >= 2 else (0.0, 0.0), layer,
-                      props, _pads(node, rot), _crtyd(node), rot, _marks(node)))
+                      props, _pads(node, rot), _crtyd(node), rot, _marks(node), node))
     return out
 
 
@@ -515,6 +546,405 @@ def lcsc_of(fp: FP) -> str | None:
     return None
 
 
+# a land_pattern key this check can hold a footprint to (package, pin1 and
+# notes alone judge nothing)
+_RECORD_KEYS = ("pads", "pad_count", "pitch_mm", "pitches_mm", "row_spacing_mm",
+                "pad_size_mm", "gap_mm", "pad_length_mm", "pad_width_mm",
+                "drill_mm", "annulus_mm")
+# fp_verify kinds kept, as this check's: (kind, severity)
+_RECORD_KINDS = {"pad_pitch": ("fp_pitch_vs_record", "error"),
+                 "row_spacing": ("fp_row_spacing_vs_record", "error"),
+                 "land_gap": ("fp_land_gap_vs_record", "error"),
+                 "pad_turned": ("fp_pad_turned_vs_record", "error"),
+                 "pad_size": ("fp_pad_size_vs_record", "warning"),
+                 "drill_mismatch": ("fp_drill_vs_record", "error"),
+                 "annulus_mismatch": ("fp_annulus_vs_record", "error")}
+VERIFY_PITCH_TOL, VERIFY_SIZE_TOL = 0.05, 0.1  # fp_verify's defaults
+
+
+def load_records(parts: Path | None) -> tuple[dict, dict]:
+    """(records, parts.json rows) from a board's parts dir: each part record
+    (parts/<MPN or LCSC>.json) whose land_pattern states something to judge,
+    by its file stem and its "mpn" field (upper-cased), as (path, doc); and
+    refdes -> parts.json row."""
+    recs: dict = {}
+    if parts is None or not Path(parts).is_dir():
+        return recs, {}
+    for f in sorted(Path(parts).glob("*.json")):
+        if f.name == "parts.json" or f.name.endswith(".grounding.json"):
+            continue
+        try:
+            doc = checklib.load_json(f, f"record {f.name}")
+        except checklib.CheckError:
+            continue
+        lp = doc.get("land_pattern") if isinstance(doc, dict) else None
+        if not isinstance(lp, dict) or not any(lp.get(k) not in (None, [], "")
+                                               for k in _RECORD_KEYS):
+            continue
+        recs.setdefault(f.stem.strip().upper(), (f, doc))
+        if isinstance(doc.get("mpn"), str) and doc["mpn"].strip():
+            recs.setdefault(doc["mpn"].strip().upper(), (f, doc))
+    import matinglib
+    return recs, matinglib.load_parts(Path(parts))
+
+
+def record_of(fp: FP, recs: dict, prows: dict | None = None):
+    """(path, doc) of the board's own record of this footprint's part, found
+    by the fields land_row reads (MPN, Value, LCSC...), its LCSC number, then
+    its parts.json row's mpn and lcsc; None without one."""
+    if not recs:
+        return None
+    row = (prows or {}).get(fp.ref) or {}
+    keys = [fp.fields.get(k, "") for k in _PART_FIELDS] + [
+        lcsc_of(fp) or "", str(row.get("mpn") or ""), str(row.get("lcsc") or "")]
+    for k in keys:
+        k = (k or "").strip().upper()
+        if k and k in recs:
+            return recs[k]
+    return None
+
+
+def record_findings(fp: FP, got: dict, path: Path, doc: dict, tmp: Path,
+                    stock_land: bool = False):
+    """(findings, placed, unread): (severity, kind, msg, extra) of the
+    footprint's pads against its record's land_pattern, whether the record's
+    pads (at_mm by number) were laid on it, and why fp_verify could not read
+    the footprint (None when it could). Pad places by number first (pin
+    order, pad positions, pitch), then pad count, then fp_verify's
+    pitch, row spacing, gap, pad size and hole on the footprint taken back
+    to its library form, read for a board (see _verify_kept): pads that are
+    no lead (an exposed pad, a shield) out of the pad size and the hole, a
+    second pad kind the record does not size and an odd pad at a row's end
+    told apart from a wrong land, and on KiCad's stock land (`stock_land`)
+    a land dimension a little off the maker's land an info."""
+    lp = doc["land_pattern"]
+    src = lp.get("pads_source") or lp.get("source") or doc.get("datasheet_url") or ""
+    cite = f"{path.name}" + (f", {src}" if isinstance(src, str) and src else "")
+    out, placed = [], False
+    base = {"record": path.name, "pads_source": src if isinstance(src, str) else None}
+    ref = {}
+    for q in lp.get("pads") or []:
+        try:
+            ref[str(q["number"])] = (float(q["at_mm"][0]), float(q["at_mm"][1]))
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    common = set(ref) & set(got)
+    if len(common) >= 2:
+        placed = True
+        r_, g_ = {k: ref[k] for k in common}, {k: got[k] for k in common}
+        c = compare(r_, g_, fp.side, turns=(0, 90, 180, 270))
+        if not c["fit"]:
+            kind = "fp_pin_order_vs_record" if c["permuted"] else "fp_pads_vs_record"
+            how = ("its pads land on the record's only with their numbers permuted "
+                   "(pin 1 on another corner, or numbered round the other side)"
+                   if c["permuted"] else
+                   f"pad {c['pad']} is {c['worst_mm']} mm from where the record puts it")
+            out.append(("error", kind,
+                        f"against its part record's land pattern ({cite}): {how}. "
+                        f"Fix: renumber or redraw the footprint to the record's top view",
+                        {**base, **{k: c[k] for k in ("worst_mm", "pad", "tol")}}))
+        elif off := pitch_off(r_, g_):
+            out.append(("error", "fp_pitch_vs_record",
+                        f"its pads are {off[1]:.3f} mm apart along a row where its part "
+                        f"record's land pattern ({cite}) has {off[0]:.3f} mm. Fix: redraw "
+                        f"the footprint to the record's pitch",
+                        {**base, "pitch_mm": round(off[0], 3),
+                         "board_pitch_mm": round(off[1], 3)}))
+    if lp.get("pad_count") is not None:
+        try:
+            want = int(lp["pad_count"])
+        except (TypeError, ValueError):
+            want = None
+        nums = {q.number for q in fp.pads if q.number}
+        raw = sum(1 for q in fp.pads if q.number)
+        ep = _centre_pads(fp)
+        # either count: an exposed pad split in parts, or pads sharing a
+        # number (a shield, a thermal via pad), counted either way
+        if want is not None and want not in (len(nums), raw) and len(nums - ep) == want:
+            out.append(("info", "fp_pad_count_vs_record",
+                        f"it has {len(nums)} numbered pad(s) where its part record's "
+                        f"land pattern ({cite}) has {want}: the extra is its exposed "
+                        f"pad ({', '.join(sorted(ep))}) the record leaves out. Add it "
+                        f"to the record to judge it",
+                        {**base, "expected": want, "measured": len(nums),
+                         "exposed": sorted(ep)}))
+        elif want is not None and want not in (len(nums), raw):
+            out.append(("error", "fp_pad_count_vs_record",
+                        f"it has {len(nums)} numbered pad(s) ({raw} copper pads) where its "
+                        f"part record's land pattern ({cite}) has {want}. Fix: draw the "
+                        f"part's land, or match the record to the part",
+                        {**base, "expected": want, "measured": len(nums)}))
+    import sexpdata
+    import fp_verify  # imports this module: here, not at the top
+    mod = tmp / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', fp.ref)}.kicad_mod"
+    mod.write_text(sexpdata.dumps(fp_verify.library_copy(
+        fp.node, fp.rot, fp.side == "bottom")), encoding="utf-8")
+    try:
+        found, _, _ = fp_verify.verify(mod, doc, VERIFY_PITCH_TOL, VERIFY_SIZE_TOL)
+    except Exception as e:  # noqa: BLE001 - one odd footprint, not the board
+        return out, placed, f"fp_verify could not read it: {str(e)[:120]}"
+    seen = set()
+    for v in found:
+        k = str(v.get("kind") or "")
+        if k not in _RECORD_KINDS or k in seen:
+            continue
+        if placed and k in ("pad_pitch", "row_spacing"):
+            continue  # judged by the record's pad places above
+        kept = _verify_kept(fp, got, lp, v, stock_land)
+        if kept is None:
+            continue
+        seen.add(k)
+        kind, _ = _RECORD_KINDS[k]
+        sev, msg, extra = kept
+        out.append((sev, kind, f"against its part record's land pattern ({cite}): "
+                    f"{msg}", {**base, **extra}))
+    return out, placed, None
+
+
+GROSS_MM = 0.5   # a stock land further than this off the maker's is a wrong land
+_LAND_DIMS = ("pad_size", "land_gap", "drill_mismatch", "annulus_mismatch")
+
+
+def _lead(p: P) -> bool:
+    """A pad that takes a lead: numbered with digits (not SH, MP, a blank
+    mounting pad)."""
+    return bool(p.number) and p.number.isdigit()
+
+
+def _off(m: float, want) -> float:
+    """How far a measure lies outside a stated value or [min, max]."""
+    lo, hi = (want, want) if not isinstance(want, (list, tuple)) else want
+    return max(0.0, float(lo) - m, m - float(hi))
+
+
+def _deviation(exp, meas) -> float:
+    """The largest distance (mm) of fp_verify's measures from its expected
+    values, in any of the shapes it reports; inf for a shape not known."""
+    try:
+        if isinstance(exp, dict):        # two-terminal length / width
+            return max(_off(m, w) for m, w in
+                       zip(meas, (exp.get("length"), exp.get("width"))) if w)
+        if isinstance(exp, (int, float)):
+            ms = meas if isinstance(meas, list) else [meas]
+            return max(abs(float(m) - exp) for m in ms)
+        if isinstance(exp, list) and exp and isinstance(exp[0], list) \
+                and exp[0] and isinstance(exp[0][0], list):   # per pad, per axis
+            return max(_off(m, w) for ms, ws in zip(meas, exp) for m, w in zip(ms, ws))
+        if isinstance(exp, list) and len(exp) == 2 and not isinstance(meas, list):
+            return _off(float(meas), exp)  # a gap's [min, max]
+    except (TypeError, ValueError):
+        pass
+    return math.inf
+
+
+def _centre_pads(fp: FP) -> set[str]:
+    """Numbers of an exposed pad: every pad with the number sits strictly
+    inside the box of the other numbered pads' centres, and the number is
+    on more than one pad (an exposed pad split for paste) or a pad of 2.5
+    times the area of the leads' commonest pad. A BGA's inner balls are
+    inside the box too, but one ball to a number and the balls' size."""
+    by: dict = {}
+    for q in fp.pads:
+        if q.number:
+            by.setdefault(q.number, []).append(q)
+    sizes = Counter(round(q.w * q.h, 4) for q in fp.pads if _lead(q))
+    common = sizes.most_common(1)[0][0] if sizes else 0.0
+    out = set()
+    for n, ps in by.items():
+        rest = [q for m, qs in by.items() if m != n for q in qs]
+        if len(rest) < 2:
+            continue
+        x0, x1 = min(q.x for q in rest), max(q.x for q in rest)
+        y0, y1 = min(q.y for q in rest), max(q.y for q in rest)
+        inside = all(x0 + 0.01 < q.x < x1 - 0.01 and y0 + 0.01 < q.y < y1 - 0.01
+                     for q in ps)
+        big = common > 0 and any(q.w * q.h >= 2.5 * common for q in ps)
+        if inside and (len(ps) > 1 or big):
+            out.add(n)
+    return out
+
+
+def _cover(fp: FP, lp: dict, exp: float, meas) -> float | None:
+    """The share of the record's land, along the lead, that the board's
+    pads cover, rows at `meas` (the measure nearest the record's, fp_verify
+    may name a pitch axis too) centre to centre with their lead pads' long
+    side, against the record's rows at `exp` with pad_size_mm's long side.
+    None without a record pad size or a lead pad."""
+    try:
+        lr = max(float(x) for x in lp["pad_size_mm"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    ep = _centre_pads(fp)
+    sizes = Counter(round(max(q.w, q.h), 3) for q in fp.pads
+                    if _lead(q) and q.number not in ep)
+    ms = [float(m) for m in (meas if isinstance(meas, list) else [meas])]
+    if not sizes or not ms or lr <= 0:
+        return None
+    lb = sizes.most_common(1)[0][0]
+    m = min(ms, key=lambda v: abs(v - exp))
+    lo, hi = max((m - lb) / 2, (exp - lr) / 2), min((m + lb) / 2, (exp + lr) / 2)
+    return max(0.0, hi - lo) / lr
+
+
+COVER_FRAC = 0.75  # board pads over this share of the maker's land catch the lead
+
+
+def _on_pads(fp: FP, lp: dict, exp: float, meas) -> bool | None:
+    """With no pad_size_mm in the record, whether the record's row line (half
+    its row spacing out from the centre) falls on the middle half of the
+    board's lead pads. A record without a land often gives the lead span
+    (tip to tip) as its row spacing, which a normal land sits inside of.
+    None when the record sizes its pads or no lead pad is left."""
+    if lp.get("pad_size_mm"):
+        return None
+    ep = _centre_pads(fp)
+    sizes = Counter(round(max(q.w, q.h), 3) for q in fp.pads
+                    if _lead(q) and q.number not in ep)
+    ms = [float(m) for m in (meas if isinstance(meas, list) else [meas])]
+    if not sizes or not ms:
+        return None
+    lb = sizes.most_common(1)[0][0]
+    m = min(ms, key=lambda v: abs(v - exp))
+    return abs(m - exp) / 2 <= lb / 4
+
+
+def _pad_sizes(fp: FP, lp: dict, exp: tuple) -> tuple[list, list] | None:
+    """fp_verify's min/max pad size again, on the pads that take a lead:
+    (sizes off the record with their pads, sizes on it). A pad of 2.5 times
+    the record's area or more (an exposed or thermal pad, a shield tab), a
+    custom one, and pads sized one by one in land_pattern.pads are left out.
+    None when no pad is left."""
+    by_pad = {str(q.get("number")) for q in lp.get("pads") or [] if q.get("size_mm")}
+    area = exp[0] * exp[1]
+    groups: dict = {}
+    ep = _centre_pads(fp)
+    for q in fp.pads:
+        if not _lead(q) or q.shape == "custom" or q.number in by_pad or q.number in ep:
+            continue
+        if area > 0 and q.w * q.h >= 2.5 * area:
+            continue
+        groups.setdefault(tuple(sorted((round(q.w, 3), round(q.h, 3)))), []).append(q.number)
+    if not groups:
+        return None
+    bad = [(s, n) for s, n in sorted(groups.items())
+           if any(abs(m - e) > VERIFY_SIZE_TOL for m, e in zip(s, exp))]
+    good = [(s, n) for s, n in sorted(groups.items()) if (s, n) not in bad]
+    return bad, good
+
+
+def _row_end(got: dict, pads: list, exp: float) -> tuple | None:
+    """(pad, pad, gap) when a row's pads are at the record's pitch all but
+    the gap at one end: an end pad of another kind (a card detect, a shield
+    tab) the record's pitch_mm leaves out, not a wrong pitch."""
+    if len(pads) != 2 or not all(n in got for n in pads):
+        return None
+    (ax, ay), (bx, by) = got[pads[0]], got[pads[1]]
+    axis = 0 if abs(bx - ax) >= abs(by - ay) else 1
+    line = (ay + by) / 2 if axis == 0 else (ax + bx) / 2
+    # fp_verify names the pair off pitch; the row is every pad on its line
+    pts = [(n, c) for n, c in got.items()
+           if abs(c[1 - axis] - line) <= VERIFY_PITCH_TOL]
+    if len(pts) < 4:
+        return None
+    pts.sort(key=lambda t: t[1][axis])
+    gaps = [math.dist(a[1], b[1]) for a, b in zip(pts, pts[1:])]
+    tol = VERIFY_PITCH_TOL
+    off = [i for i, g in enumerate(gaps) if abs(g - exp) > tol]
+    if len(off) == 1 and off[0] in (0, len(gaps) - 1):
+        i = off[0]
+        return pts[i][0], pts[i + 1][0], gaps[i]
+    return None
+
+
+def _verify_kept(fp: FP, got: dict, lp: dict, v: dict, stock_land: bool):
+    """(severity, msg, extra) for one fp_verify finding against a board's
+    part record, or None to drop it. fp_verify judges a footprint drawn to
+    a datasheet; on a board its finding is read again:
+    - pad size (the min/max of all pads): judged again on the pads that take
+      a lead, so an exposed pad, thermal pad or shield tab is not a pad of
+      the wrong size; a second pad kind beside pads of the record's size
+      (wide ground pins, drain stubs) is an info, as the record sizes one;
+    - a hole: on a lead's pad only (not a shield's or a mounting post's);
+    - pitch: a row at the record's pitch all but its end gap is a warning;
+    - on KiCad's stock land, a land dimension (pad size, gap, hole, and a
+      two-pad land's pitch) within GROSS_MM of the maker's land is an info:
+      the IPC land and the maker's differ and both solder; further off, it
+      is the wrong land for the part (a 6.3 mm can's pads for an 8 mm one)."""
+    k = str(v.get("kind"))
+    sev = _RECORD_KINDS[k][1]
+    msg = str(v.get("msg") or "")
+    exp, meas = v.get("expected_mm"), v.get("measured_mm")
+    extra = {x: v[x] for x in ("expected_mm", "measured_mm", "pads") if x in v}
+    minmax = (k == "pad_size" and isinstance(exp, list) and len(exp) == 2
+              and all(isinstance(e, (int, float)) for e in exp))
+    if minmax:
+        want = tuple(sorted(float(e) for e in exp))
+        res = _pad_sizes(fp, lp, want)
+        if res is None or not res[0]:
+            return None
+        bad, good = res
+        said = "; ".join(f"pads {', '.join(n[:6])}{'...' if len(n) > 6 else ''} "
+                         f"are {s[0]:g} x {s[1]:g} mm" for s, n in bad)
+        meas = [list(s) for s, _ in bad]
+        extra = {"expected_mm": list(want), "measured_mm": meas,
+                 "pads": [x for _, n in bad for x in n]}
+        msg = (f"{said} where the record's pad is {want[0]:g} x {want[1]:g} mm "
+               f"(tol {VERIFY_SIZE_TOL}, exposed and shield pads left out)")
+        if good:
+            sev = "info"
+            msg += (f"; pads {', '.join(good[0][1][:6])} are the record's size, so "
+                    "these are a second pad kind the record does not size: give "
+                    "each its size_mm in land_pattern.pads to judge them")
+    elif k == "drill_mismatch":
+        m = re.match(r"pad (\S+):", msg)
+        if m and not m.group(1).isdigit():
+            return None
+    elif k == "pad_pitch" and isinstance(exp, (int, float)) and v.get("pads"):
+        end = _row_end(got, [str(x) for x in v["pads"]], float(exp))
+        if end:
+            sev = "warning"
+            msg = (f"pads {end[0]} and {end[1]} at a row's end are {end[2]:.3f} mm "
+                   f"apart and the rest of the row is at the record's "
+                   f"{float(exp):.3f} mm pitch: an end pad of another kind (a card "
+                   "detect, a shield tab) or a moved one; list it in "
+                   "land_pattern.pitches_mm to judge it")
+            extra = {**extra, "measured_mm": round(end[2], 4), "pads": [end[0], end[1]]}
+    elif k == "row_spacing" and isinstance(exp, (int, float)):
+        cov = _cover(fp, lp, float(exp), meas)
+        if cov is not None and cov >= COVER_FRAC:
+            sev = "info"
+            msg += (f"; but its pads cover {cov:.0%} of the record's land along "
+                    "the lead (longer or shifted pads): a choice of land, not a fault")
+            extra = {**extra, "cover": round(cov, 3)}
+        elif cov is None and _on_pads(fp, lp, float(exp), meas):
+            sev = "info"
+            msg += ("; the record gives no pad size and its rows fall on the "
+                    "middle half of the board's pads, so the leads land on them "
+                    "(a record without a land often gives the lead span tip to "
+                    "tip): a choice of land, not a fault")
+    two_pad = len({q.number for q in fp.pads if _lead(q)}) == 2
+    if minmax and not stock_land and not two_pad and sev != "info":
+        # a leaded package's pads: their row spacing judges whether they
+        # catch the leads; a pad a little off the maker's is a library's
+        # land. A passive's two pads stay a warning (tombstoning, #328)
+        dev = max(abs(m - e) for s in meas for m, e in zip(s, want))
+        if dev <= GROSS_MM:
+            sev = "info"
+            msg += (f". Within {GROSS_MM} mm of the maker's land: a choice of "
+                    "land (an IPC or library land), not a fault")
+    if stock_land and sev != "info" and (
+            k in _LAND_DIMS or (two_pad and k == "pad_pitch")):
+        if minmax:
+            dev = max(abs(m - e) for s in meas for m, e in zip(s, want))
+        else:
+            dev = _deviation(exp, meas)
+        if dev <= GROSS_MM:
+            sev = "info"
+            msg += (f". The footprint is KiCad's stock land (IPC-7351), within "
+                    f"{GROSS_MM} mm of the maker's: a choice of land, not a fault")
+    return sev, msg, extra
+
+
 _COUNT = re.compile(
     r"^(?:[A-Za-z]*-)?(SOIC|SOP|SSOP|TSSOP|MSOP|HTSSOP|QSOP|VSSOP|TSOP|DIP|"
     r"QFN|DFN|VQFN|WQFN|UQFN|TQFN|LQFP|TQFP|QFP|VSON|WSON|SON|PLCC|HVQFN|"
@@ -650,12 +1080,16 @@ def name_judges(fp: FP, centres: dict) -> bool:
 
 def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
           stock: Stock | None = None, rows: list[dict] | None = None,
-          trace: list | None = None):
+          trace: list | None = None, parts: Path | None = None):
     """(violations, judged by first source, not_judged by why). trace, if a
     list, gets one row per footprint: every source it was judged against, or
-    why not (fp_geometry_coverage reads it)."""
+    why not (fp_geometry_coverage reads it). parts: the board's parts dir,
+    whose part records' land_pattern each footprint of the part is held to."""
+    import tempfile
     stock = stock or Stock(kicad_footprint_dir())
     rows = load_land_patterns() if rows is None else rows
+    recs, prows = load_records(parts)
+    tmp = tempfile.TemporaryDirectory(prefix="fp_geometry-") if recs else None
     viols, judged, not_judged = [], Counter(), {}
 
     def add(fp, sev, kind, msg, **extra):
@@ -670,11 +1104,11 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
         got = _centres(fp.pads)
         uncached = False  # its LCSC model was looked for and is not cached
 
-        def note(sources, why=None):
+        def note(sources, why=None, aside=None):
             if trace is not None:
                 trace.append({"ref": fp.ref, "fpid": fp.fpid, "fields": dict(fp.fields),
                               "lcsc": lcsc_of(fp), "pads": len(got), "sources": list(sources), "why": why,
-                              "model_uncached": uncached})
+                              "model_uncached": uncached, "aside": aside})
         if len(got) < 2:
             note([], "under two numbered pads")
             continue
@@ -704,7 +1138,19 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                         f"Fix: redraw the footprint to the drawing's pitch",
                         drawing=row["source"], pitch_mm=round(off[0], 3),
                         board_pitch_mm=round(off[1], 3))
+        # the board's own record of the part: before the stock footprint,
+        # and a footprint it covers is judged whatever else can't be
+        rec, placed, aside = record_of(fp, recs, prows), False, None
         sp = stock.find(fp)
+        if rec is not None:
+            sources.append("record")
+            # KiCad's own land, pad for pad: its sizes are IPC-7351's
+            # choice, not a slip, where they differ a little from the maker's
+            stock_land = sp is not None and _same_land(fp, stock.load(sp)[0])
+            found, placed, aside = record_findings(fp, got, rec[0], rec[1],
+                                                   Path(tmp.name), stock_land)
+            for sev, kind, msg, extra in found:
+                add(fp, sev, kind, msg, **extra)
         if sp is not None:
             sources.append("stock")
             spads, scrt = stock.load(sp)
@@ -803,7 +1249,7 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
             # nothing about the land: no model compare, judged or not
             if not sources and not skip:
                 skip = "a connector: LCSC's models number connectors by their own convention"
-        elif lcsc and "drawing" not in sources and not skip:
+        elif lcsc and "drawing" not in sources and not placed and not skip:
             import cpl_verify
             import easyeda
             model = easyeda.get(lcsc, easyeda_cache, fetch=live)
@@ -844,10 +1290,11 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                             f"its pads by number at any turn (tolerance {a['tol_mm']} mm): "
                             f"check the pitch, row spacing and pin 1 against the datasheet",
                             lcsc=lcsc)
-        if skip:
+        if skip and "record" not in sources:
             not_judged.setdefault(skip, []).append(fp.ref)
             note(sources, skip)
             continue
+        aside = skip or aside
         if not sources:
             for kind, msg, extra in name_findings(fp, got):
                 add(fp, "warning", kind, msg, **extra)
@@ -855,7 +1302,7 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                 sources.append("name")
         if sources:
             judged[sources[0]] += 1
-            note(sources)
+            note(sources, aside=aside)
         else:
             why = (("its LCSC model is not cached (not fetched yet, or "
                     "EasyEDA has none: fp_geometry_coverage --fill-cache)") if lcsc and not fp.connector else
@@ -863,6 +1310,8 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                    "LCSC number or pitch in its name")
             not_judged.setdefault(why, []).append(fp.ref)
             note(sources, why)
+    if tmp is not None:
+        tmp.cleanup()
     return viols, dict(judged), not_judged
 
 
@@ -887,6 +1336,18 @@ def _land_variant(fp: FP, spads: list[P], common: set, got: dict, ref: dict) -> 
         if not any(abs(x - q.x) <= q.w / 2 and abs(y - q.y) <= q.h / 2 for q in by.get(k, [])):
             return False
     return True
+
+
+def _same_land(fp: FP, spads: list[P], tol: float = 0.01) -> bool:
+    """The footprint's pads are the stock footprint's: the same numbers at
+    the same places, each the same size (either way round)."""
+    def key(ps):
+        return sorted((q.number, round(q.x, 2), round(q.y, 2),
+                       tuple(sorted((round(q.w, 2), round(q.h, 2))))) for q in ps)
+    a, b = key(fp.pads), key(spads)
+    return len(a) == len(b) and all(
+        x[0] == y[0] and all(abs(u - w) <= tol for u, w in zip(x[1:3], y[1:3]))
+        and all(abs(u - w) <= tol for u, w in zip(x[3], y[3])) for x, y in zip(a, b))
 
 
 def _numbers_differ(extra: list, missing: list) -> bool:
@@ -995,18 +1456,24 @@ def run(argv=None):
     ap.add_argument("--live", action="store_true",
                     help="fetch LCSC models not in the cache")
     ap.add_argument("--easyeda-cache")
+    ap.add_argument("--parts", help="the board's parts dir: each part record's "
+                    "land_pattern is a source (before the stock footprint)")
     ap.add_argument("--out", help="write the JSON report here")
     args = ap.parse_args(argv)
     pcb = Path(args.pcb)
     if not pcb.is_file():
         raise checklib.CheckError(f"board not found: {pcb}")
+    parts = Path(args.parts) if args.parts else None
+    if parts is not None and not parts.is_dir():
+        raise checklib.CheckError(f"parts dir not found: {parts}")
     viols, judged, nj = check(pcb, args.live,
-                              Path(args.easyeda_cache) if args.easyeda_cache else None)
+                              Path(args.easyeda_cache) if args.easyeda_cache else None,
+                              parts=parts)
     return checklib.report(
         SCRIPT, pcb, viols, judged=judged, not_judged=nj,
         nothing_to_judge=None if viols or sum(judged.values()) else
-        "no footprint could be compared with a stock KiCad or LCSC model "
-        "footprint"), args.out
+        "no footprint could be compared with a part record, stock KiCad or "
+        "LCSC model footprint"), args.out
 
 
 def main(argv=None) -> int:
