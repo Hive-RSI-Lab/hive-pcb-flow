@@ -52,8 +52,11 @@ DESCRIBED = (("connector", r"connector|header|terminal|socket|\bwire.to"),
 
 # LCSC's category names an IC by what it does ("I/O Expanders", "Gate Drivers",
 # "NOR FLASH"), and these words come before DESCRIBED's: in a category, "LED"
-# or "Gate" is the load, not the part (#1435)
+# or "Gate" is the load, not the part (#1435). LCSC files eFuses and surge
+# stoppers as "Surge Protection Devices (SPDs)", where "Integrated FET" is the
+# pass switch inside the IC; TVS and ESD parts are "ESD and Surge Protection"
 IC_CATEGORY = (r"regulator|converter|amplifier|comparator|controller|sensor|expander|"
+               r"surge protection devices|\bspds?\b|\be-?fuses?\b|"
                r"microcontroller|\bmcu\b|fpga|cpld|programmable logic|eeprom|flash|"
                r"\bs?d?ram\b|sdram|memory|logic gate|buffer|transceiver|translator|"
                r"level shifter|supervisor|timer|isolator|driver|battery management|"

@@ -83,6 +83,17 @@ def test_the_category_names_an_ic_before_its_feature_words():
     assert ls.part_class({"category": "LED Drivers", "description": "LED diode driver"}) == "ic"
 
 
+def test_an_efuse_filed_as_a_surge_protection_device_is_an_ic():
+    # #1435: TPS259472's description says "Integrated FET", its pass switch
+    efuse = {"category": "Surge Protection Devices (SPDs)",
+             "description": "2.7V~23V 45mOhm Integrated FET VQFN-10-HR(2x2) "
+                            "Surge Protection Devices (SPDs)"}
+    assert ls.part_class(efuse) == "ic"
+    tvs = {"category": "ESD and Surge Protection (TVS/ESD)",
+           "description": "6V ESD IEC 61000-4-2 Unidirectional SOT-23-6"}
+    assert ls.part_class(tvs) == "diode"
+
+
 def test_a_passive_category_still_names_its_class():
     assert ls.part_class({"category": "Pin Headers", "description": "2.54mm"}) == "connector"
     assert ls.part_class({"category": "TVS", "description": "SMA"}) == "diode"
