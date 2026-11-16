@@ -411,6 +411,29 @@ def test_thermal_grid_skips_a_big_pad_that_is_no_exposed_pad(tmp_path):
     assert len(ops) == 9 and all(abs(o["at"][0] - 45) < 2.1 for o in ops)
 
 
+
+def test_thermal_floor_grids_a_tab_that_is_no_exposed_pad(tmp_path):
+    """#636 follow-up: a power tab (TO-263, SOT-223) that a thermal
+    constraint asks vias for (min_vias > 0) still gets its grid, with a
+    note that open vias there wick; check_thermal holds that floor, so
+    skipping it left an error planes_gen could not clear. Twins: no
+    constraint, and min_vias 0, both skip."""
+    body = _fp("L1", 20, 20, _pad("1", 0, 0, "GND", 4, 4)
+               + _pad("2", 6, 0, "SW", 3, 4))
+    bg = _bg(tmp_path, body=body)
+    ops, pads = planes_gen.thermal_via_ops(bg, {"GND"}, min_vias={"L1": 4})
+    assert len(ops) == 9 and pads[0]["vias"] == 9
+    assert "gridded because constraints.thermal min_vias is 4" \
+        in pads[0]["note"] and "under" not in pads[0]["note"]
+    ops, pads = planes_gen.thermal_via_ops(bg, {"GND"}, min_vias={"L1": 12})
+    assert "not an exposed pad" in pads[0]["note"]
+    assert "grid fits 9 vias, under constraints.thermal min_vias 12" \
+        in pads[0]["note"]
+    for mv in ({}, {"L1": 0}):
+        ops, pads = planes_gen.thermal_via_ops(bg, {"GND"}, min_vias=mv)
+        assert ops == [] and pads[0]["vias"] == 0
+        assert "grid skipped" in pads[0]["note"]
+
 _VIA = ('  (via (at {x} {y}) (size 0.6) (drill 0.3)'
         ' (layers "F.Cu" "B.Cu") (net "GND"))\n')
 

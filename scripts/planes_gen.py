@@ -790,16 +790,22 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
     min_vias (ref -> constraints.thermal[*].min_vias): 0 means the part
     wants no thermal vias (a live tab, an LDO's VOUT) and its grid is
     skipped; a grid that fits fewer than a positive floor says so in the
-    pad's note (check_thermal holds the floor as an error)."""
+    pad's note (check_thermal holds the floor as an error). A big pad that
+    is not an exposed pad (#636) gets no grid unless a positive floor
+    asks for one."""
     min_vias = min_vias or {}
     ops: list[dict] = []
     pads: list[dict] = []
     keepouts = via_keepouts(bg)
     for ep in ep_pads(bg, plane_nets, ep_min_mm2):
-        if not _is_exposed_pad(bg, ep):
+        tab = not _is_exposed_pad(bg, ep)
+        if tab and not min_vias.get(ep.ref):
             # #636: a big pad that is not a belly (an inductor's, a
             # DPAK tab's) is a solder joint; a via in its opening drains
-            # it, and check_wicking judges it so
+            # it, and check_wicking judges it so. A positive
+            # constraints.thermal min_vias asks for the grid anyway (a
+            # TO-263 or SOT-223 tab sinking heat), and check_thermal holds
+            # that floor, so the ask wins and the note says what it costs.
             pads.append({"ref": ep.ref, "pad": ep.number, "net": ep.net,
                          "vias": 0,
                          "note": "not an exposed pad (check_paste rule); a "
@@ -852,9 +858,17 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
         fact = {"ref": ep.ref, "pad": ep.number, "net": ep.net,
                 "vias": len(pts)}
         want = min_vias.get(ep.ref)
+        notes = []
+        if tab:
+            notes.append(f"not an exposed pad, gridded because "
+                         f"constraints.thermal min_vias is {want}: open vias "
+                         "here wick the joint (check_wicking); order them "
+                         "filled and capped or tented")
         if want and len(pts) < want:
-            fact["note"] = (f"grid fits {len(pts)} vias, under "
-                            f"constraints.thermal min_vias {want}")
+            notes.append(f"grid fits {len(pts)} vias, under "
+                         f"constraints.thermal min_vias {want}")
+        if notes:
+            fact["note"] = "; ".join(notes)
         pads.append(fact)
     return ops, pads
 
