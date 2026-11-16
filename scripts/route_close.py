@@ -9,6 +9,8 @@ runs route_finish in small chunks and keeps each good one:
   until the next round, so it doesn't use up the next chunk (route_finish
   --skip-conns). It is the connection that is set aside, not its net: a net
   with 40 open connections still gets the other 39 tried.
+  One route_finish reports walled in by fixed copper (#682) stays set aside
+  for every round, and the report lists it under "walled".
 - Each chunk runs on its own copy of the board. The board is replaced only by
   a chunk that reports, kept copper and passed the protected-copper check, so
   a kill at any moment leaves the board as the last kept chunk left it.
@@ -362,7 +364,11 @@ class Closer:
         write_json(path, base)
 
     def new_round(self) -> None:
-        self.st.update(round=self.st["round"] + 1, skip=[], last_failed={},
+        # a connection walled in by fixed copper (#682) stays set aside: a
+        # new round's routes can't free it
+        self.st.update(round=self.st["round"] + 1, last_failed={},
+                       skip=[w["key"] for w in self.st.get("walled",
+                                                           {}).values()],
                        round_start=left_of(self.report) if self.report else None,
                        unroutable=0)
 
@@ -505,6 +511,10 @@ class Closer:
         self.st["last_failed"][key_str(key)] = {"net": conn["net"],
                                                 "a": conn["a"], "b": conn["b"],
                                                 "reason": why}
+        if conn.get("walled"):
+            self.st.setdefault("walled", {})[key_str(key)] = {
+                "key": key, "net": conn["net"], "a": conn["a"],
+                "b": conn["b"], "reason": why}
 
     def shrink(self) -> None:
         self.st["conns"] = max(1, self.st["conns"] // 2)
@@ -906,6 +916,9 @@ class Closer:
             "failed_nets": dict(sorted(fails.items(),
                                        key=lambda kv: -kv[1]["fails"])),
             "still_failing": list(self.st["last_failed"].values()),
+            # #682: walled in by fixed copper: set aside for every round
+            "walled": [{k: v for k, v in w.items() if k != "key"}
+                       for w in self.st.get("walled", {}).values()],
             "not_routable_by_maze": self.st["unroutable"],
             "rip_board": self.st["ripping"],
             "state_dir": str(self.dir),
