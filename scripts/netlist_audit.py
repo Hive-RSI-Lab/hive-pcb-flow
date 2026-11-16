@@ -303,6 +303,16 @@ schematic-level structural problems BEFORE board work starts:
    register output firmware sets is quiet; a driver whose level isn't
    known is not_judged. Edge pins (74x595 RCLK) aren't judged: either
    polarity clocks them. Class 14; fact latch_drive_checked.
+ - drive_level_mismatch (error): a control output whose level is known
+   (an active-low ~{ALERT}, ~{INT}, ~{FAULT}, a power-good) reaching an
+   input of another kind whose level is known (an enable, reset, run or
+   select), directly, through a buffer, or through a 74x00/02/04/08/14/
+   32/86 or 1G gate traced input to output, asserting at the wrong level:
+   an active-low alert into an active-high EN, a NAND of power-goods into
+   an enable, an AND of fault flags where the input needs an OR. An
+   inverter flips the level, a buffer keeps it; a gate the table doesn't
+   know is not_judged. Port and GPIO drivers are quiet. Class 14; fact
+   drive_levels_checked.
  - io_domain_overdrive (error), io_domain_underdrive (warning),
    io_domain_pull_rail (error over, warning under): an output on one
    rail into an input whose datasheet row (reference/io_tolerance.yaml,
@@ -4590,6 +4600,38 @@ def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
           f"strobe starts, so it holds whatever was on its inputs before. "
           f"Put an inverter in the line or use the part with the other "
           f"enable level", kind_of="latch")
+    cross_drive = 0
+    for hit in sd.drive_levels(nets, comps, comp_pins, rails, h):
+        if "checked" in hit:
+            cross_drive = hit["checked"]
+            continue
+        if "not_judged" in hit:
+            not_judged.append(hit["not_judged"])
+            continue
+        m = hit["pin"]
+        val = comps.get(m["ref"], {}).get("value")
+        head = (f"{m['ref']} ({val}) {m.get('pinfunction')} (pin "
+                f"{m['pin']}) asserts {hit['level']}, driven by "
+                f"'{hit['net']}' ({hit['why']})")
+        if hit["bad_level"]:
+            if hit["dom"] == "run":
+                what = (f"the line is at its run level, {hit['got']}, "
+                        f"when the input stops the part, so it runs while "
+                        f"the source says stop and stops while it says run")
+            else:
+                what = (f"the line asserts {hit['got']}, so the "
+                        f"{hit['drv_kind']} turns the input off when it "
+                        f"fires and holds it on while it is idle")
+            fix = ("Put an inverter in the line, or take the part with "
+                   "the other active level")
+        else:
+            what = (f"the gate asserts the line only when {hit['mode']} "
+                    f"of its inputs do, where the input needs "
+                    f"{hit['need']}")
+            fix = ("Use the other gate (an OR for an AND of active-high "
+                   "lines, an AND for an OR of active-low ones)")
+        v("error", "drive_level_mismatch", hit["net"], [m["ref"]],
+          f"{head}: {what}. {fix}", kind_of=hit["kind"])
     tables = {"io_levels": io_table, "pin_abs_max": abs_table,
               "pin_leakage": pl_specs, "io_tolerance": tol,
               "io_supply": io_sup}
@@ -4667,7 +4709,7 @@ def _signal_rules(v, vt, not_judged, nets, comps, comp_pins, rails,
                f"{r} needs, so a high may read low or as noise. An input "
                f"of the HCT/AHCT kind, or a translator, fixes it{src}",
                nets=hit["nets"], driver_v=hit["vd"], vih_v=hit["limit"])
-    return pol, dom, latch, latch_drive
+    return pol, dom, latch, latch_drive, cross_drive
 
 
 def audit(parsed: dict, constraints: dict,
@@ -5893,9 +5935,9 @@ def audit(parsed: dict, constraints: dict,
     # pin's supply domain against its net's level (lib/signal_domains.py,
     # classes 14 and 15 of the gaps list; built from datasheets and
     # planted faults)
-    pol_pins, dom_pairs, latch_pins, latch_drive = _signal_rules(
-        v, vt, not_judged, nets, comps, comp_pins, pl_rails, io_table,
-        abs_table, pl_specs, io_tolerance)
+    pol_pins, dom_pairs, latch_pins, latch_drive, cross_drive = \
+        _signal_rules(v, vt, not_judged, nets, comps, comp_pins, pl_rails,
+                      io_table, abs_table, pl_specs, io_tolerance)
 
     # 34-36. wiring against design intent (class 8 of
     # docs/miss-taxonomy.md, #1137). design_intent states what no design
@@ -6022,6 +6064,7 @@ def audit(parsed: dict, constraints: dict,
         "polarity_pins_checked": pol_pins,
         "latch_enables_checked": latch_pins,
         "latch_drive_checked": latch_drive,
+        "drive_levels_checked": cross_drive,
         "io_domain_pairs_checked": dom_pairs,
         "bus_groups_checked": bus_checked,
         "uart_parts_checked": uart_checked,
