@@ -601,6 +601,40 @@ def test_fp_verify_ccw_numbering_and_not_judged(tmp_path, capsys):
     assert [n for n in payload["not_judged"] if n["check"] == "pad_numbering"]
 
 
+# KiCad's SOT-223-3_TabPin2: pins 1, 2, 3 down one side, the tab across
+# the body repeating pin 2
+SOT223_TAB2 = [("1", -3.15, -2.3, 2, 1.5), ("2", -3.15, 0, 2, 1.5),
+               ("3", -3.15, 2.3, 2, 1.5), ("2", 3.15, 0, 2, 3.8)]
+
+
+def test_fp_verify_ccw_numbering_leaves_a_repeated_tab_out(tmp_path, capsys):
+    """#1444: pin 2's mean with its tab sat mid-body, so 1 -> 2 -> 3 down
+    one row read as clockwise and an AMS1117 was called numbered from the
+    bottom view. Three pins in a row run neither way: not_judged. The same
+    SOT-223 with its tab numbered 4 still goes round, mirrored or not."""
+    ds = write_ds(tmp_path, {"mpn": "AMS1117-3.3", "pinout": [], "land_pattern": {
+        "pad_count": 4, "pin1": "1", "numbering": "ccw_top"}})
+    for name, mirror in (("SOT-223-3_TabPin2", 1), ("SOT-223-3_TabPin2", -1)):
+        fp = _numbered_fp(tmp_path, name, [(n, mirror * x, y, w, h)
+                                           for n, x, y, w, h in SOT223_TAB2])
+        code, payload = _fpv(tmp_path, capsys, fp, ds)
+        assert code == 0 and not _found(payload, "pad_numbering"), mirror
+        assert payload["pad_numbering"] is None
+        why, = [n["why"] for n in payload["not_judged"]
+                if n["check"] == "pad_numbering"]
+        assert "ccw_top" in why and "one line" in why
+    tab4 = [(n if (n, x) != ("2", 3.15) else "4", x, y, w, h)
+            for n, x, y, w, h in SOT223_TAB2]
+    for mirror, code_want in ((1, 0), (-1, 1)):
+        fp = _numbered_fp(tmp_path, "SOT-223", [(n, mirror * x, y, w, h)
+                                                for n, x, y, w, h in tab4])
+        code, payload = _fpv(tmp_path, capsys, fp, ds)
+        assert code == code_want, payload["violations"]
+        assert payload["pad_numbering"]["from"] == "numbering"
+    v, = _found(payload, "pad_numbering")
+    assert v["hint"] == "bottom_view_numbering"
+
+
 def test_datasheet_validate_land_pattern_pads(tmp_path, capsys):
     ds = {"mpn": "X", "pinout": [], "land_pattern": {
         "pad_count": 2, "numbering": "ccw_top", "pads": [
