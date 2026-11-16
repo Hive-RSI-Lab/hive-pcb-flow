@@ -176,12 +176,61 @@ def test_lcsc_zero_with_jlc_stock_is_noted_not_failed():
     assert any("LCSC shows 0" in n for n in v["notes"])
 
 
-def test_value_tokens():
-    assert stocklib.value_tokens("100nF") == {"100nf"}
-    assert stocklib.value_tokens("4K7") == {"4.7k"}
-    assert stocklib.value_tokens("470R") == {"470ω"}
-    assert stocklib.value_tokens("470uF/50V") == {"470uf"}
-    assert stocklib.value_tokens("CH340C") == set()
+def test_value_quantity():
+    q = stocklib.value_quantity
+    assert q("100nF") == pytest.approx((1e-7, "F"))
+    assert q("4K7") == (4700.0, "")
+    assert q("470R") == (470.0, "Ω")
+    assert q("470uF/50V") == pytest.approx((470e-6, "F"))
+    assert q("CH340C") is None
+    # m is milli, M is mega - in both spellings (issue #762)
+    assert q("1M") == (1e6, "")
+    assert q("1mΩ") == (1e-3, "Ω")
+    assert q("4M7") == pytest.approx((4.7e6, ""))
+    assert q("4m7") == pytest.approx((4.7e-3, ""))
+    assert q("0.5R") == q("500mΩ") == q("500mOhm") == (0.5, "Ω")
+    # a space between the number and its prefix (BOMs from KiCad fields)
+    assert q("100 nF") == q("100nF")
+    assert q("2.2 uF") == pytest.approx((2.2e-6, "F"))
+    assert q("100 / 50V") == (100.0, "")
+
+
+def _desc_match(bom_value, describe):
+    return stocklib.matches("", bom_value, {"model": "X",
+                                            "description": describe})[0]
+
+
+@pytest.mark.parametrize("bom,describe", [
+    # issue #762: SI-prefix equivalents of the same value
+    ("0.5R", "500mΩ ±1% 2W 2512 Current Sense Resistor"),
+    ("100nF", "0.1uF 50V X7R ±10% 0402 MLCC"),
+    ("1nF", "1000pF 50V C0G ±5% 0402 MLCC"),
+    ("4K7", "4.7kΩ 62.5mW Thick Film Resistor ±1% 0402"),
+    ("4K7", "RES 4.7K 1% 0402"),
+    ("2.2uH", "2.2µH ±20% 3A SMD Power Inductor"),
+    ("100 nF", "100nF 50V X7R ±10% 0603 MLCC"),
+    ("1.00k", "100mW 1kΩ 75V Thin Film Resistor ±0.1% 0603"),
+])
+def test_value_matches_its_si_prefix_equivalent(bom, describe):
+    assert _desc_match(bom, describe) is True
+
+
+@pytest.mark.parametrize("bom,describe", [
+    ("1M", "1mΩ ±1% 3W 2512 Current Sense Resistor"),   # mega is not milli
+    ("1mΩ", "1MΩ 62.5mW Thick Film Resistor ±1% 0402"),
+    ("4m7", "4.7MΩ 62.5mW Thick Film Resistor ±1% 0402"),
+    ("100nF", "100nH ±5% 0402 Inductor"),               # same number, not F
+    ("0.5R", "5Ω ±1% 0402"),
+])
+def test_value_does_not_match_another_magnitude_or_unit(bom, describe):
+    assert _desc_match(bom, describe) is False
+
+
+def test_a_value_that_is_the_model_matches_though_it_reads_as_a_number():
+    rec = {"model": "750315240",
+           "description": "1:1.1 1A 440uH 5V 5kV SMD-6P Power Transformers"}
+    assert stocklib.matches("", "750315240", rec)[0] is True
+    assert stocklib.matches("", "750315241", rec)[0] is False
 
 
 def test_check_rows_quantity_is_refs_times_boards():

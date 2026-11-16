@@ -44,6 +44,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import math
 import re
 import urllib.error
 import urllib.request
@@ -166,48 +167,82 @@ def norm(s) -> str:
     return re.sub(r"[^0-9A-Z]", "", str(s or "").upper())
 
 
-_VALUE = re.compile(r"^(\d+(?:\.\d+)?)([pnumkKMG]?)(F|H|R|OHM|V|A|W|HZ)?$",
-                    re.I)
+# SI prefixes, case-sensitive: m is milli and M is mega (a 1M resistor is
+# not a 1m\u03a9 shunt). K, U, N, P and MEG are how BOMs spell k, u, n, p, M.
+_PREFIX = {"": 1.0, "p": 1e-12, "P": 1e-12, "n": 1e-9, "N": 1e-9,
+           "u": 1e-6, "U": 1e-6, "m": 1e-3, "k": 1e3, "K": 1e3,
+           "M": 1e6, "MEG": 1e6, "Meg": 1e6, "meg": 1e6, "G": 1e9}
+_UNIT = {"f": "F", "h": "H", "r": "\u03a9", "ohm": "\u03a9", "ohms": "\u03a9",
+         "\u03c9": "\u03a9", "v": "V", "a": "A", "w": "W", "hz": "Hz"}
+_VALUE = re.compile(r"^(\d+(?:\.\d+)?)(MEG|Meg|meg|[pPnNuUmkKMG]?)"
+                    r"(F|f|H|h|R|r|[Oo][Hh][Mm][Ss]?|\u03a9|V|v|A|W|w|"
+                    r"[Hh][Zz])?$")
+_DESC_Q = re.compile(r"(?<![A-Za-z0-9.])(\d+(?:\.\d+)?)\s?([pnumkKMG]?)"
+                     r"(F|H|\u03a9|[Oo]hms?|OHMS?|V|A|W|Hz)?(?![A-Za-z])")
 
 
-def value_tokens(value: str) -> set[str]:
-    """How JLC spells a passive's value in `describe` ('100nf', '4.7k' + ohm),
-    lowercased; empty when the value is not a plain quantity. '470uF/50V'
-    reads its first quantity, '4K7' reads as 4.7k."""
-    v = re.split(r"[/\s,]", str(value or "").strip())[0]
-    v = v.replace("\u00b5", "u").replace("\u03bc", "u").replace("\u03a9", "R")
-    m = re.match(r"^(\d+)([RKMrkm])(\d+)$", v)
+def _micro(s: str) -> str:
+    return s.replace("\u00b5", "u").replace("\u03bc", "u")
+
+
+def value_quantity(value: str) -> tuple[float, str] | None:
+    """A passive's value as (number in base units, unit): '100nF' is
+    (1e-07, 'F'), '0.5R' and '500m\u03a9' are (0.5, '\u03a9'), '4K7' is
+    (4700.0, '') - no unit given. The prefix keeps its case: m is milli, M is
+    mega. None when the value is not a plain quantity ('CH340C').
+    '470uF/50V' reads its first quantity; '4R7', '4K7', '4M7' and '4m7' read
+    as 4.7 with R, k, M and m; '100 nF' reads as '100nF'."""
+    v = re.sub(r"^(\d+(?:\.\d+)?)\s+(?=[^\d\s/,])", r"\1",
+               _micro(str(value or "").strip()))
+    v = re.split(r"[/\s,]", v)[0]
+    m = re.match(r"^(\d+)([RrKkMmG])(\d+)$", v)
     if m:
-        unit = {"r": "R", "k": "k", "m": "M"}[m.group(2).lower()]
-        v = f"{m.group(1)}.{m.group(3)}{unit}"
+        v = f"{m.group(1)}.{m.group(3)}{m.group(2)}"
     m = _VALUE.match(v)
     if not m:
-        return set()
-    num, pre, unit = m.group(1), m.group(2) or "", (m.group(3) or "").upper()
-    if pre == "K":
-        pre = "k"
-    unit = {"R": "\u03c9", "OHM": "\u03c9"}.get(unit, unit.lower())
-    return {f"{num}{pre.lower()}{unit}"}
+        return None
+    num, pre, unit = m.group(1), m.group(2) or "", m.group(3) or ""
+    return float(num) * _PREFIX[pre], _UNIT.get(unit.lower(), unit)
 
 
-def _desc(rec: dict) -> str:
-    return (rec.get("description") or "").lower().replace("\u00b5", "u")
+def desc_quantities(text: str) -> list[tuple[float, str]]:
+    """Every quantity with a unit in JLC's description, in base units:
+    '4.7k\u03a9 \u00b11% 62.5mW' is [(4700.0, '\u03a9'), (0.0625, 'W')]. A
+    prefixed number with no unit ('RES 4.7K 1%') comes back with unit ''."""
+    out = []
+    for m in _DESC_Q.finditer(_micro(str(text or ""))):
+        num, pre, unit = m.groups()
+        if not pre and not unit:        # '0402', '1%': not a value
+            continue
+        unit = unit or ""
+        out.append((float(num) * _PREFIX[pre], _UNIT.get(unit.lower(), unit)))
+    return out
+
+
+def _same(a: float, b: float) -> bool:
+    return math.isclose(a, b, rel_tol=1e-6, abs_tol=0.0)
 
 
 def matches(bom_mpn: str, bom_value: str, rec: dict) -> tuple[bool | None, str]:
     """(match, why). None = nothing to compare against (unknown)."""
     model = rec.get("model") or ""
     if bom_mpn and norm(bom_mpn) != norm(bom_value) and \
-            not value_tokens(bom_mpn):
+            value_quantity(bom_mpn) is None:
         ok = norm(bom_mpn) == norm(model) or (
             len(norm(bom_mpn)) >= 5 and (norm(bom_mpn) in norm(model)
                                          or norm(model) in norm(bom_mpn)))
         return ok, (f"BOM MPN {bom_mpn} vs JLC model {model}")
-    toks = value_tokens(bom_value or bom_mpn)
-    if toks:
-        desc = _desc(rec)
-        ok = any(re.search(r"(?<![\d.])" + re.escape(t), desc)
-                 for t in toks)
+    if norm(bom_value) and norm(bom_value) == norm(model):
+        # The value is the MPN, even one that reads as a bare number
+        # (Wurth's '750315240'): not a quantity.
+        return True, f"BOM value {bom_value} is JLC model {model}"
+    q = value_quantity(bom_value or bom_mpn)
+    if q is not None:
+        # Compared as numbers in base units, so 0.5R is 500m\u03a9 and 100nF
+        # is 0.1uF; a value with no unit ('4K7', '100n') takes any unit,
+        # and so does a description's '4.7K' with none.
+        ok = any(_same(q[0], n) and (not q[1] or not u or q[1] == u)
+                 for n, u in desc_quantities(rec.get("description")))
         return ok, (f"value {bom_value} {'in' if ok else 'not in'} JLC's "
                     f"description '{rec.get('description')}' ({model})")
     # A part named by its family in the value ('LP5907-3.3', 'EC11'): every
