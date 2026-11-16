@@ -5,7 +5,7 @@
  "board": "pd-trigger",
  "metrics": {
   "errors": 51,
-  "warnings": 22,
+  "warnings": 23,
   "by_kind": {
    "cpl_rotation": 2,
    "dfm_clearance": 47,
@@ -13,6 +13,8 @@
    "dfm_mask_dam": 1,
    "dfm_silk_over_pad": 19,
    "dfm_silk_width": 1,
+   "dfm_tombstone": 1,
+   "dfm_tombstone_traces": 1,
    "dfm_via_fill_note_missing": 1
   },
   "polarity": "checked",
@@ -21,11 +23,11 @@
  "metrics_live": null,
  "penalties": {
   "errors": 51.0,
-  "warnings": 22.0,
+  "warnings": 23.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 72.3,
+ "composite": 72.2,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",
@@ -35,7 +37,7 @@
  },
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-15",
+  "created": "2026-11-16",
   "kicad_version": null
  }
 }

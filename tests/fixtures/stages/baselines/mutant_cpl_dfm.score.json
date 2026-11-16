@@ -5,10 +5,11 @@
  "board": "blinky2",
  "metrics": {
   "errors": 1,
-  "warnings": 1,
+  "warnings": 2,
   "by_kind": {
    "cpl_polarity": 1,
-   "dfm_silk_width": 1
+   "dfm_silk_width": 1,
+   "dfm_tombstone": 1
   },
   "polarity": "checked",
   "capability_key": "2layer_1oz"
@@ -16,11 +17,11 @@
  "metrics_live": null,
  "penalties": {
   "errors": 1.0,
-  "warnings": 1.0,
+  "warnings": 2.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 99.4,
+ "composite": 99.3,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",
@@ -28,8 +29,9 @@
   "missed": [],
   "forbidden_errors": 0
  },
+ "e2e": null,
  "_baseline": {
-  "created": "2026-08-06",
+  "created": "2026-11-16",
   "kicad_version": null
  }
 }

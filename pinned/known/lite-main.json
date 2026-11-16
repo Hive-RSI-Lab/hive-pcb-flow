@@ -1445,6 +1445,102 @@
    "kind": "paste_on_via",
    "verdict": "real",
    "reason": "U8 pad 33's paste windows lie over the footprint's own 0.3 mm via holes, more than 0.1 mm past each rim: solder runs down the barrels (found once check_ep_paste saw a footprint's own via pads, #1198)"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "PVDD",
+   "refs": [
+    "C56",
+    "C57"
+   ],
+   "pos": [
+    93.39,
+    102.323
+   ],
+   "kind": "dfm_tombstone",
+   "verdict": "real",
+   "reason": "the PVDD pour is set to join pads solid (connect_pads yes) and touches one end of each listed 0603-or-smaller part on F.Cu, while the other end leaves on a 0.2-0.9 mm track: the pour end lags at reflow, the tombstoning setup IPC-7351 cures with a thermal relief (#328)"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "GND",
+   "refs": [
+    "C1",
+    "C10",
+    "C11",
+    "C13",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C20",
+    "C21",
+    "C22",
+    "C23",
+    "C24",
+    "C26",
+    "C30",
+    "C31",
+    "C32",
+    "C33",
+    "C34",
+    "C35",
+    "C36",
+    "C37",
+    "C38",
+    "C39",
+    "C40",
+    "C42",
+    "C45",
+    "C5",
+    "C50",
+    "C61",
+    "C63",
+    "C80",
+    "C81",
+    "C83",
+    "D2",
+    "R1",
+    "R10",
+    "R12",
+    "R14",
+    "R16",
+    "R18",
+    "R31",
+    "R34",
+    "R37",
+    "R39",
+    "R50",
+    "R52",
+    "R67",
+    "R69",
+    "R8"
+   ],
+   "pos": [
+    74.665,
+    76.548
+   ],
+   "kind": "dfm_tombstone",
+   "verdict": "real",
+   "reason": "the GND pour is set to join pads solid (connect_pads yes) and touches one end of each listed 0603-or-smaller part on F.Cu, while the other end leaves on a 0.2-0.9 mm track: the pour end lags at reflow, the tombstoning setup IPC-7351 cures with a thermal relief (#328)"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "PVDD",
+   "refs": [
+    "C53",
+    "C54"
+   ],
+   "pos": [
+    109.59,
+    102.323
+   ],
+   "kind": "dfm_tombstone",
+   "verdict": "real",
+   "reason": "the PVDD pour is set to join pads solid (connect_pads yes) and touches one end of each listed 0603-or-smaller part on F.Cu, while the other end leaves on a 0.2-0.9 mm track: the pour end lags at reflow, the tombstoning setup IPC-7351 cures with a thermal relief (#328)"
   }
  ]
 }

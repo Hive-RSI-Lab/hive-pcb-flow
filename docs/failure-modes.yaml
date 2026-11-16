@@ -2619,11 +2619,14 @@ modes:
   shows: 0402 stands up
   catch: symmetric pads and copper
   coverage:
-    script: '-'
-    rule: '-'
-    level: L0
+    script: check_tombstone (dfm family tombstone)
+    rule: dfm_tombstone
+    level: L2
   target_level: L2
-  gap: none
+  gap: imbalance by track width alone (thermal-relief spokes and unstitched
+    pour islands under 5 mm2 count as track) is info (dfm_tombstone_traces),
+    never charged; a via in pad counts its plane, as no assembly record says
+    whether it is filled or capped (#328)
   hit_on: []
   sources:
   - '[4][5]'

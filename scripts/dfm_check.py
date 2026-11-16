@@ -34,6 +34,11 @@ Checks (all thresholds from reference/jlc_capabilities.yaml, keyed
            ring, inward pad extension, hole centre on the outline, distance
            to other edges and corners, board size and thickness, and a
            plated hole the outline cuts without the castellated property
+  tombstone  check_tombstone.py over the BOARD file: an 0603-or-smaller
+           2-pad chip whose one end a plane (a pour on the pad, or a via
+           in the pad down to one) ties to far more copper than its other
+           (dfm_tombstone, warning, one per pour listing its parts); unequal
+           by track width alone is info (dfm_tombstone_traces) (#328)
   mask     silk_over_pad (silk ink inside a mask opening = unprintable/
            unsolderable), solder-mask dam between openings
   silk     min silk stroke width
@@ -180,6 +185,7 @@ from shapely.ops import nearest_points, unary_union  # noqa: E402
 from shapely.strtree import STRtree  # noqa: E402
 
 import castellation  # noqa: E402
+import check_tombstone  # noqa: E402
 import fabmaterial  # noqa: E402
 import checklib  # noqa: E402
 import gerblib  # noqa: E402
@@ -2371,6 +2377,7 @@ DFM_FAMILIES = {
     "netlist": ("dfm_net_short", "dfm_net_open", "dfm_net_tie_open",
                 "dfm_netlist_name_clash"),
     "teardrop": ("dfm_ring_breakout", "dfm_teardrop_missing"),
+    "tombstone": (check_tombstone.KIND, check_tombstone.KIND_TRACES),
 }
 
 
@@ -2514,6 +2521,10 @@ def run(pcb: Path, fab_dir: Path | None = None, copper_oz: float | None = None,
             check_slots(fab, rules, vios)
         if "teardrop" not in skip:
             facts["teardrop"] = check_teardrops(pcb, caps, vios)
+        if "tombstone" not in skip:
+            tvios, tfacts = check_tombstone.check(bg, CHECK, SOURCE)
+            vios.extend(tvios)
+            facts.update(tfacts)
         if "castellation" not in skip and "castellated" not in caps:
             # a vendor that publishes no castellation rules: nothing to
             # measure against, so a castellated board can't pass there
@@ -2630,7 +2641,7 @@ def run(pcb: Path, fab_dir: Path | None = None, copper_oz: float | None = None,
         # U2 coverage (codex C7): record which families never ran and why.
         skipped_cov: dict[str, str] = {}
         for fam in ("copper", "drill", "silk", "castellation", "zone_fill",
-                    "teardrop"):
+                    "teardrop", "tombstone"):
             if fam in skip:
                 skipped_cov[fam] = "skipped via --skip"
         if zone_fill_skipped:
@@ -2758,7 +2769,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--skip", default="",
                     help="comma list of groups to skip: "
                          "copper,drill,silk,castellation,zone_fill,"
-                         "netlist,placement")
+                         "netlist,placement,teardrop,tombstone")
     ap.add_argument("--strict", action="store_true",
                     help="release mode (codex C7): any sub-check family that "
                          "could not run (open outline, no netlist, no "
