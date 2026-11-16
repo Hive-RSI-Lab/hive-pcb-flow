@@ -1,0 +1,108 @@
+# datasheet_makers.yaml - where a maker keeps its datasheets, for a part whose
+# listing names no datasheet URL (scripts/lib/dsresolve.py).
+#
+# The maker of a part is read from its listing's brand when it has one (a
+# brand no entry knows - a clone, a reseller - is "maker not known", never a
+# guess from the part number), else from its MPN by `prefixes`.
+#
+# Rules for an entry:
+#  - `brands`: words a listing's brand carries for this maker, matched as
+#    whole words, case aside ("TI(德州仪器)" carries "ti"). They also gate the
+#    LCSC fallback: a copy listed under another brand is not this maker's PDF.
+#  - `prefixes`: regular expressions on the upper-cased MPN, from its start.
+#    Only families no other maker sells under the same name: a second-sourced
+#    family (LM358, MAX232, 74HC) has none, so a part with no brand is not
+#    pinned on one maker by its number.
+#  - `urls`: the maker's own URL patterns, `{lower}`/`{upper}` the candidate
+#    part number. Each must pass the fetch allowlist
+#    (reference/knowledge/domains.yaml). None when the maker has no pattern
+#    that holds, or its domain is not on the allowlist: such a part is tried
+#    on LCSC's copy only.
+#  - `cite`: where the pattern was seen to hold.
+version: 1
+
+makers:
+  - name: Texas Instruments
+    brands: [texas instruments, ti, burr-brown]
+    prefixes: ['TPS\d', 'TLV\d', 'LMR\d', 'SN74', 'SN65', 'PCM\d', 'MCF\d',
+               'DRV\d', 'INA\d', 'TCA\d', 'BQ\d', 'MSP430', 'OPA\d', 'ADS\d',
+               'UCC\d', 'TXS\d', 'TXB\d', 'TUSB', 'DP83']
+    urls: ['https://www.ti.com/lit/ds/symlink/{lower}.pdf']
+    cite: ti.com product-folder symlink (tps62086, mcf8316d, lmr38010, sn74lv1t34 fetched 2026-11-16)
+  - name: onsemi
+    brands: [onsemi, on semiconductor, on semi, fairchild]
+    prefixes: ['FUSB\d', 'NCP\d', 'NCV\d', 'FAN\d']
+    urls: ['https://www.onsemi.com/pdf/datasheet/{lower}-d.pdf']
+    cite: onsemi.com /pdf/datasheet/<part>-d.pdf (fusb302b fetched 2026-11-16)
+  - name: NXP
+    brands: [nxp, freescale]
+    prefixes: ['NAFE\d', 'LPC\d', 'PCF85', 'TJA1', 'MIMXRT', 'S32K', 'MKL\d', 'MK\d\d']
+    urls: ['https://www.nxp.com/docs/en/data-sheet/{upper}.pdf']
+    cite: nxp.com /docs/en/data-sheet/<PART>.pdf (PCA6416A fetched 2026-11-16)
+  - name: STMicroelectronics
+    brands: [stmicroelectronics, st, st microelectronics]
+    prefixes: ['STM32', 'STM8', 'LPS\d', 'LIS\d', 'LSM\d', 'VL53', 'HTS221', 'STUSB']
+    urls: ['https://www.st.com/resource/en/datasheet/{lower}.pdf']
+    cite: st.com /resource/en/datasheet/<part>.pdf (the site timed out to this client 2026-11-16; LCSC's copy is the fallback)
+  - name: Analog Devices
+    brands: [analog devices, adi, linear technology, maxim integrated]
+    prefixes: ['AD\d', 'ADP\d', 'ADUM', 'LTC\d', 'LT\d', 'ADXL']
+    urls: ['https://www.analog.com/media/en/technical-documentation/data-sheets/{upper}.pdf']
+    cite: analog.com technical-documentation/data-sheets/<PART>.pdf (the site timed out to this client 2026-11-16; LCSC's copy is the fallback)
+  - name: Renesas
+    brands: [renesas, intersil, idt, dialog]
+    prefixes: ['ISL\d', 'R7F', 'RA\dM']
+    urls: ['https://www.renesas.com/us/en/www/doc/datasheet/{lower}.pdf']
+    cite: renesas.com /www/doc/datasheet/<part>.pdf (Intersil's old paths)
+  - name: Espressif
+    brands: [espressif, 乐鑫]
+    prefixes: ['ESP32', 'ESP8266', 'ESP8285', 'ESP-PSRAM']
+    urls: ['https://documentation.espressif.com/{lower}_datasheet_en.pdf',
+           'https://www.espressif.com/sites/default/files/documentation/{lower}_datasheet_en.pdf']
+    cite: documentation.espressif.com/<part>_datasheet_en.pdf (esp32-c3-wroom-02 fetched 2026-11-16; www.espressif.com did not resolve to this client that day)
+  - name: Silicon Labs
+    brands: [silicon labs, silicon lab, silabs, silicon laboratories]
+    prefixes: ['SI70\d\d', 'SI72\d\d', 'CP210', 'EFM32', 'EFR32', 'EFM8']
+    urls: []
+    cite: silabs.com names its PDFs by hand (Si7021-A20.pdf); LCSC's copy only
+  - name: Microchip
+    brands: [microchip, atmel, microsemi, sst]
+    prefixes: ['PIC\d', 'ATMEGA', 'ATTINY', 'ATSAM', 'SAM[DE]\d', 'SAM[34]', 'SST\d',
+               'MCP\d', '24LC', '25LC', 'KSZ\d', 'LAN\d']
+    urls: []
+    cite: microchip.com datasheet URLs carry a document number, no pattern; LCSC's copy only
+  - name: Infineon
+    brands: [infineon, cypress]
+    prefixes: ['CY\d', 'CY8C', 'CYW', 'TLE\d', 'XMC\d', 'BTS\d']
+    urls: []
+    cite: infineon.com datasheet URLs carry a file id, no pattern; LCSC's copy only
+  - name: Torex
+    brands: [torex]
+    prefixes: ['XC6\d\d\d', 'XC9\d\d\d']
+    urls: []
+    cite: product.torexsemi.com refused this client (HTTP 403); LCSC's copy only
+  - name: Winbond
+    brands: [winbond]
+    prefixes: ['W25Q', 'W25N', 'W25X', 'W9\d\d\d', 'W97']
+    urls: []
+    cite: winbond.com is not on the fetch allowlist; LCSC's copy only
+  - name: Nexperia
+    brands: [nexperia]
+    prefixes: []
+    urls: []
+    cite: assets.nexperia.com refused this client (HTTP 403, Akamai); LCSC's copy only
+  - name: Lattice
+    brands: [lattice]
+    prefixes: ['LFE\d', 'LCMXO', 'ICE40', 'ICE5']
+    urls: []
+    cite: latticesemi.com is not on the fetch allowlist; LCSC's copy only
+  - name: AMD Xilinx
+    brands: [xilinx, amd]
+    prefixes: ['XC\dS', 'XC7[AKSZ]', 'XCZU']
+    urls: []
+    cite: xilinx.com is not on the fetch allowlist; LCSC's copy only
+  - name: ams OSRAM
+    brands: [ams, ams-osram, taos, osram]
+    prefixes: ['TSL2\d', 'TCS3\d', 'AS7\d']
+    urls: []
+    cite: ams-osram.com is not on the fetch allowlist; LCSC's copy only

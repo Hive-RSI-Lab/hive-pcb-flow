@@ -298,6 +298,61 @@ def test_a_datasheet_cached_from_another_url_is_fetched_again(
     assert fetched[1] == "https://www.ti.com/lit/ds/ldo.pdf"
 
 
+def test_the_resolver_finds_a_datasheet_the_listing_lacks(
+        stand_ins, monkeypatch):
+    """No listing URL, no table entry: dsresolve's by-maker URL is read,
+    cited, and cached with its fetch record (a second run asks nobody)."""
+    import dsresolve
+    out, reader, calls = stand_ins
+    (amb.parts_enrich.cache_dir() / "C999.json").write_text(json.dumps({
+        "lcsc": "C999", "mpn": "TESTLDO", "brand": "",
+        "package": "SOT-23-5", "datasheet": ""}))
+    url = "https://www.ti.com/lit/ds/symlink/testldo.pdf"
+    asked = []
+
+    def resolve(mpn, brand, dest):
+        asked.append((mpn, brand))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 stand-in")
+        return {"maker": "Texas Instruments", "url": url,
+                "via": "Texas Instruments URL pattern ... for TESTLDO",
+                "got": {"url": url, "status": "fetched", "file": str(dest)},
+                "tried": []}
+    monkeypatch.setattr(dsresolve, "resolve", resolve)
+    monkeypatch.setattr(datasheet_extract, "fetch_datasheet",
+                        lambda *a, **k: pytest.fail("fetched again"))
+    rep = amb.read_part("C999", [BOARD], out, reader)
+    assert rep["status"] == "kept", rep
+    assert rep["datasheet_from"] == "Texas Instruments URL pattern ... for TESTLDO"
+    assert "Texas Instruments" in calls[0]
+    assert url in json.loads((out / "ext" / "C999.json").read_text())["source_pdf"]
+    assert amb.read_part("C999", [BOARD], out, reader)["status"] == "kept"
+    assert asked == [("TESTLDO", "")]
+
+
+def test_a_resolver_miss_is_named_and_a_stall_is_asked_again(
+        stand_ins, monkeypatch):
+    import dsresolve
+    out, reader, calls = stand_ins
+    (amb.parts_enrich.cache_dir() / "C999.json").write_text(json.dumps({
+        "lcsc": "C999", "mpn": "TESTLDO", "brand": "Texas Instruments",
+        "package": "SOT-23-5", "datasheet": ""}))
+    asked = []
+
+    def resolve(mpn, brand, dest):
+        asked.append(mpn)
+        kind = "stalled" if len(asked) == 1 else "absent"
+        return {"maker": "Texas Instruments", "miss": "not found",
+                "tried": [{"url": "https://www.ti.com/x.pdf", "kind": kind,
+                           "why": "HTTP 404"}]}
+    monkeypatch.setattr(dsresolve, "resolve", resolve)
+    for _ in range(3):
+        rep = amb.read_part("C999", [BOARD], out, reader)
+        assert rep["status"] == "no listing with a datasheet URL"
+        assert rep["resolver"] == "not found" and "ti.com/x.pdf" in rep["why"]
+    assert len(asked) == 2 and calls == []     # the stall was not cached
+
+
 def test_an_exposed_pad_is_the_boards_pad_after_the_last_pin(stand_ins):
     out, _, _ = stand_ins
     ep = {"pin": "EP", "name": "GND", "type": "ground", "page": 1}

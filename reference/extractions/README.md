@@ -48,8 +48,13 @@ the reader was not sure of is left unrated, and a supply row that names no
 pin rates the part's single power input. A part whose listing names no
 datasheet, or one the fetcher refuses, is read from the maker's datasheet
 when `reference/datasheet_urls.yaml` names its MPN (rules for an entry are
-at the top of that file). An exposed pad goes in `exposed_pad`, not the
-pinout, so a board's pad one past the last pin is that pad.
+at the top of that file); failing that, when the listing names none,
+`scripts/lib/dsresolve.py` finds one by maker (`reference/datasheet_makers.yaml`:
+the maker's URL pattern, else LCSC's copy of the maker's PDF), takes it
+only when its first pages name the part, and names a miss (maker not
+known, refused, not found) rather than guess. An exposed pad goes in
+`exposed_pad`, not the pinout, so a board's pad one past the last pin is
+that pad.
 
 `scripts/land_batch.py` reads the pad numbering of the same ICs from their
 datasheets' pin drawings (#1288), with the same listings and PDFs and the
