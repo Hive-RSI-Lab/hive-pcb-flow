@@ -2352,3 +2352,115 @@ def test_pin_map_warning_needs_the_same_pin_numbers():
     # the same numbers, but a row of three, which no turn lands it on
     wide = [("1", -2.5, 0.0), ("3", 0.0, 0.0), ("2", 2.5, 0.0)]
     assert cv.analyse(_kfp("Q1", wide), model)["verdict"] == "no_fit"
+
+
+# ------------------------- pin-1 and polarity marks drawn on the board (#1380)
+
+def _gr_dot(x, y, r=0.1, layer="F.SilkS"):
+    return (f'(gr_circle (center {x} {y}) (end {x + r} {y}) (layer "{layer}") '
+            f'(stroke (width 0.15) (type solid)))')
+
+
+def _with_board_silk(pcb, *items):
+    """The board with drawings added at board level, beside its footprints."""
+    text = pcb.read_text()
+    pcb.write_text(text[:text.rindex(")")] + " ".join(items) + ")")
+    return pcb
+
+
+def _u401_a1_on_board(sx=1, sy=1, r=0, x=20.0, flip=1, layer="F.SilkS"):
+    """U401's dots drawn on the board at the corner (sx, sy) from A1's: board
+    = origin + rot(stored local, r), stored local already flipped on B.Cu."""
+    out = []
+    for dx, dy, rad in U401_DOTS:
+        bx, by = cv.rot(sx * dx, flip * sy * dy, r)
+        out.append(_gr_dot(x + bx, 20.0 + by, rad, layer))
+    return out
+
+
+@pytest.mark.parametrize("r", [0, 90, 270])
+def test_a_board_dot_at_pin_1_is_read_when_the_footprint_has_none(r, tmp_path):
+    pcb = _with_board_silk(_u401_board(tmp_path, U401_OUTLINE, r=r),
+                           *_u401_a1_on_board(r=r))
+    row, rep = _mark_row(pcb, rot=float(r))
+    assert row["silk_mark"] == "ok" and row["silk_source"] == "board"
+    assert rep["silk_mark_missing"] is None and rep["status"] == "pass"
+
+
+@pytest.mark.parametrize("r", [0, 90])
+def test_a_board_dot_at_the_far_corner_is_wrong(r, tmp_path):
+    pcb = _with_board_silk(_u401_board(tmp_path, U401_OUTLINE, r=r),
+                           *_u401_a1_on_board(-1, -1, r=r))
+    row, rep = _mark_row(pcb, rot=float(r))
+    assert row["silk_mark"] == "wrong" and row["silk_source"] == "board"
+    assert rep["silk_mark_wrong"] == ["U401"] and rep["status"] == "violations"
+
+
+def test_a_bottom_parts_board_dot_is_read_in_its_flipped_frame(tmp_path):
+    def board(s):
+        return _with_board_silk(
+            _u401_board(tmp_path, '(fp_line (start -1 -1) (end 1 -1) '
+                        '(layer "B.SilkS"))', layer="B.Cu"),
+            *_u401_a1_on_board(s, s, flip=-1, layer="B.SilkS"))
+    assert _mark_row(board(1), rot=180.0, layer="Bottom")[0]["silk_mark"] == "ok"
+    assert _mark_row(board(-1), rot=180.0, layer="Bottom")[0]["silk_mark"] == "wrong"
+
+
+def test_a_board_dot_on_the_far_side_is_not_a_mark(tmp_path):
+    pcb = _with_board_silk(_u401_board(tmp_path, U401_OUTLINE),
+                           *_u401_a1_on_board(-1, -1, layer="B.SilkS"))
+    row, _ = _mark_row(pcb)
+    assert row["silk_mark"] == "none" and "silk_source" not in row
+
+
+def test_quiet_twin_a_mounting_hole_circle_changes_nothing(tmp_path):
+    """A 3.2 mm hole's keep-out ring drawn on the silk, near the part: not a
+    mark and not by its pads, so the row is as it was without it."""
+    for silk in (U401_OUTLINE, _u401_silk()):
+        bare, _ = _mark_row(_u401_board(tmp_path, silk))
+        pcb = _with_board_silk(_u401_board(tmp_path, silk),
+                               _gr_dot(20.0 - 5.5, 20.0 - 4.0, 1.7))
+        row, _ = _mark_row(pcb)
+        assert row == bare
+
+
+def test_the_footprints_own_mark_wins_over_the_board(tmp_path):
+    pcb = _with_board_silk(_u401_board(tmp_path, _u401_silk()),
+                           *_u401_a1_on_board(-1, -1))
+    row, _ = _mark_row(pcb)
+    assert row["silk_mark"] == "ok" and "silk_source" not in row
+
+
+def test_a_board_dot_by_two_parts_counts_for_neither(tmp_path):
+    """Two quad parts 4 mm apart, a dot between them by both their pads."""
+    body = (_fp("U1", "X:IC", 20.0, 20.0, 0, QUAD, silk=" ")
+            + _fp("U2", "X:IC", 23.4, 20.0, 0, QUAD, silk=" "))
+    pcb = tmp_path / "two.kicad_pcb"
+    pcb.write_text("(kicad_pcb (version 20240108) " + body
+                   + _gr_dot(21.7, 21.6) + ")")
+    rep = cv.verify(pcb, {r: {"x": x, "y": 20.0, "rot": 0.0, "layer": "Top"}
+                          for r, x in (("U1", 20.0), ("U2", 23.4))},
+                    {}, pcb.parent / "c", fetch=False)
+    rows = {p["ref"]: p for p in rep["parts"]}
+    for ref in ("U1", "U2"):
+        assert rows[ref]["silk_mark"] == "none"
+        assert "count for neither" in rows[ref]["silk_note"]
+
+
+def test_a_board_bar_by_a_diodes_cathode_is_read(tmp_path):
+    bar = ('(gr_line (start {x} 19.0) (end {x} 21.0) (layer "F.SilkS") '
+           '(stroke (width 0.15) (type solid)))')
+    for x, want in ((20.0 - 2.36, "ok"), (20.0 + 2.36, "wrong")):
+        pcb = _with_board_silk(_sod(tmp_path, SOD123_BOX), bar.format(x=x))
+        row, _ = _mark_row(pcb, "D1")
+        assert (row["silk_mark"], row["silk_source"]) == (want, "board")
+
+
+def test_a_board_plus_text_by_an_electrolytic_is_read(tmp_path):
+    for x, want in ((20.0 - 2.75, "ok"), (20.0 + 2.75, "wrong")):
+        pcb = _with_board_silk(
+            _part_board(tmp_path, "C1", "Capacitor_SMD:CP_Elec_4x5.4", CPELEC,
+                        _lines(CPELEC_BODY), size=(2.6, 1.6)),
+            f'(gr_text "+" (at {x} 18.4) (layer "F.SilkS"))')
+        row, _ = _mark_row(pcb, "C1")
+        assert (row["silk_mark"], row["silk_source"]) == (want, "board")
