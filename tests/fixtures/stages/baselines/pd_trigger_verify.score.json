@@ -7,6 +7,7 @@
   "errors": 51,
   "warnings": 52,
   "by_check": {
+   "check_converter": 0,
    "check_return_path": 0,
    "check_current": 41,
    "check_decoupling": 0,
