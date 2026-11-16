@@ -317,6 +317,7 @@ import argparse
 import math
 import re
 import sys
+import time
 from functools import partial
 from pathlib import Path
 
@@ -324,8 +325,9 @@ import numpy as np
 import yaml
 
 from shapely import STRtree
-from shapely.geometry import Point
+from shapely.geometry import MultiPolygon, Point
 from shapely.ops import unary_union
+from shapely.prepared import prep
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
@@ -336,6 +338,20 @@ import netconn  # noqa: E402
 from checklib import CheckError, violation  # noqa: E402
 
 SCRIPT = "check_current"
+# Wall-time budget (s) for one run, under errata_corpus's 900 s harness cap:
+# a net still being judged when it runs out is listed not_judged `timeout`
+# and the nets judged before it keep their findings (--time-budget; 0: none).
+TIME_BUDGET_S = 600.0
+_DEADLINE = [None]                    # monotonic time the budget ends
+
+
+class OverBudget(Exception):
+    """The run passed its --time-budget while judging a net."""
+
+
+def _tick() -> None:
+    if _DEADLINE[0] is not None and time.monotonic() > _DEADLINE[0]:
+        raise OverBudget
 # IPC-2152 minimum trace width (mm) at 1 oz outer copper, dT = 10 degC.
 # Chart-reading interpolation table vendored from kicad-happy (MIT).
 IPC2152_1OZ_10C = [(0.0, 0.0), (0.5, 0.25), (1.0, 0.50), (2.0, 1.10),
@@ -518,6 +534,7 @@ def pour_shunted(bg: geom.BoardGeom, net: str, t) -> bool:
     meets the next track at a bare bend is followed to where that chain
     of tracks ends (_chain_end, #1298). check_net asks this only of a
     track that is no bridge: a bridge is never dropped as a pour tap."""
+    _tick()
     fills = {l: bg.zone_fill(net, l) for l in bg.layers_with_zone(net)}
     if not fills:
         return False
@@ -571,13 +588,34 @@ def covered_by_own_copper(bg: geom.BoardGeom, net: str, t, fills=None) -> bool:
     the current, so the track's own width is not the section that counts,
     whether or not the track graph (which has no zone copper) calls it a
     bridge."""
+    _tick()
     if fills is None:
         fills = {l: bg.zone_fill(net, l) for l in bg.layers_with_zone(net)}
-    cover = geom._union(
-        [p.poly for p in bg.pads_of(net, t.layer)]
-        + [v.poly for v in bg.vias_of(net, t.layer)]
-        + ([fills[t.layer]] if t.layer in fills else []))
-    return t.poly.difference(cover).area <= COVERED_FRAC * t.poly.area
+    fill = fills.get(t.layer)
+
+    def build():
+        cover = geom._union(
+            [p.poly for p in bg.pads_of(net, t.layer)]
+            + [v.poly for v in bg.vias_of(net, t.layer)]
+            + ([fill] if fill is not None else []))
+        parts = [g for g in getattr(cover, "geoms", [cover]) if not g.is_empty]
+        return parts, (STRtree(parts) if parts else None)
+    parts, tree = _memo(bg, ("own_cover", net, t.layer, id(fill)), build,
+                        keep=fill)
+    # only the cover's parts that meet the track change its difference
+    near = [parts[int(i)] for i in tree.query(t.poly)] if tree else []
+    rest = t.poly.difference(geom._union(near)) if near else t.poly
+    return rest.area <= COVERED_FRAC * t.poly.area
+
+
+def _memo(bg: geom.BoardGeom, key: tuple, build, keep=None):
+    """build() once per board and key: the pour stages ask for the same
+    geometry many times over (#timeouts). Keys made of id()s hold their
+    objects in `keep`, so an id is never reused while its entry lives."""
+    cache = bg.__dict__.setdefault("_check_current_memo", {})
+    if key not in cache:
+        cache[key] = (build(), keep)
+    return cache[key][0]
 
 
 def _stitches(bg: geom.BoardGeom, net: str, fills: dict) -> list[dict]:
@@ -710,9 +748,20 @@ def _neck_graph(bg: geom.BoardGeom, net: str, layer: str, fill,
                 others: dict | None):
     """(attachment vias, components) for one fill; components(radius)
     returns (nodes, root) where nodes[i] = (layer, reach polygon), the
-    fill's own pieces first, and root(i) its joined component."""
-    vias = [v for v in bg.vias_of(net, layer)
-            if fill.buffer(0.01).contains(Point(v.at))]
+    fill's own pieces first, and root(i) its joined component. Built once
+    per fill and set of others; components is kept per radius."""
+    key = ("neck_graph", net, layer, id(fill),
+           tuple(sorted((l, id(o[0]), o[1]) for l, o in (others or {}).items())))
+    return _memo(bg, key, lambda: _neck_graph_build(
+        bg, net, layer, fill, others),
+        keep=(fill, [o[0] for o in (others or {}).values()]))
+
+
+def _neck_graph_build(bg: geom.BoardGeom, net: str, layer: str, fill,
+                      others: dict | None):
+    _tick()
+    grown = prep(fill.buffer(0.01))
+    vias = [v for v in bg.vias_of(net, layer) if grown.contains(Point(v.at))]
     others = {l: o for l, o in (others or {}).items()
               if l != layer and not o[0].is_empty}
     fills = {layer: fill, **{l: o[0] for l, o in others.items()}}
@@ -724,7 +773,15 @@ def _neck_graph(bg: geom.BoardGeom, net: str, layer: str, fill,
         r = oreq / 2.0
         other_nodes += [(l, part.buffer(r + 0.01)) for part in _pieces(ofill, r)]
 
+    built = {}
+
     def components(radius: float):
+        if radius not in built:
+            built[radius] = _components(radius)
+        return built[radius]
+
+    def _components(radius: float):
+        _tick()
         own = [part.buffer(radius + 0.01) for part in _pieces(fill, radius)]
         nodes = [(layer, g) for g in own] + other_nodes
         parent = list(range(len(nodes)))
@@ -756,6 +813,7 @@ def pour_neck(bg: geom.BoardGeom, net: str, layer: str, fill,
     `others` maps every other copper layer with a fill of this net to
     (fill, required_mm on that layer); pieces join across layers through
     same-net vias and plated through-holes (module docstring)."""
+    _tick()
     vias, components = _neck_graph(bg, net, layer, fill, others)
     pts = [Point(v.at) for v in vias]
     if len(pts) < 2:
@@ -882,6 +940,68 @@ def _loads(bg: geom.BoardGeom, refs) -> float | None:
     return total
 
 
+def _layer_pieces(bg: geom.BoardGeom, net: str, layer: str):
+    """(parts of the net's copper on `layer`; per part, the (track id() or
+    id(None), polygon) items it is the union of; per track id(), its parts):
+    the index _copper_without rebuilds one part from. An item lies wholly
+    in the part that holds its representative point."""
+    def build():
+        cop = bg.net_copper(net, layer)
+        parts = [g for g in getattr(cop, "geoms", [cop])
+                 if g.geom_type == "Polygon" and not g.is_empty]
+        tree = STRtree(parts) if parts else None
+        members = [[] for _ in parts]
+        of_track = {}
+
+        def place(poly, track=None):
+            for g in getattr(poly, "geoms", [poly]):
+                if g.is_empty:
+                    continue
+                pt = g.representative_point()
+                got = ([int(i) for i in tree.query(pt, predicate="intersects")]
+                       if tree is not None else [])
+                if len(got) != 1:
+                    return False
+                members[got[0]].append((id(track), g))
+                if track is not None:
+                    of_track.setdefault(id(track), set()).add(got[0])
+            return True
+        ok = all(place(t.poly, t) for t in bg.tracks_of(net, layer))
+        ok = ok and all(place(x.poly) for x in
+                        list(bg.pads_of(net, layer)) + list(bg.vias_of(net, layer)))
+        ok = ok and all(place(z.fill_on(layer)) for z in bg.zones_of(net, layer))
+        return (parts, members, of_track) if ok else None
+    return _memo(bg, ("layer_pieces", net, layer), build)
+
+
+def _copper_without(bg: geom.BoardGeom, net: str, layer: str, drop):
+    """The net's copper on `layer` without the track `drop`. Only the part
+    `drop` lies in changes, so only that part is rebuilt from its own items
+    (#timeouts: rebuilding the whole layer per bridge track tried was a big
+    share of the time on large pours). Falls back to the whole union when
+    an item can't be placed in exactly one part."""
+    idx = _layer_pieces(bg, net, layer)
+    if idx is not None:
+        parts, members, of_track = idx
+        mine = of_track.get(id(drop))
+        if mine is not None and len(mine) == 1:
+            c = next(iter(mine))
+            rest = geom._union([g for who, g in members[c] if who != id(drop)])
+            out = [g for i, g in enumerate(parts) if i != c]
+            out += [g for g in getattr(rest, "geoms", [rest])
+                    if g.geom_type == "Polygon" and not g.is_empty]
+            return _multi(out)
+    return geom._union(
+        [t.poly for t in bg.tracks_of(net, layer) if t is not drop]
+        + [p.poly for p in bg.pads_of(net, layer)]
+        + [v.poly for v in bg.vias_of(net, layer)]
+        + [z.fill_on(layer) for z in bg.zones_of(net, layer)])
+
+
+def _multi(polys):
+    return MultiPolygon(polys) if polys else MultiPolygon()
+
+
 def _copper_graph(bg: geom.BoardGeom, net: str, walls: dict | None = None,
                   skip: frozenset = frozenset(), drop=None):
     """The net's raw copper as parts per layer (minus `walls[layer]`, and
@@ -889,15 +1009,12 @@ def _copper_graph(bg: geom.BoardGeom, net: str, walls: dict | None = None,
     whose id() is not in `skip`. Returns (nodes [(layer, part)], root(i),
     hits(item) -> indices of the nodes its copper touches on its own
     layers)."""
+    _tick()
     nodes = []
     for l in bg.copper_layers:
         cop = bg.net_copper(net, l)
         if drop is not None and l == drop.layer:
-            cop = geom._union(
-                [t.poly for t in bg.tracks_of(net, l) if t is not drop]
-                + [p.poly for p in bg.pads_of(net, l)]
-                + [v.poly for v in bg.vias_of(net, l)]
-                + [z.fill_on(l) for z in bg.zones_of(net, l)])
+            cop = _copper_without(bg, net, l, drop)
         if walls and l in walls and not cop.is_empty:
             cop = cop.difference(walls[l])
         if cop.is_empty:
@@ -1432,6 +1549,27 @@ def _neck_sides(bg: geom.BoardGeom, net: str, layer: str, fill,
     """[(refs, clean())] per side of a pour split at `required`; clean() says
     whether the side meets the others at one joint only, and is slow on a big
     side, so call it last. None when nothing splits."""
+    key = ("neck_sides", net, layer, id(fill), required,
+           tuple(sorted((l, id(o[0]), o[1]) for l, o in (others or {}).items())))
+    return _memo(bg, key, lambda: _neck_sides_build(
+        bg, net, layer, fill, required, others),
+        keep=(fill, [o[0] for o in (others or {}).values()]))
+
+
+def _once(fn):
+    """fn() computed on the first call only: a memoised side's clean() is
+    asked by both neck_leaf_bound and neck_branch."""
+    box = []
+
+    def call():
+        if not box:
+            box.append(fn())
+        return box[0]
+    return call
+
+
+def _neck_sides_build(bg: geom.BoardGeom, net: str, layer: str, fill,
+                      required: float, others: dict | None):
     vias, components = _neck_graph(bg, net, layer, fill, others)
     nodes, find, n_own = components(required / 2.0)
     roots = [{find(i) for i in range(n_own)
@@ -1498,7 +1636,7 @@ def _neck_sides(bg: geom.BoardGeom, net: str, layer: str, fill,
         start = {cfind(i) for v in g["vias"] for i in chits(v)}
         reached = {i for i in range(len(cn)) if cfind(i) in start}
         refs = {p.ref for p in bg.pads_of(net) if set(chits(p)) & reached}
-        sides.append((refs, partial(clean, k, reached, cn, chits)))
+        sides.append((refs, _once(partial(clean, k, reached, cn, chits))))
     return sides
 
 
@@ -1636,7 +1774,13 @@ def track_sides(bg: geom.BoardGeom, net: str, track):
 
 def _track_split(bg: geom.BoardGeom, net: str, track):
     """(side_of(item) -> its side's root or None, {root: refs} of the two
-    sides) for track_sides, else None."""
+    sides) for track_sides, else None. Once per track."""
+    return _memo(bg, ("track_split", net, id(track)),
+                 lambda: _track_split_build(bg, net, track), keep=track)
+
+
+def _track_split_build(bg: geom.BoardGeom, net: str, track):
+    _tick()
     nodes, find, hits = _copper_graph(bg, net, drop=track)
     on = [i for i, (l, _p) in enumerate(nodes) if l == track.layer]
     coords = track.shape.coords
@@ -2228,6 +2372,7 @@ def _source_stub_error(v, t, items, refs, net, amps, dt_c, cu, via_amps):
 
 
 def check_net(bg: geom.BoardGeom, entry: dict, cons: dict | None = None):
+    _tick()
     net = entry.get("net")
     if not net:
         raise CheckError('power entry without "net"')
@@ -2967,7 +3112,19 @@ def run(argv=None):
                     help="constraints.json with a power list; without it only "
                          "the switch nodes inferred from the parts are judged")
     ap.add_argument("--out", help="write JSON report here instead of stdout")
+    ap.add_argument("--time-budget", type=float, default=TIME_BUDGET_S,
+                    metavar="S",
+                    help="wall seconds for the whole run; nets not finished "
+                         "by then are listed not_judged `timeout` (0: no "
+                         f"limit; default {TIME_BUDGET_S:g})")
     args = ap.parse_args(argv)
+    t0 = time.monotonic()
+    _DEADLINE[0] = t0 + args.time_budget if args.time_budget > 0 else None
+    timed_out: list[str] = []
+
+    # Each net is judged by a direct call (so the constraint-key scan sees
+    # its reads); OverBudget in it, or a budget already spent, puts the net
+    # and every one after it in timed_out, judged no further.
 
     cons = (checklib.load_json(args.constraints, "constraints")
             if args.constraints else {})
@@ -2990,28 +3147,55 @@ def run(argv=None):
     violations: list[dict] = []
     checked: list[dict] = []
     for entry in entries:
-        vs, facts = check_net(bg, entry, cons)
+        if timed_out:
+            timed_out.append(entry.get("net"))
+            continue
+        try:
+            r = check_net(bg, entry, cons)
+        except OverBudget:
+            timed_out.append(entry.get("net"))
+            continue
+        vs, facts = r
         violations.extend(vs)
         checked.append(facts)
     inferred, unrated = inferred_switch_entries(entries, bg, switch_rows())
     no_load: list[dict] = []
     for entry in ([] if mismatch else inferred):
-        vs, facts, nl = judge_switch_node(bg, entry, cons)
+        if timed_out:
+            timed_out.append(entry["net"])
+            continue
+        try:
+            r = judge_switch_node(bg, entry, cons)
+        except OverBudget:
+            timed_out.append(entry["net"])
+            continue
+        vs, facts, nl = r
         violations.extend(vs)
         checked.append(facts)
         if nl:
             no_load.append(nl)
     ret_entry = derived_return_entry(entries, bg)
-    if ret_entry is not None:
-        vs, facts = check_net(bg, ret_entry, cons)
+    r = None
+    if ret_entry is not None and timed_out:
+        timed_out.append(ret_entry["net"])
+    elif ret_entry is not None:
+        try:
+            r = check_net(bg, ret_entry, cons)
+        except OverBudget:
+            timed_out.append(ret_entry["net"])
+    if r is not None:
+        vs, facts = r
         violations.extend(vs)
         checked.append(facts)
+    _DEADLINE[0] = None
 
     extra = {"unrated_switch_nodes": unrated} if unrated else {}
     if no_load:
         extra["no_declared_load"] = no_load
     if missing:
         extra["constraints_missing_nets"] = missing
+    if timed_out:
+        extra["timed_out_nets"] = timed_out
     if mismatch:
         extra["constraints_mismatch"] = [
             {"net": e["net"], "from_part": e["from_part"], "part": e["part"]}
@@ -3020,7 +3204,7 @@ def run(argv=None):
     payload = checklib.report(
         SCRIPT, args.pcb, violations, checked=checked,
         stackup_assumed=bg.stackup.assumed,
-        nothing_to_judge=None if checked or mismatch else
+        nothing_to_judge=None if checked or mismatch or timed_out else
         "no power entries in constraints and no switcher the table knows",
         not_judged=[f"{u['ref']} ({u.get('value')}) {u['pin']} on {u['net']}: "
                     "a switch node whose part isn't in switch_nodes.yaml and "
@@ -3035,6 +3219,11 @@ def run(argv=None):
            [f"constraints_missing_net: power entry {n} names a net this board "
             f"doesn't have; skipped, the rest of the file is used"
             for n in missing])
+        + [f"timeout: {n} not judged: check_current ran past its "
+           f"{args.time_budget:g} s time budget (--time-budget) "
+           f"{'while judging this net' if i == 0 else 'before reaching it'}; "
+           f"the nets finished before it keep their findings"
+           for i, n in enumerate(timed_out)]
         + extra_fill.pop("not_judged", []), **extra, **extra_fill)
     return payload, args.out
 
