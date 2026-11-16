@@ -4493,3 +4493,28 @@ def test_an_output_with_a_named_supply_swings_to_that_rail(tmp_path, supply,
            ("J1", "C31", {"1": "+12V", "2": "+3V3", "3": "GND"})]
     got = _over(_run(_ws(tmp_path, fps, {"C40": ext, "C30": _sink(6)})))
     assert (got[0]["bound_v"] if got else None) == hit
+
+
+def test_a_pptc_with_no_vmax_field_is_rated_from_its_extraction(tmp_path):
+    # the BOM row has a hold current and no Vmax: a library row (pin 1
+    # against "2", +-16 V) rates it rail-to-ground, so 20 V fails, cited
+    bom = [{**PPTC_BOM[0], "attributes": [
+        a for a in PPTC_BOM[0]["attributes"] if a["name"] != "Voltage - Max"]}]
+    fps = [("F1", "C70069", {"1": "/VIN_RAW", "2": "/VIN"})]
+
+    def run(sub, rail, ext):
+        d = tmp_path / sub
+        d.mkdir()
+        c = _cons(d, voltages=[{"net": "/VIN_RAW", "voltage": rail},
+                               {"net": "/VIN", "voltage": rail}])
+        return _run(_ws(d, fps, ext, bom), c)
+    p = run("a", 20, {"C70069": _mlcc(16)})
+    (e,) = _errors(p)
+    assert (e["kind"], e["limit_v"], e["rating"]) == \
+        ("rating_over_voltage", 16, "datasheet")
+    assert _rowless_nj(p, "F1") == []
+    # its quiet twin on 12 V holds, and is not listed as row-less
+    p = run("b", 12, {"C70069": _mlcc(16)})
+    assert _errors(p) == [] and _rowless_nj(p, "F1") == []
+    # with no extraction the hold current alone still judges it (no Vmax)
+    assert _errors(run("c", 20, {})) == []

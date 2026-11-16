@@ -1959,10 +1959,15 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     amb = ambient(constraints, cons_dir)
     before_fuses = dict(checked_by_ref)
     fuse_facts = fuse_findings(board, bom_by_lcsc, volts, vsrc, currents,
-                               amb, emit, checked_by_ref, unrated_passives)
+                               amb, emit, checked_by_ref, unrated_passives,
+                               exts)
+    fuse_tier = {f["ref"]: ("datasheet" if f.get("rated_v_from") and
+                            f["rated_a"] is None else "distributor")
+                 for f in fuse_facts}
     for ref, n in checked_by_ref.items():
-        if n > before_fuses.get(ref, 0):    # a fuse is rated off its parts.json row
-            rated_by_ref.setdefault(ref, set()).add("distributor")
+        if n > before_fuses.get(ref, 0):    # a fuse is rated off its parts.json
+            rated_by_ref.setdefault(ref, set()).add(   # row, or the datasheet's
+                fuse_tier.get(ref, "distributor"))
     temp_facts = temperature_findings(board, bom_by_lcsc, exts, amb, emit)
     unrated_passives = [r for r in unrated_passives if r not in trusted]
     for r in unrated_passives:
@@ -3165,9 +3170,25 @@ def is_pptc(bom: dict | None) -> bool:
     return bool(PPTC_TEXT_RE.search(text))
 
 
+def _ext_fuse_vmax(ext: dict | None) -> tuple[float, str] | None:
+    """A fuse's Vmax from its extraction: the widest voltage row on one of
+    its leads (a two-terminal part is rated pin 1 against `ref` 2), with the
+    row's source. None when the extraction has no such row."""
+    best = None
+    for r in (ext or {}).get("pin_ratings") or []:
+        if r.get("kind") != "voltage" or r.get("level") == "recommended":
+            continue
+        v = max((abs(x) for x in (r.get("min"), r.get("max"))
+                 if isinstance(x, (int, float))), default=None)
+        if v and (best is None or v > best[0]):
+            best = (float(v), r.get("source") or "extraction")
+    return best
+
+
 def fuse_findings(board: list[dict], bom_by_lcsc: dict, volts: dict,
                   vsrc: dict, currents: dict, amb: dict, emit,
-                  checked: dict, unrated_passives: list[str]) -> list[dict]:
+                  checked: dict, unrated_passives: list[str],
+                  exts: dict | None = None) -> list[dict]:
     """Fuses and PPTCs (F*, or a parts.json hold-current attribute) at the
     board's ambient (R-RAT-3, R-RAT-4). The current is the larger
     constraints power[].current_a of its two nets; its voltage is the
@@ -3177,7 +3198,9 @@ def fuse_findings(board: list[dict], bom_by_lcsc: dict, volts: dict,
             k_T x I_rated is an error;
       PPTC: Ihold(T) = Ihold x the typical derating table, under I_op is an
             error (it trips in normal running), under 1.1 x I_op warns;
-      either: a voltage rating (Vmax) under the rail is an error."""
+      either: a voltage rating (Vmax) under the rail is an error.
+    With no Vmax attribute, the extraction's voltage row (board or library)
+    gives it."""
     t = amb["c"]
     out = []
     for b in sorted(board, key=lambda x: x["ref"]):
@@ -3190,11 +3213,17 @@ def fuse_findings(board: list[dict], bom_by_lcsc: dict, volts: dict,
         irated = engcalc.parse_amps(_attr(bom, HOLD_ATTR_RE) if pptc else
                                     _attr(bom, FUSE_I_ATTR_RE))
         vrated = engcalc.parse_volts(_attr(bom, FUSE_V_ATTR_RE))
+        vfrom = "parts.json"
+        if vrated is None and (row := _ext_fuse_vmax((exts or {}).get(
+                b["lcsc"]))):
+            vrated, vfrom = row[0], "datasheet"
         iop = max((currents[n] for n in nets if n in currents), default=None)
         vs = [abs(volts[n]) for n in nets if n in volts]
         vop = max(vs) if vs else None
         fact = {"ref": ref, "kind": kind, "rated_a": irated,
                 "rated_v": vrated, "op_a": iop, "op_v": vop, "ambient_c": t}
+        if vfrom == "datasheet":
+            fact["rated_v_from"] = "datasheet"
         out.append(fact)
         if irated is None and vrated is None:
             unrated_passives.append(ref)
@@ -3207,8 +3236,8 @@ def fuse_findings(board: list[dict], bom_by_lcsc: dict, volts: dict,
                 emit("rating_over_voltage", "error", ref, net,
                      f"{ref} ({kind}) is rated {_fmt(vrated)} V but sits on "
                      f"{_fmt(vop)} V ({'/'.join(vsrc[n] for n in nets if n in vsrc)}): "
-                     "once it opens it must hold off the rail [parts.json]",
-                     limit_v=vrated, net_v=vop, rating="parts.json")
+                     f"once it opens it must hold off the rail [{vfrom}]",
+                     limit_v=vrated, net_v=vop, rating=vfrom)
         if irated is not None and iop is not None:
             did = True
             if pptc:
