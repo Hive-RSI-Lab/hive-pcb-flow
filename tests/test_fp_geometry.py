@@ -916,4 +916,6 @@ def test_every_test_board_has_its_lcsc_models_pinned():
         refs = _uncached(g.check(pcb)[2])
         if refs:
             left[str(pcb.relative_to(HERE))] = refs
-    assert left == {"fixtures/fp_board/placed.kicad_pcb": ["U10", "U7", "U8", "U9"]}
+    assert left == {"fixtures/fp_board/placed.kicad_pcb": ["U10", "U7", "U8", "U9"]}, (
+        "a test board's LCSC model is not pinned: copy <LCSC>.json (or .none) "
+        "from ~/.cache/hwde/easyeda into tests/fixtures/easyeda_pinned")
