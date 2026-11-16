@@ -864,6 +864,8 @@ def ring_findings(board: Board, *, req: bool, wander: float = DRILL_WANDER_MM,
 
 NECK_PAST = 0.05  # mm a neck runs on past where its drop ends (#1138)
 NECK_TOL = 1e-3   # mm: an end this close to a point is on it
+GROW_STEP = 0.01  # mm: a grown via's size is a whole number of these
+GROW_MAX = 1.5    # a via grows to at most this x its size (#1320)
 
 
 def _r4(v) -> float:
@@ -885,6 +887,23 @@ def neck_widths(size: float, p: dict, widths, wide: float,
                 and w not in out:
             out.append(w)
     return out
+
+
+def grow_size(size: float, p: dict, floor: float) -> float | None:
+    """#1320: the smallest via size, a whole number of GROW_STEP over size
+    and at most GROW_MAX x it, at which a track at the net's floor takes a
+    drop with teardrop settings p (takes_drop); None when there is none
+    (max_width_mm at or under the floor, or the ratios want more than
+    GROW_MAX). For a via whose net's floor forbids every width its drop
+    takes (neck_widths empty): a larger via keeps the drop."""
+    _, wr, fr = _limits(p)
+    k = min(wr, fr)
+    if k <= 0 or not takes_drop(floor, size * GROW_MAX, p):
+        return None
+    s = round(max(size, floor / k) // GROW_STEP * GROW_STEP, 4)
+    while not takes_drop(floor, s, p) or s <= size + 1e-9:
+        s = round(s + GROW_STEP, 4)
+    return s if s <= size * GROW_MAX + 1e-9 else None
 
 
 def _exit_at(a, b, c, r: float) -> float:
@@ -951,7 +970,7 @@ def _leaving(kept, j, a, c, r, shorter, board_at=None):
 
 
 def neck_tracks(kept: list, td_src: list, shorter, width_of,
-                board_at=None) -> list:
+                board_at=None, grow=None) -> list:
     """Tracks too wide for a drop on a new via that took teardrops (#1138).
     The join lays a net at the widest width the run ripped from it, so it
     can end a 0.3 mm track on a 0.254 mm via whose drops the removed via
@@ -965,11 +984,29 @@ def neck_tracks(kept: list, td_src: list, shorter, width_of,
     p): the widths the via at kept[i] with settings p may take
     (neck_widths), best first; the neck takes the first one the track
     does not graze the via at (teardroplib chord_of, grazes_on, read on
-    the track that leaves the copper, _leaving). With none, or no track
-    that leaves, the track stays and the gate names the drop it lost; a
-    track narrow enough for a drop that grazes stays too. Ops in shorter
-    (cut back by the prune) stay as they are. board_at(net, layer, pt):
-    True where board copper of the net meets pt, which ends a walk.
+    the track that leaves the copper, _leaving), and narrower than the
+    track. A track narrow enough for a drop that grazes the via (its line
+    crosses less of the copper than its width: KiCad makes no drop) necks
+    the same way, to a width under its chord (#1320). With none, or no
+    track that leaves, the track stays and the gate names the drop it
+    lost. A walk that stops short of where the drop ends (a branch, a via
+    or board copper of the net past the via's edge) leaves the drop as it
+    is: KiCad 10.0.6 lays it over the narrowed track and on (probed, a
+    0.6 mm via: a 0.2 mm track out 0.05 mm past the edge into two 0.6 mm
+    branches or one 0.6 mm track, one drop each). A stub wholly inside
+    the copper that branches gets no drop, but each branch ends in the
+    copper and necks as a join of its own. Ops in shorter (cut back by
+    the prune) stay as they are. board_at(net, layer, pt): True where
+    board copper of the net meets pt, which ends a walk.
+
+    grow(i, p) (#1320): when no width at or over the net's floor takes the
+    via's drop (width_of empty), the size the via at kept[i] may grow to
+    (grow_size, where the rules and the room round it allow; None: it
+    stays). kept[i] takes that size, and its entries carry grown [the
+    size it had, the size it has]; with no track that then gets a drop
+    the via keeps its size. A via already on the board must not grow
+    (its caller's grow says None): the ops lay only what it lists.
+
     Returns one entry per via, net, layer, width and was: via (its "at"),
     net, layer, width, was, length (mm narrowed) and ops (the kept
     indices narrowed)."""
@@ -983,29 +1020,41 @@ def neck_tracks(kept: list, td_src: list, shorter, width_of,
         size, c = float(v["size"]), _pt(v["at"])
         r = size / 2
         ws = None
+        v0, grown, keys = v, None, []
         for j in range(len(kept)):
             t = kept[j]
             if t["op"] != "add_track" or t["net"] != v["net"] \
-                    or j in shorter \
-                    or takes_drop(float(t["width"]), size, p):
+                    or j in shorter:
                 continue
             near = [e for e in (_pt(t["start"]), _pt(t["end"]))
                     if math.dist(e, c) <= r + NECK_TOL]
             if not near:
                 continue
+            was = float(t["width"])
+            a = min(near, key=lambda e: math.dist(e, c))
+            if _drops(kept, j, a, c, size, p, shorter, board_at):
+                continue
             if ws is None:
                 ws = list(width_of(i, p) or [])
+                s = grow(i, p) if not ws and grow is not None else None
+                if s:
+                    grown = [float(v["size"]), float(s)]
+                    kept[i] = v = dict(v, size=s)
+                    size, r = float(s), float(s) / 2
+                    ws = list(width_of(i, p) or [])
+                    if _drops(kept, j, a, c, size, p, shorter, board_at):
+                        keys.append(_grown_entry(out, c, v, t, was))
+                        continue
             if not ws:
                 break
-            a = min(near, key=lambda e: math.dist(e, c))
             leave = _leaving(kept, j, a, c, r, shorter, board_at)
             if leave is None:
                 continue
             chord = chord_of(leave[0], leave[1], c, size)
-            w = next((x for x in ws if not grazes_on(x, chord)), None)
+            w = next((x for x in ws if x < was - 1e-9
+                      and not grazes_on(x, chord)), None)
             if w is None:
                 continue
-            was = float(t["width"])
             laid, ops = _neck_walk(kept, td_src, j, a, c, r,
                                    drop_length(size, p) + NECK_PAST, w,
                                    shorter, board_at)
@@ -1018,7 +1067,37 @@ def neck_tracks(kept: list, td_src: list, shorter, width_of,
                 "length": 0.0, "ops": []})
             e["length"] = _r4(e["length"] + laid)
             e["ops"] += ops
+            keys.append(key)
+        if grown:
+            if keys:
+                for k in keys:
+                    out[k]["grown"] = grown
+            else:
+                kept[i] = v0     # no drop came of it: the via stays
     return list(out.values())
+
+
+def _drops(kept, j, a, c, size, p, shorter, board_at) -> bool:
+    """True when KiCad makes a drop on a via of size at c for kept[j] (end
+    a in its copper) as it is: narrow enough (takes_drop) and, read on
+    the track that leaves the copper (_leaving), no graze; a track that
+    does not leave reads as a drop (no chord to graze on)."""
+    w = float(kept[j]["width"])
+    if not takes_drop(w, size, p):
+        return False
+    leave = _leaving(kept, j, a, c, size / 2, shorter, board_at)
+    return leave is None or not grazes_on(
+        w, chord_of(leave[0], leave[1], c, size))
+
+
+def _grown_entry(out: dict, c, v, t, was: float) -> tuple:
+    """The entry for a track that takes its drop once the via grew (no
+    neck): width and was its own width, no length, no ops."""
+    key = (_r4(c[0]), _r4(c[1]), v["net"], t["layer"], was, was)
+    out.setdefault(key, {"via": [_r4(c[0]), _r4(c[1])], "net": v["net"],
+                         "layer": t["layer"], "width": was, "was": was,
+                         "length": 0.0, "ops": []})
+    return key
 
 
 def _neck_walk(kept, td_src, j, a, c, r, reach, w, shorter,
@@ -1080,11 +1159,12 @@ def neck_lengths(necks: list, kept: list, gone) -> list:
     """necks (neck_tracks) as the re-prune leaves them (#1138): each
     length read again from its ops in kept that are not in gone (the
     indices the prune took off or the board already had), an entry with
-    none of them left dropped, and the ops left out."""
+    none of them left dropped (one whose via grew stays), and the ops
+    left out."""
     out = []
     for e in necks:
         live = [k for k in e["ops"] if k not in gone]
-        if not live:
+        if not live and not e.get("grown"):
             continue
         n = sum(math.dist(_pt(kept[k]["start"]), _pt(kept[k]["end"]))
                 for k in live)

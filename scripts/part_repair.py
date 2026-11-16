@@ -90,9 +90,16 @@ drops. The joins lay a net at the widest width ripped from it, so a track
 they end on such a via can be too wide for its drop: it narrows from the
 via to NECK_PAST beyond where the drop ends, to a width the drop takes,
 the net's floor allows and the track does not graze the via at (Necks in
-the report). One that grazes at every such width stays, as does one narrow
-enough for a drop that grazes; a via that takes its teardrops in a peel
-after the refill narrows its joins there, the track laid again (#1320).
+the report). A track narrow enough for a drop that grazes the via necks
+the same way, to a width under its own that clears the graze; one that
+grazes at every such width stays. A neck that stops short of the drop's
+end (a branch, a via, board copper) keeps the drop: KiCad lays it on over
+the copper past (#1320). When the net's floor forbids every width the
+drop takes, the new via grows (teardroplib grow_size, at most 1.5 x) to
+a size the floor takes a drop on, where no other net's copper or the
+board edge is within its clearance; else the track stays. A via that
+takes its teardrops in a peel after the refill narrows its joins there,
+the track laid again (#1320), and does not grow (it is on the board).
 After the last refill, the check reads
 the drops round the repair area (lib/teardroplib.py, modelled on KiCad
 10.0.6) and fails the run when, on a layer, fewer tracks into a via have a
@@ -995,6 +1002,50 @@ def late_teardrops(kept: list, made: dict, td_src: list, gone: list,
                                         **kept[i]["teardrops"])
             again.append(dict(kept[i]))
     return again
+
+
+def _via_room(v: dict, size: float, rules, bgw, kept: list, i: int,
+              going, moved: dict) -> bool:
+    """True when add_via v (kept[i]) at this size keeps its clearance to
+    every copper item of another net on its layers (#1320, a via that
+    grows for its drop): bgw's tracks, vias and pads less the uuids in
+    going and moved, moved's cut segments (uuid -> (was, Seg)), the other
+    adds in kept; and the board edge (bgw.outline) at edge_clearance."""
+    net, c, r = v["net"], Point(_pt2(v["at"])), size / 2
+    cu = list(bgw.copper_layers)
+    lys = set(_via_layers(v, cu))
+
+    def hits(shape, other, half) -> bool:
+        return shape.distance(c) < r + half + rules.clr(net, other) - 1e-9
+
+    for _, s in moved.values():
+        if s.net != net and s.layer in lys \
+                and hits(LineString([s.a, s.b]), s.net, s.width / 2):
+            return False
+    for it in bgw.tracks_of() + bgw.vias_of() + bgw.pads_of():
+        u = getattr(it, "uuid", None)
+        if it.net == net or u in going or u in moved:
+            continue
+        on = getattr(it, "layers", None) or (it.layer,)
+        if lys & set(on) and hits(it.poly, it.net, 0.0):
+            return False
+    for k, o in enumerate(kept):
+        if k == i or o.get("net") == net:
+            continue
+        if o["op"] == "add_track" and o["layer"] in lys and hits(
+                LineString([_pt2(o["start"]), _pt2(o["end"])]), o["net"],
+                float(o["width"]) / 2):
+            return False
+        if o["op"] == "add_via" and lys & set(_via_layers(o, cu)) and hits(
+                Point(_pt2(o["at"])), o["net"], float(o["size"]) / 2):
+            return False
+    out = bgw.outline
+    return out is None or out.is_empty or out.boundary.distance(c) >= \
+        r + rules.edge_clearance + rules.margin - 1e-9
+
+
+def _pt2(e) -> tuple:
+    return (float(e[0]), float(e[1]))
 
 
 def _late_necks(kept: list, td_src: list, fresh, made: dict, skip,
@@ -1938,7 +1989,22 @@ def _steps(pcb: Path, ops: list, out: Path, payload: dict, *, cli, margin,
                    if getattr(it, "uuid", None) not in going
                    and getattr(it, "uuid", None) not in moved)
 
-    necks = neck_tracks(kept, td_src, shorter, neck_w, board_at)
+    # a via whose net's floor forbids every width its drop takes grows to
+    # a size the floor takes a drop on (#1320), where the board leaves it
+    # room: no copper of another net (the work board's, less what the run
+    # takes off, the prune's cuts, the run's own adds) within its new edge
+    # plus the clearance, and the board edge at its clearance. Pours
+    # refill round it.
+    def grow_via(i, p):
+        v = kept[i]
+        net, rules = v["net"], router.rules
+        s = tdl.grow_size(float(v["size"]), p, rules.width_floor(net))
+        if s is None:
+            return None
+        return s if _via_room(v, s, rules, bgw, kept, i, going, moved) \
+            else None
+
+    necks = neck_tracks(kept, td_src, shorter, neck_w, board_at, grow_via)
     payload["necks"] = neck_lengths(necks, kept, set())
     route_ops = ops_now()
 
@@ -2273,7 +2339,9 @@ def report_md(p: dict) -> str:
                   ""] + [
             f"- {n['net']} on {n['layer']} at ({n['via'][0]:.3f},"
             f" {n['via'][1]:.3f}): {n['was']:.3f} mm to {n['width']:.3f} mm"
-            f" for {n['length']:.3f} mm" for n in p["necks"]] + [""]
+            f" for {n['length']:.3f} mm" + (
+                f" (via grown {n['grown'][0]:.3f} to {n['grown'][1]:.3f} mm)"
+                if n.get("grown") else "") for n in p["necks"]] + [""]
     for key, head in (("failed", "Would not join"),
                       ("worse", "Worse than before")):
         if p.get(key):
