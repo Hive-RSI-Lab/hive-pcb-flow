@@ -254,3 +254,31 @@ def test_errata_corpus_passes_the_sets_folder_to_check_ratings(tmp_path):
     ext.mkdir(parents=True)
     shutil.copy(fix / "parts" / "C8734.json", ext / "C8734.json")
     assert "U1.10" in pins()
+
+
+def test_batch_work_dir_still_finds_the_other_revision(tmp_path, monkeypatch):
+    """The batch's run dir is `abs-max/<set>/work/<id>/`, not the sweep's
+    `runs/<id>/`: the other revision's checkout is still found, so its BOM
+    backfills part numbers here as in the sweep (#1354)."""
+    cache = tmp_path / "cache"
+    b = {"id": "brd", "commit": "a" * 40,
+         "rev_a": {"pcb": "a/b.kicad_pcb"}, "rev_b": {"pcb": "b/b.kicad_pcb"}}
+    repo = ec.repo_dir(cache, b, "rev_a")
+    for rev in ("rev_a", "rev_b"):
+        f = ec.repo_dir(cache, b, rev) / b[rev]["pcb"]
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("(kicad_pcb)")
+    empty = cache / "abs-max" / "training" / "work" / "brd" / "constraints.json"
+    empty.parent.mkdir(parents=True)
+    empty.write_text("{}")
+
+    def pins_pcb(b_, rev, repo_, empty_):
+        f = empty_.parent / f"{rev}-pins.kicad_pcb"
+        f.write_text("(kicad_pcb)")
+        return f
+    monkeypatch.setattr(ec, "_pins_pcb", pins_pcb)
+    got = ec._other_rev(b, "rev_a", repo, empty)
+    args = got.get("args", [])
+    assert "--other-pcb" in args
+    assert args[args.index("--other-repo") + 1] == str(
+        ec.repo_dir(cache, b, "rev_b"))
