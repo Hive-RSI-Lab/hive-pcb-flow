@@ -68,8 +68,9 @@ Kinds (one per ref and source; the worst first):
                                     (_P1.27mm, or EasyEDA's -P1.27-)
   fp_pins_vs_name          warning  pins the name counts are missing
   fp_<x>_vs_record         fp_verify's severity: the part record's land
-                                    against the pads, one per kind and ref
-                                    (x: pad_count, pin1, pin1_mark,
+                                    against the pads, one per kind and ref,
+                                    citing the record's datasheet and its
+                                    pads_source page (x: pad_count, pin1, pin1_mark,
                                     pin_order, pitch, row_spacing,
                                     row_spacing_unmeasured, pad_size,
                                     pad_turned, land_gap, drill, annulus);
@@ -656,14 +657,18 @@ def _first_clause(text: str, limit: int = 80) -> str:
 
 def _cite(rec: dict, path: Path) -> tuple[str, str]:
     """(the cite for a message, the drawing's path) from the record's
-    source_pdf: "parts/datasheets/X.pdf (Maker doc, Rev C, 8 pages)" cites
-    "Maker doc"."""
+    source_pdf and its land's pads_source (the page and figure the pads were
+    read from): "parts/datasheets/X.pdf (Maker doc, Rev C, 8 pages)" with
+    pads_source "p27 Table 2" cites "Maker doc, p27 Table 2"."""
     src = str(rec.get("source_pdf") or "").strip()
+    lp = rec.get("land_pattern")
+    where = str((lp if isinstance(lp, dict) else {}).get("pads_source") or "").strip()
+    where = f", {_first_clause(where)}" if where else ""
     if not src:
-        return path.name, ""
+        return path.name + where, ""
     pdf, _, rest = src.partition(" (")
     inner = rest.rsplit(")", 1)[0].strip() if rest else ""
-    return (_first_clause(inner) if inner else pdf), pdf
+    return (_first_clause(inner) if inner else pdf) + where, pdf
 
 
 def _sym(name: str):

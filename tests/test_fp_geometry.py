@@ -722,7 +722,7 @@ def test_record_pin_order_and_pitch(tmp_path, stock):
     order, = [x for x in v if x["kind"] == "fp_pin_order_vs_record"]
     assert order["record"] == "PARTA.json" and order["drawing"] == "parts/datasheets/X.pdf"
     # the cite is the source's first clause, not its every page
-    assert "against its part record PARTA (Maker doc DS1 Rev C):" in order["msg"]
+    assert "against its part record PARTA (Maker doc DS1 Rev C, p7 land pattern):" in order["msg"]
     assert order["hint"] == "bottom_view_numbering"
 
 
@@ -851,6 +851,12 @@ def test_cite_first_clause():
     assert g._cite({"source_pdf": "parts/datasheets/X.pdf"}, p) == (
         "parts/datasheets/X.pdf", "parts/datasheets/X.pdf")
     assert g._cite({}, p) == ("PARTA.json", "")
+    # the land's pads_source (the page and figure the pads came from) follows
+    assert g._cite({"source_pdf": "parts/datasheets/X.pdf (Maker doc, Rev C; p7)",
+                    "land_pattern": {"pads_source": "p27 Table 2; reflow row"}}, p) == (
+        "Maker doc, p27 Table 2", "parts/datasheets/X.pdf")
+    assert g._cite({"land_pattern": {"pads_source": "p3 Fig 4"}}, p) == (
+        "PARTA.json, p3 Fig 4", "")
 
 
 def test_gap_rule():
