@@ -3145,6 +3145,9 @@ def _rules_facts(rules: Rules) -> dict:
     facts["sized_nets"] = sorted(facts.get("sized_nets", ()))
     if facts.get("bans") is not None:
         facts["bans"] = facts["bans"].facts()
+    # A PairRules holds geometry and memos, not JSON: name its rules (#1501).
+    if facts.get("pair") is not None:
+        facts["pair"] = [name for _, _, _, name in facts["pair"].rows]
     return facts
 
 

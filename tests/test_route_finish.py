@@ -1042,11 +1042,11 @@ def _slot_plan(tmp_path, dru):
     rules = rf.board_rules(pcb, bg)
     pair = _pair("SIG", (10, 15), (17, 15))
     return bg, rf.plan_routes(bg, rules, [pair], ["F.Cu"],
-                              grid=0.05, margin=4)
+                              grid=0.05, margin=4), rules
 
 
 def test_without_the_courtyard_rule_the_slot_is_shut(tmp_path):
-    _, jobs = _slot_plan(tmp_path, "(version 1)\n")
+    _, jobs, _ = _slot_plan(tmp_path, "(version 1)\n")
     assert jobs[0]["status"] != "routed"
 
 
@@ -1054,7 +1054,7 @@ def test_a_bga_escape_courtyard_rule_routes_through_the_slot(tmp_path):
     """#1484: the BGA escape's 0.1 mm courtyard rule on a signal net with no
     HV rating, which the maze held at the 0.2 netclass, so U1's ring-2 balls
     stayed unrouted; #682's per-item rules read it."""
-    bg, jobs = _slot_plan(tmp_path, COURT_DRU)
+    bg, jobs, _ = _slot_plan(tmp_path, COURT_DRU)
     job = jobs[0]
     assert job["status"] == "routed", job
     gnd = [p.poly for p in bg.pads_of("GND", "F.Cu")]
@@ -1062,3 +1062,12 @@ def test_a_bga_escape_courtyard_rule_routes_through_the_slot(tmp_path):
         op["width"] / 2).distance(g) for op in _tracks(job) for g in gnd)
     assert 0.1 <= near < 0.2
     route_edit.validate_ops({"version": 1, "ops": job["ops"]})
+
+
+def test_rules_facts_with_a_courtyard_rule_are_json(tmp_path):
+    """#1501: a Rules carrying #682's PairRules still writes a JSON report;
+    route_auto lost a 19-minute route to this at the very end."""
+    _, _, rules = _slot_plan(tmp_path, COURT_DRU)
+    assert rules.pair is not None
+    facts = json.loads(json.dumps(rf._rules_facts(rules)))
+    assert facts["pair"] == ["aiee_bga_escape_U1"]
