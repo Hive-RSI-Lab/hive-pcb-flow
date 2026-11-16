@@ -178,8 +178,8 @@
     "floor": "feet"
   },
   "esd": {
-    "connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
-    "clamps": ["D1"], "level_kv": 8, "corridor_mm": 10, "corridor_v": 30,
+    "connectors": ["J1"], "internal": ["J4"], "external": ["J5"],
+    "barriers": ["J6"], "exempt_nets": ["GND"], "clamps": ["D1"], "level_kv": 8, "corridor_mm": 10, "corridor_v": 30,
     "victim_abs_max_v": {"/USB*": 6},
     "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/USB_D*": 3.3},
     "bipolar_v": {"/E1_*": 3.3}

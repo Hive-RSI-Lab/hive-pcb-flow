@@ -623,3 +623,177 @@ def test_golden_exempt_nets_are_true_findings(tmp_path, board, nets):
     hit = {v["net"] for v in payload["violations"]
            if v["kind"] == "esd_unclamped" and v["severity"] == "error"}
     assert hit == nets
+
+
+# #1496: the five false groups the pinned boards' triage found (83 of 114
+# hits false). Each group has a planted line it clears and a twin with the
+# protection taken away that must fire again.
+def _fp_lib(ref: str, value: str, at: str, pads: list[tuple], lib: str,
+            props: dict | None = None) -> str:
+    """_fp with the footprint's library name and extra properties."""
+    body = " ".join(
+        f'(pad "{n}" smd rect (at {x} {y}) (size 1 1) (layers "F.Cu") '
+        f'(net "{net}"))' for n, x, y, net in pads)
+    extra = "".join(f'    (property "{k}" "{v}" (at 0 0 0) (layer "F.Fab"))\n'
+                    for k, v in (props or {}).items())
+    return (f'  (footprint "{lib}" (at {at}) (layer "F.Cu")\n'
+            f'    (property "Reference" "{ref}" (at 0 0 0) (layer "F.SilkS"))\n'
+            f'    (property "Value" "{value}" (at 0 0 0) (layer "F.Fab"))\n'
+            f'{extra}    {body})\n')
+
+
+J_PADS = [("1", 0, 0, "SIG"), ("2", 0, 2, "GND")]
+
+
+@pytest.mark.parametrize("lib", [
+    "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+    "Connector_PinSocket_2.54mm:PinSocket_1x02_P2.54mm_Vertical",
+    "Connector_JST:JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical",
+    "Connector_JST:JST_SH_SM02B-SRSS-TB_1x02-1MP_P1.00mm_Horizontal",
+    "Connector_JST:JST_ZH_B2B-ZR_1x02_P1.50mm_Vertical",
+    "aiee:HDR-TH_2P-P2.54-V-M",
+])
+def test_header_footprint_is_internal_and_external_brings_it_back(tmp_path, lib):
+    j = _fp_lib("J1", "Conn_01x02", "5 10", J_PADS, lib)
+    payload, kinds = _run(_pcb(tmp_path, j + U1 + _seg(5, 10, 30, 10)))
+    assert payload["status"] == "pass", kinds
+    assert payload["checked"][0]["internal_by_footprint"] == ["J1"]
+    payload, kinds = _run(_pcb(tmp_path, j + U1 + _seg(5, 10, 30, 10)),
+                          {"esd": {"external": ["J1"]}})
+    assert kinds == {"esd_unclamped"}
+
+
+@pytest.mark.parametrize("lib", [
+    "Connector_JST:JST_VH_B2P-VH_1x02_P3.96mm_Vertical",
+    "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical",
+    "TerminalBlock_Phoenix:TerminalBlock_Phoenix_MKDS-1,5-2_1x02_P5.00mm",
+    "Connector_USB:USB_C_Receptacle_GCT_USB4105",
+])
+def test_field_wiring_footprints_stay_judged(tmp_path, lib):
+    j = _fp_lib("J1", "Conn_01x02", "5 10", J_PADS, lib)
+    payload, kinds = _run(_pcb(tmp_path, j + U1 + _seg(5, 10, 30, 10)))
+    assert kinds == {"esd_unclamped"}
+
+
+def _shunt(value: str, x: float = 8) -> str:
+    return _fp("C1", value, f"{x} 10", [("1", 0, 0, "SIG"), ("2", 0, 2, "GND")])
+
+
+def test_shunt_cap_at_the_pin_soaks_the_strike(tmp_path):
+    pcb = _pcb(tmp_path, J1 + U1 + _shunt("2.2uF") + _seg(5, 10, 8, 10)
+               + _seg(8, 10, 30, 10))
+    payload, kinds = _run(pcb)
+    assert payload["status"] == "pass", kinds
+    sc = payload["checked"][0]["lines"][0]["shunt_c"]
+    assert sc["ref"] == "C1" and sc["routed"] and sc["mm"] == pytest.approx(3.0)
+    # 150 pF at 8 kV is 1.2 uC: 0.545 V on 2.2 uF
+    assert sc["est_v"] == pytest.approx(150e-12 * 8e3 / 2.2e-6, abs=1e-3)
+
+
+@pytest.mark.parametrize("value,x", [("100nF", 8), ("2.2uF", 40)])
+def test_small_or_late_shunt_cap_is_no_clamp(tmp_path, value, x):
+    """A 100 nF cap is no charge sink; a 2.2 uF one the strike meets only
+    after the IC pin does not protect the pin."""
+    pcb = _pcb(tmp_path, J1 + U1 + _shunt(value, x) + _seg(5, 10, 40, 10))
+    payload, kinds = _run(pcb)
+    assert kinds == {"esd_unclamped"}
+
+
+def _magjack(value: str, props: dict | None = None) -> str:
+    return _fp_lib("J1", value, "5 10", J_PADS,
+                   "Connector_RJ:RJ45_Hanrun_HR911105A_Horizontal"
+                   if "HR911105" in value else "Connector_RJ:RJ45_Amphenol",
+                   props)
+
+
+def test_magjack_lines_sit_behind_the_transformer(tmp_path):
+    payload, kinds = _run(_pcb(tmp_path, _magjack("HR911105A") + U1))
+    assert payload["status"] == "pass", kinds
+    c = payload["checked"][0]
+    assert c["barriers"] == ["J1"] and c["lines"][0]["barrier"] == "J1"
+    # a plain RJ45 has no transformer in it: back to unclamped
+    payload, kinds = _run(_pcb(tmp_path, _magjack("RJ45") + U1))
+    assert kinds == {"esd_unclamped"}
+    # named in the constraints instead
+    payload, kinds = _run(_pcb(tmp_path, _magjack("RJ45") + U1),
+                          {"esd": {"barriers": ["J1"]}})
+    assert payload["status"] == "pass"
+
+
+def _rail_behind(series: str, net: str = "+12V") -> Path:
+    j = _fp("J1", "DC jack", "5 10", [("1", 0, 0, net), ("2", 0, 2, "GND")])
+    s = _fp(series, "PPTC", "10 10", [("1", 0, 0, net), ("2", 1, 0, net + "_F")])
+    d = _fp("D1", "SMBJ15A", "14 10", [("1", 0, 0, net + "_F"), ("2", 0, 2, "GND")])
+    u = _fp("U1", "BUCK", "30 10", [("1", 0, 0, net + "_F")])
+    return j + s + d + u + _via(14, 13)
+
+
+def test_rail_tvs_behind_its_input_fuse_is_the_usual_order(tmp_path):
+    payload, kinds = _run(_pcb(tmp_path, _rail_behind("F1")))
+    assert payload["status"] == "pass", kinds
+    line = payload["checked"][0]["lines"][0]
+    assert line["series"] == "F1" and line["series_fuse"]
+    # a sheet's /12V_IN is a rail by its leaf name
+    payload, kinds = _run(_pcb(tmp_path, _rail_behind("F1", "/12V_IN")))
+    assert payload["status"] == "pass", kinds
+    # a resistor or ferrite ahead of the TVS still crosses the strike first
+    payload, kinds = _run(_pcb(tmp_path, _rail_behind("R1")))
+    assert kinds == {"esd_behind_series"}
+    # and a signal line behind a fuse still warns
+    payload, kinds = _run(_pcb(tmp_path, _rail_behind("F1", "SIG")))
+    assert kinds == {"esd_behind_series"}
+
+
+def test_abs_max_from_the_library_extraction_counts_part_wide_rows(tmp_path):
+    """INA186A1 (C2058311): IN+/IN- are rated -0.3..42 V part-wide in hwde's
+    library extraction; a board whose parts/ has no copy reads it there, and
+    without the library it is unrated."""
+    import sim_inrush
+    fp = _fp_lib("U3", "INA186A1", "40 30",
+                 [("4", 0, 0, "VICT"), ("3", 1, 0, "+3V3")], "t:U3")
+    bg = check_esd.geom.load_board(_pcb(tmp_path, fp))
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    (parts / "parts.json").write_text(json.dumps(
+        {"parts": [{"refdes": ["U3"], "lcsc": "C2058311", "mpn": "INA186A1"}]}))
+    got = check_esd.rated_pins(bg, parts, {"VICT"})
+    assert got["VICT"][0] == pytest.approx(42.0), got
+    comps = {"U3": {"ref": "U3", "kind": "U", "value": "INA186A1",
+                    "pins": {"4": {"net": "VICT", "fn": "4"}}}}
+    raw = {"U3": {"refdes": ["U3"], "lcsc": "C2058311"}}
+    rated, unrated = sim_inrush.pin_abs_max({"comps": comps}, raw, parts,
+                                            {"VICT"})
+    assert not any(r["net"] == "VICT" and r["max_v"] == 42.0 for r in rated)
+
+
+PINNED_ESD = {
+    "core": "pinned/core/kicad/core.kicad_pcb",
+    "digits-v1": "pinned/digits-v1/kicad/digits-pcb.kicad_pcb",
+    "lite-main": "pinned/lite-main/kicad/lite-main.kicad_pcb",
+    "minuet-v3": "pinned/minuet-v3/kicad/minuet.kicad_pcb",
+    "oasis-v0-2": "pinned/oasis-v0-2/kicad/pcb.kicad_pcb",
+    "hwde-led-test": "boards/hwde-led-test/kicad/hwde-led-test.kicad_pcb",
+}
+
+
+def test_pinned_boards_keep_every_real_esd_hit():
+    """#1496 bar: all 31 hits triaged real stay found, and what is left
+    beyond them is the known false ones with a stated reason."""
+    real, false, got = set(), set(), set()
+    for board, rel in PINNED_ESD.items():
+        pcb = REPO / rel
+        known = json.loads((REPO / "pinned" / "known" / f"{board}.json")
+                           .read_text(encoding="utf-8"))["known"]
+        for k in known:
+            if k.get("check") == "check_esd":
+                (real if k["verdict"] == "real" else false).add(
+                    (board, k["kind"], k["net"], tuple(k["refs"])))
+        cdir = pcb.parent.parent
+        cons = cdir / "constraints.json"
+        viols, _ = check_esd.check(
+            pcb, json.loads(cons.read_text()) if cons.is_file() else None,
+            cdir / "parts" if (cdir / "parts").is_dir() else None)
+        got |= {(board, v["kind"], v["net"], tuple(v["refs"])) for v in viols}
+    assert len(real) == 31
+    assert real <= got, sorted(real - got)
+    assert got - real <= false, sorted(got - real - false)

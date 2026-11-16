@@ -308,6 +308,7 @@ TOP_OBJECTS: dict[str, dict] = {
     # check_esd: the connectors a zap enters, and how far a clamp may sit
     "esd": {"required": {}, "optional": {
         "connectors": "str_list", "internal": "str_list",
+        "external": "str_list", "barriers": "str_list",
         "exempt_nets": "str_list", "clamps": "str_list", "level_kv": "num",
         "corridor_mm": "num", "corridor_v": "num",
         "victim_abs_max_v": "num_or_map", "interfaces": "str_map",

@@ -6675,7 +6675,7 @@
    ],
    "kind": "esd_unclamped",
    "verdict": "false",
-   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes"
+   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes. Left by #1496: J8 is a JST VH housing, a family that carries field wiring as often as a harness, so the footprint rule leaves it judged; list J8 in esd.internal."
   },
   {
    "gate": "verify",
@@ -6690,7 +6690,7 @@
    ],
    "kind": "esd_unclamped",
    "verdict": "false",
-   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes"
+   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes. Left by #1496: J8 is a JST VH housing, a family that carries field wiring as often as a harness, so the footprint rule leaves it judged; list J8 in esd.internal."
   },
   {
    "gate": "verify",
@@ -6705,7 +6705,7 @@
    ],
    "kind": "esd_unclamped",
    "verdict": "false",
-   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes"
+   "reason": "BLDC fan motor phases on the internal motor harness, driven by the bridge's body diodes. Left by #1496: J8 is a JST VH housing, a family that carries field wiring as often as a harness, so the footprint rule leaves it judged; list J8 in esd.internal."
   },
   {
    "gate": "verify",
@@ -6752,7 +6752,7 @@
    ],
    "kind": "esd_unclamped",
    "verdict": "false",
-   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal"
+   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal. Left by #1496: the LMV331 supply pin is 11 to 17 mm from the jacks (J12, J11) and the 47 uF bulk about 70 mm, beyond it, so the shunt rule (a >=1 uF cap reached before any IC pin) does not credit it."
   },
   {
    "gate": "verify",
@@ -6767,7 +6767,7 @@
    ],
    "kind": "esd_unclamped",
    "verdict": "false",
-   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal"
+   "reason": "3.3 V rail with 47 uF bulk on board: a rail pin, not a signal. Left by #1496: the LMV331 supply pin is 11 to 17 mm from the jacks (J12, J11) and the 47 uF bulk about 70 mm, beyond it, so the shunt rule (a >=1 uF cap reached before any IC pin) does not credit it."
   },
   {
    "gate": "verify",
