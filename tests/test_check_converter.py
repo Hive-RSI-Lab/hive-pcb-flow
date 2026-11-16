@@ -125,7 +125,9 @@ def test_missing_inputs_are_named(tmp_path_factory):
     assert viols == []
     assert any("no power entry current_a" in n for n in nj)
     viols, recs, nj = cv.judge(bg, {}, TABLE)
-    assert recs == [] and nj == ["L1 on /SW: OUT has no declared voltage"]
+    assert recs == [] and nj == [
+        "L1 on /SW: OUT has no voltage: none declared, no feedback divider "
+        "sets it, and its name gives none"]
 
 
 def test_unlisted_ic_names_the_table(tmp_path_factory):
@@ -291,3 +293,82 @@ def test_lmr54406_isat_floor_and_ripple_band(tmp_path_factory):
     hit, = cv.judge(bg, cons, TABLE)[0]
     assert hit["kind"] == "converter_isat_below_limit" and hit["limit_a"] == 0.85
     assert "must be higher than peak" in hit["msg"]
+
+
+# Rail voltages read from the board (#1433): an LMR54406 (Vref 0.8 V +-1.25 %,
+# SNVSBN2 p. 6) from IN through L1 to an output its FB divider sets.
+def _fb_buck(tmp_path_factory, name, top="31.6k", bottom="10k", vin="IN",
+             out="OUT"):
+    return _board(tmp_path_factory, name,
+                  _rpart("U1", 10, [(vin, "VIN"), ("/SW", "SW"), ("GND", "GND"),
+                                    ("/FB", "FB")], "LMR54406FDBVR")
+                  + _rpart("L1", 20, [("/SW", ""), (out, "")], "10uH")
+                  + _rpart("R1", 30, [(out, ""), ("/FB", "")], top)
+                  + _rpart("R2", 40, [("/FB", ""), ("GND", "")], bottom))
+
+
+def _fb_cons(vin=24.0, iout=0.5, out="OUT"):
+    return {"voltages": [{"net": "IN", "voltage": vin}] if vin else [],
+            "power": [{"net": out, "current_a": iout}]}
+
+
+def test_divider_sets_vout_planted_swap_and_quiet_twin(tmp_path_factory):
+    # Quiet: 0.8 * (1 + 31.6 / 10) = 3.328 V; at 24 V in and 1.1 MHz the
+    # on-time is 3.328 / (24 * 1.1e6) = 126 ns, over the 60 ns minimum.
+    bg = _fb_buck(tmp_path_factory, "fbquiet")
+    viols, recs, nj = cv.judge(bg, _fb_cons(), TABLE)
+    assert viols == [] and not any("divider" in n for n in nj)
+    rec, = recs
+    assert rec["status"] == "checked" and rec["vout_source"] == "divider"
+    assert rec["vout_v"] == pytest.approx(3.328, abs=1e-3)
+    assert rec["vin_source"] == "declared"
+    inf = rec["vout_inferred"]
+    assert inf["parts"] == ["R1", "R2"] and inf["ic"] == "U1"
+    assert "R1 31.6k / R2 10k" in inf["how"] and "inferred" in inf["how"]
+    # Vref 0.79-0.81 V with 1 % resistors: 0.79 * (1 + 31.284 / 10.1) = 3.237,
+    # 0.81 * (1 + 31.916 / 9.9) = 3.421.
+    assert inf["window_v"] == pytest.approx([3.237, 3.421], abs=1e-3)
+    # Planted: Rtop and Rbottom swapped, 0.8 * (1 + 10 / 31.6) = 1.053 V;
+    # 1.053 / (24 * 1.1e6) = 39.9 ns, under 60 ns.
+    bg = _fb_buck(tmp_path_factory, "fbswap", top="10k", bottom="31.6k")
+    viols, recs, _ = cv.judge(bg, _fb_cons(), TABLE)
+    hit, = viols
+    assert hit["kind"] == "converter_min_on_time"
+    assert hit["ton_ns"] == pytest.approx(39.9, abs=0.1)
+    assert hit["voltage_basis"] == {"vin": "declared", "vout": "divider"}
+    assert "inferred from U1's divider R1 10k / R2 31.6k" in hit["msg"]
+    assert recs[0]["vout_v"] == pytest.approx(1.0532, abs=1e-3)
+
+
+def test_divider_overload_is_an_error_name_only_is_a_warning(tmp_path_factory):
+    # 24 V to 3.328 V, 10 uH, 1.1 MHz: D = 0.1387, dI = 20.67 * 0.1387 / 11
+    # = 0.2606 A; peak 0.85 A min - 0.1303 = 0.7197 A allowed, under 0.8 A.
+    bg = _fb_buck(tmp_path_factory, "fbover")
+    hit, = cv.judge(bg, _fb_cons(iout=0.8), TABLE)[0]
+    assert hit["kind"] == "converter_overload" and hit["severity"] == "error"
+    assert hit["iout_max_a"] == pytest.approx(0.7197, abs=1e-3)
+    # The same input read from its name "+24V" only: a warning, not an error.
+    bg = _fb_buck(tmp_path_factory, "fbovername", vin="+24V")
+    hit, = cv.judge(bg, _fb_cons(vin=None, iout=0.8), TABLE)[0]
+    assert hit["kind"] == "converter_overload" and hit["severity"] == "warning"
+    assert hit["voltage_basis"] == {"vin": "net name", "vout": "divider"}
+    assert "(a warning, not an error: it rests on +24V read from the net name only)" in hit["msg"]
+
+
+def test_name_and_divider_disagree_is_not_judged(tmp_path_factory):
+    # The output is named 5V but the divider sets 3.33 V: neither is used.
+    bg = _fb_buck(tmp_path_factory, "fbclash", out="+5V")
+    viols, recs, nj = cv.judge(bg, _fb_cons(out="+5V"), TABLE)
+    assert viols == [] and recs == []
+    assert any("+5V's name says 5 V but U1's divider R1 31.6k / R2 10k on /FB "
+               "sets 3.33 V (3.24-3.42 V at Vref 0.8 V), so its voltage is "
+               "unknown" in n for n in nj)
+
+
+def test_unread_input_stays_not_judged(tmp_path_factory):
+    bg = _fb_buck(tmp_path_factory, "fbnovin", vin="VSUP")
+    viols, recs, nj = cv.judge(bg, _fb_cons(vin=None), TABLE)
+    assert viols == [] and recs == []
+    assert any("U1's VIN pin: VSUP has no voltage: none declared, no "
+               "feedback divider sets it, and its name gives none" in n
+               for n in nj)
