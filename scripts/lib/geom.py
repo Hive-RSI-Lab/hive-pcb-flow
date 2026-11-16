@@ -845,6 +845,9 @@ class BoardGeom:
         # "graphics" (its drawings on every layer: {"layer", "shape"})}
         self.net_ties: list[dict] = []
         self.footprints: dict[str, dict] = {}  # ref -> {"lib", "value", "props"}
+        # refs two or more footprints share (unannotated REF** copies):
+        # their pads are pooled under one ref, so a per-part check skips them
+        self.dup_refs: set[str] = set()
         self._parse_tracks(root)
         self._parse_vias(root)
         self._parse_footprints(root)
@@ -1003,6 +1006,8 @@ class BoardGeom:
             # attrs: KiCad's (attr smd dnp ...) flags; check_pdn leaves a
             # dnp cap out of a rail's reservoir
             attr = _kid(fp, "attr")
+            if ref in self.footprints:
+                self.dup_refs.add(ref)
             self.footprints[ref] = {"lib": lib, "value": value, "props": props,
                                     "at": (fx, fy), "angle": fangle,
                                     "attrs": tuple(str(_tok(x)) for x in _strs(attr))

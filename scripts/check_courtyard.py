@@ -61,14 +61,17 @@ def check(pcb: Path) -> tuple[list[dict], dict]:
     for p in bg.pads_of():
         pads.setdefault(p.ref, []).append(p)
     viols = []
-    seen = {"footprints": 0, "with_courtyard": 0, "no_courtyard": []}
+    seen = {"footprints": 0, "with_courtyard": 0, "no_courtyard": [],
+            "duplicate_refs": sorted(bg.dup_refs)}
     for ref in sorted(model.footprints):
         f = model.footprints[ref]
         seen["footprints"] += 1
         cy = courtyard_abs(f)
         if cy is None and pads.get(ref):
             seen["no_courtyard"].append(ref)
-        if cy is None or not pads.get(ref):
+        # a ref two parts share pools both parts' pads against one
+        # courtyard: no verdict, listed in duplicate_refs
+        if cy is None or not pads.get(ref) or ref in bg.dup_refs:
             continue
         seen["with_courtyard"] += 1
         missed = []
