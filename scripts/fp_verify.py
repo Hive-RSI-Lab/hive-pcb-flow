@@ -63,18 +63,40 @@ Checks (land_pattern fields drive which run):
                 nearest under 0.7 of the next) under a quarter turn, no
                 mirror; else each pad on another pin's place is named, with
                 hint bottom_view_numbering (the mirror fits) or
-                numbering_rotated (a one-step shift fits). Places that fit
+                numbering_rotated (a one-step shift fits) or
+                numbers_differ; the pads lying on the drawing's places only
+                mirrored is hint mirrored_footprint (drawn from the bottom
+                view). Places that fit
                 the footprint and its mirror alike (a 2-pad land) and lands
                 of another shape (check_fp_geometry's job) go to
                 not_judged. A letter/number ball grid must be
                 numbered as its top view (A1 top left, numbers rising
                 rightwards, letters downwards, under any turn). With
-                land_pattern.numbering "ccw_top" the numeric pads must run
-                counter-clockwise from the top. With none of these the
-                check goes to not_judged. Example: SiTime's 3.2 x 2.5 mm
+                land_pattern.numbering "ccw_top" ("cw_top") the numeric
+                pads must run counter-clockwise (clockwise) from the top.
+                Example: SiTime's 3.2 x 2.5 mm
                 PQFN-4 oscillator has pins 1 and 2 on a LONG side (SiT1602B
                 POD-PQFN-004-X03225-002); numbering round the short side
                 puts VDD on OE and the clock never starts
+  - pad_numbering_tied: after a pass, a record pin on a pad the       (warning)
+                footprint numbers otherwise, where a datasheet may tie the
+                two: a pin the footprint has no pad for (the record's EP on
+                a tab numbered 2, rule shared) or one the record lists twice
+                (rule repeated), on a pad numbered otherwise or unnumbered,
+                which gets no net (#1285)
+  - pad_numbering_direction: when nothing places the pins (no usable  (warning)
+                land_pattern.pads, no ball grid, no numbering), a perimeter
+                package (SOIC, SOT, SC-70, DFN, QFN, QFP, LGA ...;
+                lib/padnum.py lists them, through-hole footprints and
+                connectors left out) must number counter-clockwise from the
+                top; clockwise looks numbered from the bottom view. An
+                error when land_pattern.numbering says the other way. With
+                no direction to read, pad_numbering goes to not_judged
+  - land_pattern_invalid: a land_pattern.pads entry the check can't   (warning)
+                read (not an object, no number, at_mm not two finite
+                numbers: left out; size_mm not two entries: ignored), pads
+                not a list, or a numbering other than ccw_top / cw_top
+                (ignored). `field` says which
 
 Coverage: the payload's `coverage` says, per check (pin1, pad_numbering,
 pitch, pad_size, land_gap), judged / not_judged / not_stated, so a check
@@ -119,6 +141,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import check_fp_geometry as fpg  # noqa: E402  (its frames and fit, #1102)
 import checklib  # noqa: E402
 import fplib  # noqa: E402
+import padnum  # noqa: E402  (perimeter direction, #1285)
 
 SOURCE = "check.fp_verify"
 
@@ -542,6 +565,180 @@ def _misplaced(ref: dict, got: dict, tol: float,
                                         int(kv[0]) if kv[0].isdigit() else 0, kv[0]))
 
 
+def _pair(v) -> tuple[float, float] | None:
+    """Two finite numbers (not strings, not booleans), else None."""
+    if not isinstance(v, (list, tuple)) or len(v) != 2:
+        return None
+    if any(isinstance(x, bool) or not isinstance(x, (int, float))
+           or not math.isfinite(x) for x in v):
+        return None
+    return float(v[0]), float(v[1])
+
+
+def _record_pads(land: dict) -> tuple[list[dict], list[dict]]:
+    """land_pattern.pads cleaned (#1285): each kept entry {number (str),
+    at_mm (x, y), size_mm when given}, and the entries left out, each
+    {index, number, why}. An entry that is not an object, has no number (a
+    string or an integer, not blank) or no at_mm of two finite numbers is
+    left out; a size_mm that is not two entries is dropped and the pin
+    kept. `pads` that is not a list gives no entries and one skip with
+    index None. The check that read them raw stopped on a KeyError."""
+    items = land.get("pads")
+    if items is None:
+        return [], []
+    if not isinstance(items, list):
+        return [], [{"index": None, "number": None,
+                     "why": "land_pattern.pads is not a list"}]
+    out, skipped = [], []
+    for i, r in enumerate(items):
+        if not isinstance(r, dict):
+            skipped.append({"index": i, "number": None, "why": "not an object"})
+            continue
+        num = r.get("number")
+        if isinstance(num, bool) or not isinstance(num, (str, int)) or \
+                not str(num).strip():
+            skipped.append({"index": i, "number": None, "why": (
+                "no number (a string such as '1', 'A1', 'EP')")})
+            continue
+        num = str(num).strip()
+        at = _pair(r.get("at_mm"))
+        if at is None:
+            skipped.append({"index": i, "number": num,
+                            "why": "at_mm is not two finite numbers"})
+            continue
+        q = {"number": num, "at_mm": at}
+        size = r.get("size_mm")
+        if size is not None:
+            if isinstance(size, (list, tuple)) and len(size) == 2:
+                q["size_mm"] = list(size)
+            else:
+                skipped.append({"index": i, "number": num, "why": (
+                    "size_mm is not two entries: size ignored")})
+        out.append(q)
+    return out, skipped
+
+
+def _through_hole(path: Path) -> bool:
+    """A through-hole part by lib/fpattr.py's rule: its pads, when they are
+    all one kind (a plated hole inside an SMD pad is that pad's thermal via,
+    not a pin), else its (attr). fpattr pulls in shapely, so it loads here."""
+    import fpattr
+    import sexpdata
+    v = fpattr.judge(sexpdata.loads(
+        Path(path).read_text(encoding="utf-8", errors="replace")))
+    return (v["pads_say"] or v["declared"]) == "through_hole"
+
+
+def _direction(fp: fplib.Footprint, copper: list[fplib.Pad], land: dict,
+               ds: dict, expected: str, declared: str | None, v) -> dict | None:
+    """Which way a perimeter package's numbers run, seen from the top
+    (lib/padnum.py, #1285), when nothing places each pin. Warns
+    pad_numbering_direction when they run the other way than `expected`
+    ('ccw', or 'cw' with land_pattern.numbering cw_top; an error then).
+    None when no direction can be read: not a perimeter family by any
+    name, a through-hole footprint, or numbers that run neither way."""
+    family, token = padnum.classify(
+        fp.name, *(n for n in (land.get("package"), ds.get("package"))
+                   if isinstance(n, str)))
+    if family != "perimeter" or _through_hole(fp.path):
+        return None
+    # library footprints are drawn from the front: a pad whose only copper
+    # is B.Cu (an exposed pad's back, a far-side test point) is no pin's land
+    front = [p for p in copper
+             if [ly for ly in p.layers if ly.endswith(".Cu")] != ["B.Cu"]]
+    d = padnum.perimeter_direction(front)
+    if not d or d["direction"] is None:
+        return None
+    way = d["direction"]
+    fact = {"from": "direction", "fit": way == expected, "direction": way,
+            "family": family, "token": token}
+    if way == expected:
+        return fact
+    words = {"ccw": "counter-clockwise", "cw": "clockwise"}
+    order = ", ".join(str(n) for n in d["order"][:12])
+    if len(d["order"]) > 12:
+        order += ", ..."
+    if declared:
+        msg = (f"pads numbered {words[way]} seen from the top (round the "
+               f"outline: {order}), but the record's land_pattern.numbering "
+               f"is {declared} ({words[expected]})")
+    else:
+        msg = (f"pads numbered clockwise seen from the top (round the "
+               f"outline: {order}): top-view numbers run counter-clockwise "
+               "from pin 1, so this looks numbered from the datasheet's "
+               "bottom view; if the part really numbers clockwise (Bosch's "
+               "LGA-8), say so in its record: land_pattern.numbering: cw_top")
+    pin1 = next((p.center for p in front if p.number.strip() == "1"), None)
+    v("error" if declared else "warning", pin1, msg,
+      "pad_numbering_direction", pads=[str(n) for n in d["order"]],
+      direction=way, expected=expected)
+    fact["hint"] = "bottom_view_numbering" if way == "cw" else None
+    return fact
+
+
+def _ties(ref: dict, mine: dict, stated: list[dict], copper: list[fplib.Pad],
+          turn: float, limit: float) -> list[dict]:
+    """After a pass, the record's pins that sit on a pad numbered otherwise
+    (#1285): a pin the footprint has no pad for (the record's EP on a tab
+    the footprint numbers 2: rule 'shared'), or a pin the record lists
+    again elsewhere (rule 'repeated'). A pad within max(limit, half its
+    smaller side) of the pin's place, in the record's frame (the footprint
+    turned `turn` and the shared pins' centroids aligned, as _assign
+    lays them), counts as under it. [{pin, at, pads, rule}]."""
+    g = {k: fpg._turn(*xy, turn) for k, xy in mine.items()}
+    rc = (sum(x for x, _ in ref.values()) / len(ref),
+          sum(y for _, y in ref.values()) / len(ref))
+    gc = (sum(x for x, _ in g.values()) / len(g),
+          sum(y for _, y in g.values()) / len(g))
+    dx, dy = rc[0] - gc[0], rc[1] - gc[1]
+    placed = []
+    for p in copper:
+        x, y = fpg._turn(*p.center, turn)
+        placed.append((p.number, x + dx, y + dy, min(p.size) / 2, p.center))
+    numbers = {p.number for p in copper}
+    seen: dict[str, int] = {}
+    for q in stated:
+        seen[q["number"]] = seen.get(q["number"], 0) + 1
+    out = []
+    for q in stated:
+        pin = q["number"]
+        rule = ("shared" if pin not in numbers else
+                "repeated" if seen[pin] > 1 else None)
+        if rule is None:
+            continue
+        qx, qy = q["at_mm"]
+        under = [(n, at) for n, x, y, half, at in placed
+                 if math.hypot(x - qx, y - qy) <= max(limit, half) + EPS_MM]
+        nums = sorted({n for n, _ in under})
+        if not under or pin in nums:
+            continue
+        out.append({"pin": pin, "at": under[0][1], "pads": nums, "rule": rule})
+    return out
+
+
+def _nums(nums) -> str:
+    return "/".join(n if n else "(unnumbered)" for n in nums)
+
+
+def _tie_message(tie: dict) -> str:
+    """Why a pin on a pad numbered otherwise passed, and what to check."""
+    pin, nums = tie["pin"], [n for n in tie["pads"] if n]
+    if tie["rule"] == "shared":
+        n = _nums(nums) or "(unnumbered)"
+        return (f"the record's pin {pin} sits on pad {n}, which the footprint "
+                f"ties to pin {n}; check that the datasheet connects {pin} "
+                f"to pin {n}")
+    if not nums:
+        return (f"the record lists pin {pin} here as well, and this pad has "
+                "no number, so it gets no net: number it "
+                f"{pin} unless the datasheet leaves it unconnected")
+    n = _nums(nums)
+    return (f"the record lists pin {pin} here as well, and the footprint "
+            f"numbers this pad {n}: check that the datasheet ties it to "
+            f"pin {pin} and that the symbol has a pin {n}, or the pad gets "
+            "no net")
+
+
 def _grid_handedness(copper: list[fplib.Pad]) -> float | None:
     """For a letter-row / number-column ball grid: the cross product of the
     column step (1 -> 2) and the row step (A -> B). JEDEC's top view has A1
@@ -643,7 +840,8 @@ def coverage(land: dict, not_judged: list[dict], numbering: dict | None,
         "pitch": land.get("pitch_mm") is not None or bool(land.get("pitches_mm")),
         "pad_size": bool(land.get("pad_size_mm")) or any(
             land.get(k) is not None for k in ("pad_length_mm", "pad_width_mm"))
-        or any(q.get("size_mm") for q in land.get("pads") or []),
+        or any(isinstance(q, dict) and q.get("size_mm") for q in
+               (land.get("pads") if isinstance(land.get("pads"), list) else [])),
         "land_gap": land.get("gap_mm") is not None,
     }
     out = {}
@@ -778,18 +976,36 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
     # position), else from land_pattern.numbering; with none, not_judged
     numbering_fact: dict | None = None
     got = _number_centres(copper)
-    stated_pads = land.get("pads") or []
+    stated_pads, skipped = _record_pads(land)
+    if skipped:
+        said = "; ".join(
+            s["why"] if s["index"] is None else
+            f"pads[{s['index']}]" + (f" (pin {s['number']})" if s["number"] else "")
+            + f": {s['why']}" for s in skipped[:4])
+        if len(skipped) > 4:
+            said += f"; {len(skipped) - 4} more"
+        v("warning", None, f"land_pattern {said}; fix the record",
+          "land_pattern_invalid", field="pads", skipped=skipped)
+    declared = land.get("numbering")
+    if declared is not None and declared not in ("ccw_top", "cw_top"):
+        v("warning", None,
+          f"land_pattern.numbering is {declared!r}, not ccw_top or cw_top: "
+          "ignored", "land_pattern_invalid", field="numbering")
+        declared = None
+    expected = "cw" if declared == "cw_top" else "ccw"
+    # unplaced: the record's pads place no pin, so the direction is read
+    unplaced: str | None = None
     if stated_pads:
-        ref_all = {str(q["number"]): (float(q["at_mm"][0]), float(q["at_mm"][1]))
-                   for q in stated_pads}
+        ref_all = {q["number"]: q["at_mm"] for q in stated_pads}
         common = sorted(set(ref_all) & set(got))
         ref = {k: ref_all[k] for k in common}
         mine = {k: got[k] for k in common}
         mirror = {k: (-x, y) for k, (x, y) in ref.items()}
+        reach = _pad_reach(copper, common)
         if len(common) < 2:
-            not_judged.append({"check": "pad_numbering", "why": (
+            unplaced = (
                 "land_pattern.pads shares fewer than two pad numbers with "
-                "the footprint, so there is nothing to place")})
+                "the footprint, so there is nothing to place")
         elif ((turn := _fits(ref, mine, size_tol)) is not None
               and _fits(mirror, mine, size_tol) is not None):
             not_judged.append({"check": "pad_numbering", "why": (
@@ -800,24 +1016,48 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
             numbering_fact = {"from": "pads", "fit": True,
                               "turn_deg": round(turn, 1) if turn % 1 else int(turn),
                               "pads": len(common)}
-        elif (moved := _misplaced(ref, mine, size_tol, _pad_reach(
-                copper, common))) is None:
-            not_judged.append({"check": "pad_numbering", "why": (
-                "the footprint's pads don't fall one to one on the land "
-                "drawing's places, each within 0.4 x the drawing's closest "
-                "pin spacing or half a pad, under any quarter turn or the turn the pad "
-                "numbers point to (the shape differs; check_fp_geometry "
-                "judges that), so numbering is unchecked")})
+            ties = _ties(ref, mine, stated_pads, copper, turn,
+                         _fit_limit(ref, size_tol, reach))
+            if ties:
+                numbering_fact["ties"] = [{k: t[k] for k in ("pin", "pads", "rule")}
+                                          for t in ties]
+            for t in ties:
+                v("warning", t["at"], _tie_message(t), "pad_numbering_tied",
+                  pads=list(t["pads"]), pin=t["pin"], rule=t["rule"])
+        elif (moved := _misplaced(ref, mine, size_tol, reach)) is None:
+            if _misplaced(mirror, mine, size_tol, reach) is not None:
+                # drawn from the bottom view, pads and numbers mirrored
+                # together: the pads lie on the drawing's places only
+                # mirrored, so the pads are wrong, not just their numbers
+                numbering_fact = {"from": "pads", "fit": False,
+                                  "hint": "mirrored_footprint", "pads": len(common)}
+                v("error", None,
+                  "pad numbering differs from the record's land pattern: the "
+                  "pads fit the drawing only mirrored, so the footprint was "
+                  "drawn from the datasheet's bottom view (if the record was "
+                  "copied from a bottom view or with y up, fix the record "
+                  "instead)",
+                  "pad_numbering", hint="mirrored_footprint",
+                  drawing=land.get("pads_source"), pads=common)
+            else:
+                unplaced = (
+                    "the footprint's pads don't fall one to one on the land "
+                    "drawing's places, each within 0.4 x the drawing's closest "
+                    "pin spacing or half a pad, under any quarter turn or the "
+                    "turn the pad numbers point to (the shape differs; "
+                    "check_fp_geometry judges that), so numbering is unchecked")
         else:
             hint = ("bottom_view_numbering" if _fits(mirror, mine, size_tol) is not None
                     else "numbering_rotated" if any(
                         _fits(ref, _shifted(mine, s), size_tol) is not None for s in (1, -1))
-                    else None)
+                    else "numbers_differ")
             where = "; ".join(f"pad {a} sits where the drawing has pin {b}"
                               for a, b in moved[:6])
             why = {"bottom_view_numbering": (
                        ": the mirror image of the drawing fits, so the "
-                       "pads were numbered from a bottom view"),
+                       "pads were numbered from a bottom view (if the record "
+                       "was copied from a bottom view or with y up, fix the "
+                       "record instead)"),
                    "numbering_rotated": (
                        ": the numbers are shifted one step round the body")
                    }.get(hint, "")
@@ -838,20 +1078,35 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               "letters downwards. Here they run the other way round, so the "
               "balls were numbered from the bottom view",
               "pad_numbering", hint="bottom_view_numbering")
-    elif land.get("numbering") == "ccw_top" and (t := _ccw_turn(got)) is not None:
-        numbering_fact = {"from": "numbering", "fit": t < 0}
-        if t > 0:
+    elif declared and (t := _ccw_turn(got)) is not None:
+        ccw = declared == "ccw_top"
+        numbering_fact = {"from": "numbering", "fit": t < 0 if ccw else t > 0}
+        if ccw and t > 0:
             numbering_fact["hint"] = "bottom_view_numbering"
             v("error", None,
               "pads are numbered clockwise seen from the top; the record "
               "says counter-clockwise (ccw_top), so the footprint is the "
               "part's mirror image, numbered from the bottom view",
               "pad_numbering", hint="bottom_view_numbering")
+        elif not ccw and t < 0:
+            numbering_fact["hint"] = "numbers_differ"
+            v("error", None,
+              "pads are numbered counter-clockwise seen from the top; the "
+              "record says clockwise (cw_top), as some parts number (Bosch's "
+              "LGA-8): check the record, else the footprint is numbered the "
+              "wrong way round",
+              "pad_numbering", hint="numbers_differ")
     elif len(got) >= 2:
-        not_judged.append({"check": "pad_numbering", "why": (
+        unplaced = (
             "the record states no pad positions (land_pattern.pads) and no "
             "numbering direction, so which pad carries which pin is "
-            "unchecked")})
+            "unchecked")
+    if unplaced is not None:
+        # no pin placed: a perimeter package's direction still tells a
+        # bottom-view numbering (#1285)
+        numbering_fact = _direction(fp, copper, land, ds, expected, declared, v)
+        if numbering_fact is None:
+            not_judged.append({"check": "pad_numbering", "why": unplaced})
 
     # --- pad size and gap, axis by axis (#1331). The sorted pad_size_mm
     # check below passes a pad turned a quarter, and on a two-terminal chip
@@ -865,8 +1120,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
     sized = [q for q in stated_pads if q.get("size_mm")]
     if sized:
         fit = _drawing_turn(
-            {str(q["number"]): (float(q["at_mm"][0]), float(q["at_mm"][1]))
-             for q in stated_pads}, got, size_tol)
+            {q["number"]: q["at_mm"] for q in stated_pads}, got, size_tol)
         if fit is None:
             not_judged.append({"check": "pad_size", "why": (
                 "the footprint's pads don't lie on land_pattern.pads' places "
@@ -875,7 +1129,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         else:
             turned, off, odd, judged = [], [], [], []
             for q in sized:
-                n = str(q["number"])
+                n = q["number"]
                 same = [p for p in copper if p.number == n]
                 if not same:
                     continue      # a missing pad is pad_count's or pin1's finding
@@ -1341,7 +1595,9 @@ def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
     pad_numbering findings kept, under the placed reference and position.
     A part with neither takes its record from its Value when that reads as
     a part number and exactly one record file carries it as its name or
-    mpn (#1406); none, or two or more, leaves it not_judged and says so."""
+    mpn (#1406); none, or two or more, leaves it without a record and says
+    why under no_record (and in not_judged when nothing else is judged).
+    A perimeter package with no record still has its direction read."""
     import tempfile
 
     import sexpdata
@@ -1419,6 +1675,9 @@ def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
                 "side": "bottom" if bottom else "top",
                 "record": str(rec) if rec else None, "pad_numbering": num,
                 **({"found_by": "value"} if rec and value else {}),
+                # why no record was used, kept when the direction is read
+                # without one (#1285 with #1406)
+                **({"no_record": no_rec} if not rec else {}),
                 "not_judged": ([n["why"] for n in facts["not_judged"]
                                 if n["check"] == "pad_numbering"] if rec
                                else [no_rec] if not num

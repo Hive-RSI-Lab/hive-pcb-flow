@@ -137,8 +137,16 @@ def _find1(node, name):
 _NATIVE_FIELDS = {"Reference", "Value", "Footprint", "Datasheet", "Description"}
 
 
-def _comp_fields(comp) -> dict[str, str]:
-    """Custom symbol fields of a netlist (comp ...): {name: value}."""
+# Of those natives, the two KiCad 10.0.6's parity compares with the
+# footprint's own text (measured: a footprint Description or Datasheet the
+# symbol lacks gives footprint_symbol_field_mismatch). A library footprint
+# brings its own, so the symbol's, empty included, must replace it (#1357)
+PARITY_NATIVES = ("Description", "Datasheet")
+
+
+def _all_fields(comp) -> dict[str, str]:
+    """Every symbol field of a netlist (comp ...): {name: value}; a
+    valueless `(field (name "Description"))` is ""."""
     fields: dict[str, str] = {}
     fnode = _find1(comp, "fields")
     if fnode:
@@ -146,9 +154,23 @@ def _comp_fields(comp) -> dict[str, str]:
             nnode = _find1(f, "name")
             name = _sym(nnode[1]) if nnode and len(nnode) > 1 else None
             value = _sym(f[-1]) if len(f) > 2 else ""
-            if name and name not in _NATIVE_FIELDS:
+            if name:
                 fields[name] = value
     return fields
+
+
+def _comp_fields(comp) -> dict[str, str]:
+    """Custom symbol fields of a netlist (comp ...): {name: value}."""
+    return {k: v for k, v in _all_fields(comp).items()
+            if k not in _NATIVE_FIELDS}
+
+
+def _comp_natives(comp) -> dict[str, str]:
+    """The symbol's PARITY_NATIVES the netlist carries: {name: value}. A
+    netlist without them (a hand-written one) gives {}: leave the
+    footprint's as they are."""
+    return {k: v for k, v in _all_fields(comp).items()
+            if k in PARITY_NATIVES}
 
 
 def _comp_sheet(comp) -> dict:
@@ -203,6 +225,7 @@ def parse_netlist(path: Path) -> tuple[list[dict], dict]:
                                    "exclude_from_bom":
                                        "exclude_from_bom" in props,
                                    "fields": _comp_fields(comp),
+                                   "natives": _comp_natives(comp),
                                    **_comp_sheet(comp)})
         elif _head(section) == "nets":
             for net in _find(section, "net"):

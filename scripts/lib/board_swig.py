@@ -413,6 +413,18 @@ def build(job: dict) -> dict:
         for field in fp.GetFields():
             if field.GetName() in (comp.get("fields") or {}):
                 field.SetVisible(False)  # metadata, not board art
+        # The symbol's Description / Datasheet replace the library
+        # footprint's own: KiCad 10.0.6's parity compares them (#1357).
+        _natives = comp.get("natives") or {}
+        for field in fp.GetFields():
+            if field.GetName() in _natives:
+                field.SetText(_natives[field.GetName()] or "")
+        for fname in _natives:
+            if _natives[fname] and fname not in {f.GetName() for f in fp.GetFields()}:
+                fp.SetField(fname, _natives[fname])
+                for field in fp.GetFields():
+                    if field.GetName() == fname:
+                        field.SetVisible(False)
         # KiCad's native do-not-populate flag and the symbol's in_bom are
         # SYMBOL attributes that must be mirrored on the footprint, else
         # `drc --schematic-parity` reports footprint_symbol_mismatch ("'Do not

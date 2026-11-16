@@ -28,13 +28,15 @@ reads the PDF pages); this script owns the deterministic half:
                     stubs (wmsc.lcsc.com answers one) are followed, and
                     anything that isn't a PDF in the end is refused, never
                     written. index.json records pages, text chars per page
-                    and status ok|suspect (+ reasons): suspect = the file is
-                    cut off, has no text layer, or nothing ties it to the MPN
-                    (#706, #755: see assess_pdf); a suspect PDF is kept but
-                    check_ratings and the ledger never count what was read
-                    from it verified.
+                    and status ok|suspect|not_judged (+ reasons): suspect =
+                    the file is cut off or nothing ties it to the MPN (#706,
+                    #755: see assess_pdf); not_judged = it has no text layer
+                    (a scan) or prints no part number on pages 1-2, so there
+                    is nothing to judge it by. Either PDF
+                    is kept but check_ratings and the ledger never count what
+                    was read from it verified.
                     exit 0 = every datasheet fetched, 1 = some suspect,
-                    refused or missing, 2 = bad workspace.
+                    not_judged, refused or missing, 2 = bad workspace.
   --assess WS       re-read every index.json entry's PDF on disk (or only
                     --lcsc's) and write its status, with no download. An entry
                     with no status and no PDF becomes status unassessed. Not
@@ -42,7 +44,7 @@ reads the PDF pages); this script owns the deterministic half:
                     judge the PDFs on disk whenever they read the index, and
                     judge again only if the PDF, the MPN or ASSESS_VERSION
                     changed (#768); this forces it. exit 0 = all ok,
-                    1 = some suspect or unassessed, 2 = no index.
+                    1 = some suspect, not_judged or unassessed, 2 = no index.
   --render DIR      with --pdf: render the image-only pages (under
                     IMAGE_ONLY_CHARS of text) and the mechanical-drawing
                     pages to DIR/page-NNN.png with pdftoppm, OCR the
@@ -869,6 +871,22 @@ def mpn_in_text(mpn: str, text: str) -> str | None:
 # Fewer text characters per page than this on average = a scan, not a datasheet.
 MIN_CHARS_PER_PAGE = 20
 
+# A reason that starts with one of these leaves a datasheet not_judged, not
+# suspect: there is nothing in the file to check the MPN against either way.
+NOT_JUDGED_REASONS = ("no text layer:", "MPN not printed:")
+
+# A part number on a page: capitals, digits and dashes, 4+ long, with a letter
+# and 2+ digits; a quantity with its unit (100MHZ, 3000PCS) is not one.
+_PART_NUMBER = re.compile(r"(?<![A-Za-z0-9])[A-Z0-9][A-Z0-9-]{3,}(?![A-Za-z0-9])")
+_QUANTITY = re.compile(r"^\d+(?:-\d+)?[A-Z]{1,4}$")
+
+
+def part_numbers(text: str) -> list[str]:
+    """The part-number-like words in `text` (_PART_NUMBER), sorted, once each."""
+    words = {w.strip("-") for w in _PART_NUMBER.findall(text)}
+    return sorted(w for w in words if re.search(r"[A-Z]", w)
+                  and sum(c.isdigit() for c in w) >= 2 and not _QUANTITY.match(w))
+
 
 # Words on a page that make an MPN found there an entry in a list of parts, not
 # one part named in passing by another part's datasheet.
@@ -899,6 +917,16 @@ def series_match(mpn: str, text: str) -> tuple[dict | None, str | None]:
             return None, f"its {name} ordering table has no {', '.join(lost)}"
         return {"how": "series", "scheme": name, "fields": fields}, None
     return None, None
+
+
+def names_a_series(text: str) -> str | None:
+    """The first scheme in reference/ordering_codes.yaml whose series `text`
+    names, else None: a series document, whichever part it is for."""
+    flat = re.sub(r"\s+", " ", text)
+    for name, sch in _ordering_schemes().items():
+        if all(re.search(r, flat) for r in sch["series"]):
+            return name
+    return None
 
 
 def match_mpn(mpn: str, texts: list[str]) -> tuple[dict | None, str | None]:
@@ -932,14 +960,31 @@ def match_mpn(mpn: str, texts: list[str]) -> tuple[dict | None, str | None]:
 PACKAGING_SUFFIX = re.compile(r"(?:\s*\([A-Za-z0-9]{1,4}\))+\s*$")
 
 
+def names_no_part(mpn: str, texts: list[str]) -> bool:
+    """Does a document that match_mpn could not tie to `mpn` print nothing to
+    tie it to another part either (#1434)? No part number on pages 1-2, no
+    page that lists parts (_PART_LIST words with a part number), `mpn` and its
+    base family nowhere, and no series in reference/ordering_codes.yaml named:
+    an approval sheet naming only "0603-0.6 green", a brochure naming only
+    "7X Series". Any of those and the file is more likely another part's."""
+    whole = " ".join(texts)
+    return not (part_numbers(" ".join(texts[:2]))
+                or any(_PART_LIST.search(t) and part_numbers(t) for t in texts)
+                or mpn_in_text(mpn, whole) or names_a_series(whole))
+
+
 def assess_pdf(data: bytes, mpn: str | None = None) -> dict:
-    """Is `data` a usable datasheet for `mpn` (#706)? {status: ok|suspect,
-    reasons, pages, chars_per_page, text_chars[, match]}. Suspect when the file
-    is cut off (no %%EOF) or does not parse, has no text layer (a scan: nothing
-    to read facts from), or nothing ties it to the MPN (match_mpn: probably
-    another part's datasheet). `match` says what did. With no `mpn` the name
-    check is skipped. A suspect file is kept for a person to look at; no fact
-    read from it counts as verified."""
+    """Is `data` a usable datasheet for `mpn` (#706)? {status:
+    ok|suspect|not_judged, reasons, pages, chars_per_page, text_chars[, match]}.
+    Suspect when the file is cut off (no %%EOF) or does not parse, or nothing
+    ties it to the MPN (match_mpn: probably another part's datasheet).
+    not_judged when it is whole but has no text layer (a scan or an image PDF),
+    or its pages 1-2 print no part number at all, this one or another, and it
+    names no series in reference/ordering_codes.yaml (an approval sheet naming
+    only "0603 green"):
+    nothing to check the MPN against, so no verdict either way. `match` says
+    what tied it. With no `mpn` the name check is skipped. Either way the file
+    is kept for a person to look at; no fact read from it counts as verified."""
     import logging
     from io import BytesIO
     logging.getLogger("pypdf").setLevel(logging.ERROR)   # repair chatter
@@ -970,19 +1015,30 @@ def assess_pdf(data: bytes, mpn: str | None = None) -> dict:
         match, why = match_mpn(mpn, texts)
         if match:
             out["match"] = match
+        elif not why and names_no_part(mpn, texts):
+            reasons.append(f"MPN not printed: pages 1-2 name no part number at "
+                           f"all, {mpn} or another, no page lists parts, and "
+                           "the document names no series we have an ordering "
+                           "table for, so the name check has nothing to go on")
         else:
             reasons.append(f"MPN {mpn} (or its base family) is not in the text "
                            "of pages 1-2 and no ordering table here decodes it"
                            f"{f' ({why})' if why else ''}: probably another "
                            "part's datasheet")
-    return {"status": "suspect" if reasons else "ok", "reasons": reasons,
-            **out}
+    if not reasons:
+        status = "ok"
+    elif all(r.startswith(NOT_JUDGED_REASONS) for r in reasons):
+        status = "not_judged"
+    else:
+        status = "suspect"
+    return {"status": status, "reasons": reasons, **out}
 
 
 def fetch_datasheet(url: str, dest: Path, transport=None,
                     domains: dict | None = None, mpn: str | None = None) -> dict:
-    """GET one datasheet into dest: {status: fetched|suspect|missing|refused|error, ...}.
-    transport is researchlib.http_transport unless injected (tests)."""
+    """GET one datasheet into dest: {status: fetched|suspect|not_judged|
+    missing|refused|error, ...}; suspect and not_judged are assess_pdf's
+    verdicts. transport is researchlib.http_transport unless injected (tests)."""
     researchlib = _lib("researchlib")
     partslib = _lib("partslib")
     url = partslib.fix_datasheet_url(url)
@@ -1022,7 +1078,7 @@ def fetch_datasheet(url: str, dest: Path, transport=None,
     dest.write_bytes(data)
     import hashlib
     ass = assess_pdf(data, mpn)
-    return {**out, "status": "fetched" if ass["status"] == "ok" else "suspect",
+    return {**out, "status": {"ok": "fetched"}.get(ass["status"], ass["status"]),
             "assessment": ass, "file": str(dest),
             "final_url": resp.get("final_url") or url, "bytes": len(data),
             "sha256": hashlib.sha256(data).hexdigest()}
@@ -1034,7 +1090,9 @@ _ASSESSED = ("status", "reasons", "pages", "chars_per_page", "text_chars",
 # Bump when a change to assess_pdf or match_mpn can change a verdict: the next
 # read of each index judges its PDFs again. 2: the family match keeps to words.
 # 3: a bracketed packaging code at the end of the MPN is cut and tried again.
-ASSESS_VERSION = 3
+# 4: a whole PDF with no text layer, or no part number on pages 1-2, is
+# not_judged, not suspect.
+ASSESS_VERSION = 4
 _VERDICTS: dict = {}    # this process's verdicts, for a tree it cannot write
 
 
@@ -1139,17 +1197,21 @@ def ensure_assessed(parts_dir: Path) -> dict:
     return idx
 
 
-def suspect_datasheets(parts_dir: Path, lcscs) -> dict[str, str]:
+def suspect_datasheets(parts_dir: Path, lcscs,
+                       statuses=("suspect", "not_judged")) -> dict[str, str]:
     """{lcsc: why} for each part whose datasheet PDF is a placeholder or whose
-    verdict is suspect (truncated, no text layer, nothing ties it to the MPN;
-    #706)."""
+    verdict is in `statuses`: suspect (truncated, nothing ties it to the MPN;
+    #706) or not_judged (nothing to judge it by). Both hold back what was
+    read from the PDF; pass statuses=("suspect",) for only the files judged
+    wrong."""
     ddir = parts_dir / "datasheets"
     idx = ensure_assessed(parts_dir)
     out = {}
     for lcsc in lcscs:
         ent = idx.get(lcsc)
-        if isinstance(ent, dict) and ent.get("status") == "suspect":
-            out[lcsc] = "; ".join(ent.get("reasons") or ["marked suspect"])
+        if isinstance(ent, dict) and ent.get("status") in statuses:
+            out[lcsc] = "; ".join(ent.get("reasons") or
+                                  [f"marked {ent.get('status')}"])
             continue
         pdf = ddir / f"{lcsc}.pdf"
         if pdf.is_file():
@@ -1162,7 +1224,8 @@ def suspect_datasheets(parts_dir: Path, lcscs) -> dict[str, str]:
 def unassessed_datasheets(parts_dir: Path, lcscs) -> list[str]:
     """Parts with a datasheet that has no verdict and cannot get one here
     (#755, #768): an index.json entry with no PDF on disk, which takes --fetch,
-    or a PDF with no MPN to check it against."""
+    a PDF with no MPN to check it against, or a PDF with nothing to check
+    it by (not_judged)."""
     idx = ensure_assessed(parts_dir)
     ddir = parts_dir / "datasheets"
     out = []
@@ -1191,7 +1254,7 @@ def do_assess(args) -> tuple[dict, int]:
         if (args.lcsc and lcsc != args.lcsc) or not isinstance(ent, dict):
             continue
         if not (ddir / f"{lcsc}.pdf").is_file() \
-                and ent.get("status") not in ("ok", "suspect"):
+                and ent.get("status") not in ("ok", "suspect", "not_judged"):
             # the verdict of a PDF since gone still stands; none was ever made
             idx[lcsc] = {**ent, "status": "unassessed", "reasons": [
                 "no PDF on disk: run --fetch to read it"]}
@@ -1201,7 +1264,7 @@ def do_assess(args) -> tuple[dict, int]:
                      "match": e.get("match")})
     _write_index(ddir, idx)
     counts = {st: sum(r["status"] == st for r in rows)
-              for st in ("ok", "suspect", "unassessed")}
+              for st in ("ok", "suspect", "not_judged", "unassessed")}
     clean = counts["ok"] == len(rows)
     return {"script": "datasheet_extract",
             "status": "pass" if clean else "violations", **counts,
@@ -1238,7 +1301,8 @@ def fetch_line(line: dict, dest: Path, transport=None, lookup=None,
     with none, its LCSC id's listing's; and when that is missing or does not
     come back a PDF of the part, dsresolve.resolve by MPN and brand.
     -> fetch_datasheet's result with `via` (where the URL came from), or a
-    miss {status: missing|suspect|refused|error, error, miss?, tried?} that
+    miss {status: missing|suspect|not_judged|refused|error, error, miss?,
+    tried?} that
     names every step that came up empty."""
     lcsc = str(line.get("lcsc") or "").strip()
     mpn = str(line.get("mpn") or "").strip() or None
@@ -1344,6 +1408,7 @@ def do_fetch(args, transport=None, lookup=None, resolve=None
             "status": "pass" if ok else "violations",
             "fetched": sum(r["status"] == "fetched" for r in results),
             "suspect": sum(r["status"] == "suspect" for r in results),
+            "not_judged": sum(r["status"] == "not_judged" for r in results),
             "of": len(results), "datasheets": results,
             "next": ("datasheet_extract.py --pdf parts/datasheets/<lcsc>.pdf "
                      "--lcsc <lcsc> --out parts/<lcsc>.grounding.json")}, \

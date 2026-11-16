@@ -18,7 +18,7 @@ Contract:
                      # key left out takes the default on a new via and keeps
                      # its value on a via already there ({} only enables)
               [filled: bool]   # filling + capping, as set_via_fill (#1147)
-    remove    {uuid}                         # track, via or zone; absent=noop
+    remove    {uuid, [patches]}              # track, via or zone; absent=noop
                      # a track's teardrops go with it (#1144): see below
     set_net   {uuid, net}                            # worker-level (renet)
     set_via_fill {uuid, filled}                      # filling + capping
@@ -50,6 +50,20 @@ worker ops above, so they share the atomic apply + verify:
                                            drag (default true) takes the
                                            straight same-net track ends on
                                            its centre along - move_via.py
+    set_end {at, to, [net], [layer], [uuid_prefix]}   the straight track
+                                           ends at `at` (within 0.02 mm) go
+                                           to `to` in place, uuids kept: a
+                                           track shortened or one end moved
+                                           without a rip (#1148). Several
+                                           same-net ends there move
+                                           together (the joint stays);
+                                           refused on an arc, on ends of
+                                           more than one net (give net),
+                                           or when a track would shrink to
+                                           nothing. A via or pad at `at`
+                                           stays (move_via moves a via with
+                                           its ends); the end's teardrop is
+                                           rebuilt only by a refill
     join_end {at, [net], [layer], [radius]}   a track's free end at `at`
                                            gets a track (same width) to the
                                            nearest same-net anchor on its
@@ -105,9 +119,9 @@ worker ops above, so they share the atomic apply + verify:
   Every op in one list is resolved against the board as it was before the
   list ran, so an op can't select what an earlier op in it added or moved.
   The routing ops are the exception: each routes around what the ops before
-  it removed and added (not what they moved: set_point, move_via); so is
-  fill_vias, which picks the vias added before it and skips the ones
-  removed before it (#1147).
+  it removed and added (not what they moved: set_point, move_via,
+  set_end); so is fill_vias, which picks the vias added before it and
+  skips the ones removed before it (#1147).
   SELECTOR (all given keys must match; at least one of net, pads, at,
   region, uuid_prefix):
     net: NAME | [NAME...]       only these nets
@@ -157,6 +171,14 @@ kept track's), through a remove_teardrop {net, layer, at} the driver adds
 lays stays. Drops of tracks other ops move (set_point, move_via) are not
 looked at: refill for those.
 
+Patches (#1145): a PATCH_<net> zone (zone_patch) that held a via of its
+net before the edit and holds none after it (the vias the list removes,
+moves or renets; the ones it adds count) is named in the result of the op
+that took its last via: "patches_left": [{uuid, name, layer}]. A remove or
+rip with "patches": true takes those zones with it instead
+("patches_removed"). A patch that still holds a via of its net, kept or
+added, is left alone.
+
 Zone fills are NOT refreshed here: adding/removing copper stales any pour it
 crosses. Callers that touch plane layers must refill afterwards
 (kicad-cli pcb drc --refill-zones --save-board; kc.run_drc(refill=True)).
@@ -188,7 +210,7 @@ OP_FIELDS = {  # op -> (required, optional)
     "add_track": ({"start", "end", "width", "layer", "net"}, set()),
     "add_via": ({"at", "size", "drill", "net"},
                 {"kind", "top", "bot", "teardrops", "filled"}),
-    "remove": ({"uuid"}, set()),
+    "remove": ({"uuid"}, {"patches"}),
     "set_net": ({"uuid", "net"}, set()),
     "set_via_fill": ({"uuid", "filled"}, set()),
     "set_point": ({"uuid", "which", "to"}, set()),
@@ -197,12 +219,13 @@ SELECT_KEYS = {"net", "layer", "kind", "region", "at", "radius", "touch",
                "pads", "uuid_prefix"}
 SCOPE_KEYS = {"net", "pads", "at", "region", "uuid_prefix"}
 ECO_FIELDS = {  # selector ops, resolved by the driver into OP_FIELDS ops
-    "rip": (set(), SELECT_KEYS),
+    "rip": (set(), SELECT_KEYS | {"patches"}),
     "renet": ({"to"}, SELECT_KEYS),
     "add_path": ({"points", "width", "layer", "net"}, set()),
     "rename_net": ({"from", "to"}, set()),
     "set_width": ({"width"}, SELECT_KEYS),
     "move_via": ({"at", "to"}, {"net", "drag"}),
+    "set_end": ({"at", "to"}, {"net", "layer", "uuid_prefix"}),
     "join_end": ({"at"}, {"net", "layer", "radius"}),
     "copy_from": ({"pcb"}, SELECT_KEYS),
     "fill_vias": (set(), SELECT_KEYS | {"filled"}),
@@ -247,7 +270,7 @@ def validate_ops(doc: dict) -> list[dict]:
             raise CheckError(f"ops[{i}] ({kind}): unknown keys {sorted(unknown)}")
         if kind in ROUTE_OPS:
             _validate_route(i, op)
-        to_pt = kind in ("move_via", "set_point")
+        to_pt = kind in ("move_via", "set_point", "set_end")
         for k in ("start", "end", "at") + (("to",) if to_pt else ()):
             if k in op and not _pt(op[k]):
                 raise CheckError(f"ops[{i}]: {k} must be [x, y] mm")
@@ -279,6 +302,15 @@ def validate_ops(doc: dict) -> list[dict]:
             raise CheckError(f"ops[{i}]: fill_vias selects vias only")
         if "filled" in op and not isinstance(op["filled"], bool):
             raise CheckError(f"ops[{i}]: filled must be true or false")
+        if "patches" in op and not isinstance(op["patches"], bool):
+            raise CheckError(f"ops[{i}]: patches must be true or false")
+        if kind == "set_end" and "uuid_prefix" in op \
+                and _strs(op["uuid_prefix"]) is None:
+            raise CheckError(f"ops[{i}]: uuid_prefix must be a name or a "
+                             "list of names")
+        if kind == "set_end" and _close(op["at"], op["to"]):
+            raise CheckError(f"ops[{i}]: set_end at and to are the same "
+                             "point")
         if "drag" in op and not isinstance(op["drag"], bool):
             raise CheckError(f"ops[{i}]: drag must be true or false")
         if kind == "join_end" and "radius" in op \
@@ -535,6 +567,8 @@ def resolve_ops(bg, ops: list[dict], guards: dict | None = None
             continue
         elif kind == "move_via":
             flat += _resolve_move_via(bg, op)
+        elif kind == "set_end":
+            flat += _resolve_set_end(bg, op)
         elif kind == "join_end":
             flat += _resolve_join_end(bg, op)
         elif kind == "copy_from":
@@ -675,6 +709,43 @@ def _resolve_move_via(bg, op: dict) -> list[dict]:
     return out
 
 
+def _resolve_set_end(bg, op: dict) -> list[dict]:
+    """set_point for each straight track end within AT_TOL of `at` (the
+    net, layer and uuid_prefix given narrowing them), so a track is
+    shortened or has one end moved in place, uuid kept (#1148). Nothing at
+    `at` (or already moved): a re-run is a no-op."""
+    from shapely.geometry import Point
+
+    at = Point(op["at"])
+    pre = tuple(_strs(op["uuid_prefix"])) if "uuid_prefix" in op else ()
+    ends = []
+    for t in bg.tracks_of(net=op.get("net"), layer=op.get("layer")):
+        if not t.uuid or (pre and not t.uuid.startswith(pre)):
+            continue
+        c = list(t.shape.coords)
+        for which, q, other in (("start", c[0], c[-1]),
+                                ("end", c[-1], c[0])):
+            if Point(q).distance(at) <= AT_TOL:
+                ends.append((t, which, other))
+    if not ends:
+        return []
+    nets = sorted({t.net for t, _, _ in ends})
+    if len(nets) > 1:
+        raise CheckError(f"set_end: track ends of nets {nets} at "
+                         f"{op['at']} - give net to pick one")
+    for t, which, other in ends:
+        if not _straight(t):
+            raise CheckError(f"set_end: {t.uuid} is an arc - set_end moves "
+                             "straight track ends only; rip the arc and add "
+                             "it again")
+        if Point(other).distance(at) <= AT_TOL \
+                or _close(tuple(op["to"]), other):
+            raise CheckError(f"set_end: {t.uuid} would shrink to nothing - "
+                             "rip it instead")
+    return [{"op": "set_point", "uuid": t.uuid, "which": which,
+             "to": list(op["to"])} for t, which, _ in ends]
+
+
 def _resolve_join_end(bg, op: dict) -> list[dict]:
     """A track's free end at `at` is joined to the nearest same-net anchor
     on its layer within `radius` (a track end, a via centre or a pad's
@@ -782,6 +853,57 @@ def _drops_left(pcb: Path, bg, flat: list[dict]) -> list[tuple[int, dict]]:
 def _point(xy):
     from shapely.geometry import Point
     return Point(xy)
+
+
+def _patches_left(bg, flat: list[dict]) -> list[tuple[int, object]]:
+    """(index in flat of the op that took its last via, zone) for each
+    PATCH_<net> zone that holds a via of its net now and none after the
+    list (#1145). A via is held when its copper meets the zone's outline on
+    one of the zone's layers; the list's removes, set_point at (move_via)
+    and set_net (renet) take vias out, its add_vias put them in. A zone the
+    list itself removes is skipped."""
+    from shapely.geometry import Point, Polygon
+
+    pats = [z for z in bg.zones_of() if z.outline
+            and z.name == f"PATCH_{z.net}"]
+    if not pats:
+        return []
+    vias = {v.uuid: v for v in bg.vias_of() if v.uuid}
+    gone = {op["uuid"] for op in flat if op["op"] == "remove"}
+    took: dict[str, int] = {}       # via uuid -> first op that changed it
+    moved: dict[str, dict] = {}     # via uuid -> its net / centre after
+    after = []                      # (net, disc) of the vias after the list
+    for j, op in enumerate(flat):
+        u = op.get("uuid")
+        if u in vias and op["op"] in ("remove", "set_net", "set_point"):
+            took.setdefault(u, j)
+            if op["op"] == "set_net":
+                moved.setdefault(u, {})["net"] = op["net"]
+            elif op["op"] == "set_point" and op["which"] == "at":
+                moved.setdefault(u, {})["at"] = tuple(op["to"])
+        if op["op"] == "add_via":
+            after.append((op["net"], Point(op["at"]).buffer(op["size"] / 2)))
+    for u, v in vias.items():
+        if u in gone:
+            continue
+        m = moved.get(u, {})
+        after.append((m.get("net", v.net), v.poly if "at" not in m else
+                      Point(m["at"]).buffer(v.diameter / 2)))
+    out = []
+    for z in pats:
+        if z.uuid and z.uuid in gone:
+            continue
+        ring = Polygon(z.outline)
+        ring = ring if ring.is_valid else ring.buffer(0)
+        held = [u for u, v in vias.items() if v.net == z.net
+                and any(v.spans(ly) for ly in z.layers)
+                and ring.intersects(v.poly)]
+        if not any(u in took for u in held):
+            continue
+        if any(n == z.net and ring.intersects(d) for n, d in after):
+            continue
+        out.append((min(took[u] for u in held if u in took), z))
+    return out
 
 
 def _close(a: tuple[float, float], b) -> bool:
@@ -984,7 +1106,13 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
     guards: dict = {}
     flat, spans = resolve_ops(bg, ops, guards)
     drop_by = _drops_left(pcb, bg, flat)
-    flat = flat + [op for _, op in drop_by]
+    own = {j: n for n, span in enumerate(spans) for j in span}
+    stale = _patches_left(bg, flat)
+    take = [z.uuid for j, z in stale
+            if z.uuid and ops[own[j]].get("patches")]
+    n0 = len(flat)
+    flat = flat + [op for _, op in drop_by] \
+        + [{"op": "remove", "uuid": u} for u in take]
 
     cli = env.find_kicad_cli()
     bp = env.find_kicad_python(cli) if cli else None
@@ -1027,12 +1155,15 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
             os.replace(staged, pcb)
         out = [_fold(op, [worker[j] for j in span], [flat[j] for j in span])
                for op, span in zip(ops, spans)]
-        base = len(flat) - len(drop_by)
         for k, (j, _) in enumerate(drop_by):
-            if worker[base + k]["status"] != "removed":
+            if worker[n0 + k]["status"] != "removed":
                 continue
-            r = out[next(n for n, span in enumerate(spans) if j in span)]
+            r = out[own[j]]
             r["teardrops_removed"] = r.get("teardrops_removed", 0) + 1
+        for j, z in stale:
+            key = "patches_removed" if z.uuid in take else "patches_left"
+            out[own[j]].setdefault(key, []).append(
+                {"uuid": z.uuid, "name": z.name, "layer": z.layers[0]})
         return out
     finally:
         shutil.rmtree(stage, ignore_errors=True)
@@ -1045,12 +1176,12 @@ def _fold(op: dict, results: list[dict], flat: list[dict]) -> dict:
     out = {"op": op["op"], "count": len(results),
            "status": "absent" if not results else
            {"rip": "removed", "renet": "renetted", "add_path": "added",
-            "set_width": "changed", "move_via": "moved",
+            "set_width": "changed", "move_via": "moved", "set_end": "moved",
             "join_end": "added", "copy_from": "added",
             "route": "added", "route_group": "added", "reroute": "rerouted",
             "fill_vias": "filled" if op.get("filled", True)
             else "unfilled"}[op["op"]]}
-    if op["op"] in ("rip", "renet", "set_width", "move_via"):
+    if op["op"] in ("rip", "renet", "set_width", "move_via", "set_end"):
         out["uuids"] = [f["uuid"] for f in flat]
     if op["op"] == "fill_vias":
         # a via an earlier op in the list added (#1147): its add_via result
@@ -1064,7 +1195,8 @@ def _fold(op: dict, results: list[dict], flat: list[dict]) -> dict:
             out["status"] = "exists"
         if not results:
             out["warning"] = "selected no via: nothing filled"
-    elif op["op"] not in ("rip", "renet", "set_width", "move_via"):
+    elif op["op"] not in ("rip", "renet", "set_width", "move_via",
+                          "set_end"):
         out["segments"] = [r["status"] for r in results]
     return out
 

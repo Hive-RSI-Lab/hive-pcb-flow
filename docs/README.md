@@ -71,7 +71,10 @@ page covers how an agent runs it inside the Hive.
   index and again only if the PDF, the MPN or the check changed (`--assess
   boards/<name>` forces it): a datasheet matches by naming the MPN or by an
   ordering table (`reference/ordering_codes.yaml`) that decodes it, else it is
-  suspect. An entry with no PDF on disk stays unassessed until `--fetch`.
+  suspect; a scan with no text layer, or a sheet whose pages 1-2 print no
+  part number at all, is not_judged (nothing to judge it by, its facts held
+  back all the same). An entry with no PDF on disk stays
+  unassessed until `--fetch`.
   A part with no `parts/<lcsc>.json` is rated from pcb-flow's own library,
   `reference/extractions/<lcsc>.json`, when it has an entry (rules in its
   README: every number cited to a datasheet page).

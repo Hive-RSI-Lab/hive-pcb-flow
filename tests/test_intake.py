@@ -389,6 +389,131 @@ def test_intake_refuses_an_existing_workspace_unless_forced(tmp_path):
     assert (other / "keep.txt").is_file()
 
 
+def _plant_foreign(ws: Path) -> None:
+    """What eda-crossover held besides intake's files (#536)."""
+    (ws / "fw").mkdir()
+    (ws / "fw" / "main.c").write_text("int main(void){}", encoding="utf-8")
+    (ws / "fw" / "check.sh").write_text("true", encoding="utf-8")
+    (ws / "kicad" / "gen").mkdir()
+    (ws / "kicad" / "gen" / "fix_pcb.py").write_text("pass",
+                                                     encoding="utf-8")
+    (ws / "README.md").write_text("# board", encoding="utf-8")
+
+
+def test_force_refuses_a_workspace_holding_files_intake_did_not_write(
+        tmp_path):
+    pdir = make_project(tmp_path)
+    ws = tmp_path / "ws"
+    hermetic(pdir, ws)
+    _plant_foreign(ws)
+    pcb = ws / "kicad" / "tiny.kicad_pcb"
+    pcb.write_text("edited", encoding="utf-8")
+    with pytest.raises(CheckError, match="did not write") as exc:
+        hermetic(pdir, ws, "--force")
+    msg = str(exc.value)
+    assert "fw/ (2 files)" in msg and "kicad/gen/ (1 file)" in msg
+    assert "README.md" in msg and "--keep-foreign" in msg
+    assert "tiny.kicad_pcb" not in msg            # intake's own: not listed
+    # the refusal touched nothing
+    assert (ws / "fw" / "main.c").is_file()
+    assert (ws / "kicad" / "gen" / "fix_pcb.py").is_file()
+    assert pcb.read_text(encoding="utf-8") == "edited"
+    assert not (tmp_path / ("ws" + intake.STAGE_SUFFIX)).exists()
+
+
+def test_force_keep_foreign_replaces_only_intakes_files(tmp_path):
+    pdir = make_project(tmp_path)
+    ws = tmp_path / "ws"
+    hermetic(pdir, ws)
+    _plant_foreign(ws)
+    (ws / "kicad" / "tiny.kicad_pcb").write_text("edited", encoding="utf-8")
+    (ws / "reports" / "gate-old.json").write_text("{}", encoding="utf-8")
+    hermetic(pdir, ws, "--force", "--keep-foreign")
+    # fw/ and kicad/gen/ (and the README) survive, byte for byte
+    assert (ws / "fw" / "main.c").read_text(encoding="utf-8") == \
+        "int main(void){}"
+    assert (ws / "fw" / "check.sh").is_file()
+    assert (ws / "kicad" / "gen" / "fix_pcb.py").read_text(
+        encoding="utf-8") == "pass"
+    assert (ws / "README.md").is_file()
+    # intake's own files came back from the source; reports/ is regenerated
+    assert (ws / "kicad" / "tiny.kicad_pcb").read_text(
+        encoding="utf-8") == (pdir / "tiny.kicad_pcb").read_text(
+        encoding="utf-8")
+    assert not (ws / "reports" / "gate-old.json").exists()
+    state = json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    assert state["board"] == "tiny" and state["decisions"]
+    # the manifest lists intake's files and none of the kept ones, so the
+    # next --force still sees fw/ as foreign
+    files = json.loads((ws / intake.MANIFEST_REL).read_text(
+        encoding="utf-8"))["files"]
+    assert "kicad/tiny.kicad_pcb" in files and "state.json" in files
+    assert not any(f.startswith(("fw/", "kicad/gen/")) for f in files)
+    assert "README.md" not in files
+    with pytest.raises(CheckError, match="did not write"):
+        hermetic(pdir, ws, "--force")
+
+
+def test_force_on_a_workspace_intake_made_replaces_it_as_before(tmp_path):
+    """Quiet twin: nothing foreign, so --force swaps the whole workspace -
+    with or without a manifest (a workspace made before #536 has none)."""
+    pdir = make_project(tmp_path)
+    ws = tmp_path / "ws"
+    hermetic(pdir, ws)
+    (ws / "kicad" / "tiny.kicad_pcb").write_text("edited", encoding="utf-8")
+    (ws / "kicad" / "tiny.kicad_prl").write_text("{}", encoding="utf-8")
+    (ws / "kicad" / "fp-info-cache").write_text("0", encoding="utf-8")
+    (ws / "reports" / "gate-drc.json").write_text("{}", encoding="utf-8")
+    hermetic(pdir, ws, "--force")
+    assert (ws / "kicad" / "tiny.kicad_pcb").read_text(
+        encoding="utf-8") != "edited"
+    assert not (ws / "kicad" / "tiny.kicad_prl").exists()
+    assert not (ws / "reports" / "gate-drc.json").exists()
+    # a pre-manifest workspace: ownership falls back to what this run copies
+    (ws / intake.MANIFEST_REL).unlink()
+    payload = hermetic(pdir, ws, "--force")
+    assert payload["status"] == "pass"
+    assert (ws / intake.MANIFEST_REL).is_file()
+
+
+def test_force_lists_a_hand_authored_constraints_file_as_foreign(tmp_path):
+    """kicad/constraints.json is the human's when the source had none: the
+    old --force deleted it with the rest."""
+    pdir = make_project(tmp_path)                  # no sidecars in source
+    ws = tmp_path / "ws"
+    hermetic(pdir, ws)
+    (ws / "kicad" / "constraints.json").write_text('{"power": []}',
+                                                   encoding="utf-8")
+    with pytest.raises(CheckError, match="kicad/constraints.json"):
+        hermetic(pdir, ws, "--force")
+    # ...while a source that carries one owns it
+    pdir2 = make_project(tmp_path / "b", sidecars=True)
+    ws2 = tmp_path / "ws2"
+    hermetic(pdir2, ws2)
+    hermetic(pdir2, ws2, "--force")
+
+
+def test_force_forgets_a_file_the_old_source_had(tmp_path):
+    """A sub-sheet the previous source had and the new one dropped is
+    intake's (it is in the manifest), so --force removes it, not refuses."""
+    pdir = make_project(tmp_path)
+    ws = tmp_path / "ws"
+    hermetic(pdir, ws)
+    pdir2 = make_project(tmp_path / "b", sub_sheet=False)
+    hermetic(pdir2, ws, "--force")
+    assert not (ws / "kicad" / "sub.kicad_sch").exists()
+
+
+def test_summarize_paths_folds_wholly_foreign_dirs():
+    everything = ["README.md", "fw/a", "fw/b/c", "kicad/gen/x.py",
+                  "kicad/tiny.kicad_pcb", "kicad/constraints.json"]
+    foreign = ["README.md", "fw/a", "fw/b/c", "kicad/gen/x.py",
+               "kicad/constraints.json"]
+    assert intake.summarize_paths(foreign, everything) == [
+        "README.md", "fw/ (2 files)", "kicad/constraints.json",
+        "kicad/gen/ (1 file)"]
+
+
 def test_board_only_project_imports_with_a_no_schematic_warning(tmp_path):
     pdir = make_project(tmp_path, escaping_lib=False)
     (pdir / "tiny.kicad_sch").unlink()
@@ -501,13 +626,12 @@ GOLDEN_WARNINGS = {
 # STM32F1 row in reference/reset_states.yaml) and must pass it, as below.
 # The checks blinky2 gives nothing to judge: it has none of what they read.
 # check_mounting says so since #1295 (blinky2 has no mounting holes), and
-# fp_verify since #1285 (no record on blinky2 states its pad numbering),
 # and check_backfeed since #394 (one power tree, no two rails apart),
 # and check_converter since #355 (an LDO only, no switching converter).
 GOLDEN_NOTHING_TO_JUDGE = {
     "check_antenna", "check_backfeed", "check_cap_load", "check_converter", "check_creepage", "check_ddr_timing",
     "check_diffpair", "check_isolation", "check_kelvin", "check_length_groups", "check_mate_pins",
-    "check_mounting", "check_net_tie", "fp_verify", "check_pinouts", "check_rail_budget", "check_rf_match", "check_stackup", "check_surge", "check_thermal",
+    "check_mounting", "check_net_tie", "check_pinouts", "check_rail_budget", "check_rf_match", "check_stackup", "check_surge", "check_thermal",
     "check_transformer", "check_usb_phy", "check_via_stubs",
 }
 

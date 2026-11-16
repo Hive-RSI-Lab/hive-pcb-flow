@@ -586,6 +586,10 @@ def test_parse_netlist_custom_fields(tmp_path):
     by_ref = {c["ref"]: c for c in comps}
     assert by_ref["R1"]["fields"] == {"LCSC": "C25804"}  # natives excluded
     assert by_ref["C1"]["fields"] == {}
+    # #1357: the two natives KiCad's parity compares come back on their
+    # own; a netlist without them gives {} (leave the footprint's alone)
+    assert by_ref["R1"]["natives"] == {"Datasheet": "url"}
+    assert by_ref["C1"]["natives"] == {}
 
 
 def test_parse_netlist_dnp_and_exclude_from_bom(tmp_path):
@@ -1234,6 +1238,48 @@ def test_board_init_lcsc_fields_and_inplace_schematic(cli, usbbuck4_net, tmp_pat
         break
     else:
         pytest.fail("LCSC footprint fields are not hidden")
+
+
+@pytest.mark.smoke
+def test_board_init_takes_the_symbol_description(cli, usbbuck4_net, tmp_path):
+    """#1357, initial build: a project footprint that carries its own
+    Description and Datasheet (C_0603 here) must take the symbol's (empty
+    on the golden board), or
+    KiCad 10.0.6's parity warns footprint_symbol_field_mismatch on all
+    eight caps. The quiet twin is test_board_init_end_to_end: the stock
+    library, parity clean as before."""
+    import env
+    bp = env.find_kicad_python(cli)
+    stock = (bp.parents[1] / "share" / "kicad" / "footprints"
+             / "Capacitor_SMD.pretty" / "C_0603_1608Metric.kicad_mod"
+             if bp else None)
+    if stock is None or not stock.is_file():
+        pytest.skip("KiCad's stock footprint library not installed")
+    lib = tmp_path / "fp" / "Capacitor_SMD.pretty"
+    lib.mkdir(parents=True)
+    text = stock.read_text("utf-8").rstrip()
+    assert text.endswith(")")
+    (lib / stock.name).write_text(
+        text[:-1] + '\t(property "Description" "Library text")\n'
+        '\t(property "Datasheet" "https://lib.example/c.pdf")\n)\n', "utf-8")
+    out = tmp_path / "kicad"
+    rep = tmp_path / "report.json"
+    rc = board_init.main([
+        "--netlist", str(usbbuck4_net), "--name", "usbbuck4",
+        "--out", str(out), "--layers", "4", "--mounting-holes", "0",
+        "--schematic", str(GOLDEN / "usbbuck4" / "usbbuck4.kicad_sch"),
+        "--fp-lib", str(tmp_path / "fp"), "--out-report", str(rep)])
+    r = json.loads(rep.read_text("utf-8"))
+    assert rc == 0 and r["status"] == "pass", r
+    assert r["self_check"]["parity_count"] == 0, r["self_check"]
+    board = (out / "usbbuck4.kicad_pcb").read_text("utf-8")
+    assert "C_0603_1608Metric" in board
+    assert '"Library text"' not in board
+    assert '"https://lib.example/c.pdf"' not in board
+    # the golden symbols leave Description and Datasheet empty, so the
+    # footprints must too: parity compares the symbol's field, not the
+    # libsource text
+    assert board.count('(property "Description" ""') >= 8
 
 
 @pytest.mark.smoke

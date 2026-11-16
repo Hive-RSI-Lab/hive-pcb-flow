@@ -200,3 +200,11 @@ def test_a_board_listing_and_a_users_guide_are_not_the_part(tmp_path):
                             search=lambda q: [])
     assert got["miss"] == "refused", got
     assert "user's guide" in got["tried"][0]["why"].lower()
+
+
+def test_a_scan_is_unjudged_not_wrong():
+    reasons = ["no text layer: 0 chars over 4 pages (a scan?)"]
+    assert dsresolve._verdict({"status": "not_judged", "assessment": {
+        "reasons": reasons}}) == ("unjudged", reasons[0])
+    assert dsresolve._verdict({"status": "suspect", "assessment": {
+        "reasons": ["x"]}})[0] == "wrong"

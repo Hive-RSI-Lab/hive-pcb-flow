@@ -57,5 +57,8 @@ They stay `pending` for a later `promote` pass.
 ## Do not
 
 - Do not re-run intake on an existing workspace to "refresh" it - `--force`
-  DELETES the workspace. Use the workspace variant.
+  replaces everything intake wrote there (kicad/ project files, state.json,
+  reports/). It refuses when the workspace holds files intake did not write
+  (fw/, import/, kicad/gen/, a README) unless `--keep-foreign` is given, which
+  leaves those in place. Use the workspace variant.
 - Do not read the .kicad_pcb yourself (rule 1). Renders and JSON only.

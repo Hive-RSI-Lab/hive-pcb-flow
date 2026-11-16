@@ -102,6 +102,22 @@ def apply_fields(fp, value, fields):
             f.SetVisible(False)
 
 
+def apply_natives(fp, natives):
+    """The symbol's Description / Datasheet onto a footprint fresh from its
+    library, which brings its own: KiCad 10.0.6's schematic parity compares
+    both with the symbol's, an empty one included (#1357). Visibility is the
+    library's; only the text changes."""
+    have = {f.GetName(): f for f in fp.GetFields()}
+    for name, val in (natives or {}).items():
+        if name in have:
+            have[name].SetText(val or "")
+        elif val:
+            fp.SetField(name, val)
+            for f in fp.GetFields():
+                if f.GetName() == name:
+                    f.SetVisible(False)
+
+
 def inherit(fp, old, texts):
     """A swapped-in footprint takes over what the board held on the one it
     replaces: its schematic link (path, sheet), its BOM/position-file
@@ -225,6 +241,7 @@ def verb_apply_update(job):
         fp.SetDNP(bool(add.get("dnp")))
         if add.get("inherit") and ref in replaced:
             inherit(fp, fps[ref], add["inherit"].get("texts"))
+        apply_natives(fp, add.get("natives"))
         pad_nets = add.get("pad_nets") or {}
         pad_pins = add.get("pad_pins") or {}
         netted = 0

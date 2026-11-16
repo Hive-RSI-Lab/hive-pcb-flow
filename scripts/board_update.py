@@ -251,6 +251,7 @@ def build_plan(model: placelib.PlaceModel, board_fields: dict,
             continue
         plan["add"].append({"ref": ref, "fp": c["fp"], "value": c["value"],
                             "fields": c["fields"], "pads": pads_of_ref(ref),
+                            "natives": c.get("natives") or {},
                             "pins": c.get("pins") or {},
                             "dnp": bool(c.get("dnp"))})
 
@@ -268,6 +269,7 @@ def build_plan(model: placelib.PlaceModel, board_fields: dict,
             plan["swap_new_fp"].append({
                 "ref": ref, "fp_old": f.fpid, "fp_new": c["fp"],
                 "value": c["value"], "fields": c["fields"],
+                "natives": c.get("natives") or {},
                 "pads": pads_of_ref(ref), "dnp": bool(c.get("dnp")),
                 "pins": c.get("pins") or {},
                 "pos": [round(f.pos[0], 4), round(f.pos[1], 4)],
@@ -1607,6 +1609,9 @@ def apply_update(pcb: Path, plan: dict, resolved: dict, orphans: dict,
                      "fpid": entry.get("fp") or entry["fp_new"],
                      "x": want["x"], "y": want["y"], "deg": want["deg"],
                      "side": want["side"], "fields": entry["fields"],
+                     # the symbol's Description/Datasheet replace the
+                     # library footprint's own (#1357)
+                     "natives": entry.get("natives") or {},
                      "pad_nets": entry["pads"],
                      "pad_pins": entry.get("pins") or {},
                      "dnp": bool(entry.get("dnp")),
