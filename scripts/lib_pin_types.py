@@ -32,6 +32,21 @@ reads, and an imported schematic (Eagle via eda_io import-sch types every
 pin `io`) needs the same retype there (#528). The symbols are named
 "LIB:SYM" there and their units "SYM_1_1"; only that block is rewritten.
 
+On a schematic only IMPORTED symbols are retyped: KiCad's importers (and
+eda_io import-sch through them) name the library "<stem>-<format>-import"
+(eagle, altium, cadstar, easyeda...), read from the symbol's own name. A
+symbol drawn in KiCad keeps every type it has: its library typed it on
+purpose, and a bidirectional MCU pin made passive hides it from pin_state and
+the drive checks (bedlift SPAN_SCS, #1494).
+
+Two pins are never made power_in by name alone, as they are left as they are
+(and listed in "not_judged"):
+  a HIDDEN pin, because KiCad joins hidden power_in pins into a net named
+    after the pin: a hidden VCC on a 1V1 part would join +3V3 to +1V1;
+  a supply pin of a MODULE (Pro Micro, Pico, Arduino Nano, Feather, XIAO, a
+    DevKit, a "Module" footprint): its VCC or 3V3 can be the module's input or
+    its regulator's output, and the board decides which. Grounds are judged.
+
 lib_pull runs this on the symbols it pulls, with the extracts beside
 parts.json when there are any; --symbols limits a run to named symbols the
 same way, so types set from an extract earlier are not reverted.
@@ -85,6 +100,17 @@ POWER_NAME = re.compile(
     re.IGNORECASE)
 GROUND_NAME = re.compile(r"GND|VSS", re.IGNORECASE)
 IC_REF = re.compile(r"^(?:U|IC)$", re.IGNORECASE)
+# a symbol's library as KiCad's importers name it: "<stem>-eagle-import"
+IMPORTED_LIB = re.compile(r"-[a-z0-9_]+-import$", re.IGNORECASE)
+# a module (a board on the board), from the symbol's or footprint's own name,
+# never the library's ("pro-micro-eagle-import" names the source file)
+MODULE_NAME = re.compile(
+    r"(?:^|[^A-Z0-9])(?:MODULE|PRO_?MICRO|PICO(?:_?W)?|ARDUINO|NANO|FEATHER"
+    r"|XIAO|DEVKIT\w*|TEENSY|QT_?PY|WEMOS|D1_?MINI|BLUEPILL|BLACKPILL)"
+    r"(?:$|[^A-Z])",
+    re.IGNORECASE)
+HIDE_RE = re.compile(r"\(hide(?:\s+yes)?\)|\shide(?=[\s)])")
+NOT_JUDGED = "not_judged"   # a rule result: keep the type and report the pin
 
 
 KEEP = "keep"      # a rule value: leave the pin's type as it is
@@ -120,7 +146,8 @@ def symbol_index(path: Path) -> tuple[list[dict], tuple[int, int] | None]:
                     "lcsc": props.get("LCSC Part", ""),
                     "footprint": props.get("Footprint", ""),
                     "reference": props.get("Reference", ""),
-                    "power": _power(child)})
+                    "power": _power(child),
+                    "imported": imported(str(fplib._tok(child[1])))})
     m = re.search(r"\(lib_symbols\b", text)
     if not m:
         return out, (0, 0)
@@ -141,6 +168,18 @@ def symbol_index(path: Path) -> tuple[list[dict], tuple[int, int] | None]:
     return out, (m.start(), i + 1)
 
 
+def imported(name: str) -> bool:
+    """A schematic symbol "LIB:SYM" whose LIB a KiCad importer named."""
+    return ":" in name and bool(IMPORTED_LIB.search(name.split(":", 1)[0]))
+
+
+def module(entry: dict) -> bool:
+    """The symbol is a module, by its own name or its footprint's."""
+    names = [entry.get("name", "").split(":")[-1],
+             entry.get("footprint", "")]
+    return any(MODULE_NAME.search(n) for part in names for n in part.split(":"))
+
+
 def _power(node) -> bool:
     return fplib._is_node(node) and any(
         fplib._head(c) == "power" for c in node[2:])
@@ -150,7 +189,10 @@ def default_rules(entry: dict) -> dict[str, str]:
     """The rules for a symbol with no extract: power_in on an IC's supply and
     ground names, passive everywhere else."""
     if IC_REF.match(entry.get("reference", "").strip()):
-        return {"*": DEFAULT, "name:power": "power_in"}
+        rules = {"*": DEFAULT, "name:power": "power_in"}
+        if module(entry):
+            rules["module"] = "yes"
+        return rules
     return {"*": DEFAULT}
 
 
@@ -159,7 +201,9 @@ def build_rules(index: list[dict], extracts: dict[str, dict]) -> tuple[dict, lis
     rules: dict[str, dict[str, str]] = {}
     matched: list[str] = []
     for entry in index:
-        if entry.get("power") or entry["name"].split(":")[-1] == "PWR_FLAG":
+        if (entry.get("power") or entry["name"].split(":")[-1] == "PWR_FLAG"
+                or entry.get("imported") is False):
+            # a power symbol, or a schematic symbol drawn in KiCad
             rules[entry["name"]] = {"*": KEEP}
             continue
         ds = extracts.get(entry["lcsc"])
@@ -204,13 +248,34 @@ def _owner(names: list[str], rules: dict) -> str:
     return re.sub(r"_\d+_\d+$", "", names[-1]) if names else "?"
 
 
+def _node_end(text: str, start: int) -> int:
+    """Where the balanced form opened at `start` closes (strings skipped)."""
+    depth, i = 0, start
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            i += 1
+            while i < len(text) and text[i] != '"':
+                i += 2 if text[i] == "\\" else 1
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(text)
+
+
 def retype(text: str, rules: dict[str, dict[str, str]],
            only: set[str] | None = None,
-           span: tuple[int, int] | None = None) -> tuple[str, list[dict]]:
+           span: tuple[int, int] | None = None,
+           not_judged: list[dict] | None = None) -> tuple[str, list[dict]]:
     """Rewrite every pin's electrical type; unruled symbols/pins -> passive,
     a symbol ruled KEEP (a power symbol) as it is. With `only`, symbols not
     named in it keep their pins as they are; with `span`, only pins inside
-    that slice of the text are touched."""
+    that slice of the text are touched. A supply-named pin that is hidden or
+    on a module keeps its type and is appended to `not_judged`."""
     changes: list[dict] = []
     out: list[str] = []
     pos = 0
@@ -231,8 +296,22 @@ def retype(text: str, rules: dict[str, dict[str, str]],
                 # a supply-named pin its library types power_out is an
                 # internal regulator's output (DVDD on a DRV8434S, VCC on an
                 # LM5158): keep it; a ground never is one
-                if m.group(1) == "power_out" and not GROUND_NAME.search(pin_name):
+                ground = GROUND_NAME.search(pin_name)
+                # the pin's own (hide yes) sits before its (name ...); one
+                # inside the name's or number's effects hides only the text
+                end = _node_end(text, m.start())
+                head = name_m.start() if name_m and name_m.start() < end else end
+                hidden = HIDE_RE.search(text, m.end(), head)
+                if m.group(1) == "power_out" and not ground:
                     want = KEEP
+                elif m.group(1) != "power_in" and (
+                        hidden or ("module" in sym_rules and not ground)):
+                    want = KEEP
+                    if not_judged is not None:
+                        not_judged.append({
+                            "symbol": symbol, "pin": number, "name": pin_name,
+                            "type": m.group(1),
+                            "why": "hidden" if hidden else "module supply"})
                 else:
                     want = sym_rules["name:power"]
             else:
@@ -293,9 +372,10 @@ def main(argv: list[str] | None = None) -> int:
         index, span = symbol_index(lib)
         extracts = _load_extracts(args.datasheet_json)
         rules, matched = build_rules(index, extracts)
+        unjudged: list[dict] = []
         new, changes = retype(text, rules,
                               set(args.symbols) if args.symbols else None,
-                              span)
+                              span, unjudged)
         if changes and not args.dry_run:
             lib.write_text(new, encoding="utf-8")
         lib_ids = {e["lcsc"] for e in index}
@@ -310,7 +390,12 @@ def main(argv: list[str] | None = None) -> int:
             "extracts_unmatched": sorted(set(extracts) - lib_ids),
             "changed": len(changes),
             "changes": changes,
+            # supply-named pins left as they are: hidden, or a module's
+            "not_judged": unjudged,
         }
+        if span is not None:
+            payload["kept_kicad_drawn"] = sum(
+                1 for e in index if e.get("imported") is False)
     except Exception as exc:  # noqa: BLE001 - contract: any error -> exit 2
         print(json.dumps({"script": "lib_pin_types", "status": "error",
                           "error": f"{type(exc).__name__}: {exc}"}))
