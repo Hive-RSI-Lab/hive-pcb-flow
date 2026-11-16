@@ -602,3 +602,24 @@ def test_bipolar_line_without_polarity_or_vf_is_not_judged(tmp_path):
     r = _ratings(payload)["/LINE_B"]
     assert r["bipolar_check"] == "not_judged"
     assert any("no polarity" in w for w in r["why_not"])
+
+
+# #312: the goldens' esd blocks exempt two true findings so their verify runs
+# stay clean. Drop the exemptions and the check must still find them.
+@pytest.mark.parametrize("board,nets", [
+    ("rf4", {"/RF_FEED"}),
+    ("usbbuck4", {"/USB_DP", "/USB_DM"}),
+])
+def test_golden_exempt_nets_are_true_findings(tmp_path, board, nets):
+    src = REPO / "tests" / "golden" / board
+    cons = json.loads((src / "constraints.json").read_text(encoding="utf-8"))
+    assert set(cons["esd"]["exempt_nets"]) == nets
+    del cons["esd"]["exempt_nets"]
+    c = tmp_path / "constraints.json"
+    c.write_text(json.dumps(cons), encoding="utf-8")
+    payload, _ = check_esd.run(["--pcb", str(src / f"{board}.kicad_pcb"),
+                                "--constraints", str(c),
+                                "--out", str(tmp_path / "esd.json")])
+    hit = {v["net"] for v in payload["violations"]
+           if v["kind"] == "esd_unclamped" and v["severity"] == "error"}
+    assert hit == nets

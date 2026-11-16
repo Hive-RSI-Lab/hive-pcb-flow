@@ -722,3 +722,15 @@ entries:
       ESR bound for a ceramic. A warning that the board departs from the
       datasheet's stable condition is true; it is a warning, not an error,
       because the AMS1117 states no ESR window (#356).
+
+  - board: golden:usbbuck4
+    check: check_esd
+    kind: esd_unclamped
+    net: VBUS
+    refs: [J1]
+    verdict: fp
+    reason: >-
+      VBUS has 10 uF (C10) and 4.7 uF (C13) at the micro-USB. An 8 kV
+      IEC 61000-4-2 strike (150 pF) carries 1.2 uC, which lifts 14.7 uF by
+      about 82 mV on a 5 V rail, which harms nothing behind it. check_esd does
+      not yet credit a large shunt cap at the connector as the clamp (#312).

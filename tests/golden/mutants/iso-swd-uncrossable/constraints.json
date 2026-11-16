@@ -51,5 +51,12 @@
         "altitude_m": 2000
       }
     ]
+  },
+  "esd": {
+    "_comment": "check_esd (#312): J1 is the bench 5 V input header and J2 the SWD header, both bench-only, so neither is judged.",
+    "internal": [
+      "J1",
+      "J2"
+    ]
   }
 }

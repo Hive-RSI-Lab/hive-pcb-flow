@@ -1,0 +1,11 @@
+# check_esd: ESD clamps at external connectors (hive-pcb-flow #312): every
+# line that leaves the board has a clamp, first on the line and close to the
+# pin, with a short ground; its rating (reference/esd_clamps.yaml) against the
+# line's interface and working voltage. Connectors listed in constraints
+# esd.internal (board-to-board, bench-only headers) are not judged.
+name: check_esd
+needs: []
+args: []
+optional:
+  constraints: [--constraints, "{constraints}"]
+  parts: [--parts, "{parts}"]
