@@ -81,6 +81,8 @@ An agent designs a PCB from a written brief: research, architecture, parts, sche
   ignored ones) and removes the copy after. A run that waits in a heavy
   queue, or an edit made while it runs, then can't change what it judges;
   paths into the checkout point into the copy, and it exits with the
-  command's status ([bin/frozen.py](bin/frozen.py)).
+  command's status ([bin/frozen.py](bin/frozen.py)). Budget more time:
+  the full `test` took 1177 s frozen against 997 s plain (about a fifth
+  more), so raise the `heavy timeout` to match.
 
 MIT, like upstream; see NOTICE for what that doesn't cover.

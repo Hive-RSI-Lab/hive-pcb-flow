@@ -37,6 +37,11 @@ passed on to it. The run exits with the command's status. What the command
 writes inside the copy goes with it, so this suits runs that read the tree,
 not ones meant to write into it.
 
+Budget more time than a plain run. Making the copy takes under a second, but
+the run in it is slower: the full `pcb-flow test` took 1177 s frozen against
+997 s plain on the same tree (about a fifth more), so give `heavy timeout`
+that much more.
+
 Stdlib only, like bin/pin.py: it runs before the venv exists.
 """
 from __future__ import annotations
