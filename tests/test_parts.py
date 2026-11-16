@@ -468,6 +468,122 @@ def test_fp_verify_ball_grid_numbered_from_the_bottom(tmp_path, capsys):
     assert v["hint"] == "bottom_view_numbering"
 
 
+# #377: a ball grid against the datasheet's ball map (the record's pinout
+# named as balls): a missing ball, a pad on a depopulated site, a row
+# lettered differently (JEDEC skips I), two balls' names swapped
+def _ballgrid(tmp_path, rows, ncols, drop=(), swap=None, name="bga") -> Path:
+    """Rows top to bottom in `rows`' order, columns 1.. left to right, 1 mm."""
+    pads = {f"{r}{c}": ((c - 1) * 1.0, i * 1.0)
+            for i, r in enumerate(rows) for c in range(1, ncols + 1)
+            if f"{r}{c}" not in drop}
+    if swap:
+        a, b = swap
+        pads[a], pads[b] = pads[b], pads[a]
+    fp = tmp_path / f"{name}.kicad_mod"
+    fp.write_text(f'(footprint "{name}" (layer "F.Cu")\n' + "\n".join(
+        f'  (pad "{n}" smd circle (at {x:g} {y:g}) (size 0.4 0.4) '
+        '(layers "F.Cu" "F.Paste" "F.Mask"))' for n, (x, y) in pads.items())
+        + "\n)\n", encoding="utf-8")
+    return fp
+
+
+def _ballmap(tmp_path, rows, ncols, drop=(), whole=True):
+    balls = [f"{r}{c}" for r in rows for c in range(1, ncols + 1)
+             if f"{r}{c}" not in drop]
+    lp = {"pin1": "A1", **({"pad_count": len(balls)} if whole else {})}
+    return write_ds(tmp_path, {"mpn": "BGA-T", "land_pattern": lp, "pinout": [
+        {"pin": b, "name": f"IO_{b}", "type": "io"} for b in balls]})
+
+
+def _bga_kinds(payload):
+    return {v["problem"]: v for v in payload["violations"]
+            if v["kind"] == "bga_numbering"}
+
+
+def test_fp_verify_ball_map_quiet_twin(tmp_path, capsys):
+    """A grid that is the datasheet's map, a depopulated C3 left off in both."""
+    for drop in ((), ("C3",)):
+        code, payload = _fpv(tmp_path, capsys,
+                             _ballgrid(tmp_path, "ABCDE", 5, drop=drop),
+                             _ballmap(tmp_path, "ABCDE", 5, drop=drop))
+        assert code == 0, payload["violations"]
+        assert not _bga_kinds(payload)
+        assert payload["coverage"]["ball_map"] == "judged"
+        assert payload["ball_map"]["off_site"] == 0
+        assert payload["ball_map"]["shared"] == 25 - len(drop)
+
+
+def test_fp_verify_ball_on_depopulated_site(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys, _ballgrid(tmp_path, "ABCDE", 5),
+                         _ballmap(tmp_path, "ABCDE", 5, drop=("C3",)))
+    assert code == 1
+    v = _bga_kinds(payload)["ball_not_in_map"]
+    assert v["balls"] == ["C3"] and v["depopulated"] is True
+    # a pinout that is not the whole map can't say C3 isn't there
+    code, payload = _fpv(tmp_path, capsys, _ballgrid(tmp_path, "ABCDE", 5),
+                         _ballmap(tmp_path, "ABCDE", 5, drop=("C3",), whole=False))
+    assert code == 0 and not _bga_kinds(payload)
+    nj, = [n for n in payload["not_judged"] if n["check"] == "ball_map"]
+    assert "C3" in nj["why"] and "not the whole map" in nj["why"]
+    assert payload["coverage"]["ball_map"] == "not_judged"
+
+
+def test_fp_verify_ball_missing(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys,
+                         _ballgrid(tmp_path, "ABCDE", 5, drop=("D4",)),
+                         _ballmap(tmp_path, "ABCDE", 5))
+    assert code == 1
+    assert _bga_kinds(payload)["ball_missing"]["balls"] == ["D4"]
+
+
+def test_fp_verify_ball_rows_lettered_with_i(tmp_path, capsys):
+    """The datasheet skips I (JEDEC); the footprint letters its ninth row I."""
+    code, payload = _fpv(tmp_path, capsys, _ballgrid(tmp_path, "ABCDEFGHI", 3),
+                         _ballmap(tmp_path, "ABCDEFGHJ", 3))
+    assert code == 1
+    got = _bga_kinds(payload)
+    assert got["ball_missing"]["balls"] == ["J1", "J2", "J3"]
+    v = got["ball_not_in_map"]
+    assert v["balls"] == ["I1", "I2", "I3"] and v["depopulated"] is False
+    assert "without I" in v["msg"]
+
+
+def test_fp_verify_ball_rows_skipping_i_against_a_map_with_i(tmp_path, capsys):
+    """The other way: the maker's map has an I row, the footprint skips it,
+    so its J row sits on the map's I site."""
+    code, payload = _fpv(tmp_path, capsys, _ballgrid(tmp_path, "ABCDEFGHJK", 3),
+                         _ballmap(tmp_path, "ABCDEFGHIJ", 3))
+    assert code == 1
+    got = _bga_kinds(payload)
+    assert got["ball_off_site"]["balls"] == ["J1", "J2", "J3"]
+    assert got["ball_missing"]["balls"] == ["I1", "I2", "I3"]
+    assert got["ball_not_in_map"]["balls"] == ["K1", "K2", "K3"]
+
+
+def test_fp_verify_ball_names_swapped(tmp_path, capsys):
+    code, payload = _fpv(tmp_path, capsys,
+                         _ballgrid(tmp_path, "ABCDE", 5, swap=("B2", "C4")),
+                         _ballmap(tmp_path, "ABCDE", 5))
+    assert code == 1
+    assert _bga_kinds(payload)["ball_off_site"]["balls"] == ["B2", "C4"]
+
+
+def test_fp_verify_ball_map_not_judged(tmp_path, capsys):
+    """Pads not named as balls against a ball map, and a ball grid against a
+    record with no map: not_judged, never a finding."""
+    ds = _ballmap(tmp_path, "ABCDE", 5)
+    code, payload = _fpv(tmp_path, capsys, LEGACY_FP, ds)
+    assert not _bga_kinds(payload)
+    nj, = [n for n in payload["not_judged"] if n["check"] == "ball_map"]
+    assert "aren't named as balls" in nj["why"]
+    ds = write_ds(tmp_path, {"mpn": "X", "pinout": [{"pin": "1", "type": "io"}],
+                             "land_pattern": {"pad_count": 25, "pin1": "A1"}})
+    code, payload = _fpv(tmp_path, capsys, _ballgrid(tmp_path, "ABCDE", 5), ds)
+    assert code == 0 and not _bga_kinds(payload)
+    nj, = [n for n in payload["not_judged"] if n["check"] == "ball_map"]
+    assert "names no ball grid" in nj["why"]
+
+
 def test_fp_verify_ccw_numbering_and_not_judged(tmp_path, capsys):
     ccw = {"1": (-1.1, -0.95), "2": (-1.1, 0.95), "3": (1.1, 0.95),
            "4": (1.1, -0.95)}  # down the left, back up the right: CCW on screen
