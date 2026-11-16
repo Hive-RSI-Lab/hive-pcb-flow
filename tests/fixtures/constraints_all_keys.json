@@ -180,7 +180,8 @@
   "esd": {
     "connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
     "clamps": ["D1"], "level_kv": 8, "corridor_mm": 10, "corridor_v": 30,
-    "victim_abs_max_v": {"/USB*": 6}
+    "victim_abs_max_v": {"/USB*": 6},
+    "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/USB_D*": 3.3}
   },
   "teardrops": {
     "enabled": true, "required": null, "vias": true, "pth": true,
