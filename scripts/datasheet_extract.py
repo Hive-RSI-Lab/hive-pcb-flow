@@ -17,7 +17,13 @@ reads the PDF pages); this script owns the deterministic half:
                     directly.
   --fetch WS        download each WS/parts/parts.json line's datasheet to
                     WS/parts/datasheets/<lcsc>.pdf (or only --lcsc's) and
-                    index them in WS/parts/datasheets/index.json. Every hop
+                    index them in WS/parts/datasheets/index.json. A line
+                    with no datasheet URL takes its LCSC id's own listing's
+                    (#692); a line whose URL is missing, or does not come
+                    back a PDF of the part, goes to scripts/lib/dsresolve.py
+                    (the maker's own URL, then LCSC's copy of the maker's
+                    PDF), with the listing's brand. Each entry says where its
+                    URL came from (`via`), and each miss is named. Every hop
                     must be on the research allowlist; LCSC's HTML redirect
                     stubs (wmsc.lcsc.com answers one) are followed, and
                     anything that isn't a PDF in the end is refused, never
@@ -1202,7 +1208,96 @@ def do_assess(args) -> tuple[dict, int]:
             "of": len(rows), "datasheets": rows}, 0 if clean else 1
 
 
-def do_fetch(args, transport=None) -> tuple[dict, int]:
+def _offline() -> bool:
+    """HWDE_EASYEDA_OFFLINE=1 (tests, scratch runs): no JLC search."""
+    return os.environ.get("HWDE_EASYEDA_OFFLINE", "") not in ("", "0")
+
+
+def lcsc_listing(lcsc: str) -> dict | None:
+    """JLC's listing for this exact LCSC code (partslib.normalize's shape:
+    mpn, brand, datasheet), or None when the search shows none. An empty
+    search is also what an unreachable one looks like (live_search)."""
+    if _offline():
+        raise RuntimeError("offline (HWDE_EASYEDA_OFFLINE): no JLC search")
+    partslib = _lib("partslib")
+    rows, _ = partslib.live_search(lcsc, page_size=10)
+    for row in rows:
+        n = partslib.normalize(row)
+        if n["lcsc"].strip().upper() == lcsc.upper():
+            return n
+    return None
+
+
+def _no_search(q):
+    raise RuntimeError("offline (HWDE_EASYEDA_OFFLINE): no LCSC search")
+
+
+def fetch_line(line: dict, dest: Path, transport=None, lookup=None,
+               resolve=None) -> dict:
+    """One parts.json line's datasheet into dest (#692): the line's own URL;
+    with none, its LCSC id's listing's; and when that is missing or does not
+    come back a PDF of the part, dsresolve.resolve by MPN and brand.
+    -> fetch_datasheet's result with `via` (where the URL came from), or a
+    miss {status: missing|suspect|refused|error, error, miss?, tried?} that
+    names every step that came up empty."""
+    lcsc = str(line.get("lcsc") or "").strip()
+    mpn = str(line.get("mpn") or "").strip() or None
+    brand = str(line.get("brand") or line.get("manufacturer") or "").strip()
+    url, via, notes = line.get("datasheet"), "parts.json", []
+    if not url:
+        notes.append("no datasheet URL in parts.json")
+        if lcsc:
+            try:
+                lst = (lookup or lcsc_listing)(lcsc)
+            except Exception as exc:  # noqa: BLE001 - a failed search is a note
+                lst = None
+                notes.append(f"LCSC listing {lcsc}: {type(exc).__name__}: "
+                             f"{exc}"[:200])
+            if lst and lst.get("datasheet"):
+                url = lst["datasheet"]
+                brand = brand or str(lst.get("brand") or "").strip()
+                mpn = mpn or str(lst.get("mpn") or "").strip() or None
+                via = f"LCSC listing {lcsc} ({lst.get('brand') or 'no brand'})"
+            elif lst:
+                brand = brand or str(lst.get("brand") or "").strip()
+                mpn = mpn or str(lst.get("mpn") or "").strip() or None
+                notes.append(f"LCSC listing {lcsc} names no datasheet")
+            elif not notes[-1].startswith(f"LCSC listing {lcsc}:"):
+                notes.append(f"JLC search shows no listing {lcsc} (no such "
+                             "code, or the search was unreachable)")
+    r = None
+    if url:
+        r = {**fetch_datasheet(url, dest, transport=transport, mpn=mpn),
+             "via": via}
+        if r["status"] == "fetched":
+            return r
+        notes.append(f"{via} URL: {r['status']}: "
+                     f"{r.get('error') or '; '.join((r.get('assessment') or {}).get('reasons') or [])}"[:240])
+    if not mpn:
+        notes.append("no MPN for the resolver to go by")
+        return {**(r or {"url": None, "file": None, "status": "missing"}),
+                "error": "; ".join(notes)}
+    if resolve is None:
+        dsresolve = _lib("dsresolve")
+
+        def resolve(m, b, d):
+            return dsresolve.resolve(m, b, d, transport=transport,
+                                     search=_no_search if _offline() else None)
+    found = resolve(mpn, brand or None, dest)
+    if found.get("url"):
+        return {**found["got"], "status": "fetched", "via": found["via"],
+                "file": str(dest)}
+    notes.append(f"resolver: {found.get('miss')}"
+                 + (f" ({found['why']})" if found.get("why") else ""))
+    return {**(r or {"url": None, "file": None, "status": "missing"}),
+            "error": "; ".join(notes), "miss": found.get("miss"),
+            "tried": found.get("tried") or []}
+
+
+def do_fetch(args, transport=None, lookup=None, resolve=None
+             ) -> tuple[dict, int]:
+    """--fetch WS. transport, lookup (lcsc_listing) and resolve
+    (dsresolve.resolve) are injected by tests."""
     ws = Path(args.fetch)
     pj = ws / "parts" / "parts.json"
     if not pj.is_file():
@@ -1215,13 +1310,14 @@ def do_fetch(args, transport=None) -> tuple[dict, int]:
         lcsc = str(line.get("lcsc") or "").strip()
         if args.lcsc and lcsc != args.lcsc:
             continue
-        if not lcsc or not line.get("datasheet"):
+        if not lcsc:
             results.append({"lcsc": lcsc, "mpn": line.get("mpn"),
                             "status": "missing",
-                            "error": "no lcsc or no datasheet URL"})
+                            "error": "no LCSC id: nowhere under "
+                                     "parts/datasheets/ to file it"})
             continue
-        r = fetch_datasheet(line["datasheet"], ddir / f"{lcsc}.pdf",
-                            transport=transport, mpn=line.get("mpn"))
+        r = fetch_line(line, ddir / f"{lcsc}.pdf", transport=transport,
+                       lookup=lookup, resolve=resolve)
         if r.get("file"):
             r["file"] = Path(r["file"]).relative_to(ws).as_posix()
         results.append({"lcsc": lcsc, "mpn": line.get("mpn"), **r})
@@ -1238,7 +1334,8 @@ def do_fetch(args, transport=None) -> tuple[dict, int]:
                 a = r["assessment"]
                 old[r["lcsc"]] = {
                     **{k: r.get(k) for k in ("mpn", "file", "url",
-                                             "final_url", "bytes", "sha256")},
+                                             "final_url", "bytes", "sha256",
+                                             "via")},
                     **{k: a[k] for k in _ASSESSED if k in a},
                     **({"assessed": _stamp(r["sha256"], r["mpn"])}
                        if r.get("mpn") else {})}
