@@ -92,8 +92,8 @@ Board API (rules E, G and H):
   types of the footprints PLACED on a board, which KiCad copies in and a library fix does
   not reach. Run it after fixing the library the board was built from.
 
-CLI (SPEC section 6): fpfix.py --lib <dir>.pretty [--dry-run] [--out r.json]
-                      fpfix.py --pcb <board>.kicad_pcb [--dry-run] [--out r.json]
+CLI (SPEC section 6): pcb-flow fpfix --lib <dir>.pretty [--dry-run] [--out r.json]
+                      pcb-flow fpfix --pcb <board>.kicad_pcb [--dry-run] [--out r.json]
   exit 0 = clean or fixed, 1 = residue left (a defect no rule can repair), 2 = error
 """
 from __future__ import annotations
