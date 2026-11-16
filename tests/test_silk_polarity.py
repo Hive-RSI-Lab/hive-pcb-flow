@@ -213,3 +213,19 @@ def test_unpolarised_parts_are_left_out(tmp_path):
     refs, fact = _polarity(pcb)
     assert refs == [] and fact == {"ok": 0, "wrong": 0, "not_judged": 0,
                                    "not_judged_refs": []}
+
+
+def test_a_kicad5_board_is_not_judged_not_passed(tmp_path):
+    """The part reader reads `footprint` blocks only: a KiCad 5 board's
+    `module` blocks give it nothing, which must not read as a clean pass."""
+    pcb = tmp_path / "k5.kicad_pcb"
+    pcb.write_text(
+        '(kicad_pcb (version 20171130) (host pcbnew 5.1.6)\n'
+        '  (module Diode_SMD:D_SOD-123 (layer F.Cu) (at 20 20)\n'
+        '    (fp_text reference D1 (at 0 -2) (layer F.SilkS))\n'
+        '    (pad 1 smd rect (at -1.65 0) (size 0.9 1.2) (layers F.Cu))\n'
+        '    (pad 2 smd rect (at 1.65 0) (size 0.9 1.2) (layers F.Cu)))\n'
+        ')\n', encoding="utf-8")
+    refs, fact = _polarity(pcb)
+    assert refs == [] and fact["ok"] == 0 and fact["not_judged"] == 1
+    assert "KiCad 5" in fact["not_judged_board"]
