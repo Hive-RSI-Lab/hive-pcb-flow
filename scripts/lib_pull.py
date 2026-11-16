@@ -689,13 +689,14 @@ def _register_project(project: Path, nickname: str, sym_lib: Path | None,
 # ------------------------------------------------------------ post-pull hygiene
 
 def _autofix(pretty: Path, names: list[str], dry_run: bool) -> dict:
-    """Sanitise the footprints this pull produced (fpfix rules A-H).
+    """Sanitise the footprints this pull produced (fpfix rules A-I).
 
     Every pull ships the same library-inherent defects - silk artifacts on pad
     copper, outlines under the silk-to-copper bar, plated locating pegs with no
     annular ring, legend text hidden under the body, a courtyard that is the
     body outline and leaves the pads outside, a placement type (attr) the
-    pads contradict. They were repaired by hand
+    pads contradict, an edge-mount part's open board-edge line on Edge.Cuts
+    (moved to Dwgs.User once the model fit has faced the model on it). They were repaired by hand
     on three shipped boards (boards/*/lib/EDITS.md) before this ran at pull time.
     """
     rep = fpfix.fix_lib(pretty, dry_run=dry_run, names=names)
@@ -716,10 +717,14 @@ def _model_fit(pretty: Path, names: list[str], dry_run: bool) -> dict:
     off and turned on lite-main, the FPC-05F-20PH20's 0.45 mm off on the
     core board, and each was found on a board and repaired by hand. Runs
     after the models are restored (a fresh clone's are fetched first) and
-    before fpfix, whose model flags then read the fitted model."""
+    before fpfix, whose model flags then read the fitted model. An
+    edge-launch part's model is also faced and seated on the board edge its
+    footprint marks on Edge.Cuts ("edge": turned, slide_mm; #405), before
+    fpfix rule I moves that mark to Dwgs.User."""
     rep = check_model_fit.fit_lib(pretty, names, dry_run=dry_run)
     rep["fixed"] = [{k: m[k] for k in ("footprint", "model", "fixed", "from",
-                                         "to")} for m in rep["fixed"]]
+                                         "to", "edge") if k in m}
+                    for m in rep["fixed"]]
     return rep
 
 
