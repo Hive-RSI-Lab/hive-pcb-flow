@@ -1243,6 +1243,9 @@ def write_svg(path: Path, fp: fplib.Footprint, bad_pads: set[str],
     Pads flagged as geometry mismatches are drawn red; others blue. A header
     line states measured vs datasheet-expected count/pitch/size.
     """
+    # The overlay is written before the report, whose writer makes the
+    # --out folder: make it here too, or a new folder ends in exit 2
+    path.parent.mkdir(parents=True, exist_ok=True)
     copper = fp.copper_pads
     all_pts = [pt for p in copper for pt in _pad_corners(p)]
     if not all_pts:
