@@ -292,6 +292,7 @@ def test_worker_zone_dicts_and_layer_types(tmp_path):
     plan, _ = planes_gen.build_plan(bg, con)
     zones = planes_gen.worker_zones(plan)
     assert zones[0] == {"net": "GND", "layer": "In1.Cu",
+                        "name": "PLANE_GND",
                         "rect": [0.5, 0.5, 59.5, 39.5], "priority": 0,
                         "min_island_mm2": None, "clearance": None,
                         "min_width": planes_gen.MIN_WIDTH_MM,
@@ -623,9 +624,13 @@ def test_verify_zones_missing_zone_is_hard_error(tmp_path):
 
 def test_existing_cover_skips_replan(tmp_path):
     bg = _bg(tmp_path, body=_basic_body() + _FILLED_ZONE)
-    # partial fill (~23%) does NOT skip; a small covered region does
+    # a partial fill (~23%) is not cover enough to skip, but this zone's
+    # outline IS the planned region: it is the plane, and adding it again
+    # would be a duplicate (#583), so it is current, not re-added
     plan, meta = planes_gen.build_plan(bg, {})
-    assert not plan[0].get("_existing")
+    assert plan[0]["_current"] and plan[0]["_existing"]
+    assert not plan[0].get("_replace") and not plan[0].get("_regrow")
+    # a small covered region inside the 1..20 fill skips on cover
     con = {"planes": [{"net": "GND", "layer": "B.Cu",
                        "region": [2, 2, 18, 18]}]}   # inside the 1..20 fill
     plan2, meta2 = planes_gen.build_plan(bg, con)
@@ -937,3 +942,157 @@ def test_no_thermal_vias_flag(cli, blinky2_seeded, tmp_path):
     r = json.loads(rep.read_text("utf-8"))
     assert r["facts"]["thermal_vias"] == 0
     assert geom.BoardGeom.from_file(pcb).vias_of(net="GND") == []
+
+
+# ======================================== #583: a plane whose region changed
+
+def _zone(net, layer, x1, y1, x2, y2, name="", uuid="", fill=True):
+    nm = f' (name "{name}")' if name else ""
+    uu = f' (uuid "{uuid}")' if uuid else ""
+    pts = f"(xy {x1} {y1}) (xy {x2} {y1}) (xy {x2} {y2}) (xy {x1} {y2})"
+    fl = (f'    (filled_polygon (layer "{layer}") (pts {pts}))\n'
+          if fill else "")
+    return (f'  (zone (net "{net}") (layer "{layer}"){uu}{nm}\n'
+            f'    (polygon (pts {pts}))\n{fl}  )\n')
+
+
+def _gnd(region):
+    return {"planes": [{"net": "GND", "layer": "B.Cu", "region": region}]}
+
+
+def _plan583(tmp_path, zones, con, name="b"):
+    bg = _bg(tmp_path, name=name, body=_basic_body() + zones)
+    return planes_gen.build_plan(bg, con)
+
+
+def test_named_plane_whose_region_moved_is_replaced(tmp_path):
+    """Planted #583: planes_gen poured GND on 2..30, the region moved to
+    20..58. The old PLANE_GND zone used to stay beside the new one
+    (zones_intersect); it is removed by uuid and the new one added."""
+    old = _zone("GND", "B.Cu", 2, 2, 30, 38, "PLANE_GND", "z-old")
+    plan, meta = _plan583(tmp_path, old, _gnd([20, 2, 58, 38]))
+    assert not plan[0].get("_existing") and not plan[0].get("_regrow")
+    assert plan[0]["_replace"] == [{"name": "PLANE_GND", "net": "GND",
+                                    "layer": "B.Cu", "uuid": "z-old",
+                                    "inside": [2.0, 2.0, 30.0, 38.0]}]
+    assert any("region on B.Cu changed" in n for n in meta["notes"])
+    # the quiet twin: the region did not change, nothing goes, nothing added
+    plan2, meta2 = _plan583(tmp_path, old, _gnd([2, 2, 30, 38]), "twin")
+    assert plan2[0]["_current"] and plan2[0]["_existing"]
+    assert not plan2[0].get("_replace") and not plan2[0].get("_regrow")
+
+
+def test_named_plane_whose_region_shrank_is_replaced_not_kept(tmp_path):
+    # the old fill covers ALL of the smaller region: cover alone said
+    # "existing" and the region change never reached the board
+    old = _zone("GND", "B.Cu", 2, 2, 58, 38, "PLANE_GND", "z-old")
+    plan, _ = _plan583(tmp_path, old, _gnd([2, 2, 30, 38]))
+    assert not plan[0].get("_existing")
+    assert [r["uuid"] for r in plan[0]["_replace"]] == ["z-old"]
+    # and a grown one goes the same way
+    old = _zone("GND", "B.Cu", 2, 2, 30, 38, "PLANE_GND", "z-old")
+    plan, _ = _plan583(tmp_path, old, _gnd([2, 2, 58, 38]), "grew")
+    assert [r["uuid"] for r in plan[0]["_replace"]] == ["z-old"]
+
+
+def test_unfilled_plane_with_the_planned_outline_is_not_added_again(tmp_path):
+    # the issue's second zone: an unfilled copy of the same plane. Zero fill
+    # cover used to mean "add it", which put a duplicate on the board
+    z = _zone("GND", "B.Cu", 2, 2, 30, 38, "PLANE_GND", "z-1", fill=False)
+    plan, _ = _plan583(tmp_path, z, _gnd([2, 2, 30, 38]))
+    assert plan[0]["_current"] and plan[0]["_existing"]
+    assert not plan[0].get("_replace")
+
+
+def test_earlier_duplicates_go_and_split_entries_keep_their_own(tmp_path):
+    zones = (_zone("GND", "B.Cu", 2, 2, 20, 38, "PLANE_GND", "z-a")
+             + _zone("GND", "B.Cu", 2, 2, 20, 38, "PLANE_GND", "z-dup")
+             + _zone("GND", "B.Cu", 40, 2, 58, 38, "PLANE_GND", "z-b"))
+    con = {"planes": [{"net": "GND", "layer": "B.Cu", "region": [2, 2, 20, 38]},
+                      {"net": "GND", "layer": "B.Cu",
+                       "region": [40, 2, 58, 38]}]}
+    plan, meta = _plan583(tmp_path, zones, con)
+    assert all(z["_current"] for z in plan)
+    gone = [r["uuid"] for z in plan for r in z.get("_replace") or []]
+    assert gone == ["z-dup"]
+    assert any("match no planned region" in n for n in meta["notes"])
+    # one of two split regions moved: only its zone is replaced
+    con["planes"][1]["region"] = [36, 2, 58, 38]
+    plan, _ = _plan583(tmp_path, zones.replace(
+        _zone("GND", "B.Cu", 2, 2, 20, 38, "PLANE_GND", "z-dup"), ""), con,
+        "split")
+    assert plan[0]["_current"] and not plan[0].get("_replace")
+    assert [r["uuid"] for r in plan[1]["_replace"]] == ["z-b"]
+
+
+def test_other_names_nets_and_layers_are_never_replaced(tmp_path):
+    zones = (_zone("GND", "B.Cu", 2, 2, 30, 38, "PATCH_GND", "z-patch")
+             + _zone("GND", "B.Cu", 2, 2, 30, 38, "MY_POUR", "z-hand")
+             + _zone("VCC", "B.Cu", 2, 2, 30, 38, "PLANE_VCC", "z-vcc")
+             + _zone("GND", "F.Cu", 2, 2, 30, 38, "PLANE_GND", "z-front"))
+    plan, _ = _plan583(tmp_path, zones, _gnd([20, 2, 58, 38]))
+    assert not plan[0].get("_replace") and not plan[0].get("_regrow")
+
+
+def test_unnamed_pour_of_a_moved_region_is_replaced(tmp_path):
+    """A board poured before planes_gen named its zones: an unnamed zone
+    mostly inside a region that moved is the old pour of it."""
+    old = _zone("GND", "B.Cu", 2, 2, 30, 38, uuid="z-old")
+    plan, meta = _plan583(tmp_path, old, _gnd([14, 2, 58, 38]))
+    assert [r["uuid"] for r in plan[0]["_replace"]] == ["z-old"]
+    assert any("the region moved" in n for n in meta["notes"])
+    # mostly outside the region: may be hand copper, kept
+    plan, _ = _plan583(tmp_path, old, _gnd([24, 2, 58, 38]), "out")
+    assert not plan[0].get("_replace") and not plan[0].get("_existing")
+    # an unnamed zone still drawn to the planned outline is current
+    plan, _ = _plan583(tmp_path, old, _gnd([2, 2, 30, 38]), "same")
+    assert plan[0]["_current"] and not plan[0].get("_replace")
+
+
+def test_unnamed_pour_past_a_shrunk_region_is_kept_and_named(tmp_path):
+    old = _zone("GND", "B.Cu", 2, 2, 58, 38, uuid="z-old")
+    plan, meta = _plan583(tmp_path, old, _gnd([2, 2, 30, 38]))
+    assert plan[0]["_existing"] and not plan[0].get("_replace")
+    assert any(n.startswith("kept [[2.0, 2.0, 58.0, 38.0]]")
+               for n in meta["notes"])
+
+
+@pytest.mark.smoke
+def test_rerun_after_a_region_move_replaces_the_plane_live(cli, blinky2_seeded,
+                                                          tmp_path):
+    """#583 end to end: pour GND on one region, move the region, re-run.
+    One PLANE_GND zone at the new place, no zones_intersect; the same
+    region again (the quiet twin) is a no-op."""
+    import kc
+    pcb = _copy_board(blinky2_seeded, tmp_path / "b")
+    x1, y1, x2, y2 = geom.BoardGeom.from_file(pcb).outline.bounds
+    mid = round((x1 + x2) / 2, 1)
+    rep, con = tmp_path / "planes.json", tmp_path / "c.json"
+
+    def pour(region):
+        con.write_text(json.dumps({"planes": [
+            {"net": "GND", "layer": "B.Cu", "region": region}]}))
+        assert planes_gen.main(["--pcb", str(pcb), "--constraints", str(con),
+                                "--no-thermal-vias",
+                                "--out-report", str(rep)]) == 0
+        r = json.loads(rep.read_text("utf-8"))
+        zs = geom.BoardGeom.from_file(pcb).zones_of(net="GND", layer="B.Cu")
+        return r["facts"]["zones"][0]["status"], zs
+
+    a = [x1 + 1, y1 + 1, mid + 3, y2 - 1]
+    b = [mid - 3, y1 + 1, x2 - 1, y2 - 1]
+    assert pour(a)[0] == "added"
+    status, zs = pour(b)
+    assert status == "replaced"
+    assert [(z.name, tuple(round(v, 2) for v in box(
+        *_bounds(z.outline)).bounds)) for z in zs] == [
+        ("PLANE_GND", tuple(round(v, 2) for v in b))]
+    assert not [v for v in kc.run_drc(cli, pcb)["violations"]
+                if v["check"] == "zones_intersect"]
+    status, zs = pour(b)
+    assert status == "existing" and len(zs) == 1
+
+
+def _bounds(outline):
+    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+    return min(xs), min(ys), max(xs), max(ys)
