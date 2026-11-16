@@ -40,6 +40,32 @@ Per net in constraints.json["high_speed"]:
     FLEX_PULLBACK_MM band the rigid copper leaves at the rigid-flex line.
     Other keepouts (an antenna's) are still voids: only the flex areas
     remove a layer.
+ 8. Hatched reference impedance (#1010): a hatch carries the return, but
+    with less copper than a plane, so the line over it sits above the Z0 a
+    solid-plane solve gives. Under the corridor the hatch's fill ratio f
+    (copper over hatch area) and cell opening g (sqrt of the median cell)
+    are measured. The line's Z0 is field-solved over solid planes, then
+    scaled as an ESTIMATE (no closed form exists for a hatch; Altium's
+    guidance is to start from the fill factor and iterate): the plane's
+    share of the line's capacitance falls to f_eff = 1 - (1 - f) min(1,
+    g / 2h), the cell against twice the dielectric height h (a cell much
+    finer than h looks solid to the field; one 2h wide or more removes
+    copper in full), and Z0 rises by 1 / sqrt(1 - share (1 - f_eff)),
+    share 1 for a microstrip and the plane's capacitance share h_other /
+    (h + h_other) for a stripline. The estimate is reported in facts
+    ("hatch_impedance"); with a target (the entry's z0_ohm, else its
+    impedance_ohm; z0_tol_pct default 10) a miss warns as hatch_impedance,
+    never an error, since it is an estimate. The miss is the hatch's only
+    when the line is on target over solid copper, or the hatch alone moves
+    Z0 by more than the tolerance; a line already off target over solid
+    copper (a width or stackup miss, check_si's to report) is left in
+    facts with its solid_plane_miss_pct. Left as not_judged, with the reason: a cell wider than
+    the return corridor, 2 k x the trace width (the trace's whole return
+    can sit over one open cell, so it runs over gaps, not a thinner
+    plane), a pitch over
+    1/HATCH_PITCH_LAMBDA of the wavelength at the knee frequency of the
+    entry's t_rise_ns (a periodic line, not a uniform one), no stackup or
+    field solver, and a net with no target.
 
 Unavoidable single-item plane punctures are EXCISED from the deficit before
 judging it: the annular clearance void around any single via (the signal's
@@ -60,7 +86,8 @@ constraints.json["high_speed"] entries:
      "reference": "GND",             # default GND; or {"F.Cu": "GND", ...}
      "k": 3.0,                       # optional per-net corridor factor
      "t_rise_ns": 1.0,               # optional -> r = c/(f_knee*20)
-     "return_via_radius_mm": 2.0}    # optional explicit r (wins over t_rise)
+     "return_via_radius_mm": 2.0,    # optional explicit r (wins over t_rise)
+     "z0_ohm": 50, "z0_tol_pct": 10} # optional, judged over a hatch only
 """
 from __future__ import annotations
 
@@ -78,6 +105,7 @@ from shapely.ops import linemerge, unary_union
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import checklib  # noqa: E402
 import geom  # noqa: E402
+import impedance  # noqa: E402
 from checklib import CheckError, violation  # noqa: E402
 
 SCRIPT = "check_return_path"
@@ -93,6 +121,8 @@ COVER_EPS_MM2 = 1e-6           # fill/corridor overlap below this is numeric noi
 HATCH_MIN_HOLES = 20           # a fill polygon with this many holes is a hatch
 HATCH_HOLE_FACTOR = 3.0        # holes up to this x the median are hatch cells
 HATCH_MAX_GAP_MM = 1.5         # wider cells are too open to carry the return
+HATCH_PITCH_LAMBDA = 20.0      # pitch over lambda_knee / this: a periodic line
+HATCH_Z_TOL_PCT = 10.0         # default tolerance on an entry's z0_ohm
 FLEX_AREA_GLOB = "FLEX_*"      # teardroplib's flex areas (FLEX_TAIL, ...)
 FLEX_PULLBACK_MM = 1.5         # outer copper may stop this far short of
                                # the rigid-flex line (the usual 1.5 mm
@@ -178,6 +208,136 @@ def reference_copper(bg: geom.BoardGeom, net: str, layer: str):
     if hatched:
         copper = unary_union([copper] + solids)
     return copper, hatched
+
+
+def hatch_under(bg: geom.BoardGeom, net: str, layer: str, region):
+    """The net's hatched fill under `region` on the layer: {fill, opening_mm,
+    pitch_mm, area_mm2}, fill = hatch copper / hatch area there, opening =
+    sqrt of the median cell (area-weighted over the hatch polygons), pitch
+    = opening / sqrt(1 - fill) (a square grid). None when no hatch is there."""
+    copper = area = weighted = 0.0
+    for z in bg.zones_of(net, layer):
+        for p in getattr(z.fill_on(layer), "geoms", [z.fill_on(layer)]):
+            if p.is_empty:
+                continue
+            q, h = _solid_hatch(p)
+            if not h:
+                continue
+            a = q.intersection(region).area
+            if a <= COVER_EPS_MM2:
+                continue
+            cells = [Polygon(r).area for r in p.interiors]
+            area += a
+            copper += p.intersection(region).area
+            weighted += a * math.sqrt(statistics.median(cells))
+    if area <= COVER_EPS_MM2:
+        return None
+    fill = min(1.0, copper / area)
+    opening = weighted / area
+    pitch = opening / math.sqrt(1.0 - fill) if fill < 1.0 else opening
+    return {"fill": fill, "opening_mm": opening, "pitch_mm": pitch,
+            "area_mm2": area}
+
+
+def solid_plane_z0(bg: geom.BoardGeom, layer: str, w: float):
+    """(z0, eps_eff, model) of a w-wide line on the layer over solid planes,
+    as check_si's line model solves it; None without a stackup or solver."""
+    st = bg.stackup
+    if len(bg.copper_layers) < 2 or not st.dielectrics:
+        return None
+    above, below = st.adjacent(layer)
+    t = st.copper_thickness.get(layer, 0.035)
+    try:
+        if above is None or below is None:
+            ref = below or above
+            r = impedance.field_microstrip(w, st.height_between(layer, ref), t,
+                                           st.epsilon_between(layer, ref))
+            return r["z0"], r["eps_eff"], "coated microstrip"
+        (hb, eb), (hf, ef) = impedance.stripline_sides(st.side(layer, above),
+                                                       st.side(layer, below))
+        r = impedance.field_stripline(w, hb, hf, t, eb, ef)
+        return r["z0"], r["eps_eff"], "stripline"
+    except (ValueError, RuntimeError, ZeroDivisionError):
+        return None
+
+
+def hatch_impedance(bg: geom.BoardGeom, net: str, entry: dict, layer: str,
+                    w: float, k: float, recs: list[dict]):
+    """Judge a line on `layer` whose reference records `recs` (one per
+    adjacent plane) include a hatch: (facts, violation or None, why not
+    judged or None). See the module docstring, item 8."""
+    st = bg.stackup
+    hatched = [r for r in recs if r.get("hatch")]
+    where = ", ".join(f"{r['resolved']} on {r['ref_layer']}" for r in hatched)
+    head = f"{net} on {layer} over hatched {where}"
+    out = {"signal_layer": layer, "width_mm": checklib.rnd(w),
+           "hatched": [r["ref_layer"] for r in hatched]}
+    for r in hatched:
+        g = r["hatch"]["opening_mm"]
+        if g > 2.0 * k * w:
+            return out, None, (f"{head}: the {g:.2f} mm hatch cell is wider "
+                               f"than the {2.0 * k * w:.2f} mm return corridor, "
+                               "too coarse to model its impedance")
+    solved = solid_plane_z0(bg, layer, w)
+    if solved is None:
+        return out, None, (f"{head}: no stackup or field solver, so the "
+                           "hatch's impedance was not estimated")
+    z_solid, eps_eff, model = solved
+    if entry.get("t_rise_ns"):
+        f_knee = 0.5 / (float(entry["t_rise_ns"]) * 1e-9)
+        lam = C_MM_PER_S / (f_knee * math.sqrt(eps_eff))
+        for r in hatched:
+            p = r["hatch"]["pitch_mm"]
+            if p > lam / HATCH_PITCH_LAMBDA:
+                return out, None, (
+                    f"{head}: the {p:.2f} mm hatch pitch is over 1/"
+                    f"{HATCH_PITCH_LAMBDA:g} of the {lam:.1f} mm wavelength at "
+                    f"the {f_knee / 1e9:.2f} GHz knee, a periodic line no "
+                    "single Z0 describes")
+    heights = {r["ref_layer"]: st.height_between(layer, r["ref_layer"])
+               for r in recs}
+    lost = 0.0
+    for r in hatched:
+        h = heights[r["ref_layer"]]
+        others = [v for k, v in heights.items() if k != r["ref_layer"]]
+        share = others[0] / (h + others[0]) if others else 1.0
+        f = r["hatch"]["fill"]
+        f_eff = 1.0 - (1.0 - f) * min(1.0, r["hatch"]["opening_mm"] / (2.0 * h))
+        lost += share * (1.0 - f_eff)
+    z_est = z_solid / math.sqrt(max(1.0 - lost, 1e-3))
+    out.update(z0_solid_ohm=checklib.rnd(z_solid, 1),
+               z0_estimate_ohm=checklib.rnd(z_est, 1), model=model,
+               basis="estimate: solid-plane field solve scaled by the "
+                     "hatch's effective fill")
+    target = entry.get("z0_ohm") or entry.get("impedance_ohm")
+    if not target:
+        return out, None, (f"{head}: Z0 estimated at {z_est:.0f} ohm "
+                           f"({z_solid:.0f} ohm over solid copper), but the "
+                           "entry has no z0_ohm or impedance_ohm target to judge "
+                           "it against")
+    tol = float(entry.get("z0_tol_pct", HATCH_Z_TOL_PCT))
+    miss = 100.0 * (z_est - float(target)) / float(target)
+    out.update(target_ohm=float(target), miss_pct=checklib.rnd(miss, 1))
+    if abs(miss) <= tol:
+        return out, None, None
+    solid_miss = 100.0 * (z_solid - float(target)) / float(target)
+    shift = 100.0 * (z_est - z_solid) / float(target)
+    if abs(solid_miss) > tol and shift <= tol:
+        # off target over solid copper too: the width's miss, not the hatch's
+        out.update(solid_plane_miss_pct=checklib.rnd(solid_miss, 1))
+        return out, None, None
+    pos = hatched[0]["hatch_at"]
+    vio = violation(
+        SCRIPT, "warning", pos, hatched[0]["ref_layer"], net, [],
+        f"{head}: Z0 estimated at {z_est:.1f} ohm against its "
+        f"{float(target):.0f} ohm target ({miss:+.0f}%, tolerance {tol:.0f}%); "
+        f"{z_solid:.1f} ohm over solid copper", SCRIPT,
+        kind="hatch_impedance", signal_layer=layer,
+        z0_estimate_ohm=checklib.rnd(z_est, 1),
+        z0_solid_ohm=checklib.rnd(z_solid, 1), target_ohm=float(target),
+        miss_pct=checklib.rnd(miss, 1),
+        hatch_fill=checklib.rnd(min(r["hatch"]["fill"] for r in hatched), 3))
+    return out, vio, None
 
 
 def flex_cut(bg: geom.BoardGeom, layer: str):
@@ -418,6 +578,12 @@ def check_net(bg: geom.BoardGeom, entry: dict, k_cli: float):
                 "corridor_coverage": checklib.rnd(coverage)}
             if hatched:
                 resolution[(layer, ref_layer)]["hatched"] = True
+                hatch = hatch_under(bg, ref_net, ref_layer, judged)
+                if hatch is not None:
+                    resolution[(layer, ref_layer)]["hatch"] = {
+                        k: checklib.rnd(v, 3) for k, v in hatch.items()}
+                    rp = judged.representative_point()
+                    resolution[(layer, ref_layer)]["hatch_at"] = (rp.x, rp.y)
             if corridor.area - judged.area > MIN_DEFICIT_MM2:
                 resolution[(layer, ref_layer)]["flex_excluded_mm2"] = \
                     checklib.rnd(corridor.area - judged.area)
@@ -460,12 +626,32 @@ def check_net(bg: geom.BoardGeom, entry: dict, k_cli: float):
         if vio is not None:
             violations.append(vio)
 
+    hatch_z: list[dict] = []
+    not_judged: list[str] = []
+    for layer in layers_used:
+        recs = [r for (sl, _), r in resolution.items() if sl == layer]
+        if not any(r.get("hatch") for r in recs):
+            continue
+        w = max(t.width for t in bg.tracks_of(net, layer))
+        z, vio, why = hatch_impedance(bg, net, entry, layer, w, k, recs)
+        hatch_z.append(z)
+        if vio is not None:
+            violations.append(vio)
+        if why:
+            not_judged.append(why)
+    for r in resolution.values():
+        r.pop("hatch_at", None)
+
     facts = {"net": net, "layers": layers_used, "k": k,
              "return_via_radius_mm": checklib.rnd(radius),
              "transitions": [{"pos": [checklib.rnd(t["via"].at[0]),
                                       checklib.rnd(t["via"].at[1])],
                               "layers": t["layers"]} for t in transitions],
              "reference_resolution": list(resolution.values())}
+    if hatch_z:
+        facts["hatch_impedance"] = hatch_z
+    if not_judged:
+        facts["not_judged"] = not_judged
     return violations, facts
 
 
@@ -496,10 +682,11 @@ def run(argv=None):
         violations.extend(vs)
         checked.append(facts)
 
+    not_judged = [why for f in checked for why in f.pop("not_judged", [])]
     payload = checklib.report(
         SCRIPT, args.pcb, violations, checked=checked,
         nothing_to_judge=None if checked else
-        "no high_speed entries in constraints")
+        "no high_speed entries in constraints", not_judged=not_judged)
     return payload, args.out
 
 

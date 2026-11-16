@@ -17,7 +17,8 @@
   "high_speed": [
     {"net": "/CLK", "reference": "GND", "k": 3, "t_rise_ns": 1.0,
      "return_via_radius_mm": 1.5, "impedance_ohm": 50,
-     "data_rate_mbps": 100, "f_max_ghz": 0.5},
+     "data_rate_mbps": 100, "f_max_ghz": 0.5,
+     "z0_ohm": 50, "z0_tol_pct": 10},
     {"net": "/DATA", "reference": {"default": "GND"}, "rise_ps": 400,
      "note": "a map reference names a plane per layer, default for the rest"}
   ],

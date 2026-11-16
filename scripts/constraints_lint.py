@@ -62,7 +62,9 @@ SECTIONS: dict[str, dict[str, dict[str, str]]] = {
                      "return_via_radius_mm": "num", "impedance_ohm": "num",
                      # check_via_stubs (#478)
                      "data_rate_mbps": "num", "f_max_ghz": "num",
-                     "rise_ps": "num"},
+                     "rise_ps": "num",
+                     # check_return_path over a hatched plane (#1010)
+                     "z0_ohm": "num", "z0_tol_pct": "num"},
     },
     "power": {
         "required": {"net": "str", "current_a": "num"},
