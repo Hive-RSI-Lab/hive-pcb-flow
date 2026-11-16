@@ -584,3 +584,121 @@ def test_route_edit_fill_vias_apply(kicad, pd):
     route_edit.run(["--pcb", str(pd), "--op",
                     '{"op": "fill_vias", "net": "/CC1", "filled": false}'])
     assert all(v == (False, False) for v in route_edit._via_fills(pd).values())
+
+
+# ------------------------------------------------------------ fill_vias on a via the list adds (#1147)
+
+# a GND stitching via in the pour (KiCad gives a lone via there the pour's
+# net on save, whatever it was added on)
+_NEW = {"op": "add_via", "at": [36.0, 47.0], "size": 0.6, "drill": 0.3,
+        "net": "GND"}
+
+
+def test_resolve_fill_vias_takes_a_via_added_before_it(bg):
+    """Planted: the add_via before a fill_vias that picks its spot is
+    added filled, and the fill's span names it."""
+    flat, spans = route_edit.resolve_ops(bg, _v(
+        _NEW, {"op": "fill_vias", "at": [36.0, 47.0]}))
+    assert flat[0]["filled"] is True and spans[1][0] == 0
+    assert [flat[j]["op"] for j in spans[1]] == ["add_via"]
+    # by net: the board's GND vias and the new one; filled: false too
+    flat, spans = route_edit.resolve_ops(bg, _v(
+        _NEW, {"op": "fill_vias", "net": "GND", "filled": False}))
+    assert flat[0]["filled"] is False
+    assert [flat[j]["op"] for j in spans[1]] == ["add_via"] + \
+        ["set_via_fill"] * len(bg.vias_of(net="GND"))
+    # a route's via is picked the same way
+    routed = [{"op": "add_via", "at": [30.0, 40.0], "size": 0.6,
+               "drill": 0.3, "net": "/CC1"}]
+    assert route_edit._added_vias(bg, {"kind": "via", "net": "/CC1"},
+                                  routed) == [0]
+
+
+def test_resolve_fill_vias_twins_stay_quiet(bg):
+    """Twins: a fill_vias before the add_via, one that picks elsewhere, one
+    by uuid_prefix (a new via has none yet), another net: no filled key; a
+    via an earlier rip removed is not filled (the worker would refuse
+    its uuid)."""
+    for fill in ({"op": "fill_vias", "at": [10.0, 10.0]},
+                 {"op": "fill_vias", "net": "/CC2"},
+                 {"op": "fill_vias", "uuid_prefix": "82e1b972"}):
+        flat, spans = route_edit.resolve_ops(bg, _v(_NEW, fill))
+        assert "filled" not in flat[0] and 0 not in spans[1]
+    flat, _ = route_edit.resolve_ops(bg, _v(
+        {"op": "fill_vias", "at": [36.0, 47.0]}, _NEW))
+    assert flat == [dict(_NEW)]
+    via = bg.vias_of(net="/CC1")[0]
+    flat, spans = route_edit.resolve_ops(bg, _v(
+        {"op": "rip", "uuid_prefix": via.uuid[:8]},
+        {"op": "fill_vias", "net": "/CC1"}))
+    assert via.uuid not in {flat[j]["uuid"] for j in spans[1]}
+    assert len(spans[1]) == len(bg.vias_of(net="/CC1")) - 1
+
+
+def test_validate_add_via_filled():
+    assert _v(dict(_VIA, filled=True))[0]["filled"] is True
+    with pytest.raises(CheckError, match="filled must be"):
+        _v(dict(_VIA, filled="yes"))
+
+
+def test_verify_catches_an_added_via_left_open(pd):
+    """Mutant: a worker that drops the filled key on add_via leaves the via
+    open; verify names it, so the edit rolls back."""
+    via = geom.BoardGeom.from_file(pd).vias_of(net="/CC1")[0]
+    op = {"op": "add_via", "at": list(via.at), "size": via.diameter,
+          "drill": via.drill, "net": "/CC1"}
+    assert route_edit._verify(pd, [op]) == []
+    assert route_edit._verify(pd, [dict(op, filled=False)]) == []
+    probs = route_edit._verify(pd, [dict(op, filled=True)])
+    assert len(probs) == 1 and "filling/capping not True" in probs[0]
+
+
+def test_route_edit_fill_vias_on_added_via_apply(kicad, pd):
+    """Planted end to end: one list adds a via and fills it; a re-run
+    finds it there and filled. Twins: a via added with no fill in the
+    list stays open, and an add_via on a via already there takes the fill
+    (filled: "set")."""
+    payload, _ = route_edit.run(["--pcb", str(pd), "--op", json.dumps(
+        [_NEW, {"op": "fill_vias", "at": [36.0, 47.0]}])])
+    add, fill = payload["results"]
+    assert add["status"] == "added" and "warnings" not in payload
+    assert fill["status"] == "filled" and fill["count"] == 1
+    assert fill["uuids"] == [add["uuid"]] and fill["segments"] == ["changed"]
+    fills = route_edit._via_fills(pd)
+    assert fills[add["uuid"]] == (True, True)
+    assert sum(f == (True, True) for f in fills.values()) == 1
+    again, _ = route_edit.run(["--pcb", str(pd), "--op", json.dumps(
+        [_NEW, {"op": "fill_vias", "at": [36.0, 47.0]}])])
+    assert again["results"][0]["status"] == "exists"
+    assert again["results"][1] == {"op": "fill_vias", "count": 1,
+                                   "status": "exists", "uuids": [None],
+                                   "segments": ["exists"]}
+    # twin: no fill in the list
+    open_ = dict(_NEW, at=[40.0, 48.0])
+    r, _ = route_edit.run(["--pcb", str(pd), "--op", json.dumps(open_)])
+    assert route_edit._via_fills(pd)[r["results"][0]["uuid"]] \
+        == (False, False)
+    # the via already there, filled by a fill_vias after its add_via
+    r, _ = route_edit.run(["--pcb", str(pd), "--op", json.dumps(
+        [open_, {"op": "fill_vias", "at": [40.0, 48.0]}])])
+    assert r["results"][0] == {"op": "add_via", "status": "exists",
+                               "filled": "set"}
+    assert r["results"][1]["segments"] == ["changed"]
+
+
+def test_route_edit_fill_vias_picking_nothing_warns(kicad, pd, capsys):
+    """A fill_vias that picks no via is not silent any more (#1147): its
+    result and the report carry a warning; one that picks a via has
+    none."""
+    payload, _ = route_edit.run(["--pcb", str(pd), "--op",
+                                 '{"op": "fill_vias", "at": [10, 10]}'])
+    r = payload["results"][0]
+    assert r["status"] == "absent" and r["count"] == 0
+    assert "selected no via" in r["warning"]
+    assert payload["warnings"] == [
+        "ops[0] (fill_vias): selected no via: nothing filled"]
+    assert "selected no via" in capsys.readouterr().err
+    payload, _ = route_edit.run(["--pcb", str(pd), "--op",
+                                 '{"op": "fill_vias", "net": "/CC1"}'])
+    assert "warning" not in payload["results"][0]
+    assert "warnings" not in payload
