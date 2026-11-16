@@ -28,8 +28,10 @@ Every result says where its URL came from (`via`), and every miss is named:
 "maker not known" (no brand or family in the table; a clone's brand is not
 read as its original's maker), "refused" (a PDF came back for another part,
 a PDF with nothing to check it by, or a host or the allowlist refused it),
-"not found" (no pattern URL is a PDF and LCSC lists no copy). `tried` lists
-each URL and what came of it.
+"not found" (no pattern URL is a PDF and LCSC lists no copy), "stalled"
+(a host that might have had it timed out, once more after STALL_BACKOFF
+seconds, so the part is not judged rather than called not found). `tried`
+lists each URL and what came of it.
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ import os
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -50,8 +53,11 @@ MAKERS = HERE.parent.parent / "reference" / "datasheet_makers.yaml"
 # Bump when a change here can change a result: cached results are keyed by it.
 # 3: a PDF fetch could not judge (status not_judged: a scan, or no part number
 # printed) is its own kind, unjudged.
-VERSION = 3
+# 4: a stalled fetch is tried once more after STALL_BACKOFF, and a miss
+# with a stall in it is "stalled", not "not found" (#1480).
+VERSION = 4
 FETCH_TIMEOUT = 20.0            # seconds: a maker site that stalls is skipped
+STALL_BACKOFF = 15.0            # seconds before the one retry of a stalled fetch
 MAX_CUT = 6                     # ordering-suffix characters `candidates` cuts
 MAX_LCSC = 3                    # LCSC copies tried per part
 
@@ -62,7 +68,8 @@ BOARD_SUFFIX = re.compile(r"(EVM|EVK|EVB|EVAL|DEMO|KIT|BOARD)")
 NOT_A_SHEET = re.compile(r"USER'?S GUIDE|USER MANUAL|EVALUATION (MODULE|BOARD|KIT)")
 
 _DEAD: dict[str, str] = {}      # host -> why: this process skips it after
-_DEAD_LOCK = threading.Lock()   # one timeout or one block
+_DEAD_LOCK = threading.Lock()   # one timeout (after its retry) or one block
+_sleep = time.sleep             # tests stand in for the backoff
 
 
 def load_makers(path: Path | None = None) -> list[dict]:
@@ -195,11 +202,20 @@ def resolve(mpn: str, brand: str | None, dest: Path, *, makers=None,
         with _DEAD_LOCK:
             dead = _DEAD.get(host)
         if dead:
-            tried.append({"url": url, "kind": "skipped", "why": dead})
+            tried.append({"url": url, "kind": "skipped", "why": dead[1],
+                          "after": dead[0]})
             return None
         tmp.unlink(missing_ok=True)
         got = fetch(url, tmp, mpn=mpn, transport=transport)
         kind, why = _verdict(got)
+        if kind == "stalled":
+            # once more after a pause: st.com times out now and then (#1480)
+            _sleep(STALL_BACKOFF)
+            tmp.unlink(missing_ok=True)
+            got = fetch(url, tmp, mpn=mpn, transport=transport)
+            kind, why = _verdict(got)
+            if kind == "stalled":
+                why = f"twice, {STALL_BACKOFF:g} s apart: {why}"
         if kind == "ok":
             texts = pages(tmp)
             head = (texts[0] if texts else "")[:300].upper()
@@ -212,7 +228,7 @@ def resolve(mpn: str, brand: str | None, dest: Path, *, makers=None,
         tried.append({"url": url, "kind": kind, "why": why[:200]})
         if kind == "stalled" or got.get("blocked_by_host"):
             with _DEAD_LOCK:
-                _DEAD.setdefault(host, f"{host} {kind} earlier: {why[:120]}")
+                _DEAD.setdefault(host, (kind, f"{host} {kind} earlier: {why[:120]}"))
         if kind != "ok":
             tmp.unlink(missing_ok=True)
             return None
@@ -238,9 +254,11 @@ def resolve(mpn: str, brand: str | None, dest: Path, *, makers=None,
             return {**base, "url": got["url"], "got": got, "tried": tried,
                     "via": f"LCSC's copy of the {maker['name']} PDF, listed for "
                            f"{h.get('lcsc')} {h.get('mpn')} ({h.get('brand')})"}
-    kinds = {t["kind"] for t in tried}
+    # a skip after a host stalled counts as that stall: the part was not judged
+    kinds = {t["kind"] for t in tried} | {
+        "stalled" for t in tried if t.get("after") == "stalled"}
     miss = "refused" if kinds & {"wrong", "unjudged", "blocked"} \
-        else "not found"
+        else "stalled" if "stalled" in kinds else "not found"
     return {**base, "miss": miss, "tried": tried}
 
 
