@@ -76,6 +76,7 @@ SECTION_STEPS = 50.0         # a coupled run under t_r / this joins a neighbour
 MIN_LINE_MM = 0.01           # uncoupled pieces under this are a node
 LUMPED_STEPS = 50.0          # an uncoupled span under t_r / this is a wire
 DECK_TIMEOUT_S = 30.0        # a deck takes well under a second
+DECK_RETRY_S = 120.0         # a deck that timed out gets one more go (#1377)
 CPL_DISAGREE = 0.10          # CPL vs modal peak, past which CPL isn't believed
 CPL_FLOOR_V = 0.002          # ... when the difference is at least this
 
@@ -501,7 +502,8 @@ def _orientations(a, b, known):
 
 
 def simulate_pair(bg, lm, aggressor, victim, specs=None, si=None, power_nets=frozenset(),
-                  t_rise_ns=None, swing=None, engine="auto") -> dict:
+                  t_rise_ns=None, swing=None, engine="auto",
+                  timeout=DECK_TIMEOUT_S) -> dict:
     """One aggressor -> victim. {sections, ends, noise_v, budget_v, margin_v,
     engines, ...}, or {"not_simulated": why}."""
     specs = specs or {}
@@ -525,7 +527,7 @@ def simulate_pair(bg, lm, aggressor, victim, specs=None, si=None, power_nets=fro
     for da in _orientations(*ta, drv_a):
         for dv in _orientations(*tv, drv_v):
             deck, ends = build_deck(bg, lm, pa, pv, secs, da, dv, sa, sv, v, t_r_s, power_nets)
-            got = _run_engines(deck, ends, engine)
+            got = _run_engines(deck, ends, engine, timeout)
             rx = max((abs(got["peaks"][n]) for n, e in ends.items() if e["receiver"]), default=0.0)
             if best is None or rx > best["rx"]:
                 best = {"rx": rx, "got": got, "ends": ends, "da": da, "dv": dv}
@@ -555,22 +557,24 @@ def simulate_pair(bg, lm, aggressor, victim, specs=None, si=None, power_nets=fro
     }
 
 
-def _run_engines(deck, ends, engine) -> dict:
+def _run_engines(deck, ends, engine, timeout=DECK_TIMEOUT_S) -> dict:
     if engine == "xyce":
-        return {"peaks": _peaks(deck, ends, "modal", "xyce"), "engines": {"used": "xyce modal"}}
+        return {"peaks": _peaks(deck, ends, "modal", "xyce", timeout),
+                "engines": {"used": "xyce modal"}}
     if engine == "cpl":
-        return {"peaks": _peaks(deck, ends, "cpl", "ngspice"), "engines": {"used": "ngspice cpl"}}
-    modal = _peaks(deck, ends, "modal", "ngspice")
+        return {"peaks": _peaks(deck, ends, "cpl", "ngspice", timeout),
+                "engines": {"used": "ngspice cpl"}}
+    modal = _peaks(deck, ends, "modal", "ngspice", timeout)
     if engine == "modal":
         return {"peaks": modal, "engines": {"used": "ngspice modal"}}
-    cpl = _peaks(deck, ends, "cpl", "ngspice")
+    cpl = _peaks(deck, ends, "cpl", "ngspice", timeout)
     diff = max(abs(cpl[n] - modal[n]) for n in ends)
     top = max(abs(modal[n]) for n in ends) or 1e-12
     bad = diff > CPL_FLOOR_V and diff / top > CPL_DISAGREE
     info = {"used": "ngspice modal (CPL disagreed)" if bad else "ngspice cpl",
             "cpl_vs_modal_mv": checklib.rnd(1000 * diff, 3)}
     if engine == "both":
-        xy = _peaks(deck, ends, "modal", "xyce")
+        xy = _peaks(deck, ends, "modal", "xyce", timeout)
         info["xyce_vs_modal_mv"] = checklib.rnd(
             1000 * max(abs(xy[n] - modal[n]) for n in ends), 3)
     return {"peaks": modal if bad else cpl, "engines": info}

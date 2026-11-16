@@ -96,6 +96,10 @@ class SolverError(RuntimeError):
     pass
 
 
+class SolverTimeout(SolverError):
+    """The solver ran past its (load-stretched) time limit: slow, not wrong."""
+
+
 def toolchain_root() -> Path | None:
     for var in ENV_VARS:
         val = os.environ.get(var)
@@ -272,7 +276,7 @@ def run(tool: str, args: list[str], cwd: Path | str | None = None,
         p = loadlib.run(argv, cwd=cwd, env=env, input=stdin, text=True,
                         capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
-        raise SolverError(f"{tool} ran past {e.timeout:.0f} s "
+        raise SolverTimeout(f"{tool} ran past {e.timeout:.0f} s "
                           f"(limit {timeout:.0f} s)") from e
     return Run(tool, argv, p.returncode, p.stdout, p.stderr)
 
