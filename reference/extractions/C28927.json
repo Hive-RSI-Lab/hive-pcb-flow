@@ -1,0 +1,91 @@
+{
+  "mpn": "TMP112AIDRLR",
+  "lcsc": "C28927",
+  "package": "SOT-563 (DRL)",
+  "description": "TI TMP112 high-accuracy low-power digital temperature sensor, I2C/SMBus, SOT-563 (DRL)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "SCL",
+      "type": "input"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "ALERT",
+      "type": "output",
+      "notes": "open drain"
+    },
+    {
+      "pin": "4",
+      "name": "ADD0",
+      "type": "input",
+      "notes": "address select"
+    },
+    {
+      "pin": "5",
+      "name": "V+",
+      "type": "power_in"
+    },
+    {
+      "pin": "6",
+      "name": "SDA",
+      "type": "bidirectional"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "Supply voltage",
+      "value": "5",
+      "unit": "V"
+    },
+    {
+      "param": "Input voltage, pins 1, 4 and 6",
+      "value": "-0.5~+5",
+      "unit": "V"
+    },
+    {
+      "param": "Input voltage, pin 3",
+      "value": "-0.5~(VS)+0.5",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "V+"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 5,
+      "source": "TI TMP112 datasheet (ZHCS916B, Mar 2009 revised Jun 2009; English SBOS473) p.2 Absolute Maximum Ratings: '电源电压 5 V'"
+    },
+    {
+      "pins": [
+        "SCL",
+        "ADD0",
+        "SDA"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": 5,
+      "source": "TI TMP112 datasheet (ZHCS916B, Mar 2009 revised Jun 2009; English SBOS473) p.2 Absolute Maximum Ratings: '输入电压，引脚 1，4，和 6 -0.5 至 +5 V'"
+    },
+    {
+      "pins": [
+        "ALERT"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": "(V+)+0.5",
+      "source": "TI TMP112 datasheet (ZHCS916B, Mar 2009 revised Jun 2009; English SBOS473) p.2 Absolute Maximum Ratings: '输入电压，引脚 3 -0.5 至 (VS) + 0.5 V'"
+    }
+  ],
+  "source_pdf": "TI TMP112 high-accuracy low-power digital temperature sensor (Chinese datasheet ZHCS916B Mar 2009 revised Jun 2009, English SBOS473), 25 pages, pin map p.2 DRL SOT563 'SCL 1, GND 2, ALERT 3, ADD0 4, V+ 5, SDA 6'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1811060316_Texas-Instruments-TMP112AIDRLR_C28927.pdf sha256 f363804ea5421523fd2091ce6f2df315d08da612044c7b218e4491caf2b616fc"
+}

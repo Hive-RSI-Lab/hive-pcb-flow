@@ -1,0 +1,32 @@
+{
+  "mpn": "CL21B104KCFNNNE",
+  "lcsc": "C28233",
+  "package": "0805 (2012 metric)",
+  "description": "Samsung Electro-Mechanics CL21B104KCFNNNE 100V 100nF X7R ±10% 0805 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -100,
+      "max": 100,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics MLCC catalog (Nov 2015) p.4 Part Numbering System: '6. RATED VOLTAGE CODE' 'C = 100V' (the C in CL21B104KCFNNNE, position 6 of 'CL 10 A 106 M P 8 N N N C'; the part is not in the catalog Product Lineup tables); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics MLCC catalog (Nov 2015), 84 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Samsung-Electro-Mechanics-CL21B104KCFNNNE_C28233.pdf sha256 96baebe4bd0ce363e87be28b5b003f511f1502e084a6fc4f02333ded56c808f6 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

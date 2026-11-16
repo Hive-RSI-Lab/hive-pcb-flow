@@ -1,0 +1,74 @@
+{
+  "mpn": "BM29B0.6-4DS/2-0.35V(51)",
+  "lcsc": "C3646565",
+  "package": "SMD,P=0.35mm",
+  "description": "Hirose BM29B0.6-4DS/2-0.35V(51) 0.35mm board-to-board receptacle (8 contact pads incl. power contacts) with mounting tabs, 50V",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    },
+    {
+      "pin": "5",
+      "name": "P5",
+      "type": "passive"
+    },
+    {
+      "pin": "6",
+      "name": "P6",
+      "type": "passive"
+    },
+    {
+      "pin": "7",
+      "name": "P7",
+      "type": "passive"
+    },
+    {
+      "pin": "8",
+      "name": "P8",
+      "type": "passive"
+    },
+    {
+      "pin": "MP",
+      "name": "MP",
+      "type": "ground",
+      "notes": "solder tab / mounting pad (board pad; not a signal contact)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5",
+        "P6",
+        "P7",
+        "P8"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "source": "Hirose specification sheet BM29B0.6-4DS/2-0.35V(51), drawing no. ELC-386724-51-01 p.1 RATING: 'RATING Voltage 50V AC/DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "Hirose specification sheet BM29B0.6-4DS/2-0.35V(51), drawing no. ELC-386724-51-01, 1 PDF pages, pin map: single-page specification sheet, no pin map; pads follow the KiCad footprint (rating covers signal and power contacts alike); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2403201123_HRS-Hirose-BM29B0-6-4DS-2-0-35V-51_C3646565.pdf sha256 6d8a636317e2edce9c7bf4fca92143f12759c2c5690c2da97e64574d659fc0f2"
+}

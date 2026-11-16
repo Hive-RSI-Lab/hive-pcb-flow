@@ -1,0 +1,123 @@
+{
+  "mpn": "LMR54406DBVR",
+  "lcsc": "C5219316",
+  "package": "SOT-23-6 (DBV)",
+  "description": "TI LMR54406 4V-36V 0.6A synchronous buck converter, SOT-23-6 (DBV)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "CB",
+      "type": "input",
+      "notes": "bootstrap, cap to SW",
+      "self_driven": true
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "FB",
+      "type": "input",
+      "notes": "feedback"
+    },
+    {
+      "pin": "4",
+      "name": "EN",
+      "type": "input"
+    },
+    {
+      "pin": "5",
+      "name": "VIN",
+      "type": "power_in"
+    },
+    {
+      "pin": "6",
+      "name": "SW",
+      "type": "power_out",
+      "notes": "switch node"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VIN to GND",
+      "value": "-0.3~45",
+      "unit": "V"
+    },
+    {
+      "param": "EN to GND",
+      "value": "-0.3~VIN+0.3",
+      "unit": "V"
+    },
+    {
+      "param": "FB to GND",
+      "value": "-0.3~5.5",
+      "unit": "V"
+    },
+    {
+      "param": "SW to GND",
+      "value": "-0.3~VIN+0.3",
+      "unit": "V"
+    },
+    {
+      "param": "CBOOT to SW",
+      "value": "-0.3~5.5",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VIN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 45,
+      "source": "TI LMR54406 datasheet (SLUSEG8E, Oct 2021 revised Jan 2026) p.4 6.1 Absolute Maximum Ratings: 'VIN to GND(2) –0.3 45(3) V'"
+    },
+    {
+      "pins": [
+        "EN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VIN+0.3",
+      "source": "TI LMR54406 datasheet (SLUSEG8E, Oct 2021 revised Jan 2026) p.4 6.1 Absolute Maximum Ratings: 'EN to GND(2) –0.3 VIN+0.3 V'"
+    },
+    {
+      "pins": [
+        "FB"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 5.5,
+      "source": "TI LMR54406 datasheet (SLUSEG8E, Oct 2021 revised Jan 2026) p.4 6.1 Absolute Maximum Ratings: 'FB to GND –0.3 5.5 V'"
+    },
+    {
+      "pins": [
+        "SW"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VIN+0.3",
+      "source": "TI LMR54406 datasheet (SLUSEG8E, Oct 2021 revised Jan 2026) p.4 6.1 Absolute Maximum Ratings: 'SW to GND(2) –0.3 VIN+0.3 V'"
+    },
+    {
+      "pins": [
+        "CB"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 5.5,
+      "ref": "SW",
+      "source": "TI LMR54406 datasheet (SLUSEG8E, Oct 2021 revised Jan 2026) p.4 6.1 Absolute Maximum Ratings: 'CBOOT to SW –0.3 5.5 V'"
+    }
+  ],
+  "source_pdf": "TI LMR54406 4-V to 36-V 0.6-A synchronous buck converter, SLUSEG8E Oct 2021 revised Jan 2026, 37 pages, pin map p.3 Pin Functions 'CB 1, GND 2, FB 3, EN 4, VIN 5, SW 6'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2302281330_Texas-Instruments-LMR54406DBVR_C5219316.pdf sha256 48193ee772283f2388020fce6dded28c635352519068b13d1bb904b2dd054457"
+}

@@ -1,0 +1,32 @@
+{
+  "mpn": "CL31A476MPHNNNE",
+  "lcsc": "C96123",
+  "package": "1206 (3216 metric)",
+  "description": "Samsung Electro-Mechanics CL31A476MPHNNNE 10V 47uF X5R ±20% 1206 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -10,
+      "max": 10,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics MLCC catalog (Nov 2015) p.4 Part Numbering System: '6. RATED VOLTAGE CODE' 'P = 10V' (the P in CL31A476MPHNNNE, position 6 of 'CL 10 A 106 M P 8 N N N C'; the part is not in the catalog Product Lineup tables); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics MLCC catalog (Nov 2015), 84 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Samsung-Electro-Mechanics-CL31A476MPHNNNE_C96123.pdf sha256 96baebe4bd0ce363e87be28b5b003f511f1502e084a6fc4f02333ded56c808f6 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

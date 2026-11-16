@@ -1,0 +1,33 @@
+{
+  "mpn": "BZX584C3V6",
+  "lcsc": "C22395574",
+  "package": "SOD-523",
+  "description": "hongjiacheng (Zhuhai Hongjiacheng) BZX584C3V6 3.6 V 150 mW zener diode, SOD-523",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 3.8,
+      "ref": "A",
+      "source": "Zhuhai Hongjiacheng BZX584C2V4 THRU BZX584C43 Rev:2.0 p.2 Electrical Characteristics (VZ Min Nom Max): 'BZX584C3V6 Z15 3.4 3.6 3.8 5 90 600 1 5 1' (zener voltage range; the datasheet gives no reverse-voltage absolute maximum, only Pd); above this a zener conducts, so a clamp use is intended, bound is the top of its zener range"
+    }
+  ],
+  "source_pdf": "Zhuhai Hongjiacheng Technology BZX584C2V4 THRU BZX584C43 Surface Mount Zener Diodes, Rev:2.0, 4 pages, polarity p.1 (cathode line denotes the cathode end) and p.4 cathode band drawing; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2405111114_hongjiacheng-BZX584C3V6_C22395574.pdf sha256 c4ac9f75220354cedb1b2f26c0dcc975221a01cccffdec7a3214030380b9c5ed"
+}

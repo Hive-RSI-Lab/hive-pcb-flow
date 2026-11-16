@@ -193,7 +193,10 @@ Sources and verified/disputed tags: docs/ingest/safety-components.md.
 A pin on a net of unknown voltage is not a finding (counted in facts); a
 supply pin on one is named in not_judged by rail, since nothing compared it
 (#601). A connected pad the extraction's pinout has no row for is
-rating_unrated. A board where nothing could be compared with known volts
+rating_unrated. A part with no voltage rating row at all (an extraction with
+no pin_ratings or abs_max row it can read, a part with no extraction and no
+voltage field on its parts row) is also named in not_judged, one line per
+part with the reason, so it never reads as a pass; a trusted ref is not. A board where nothing could be compared with known volts
 reports nothing_to_judge, led by the reason that kept out the most parts (no
 part number, a passive with no voltage field, no datasheet read, a datasheet
 with no pin rating, or no known voltage on its nets), and facts
@@ -890,6 +893,24 @@ def pin_index(pinout: list[dict]) -> dict[str, list[dict]]:
     return idx
 
 
+def ref_hits(name, idx: dict, pinout: list[dict]) -> list[dict]:
+    """The pins a rating's reference names: by alias, then by a name
+    aliases() drops (a passive's "2", rating_fill), V+ for VS, a V-less
+    name, and a prefix (VDDIOX -> VDDIO*)."""
+    hits = idx.get(str(name).upper()) or []
+    if not hits:
+        hits = [q for q in pinout if str(name) in (q["pin"], q["name"])]
+    if not hits and str(name).upper() in ("VS", "V+"):
+        hits = idx.get("V+") or []
+    if not hits and str(name).upper().startswith("V"):
+        hits = idx.get(str(name).upper()[1:]) or []
+    if not hits:
+        stem = str(name).upper().rstrip("X")
+        hits = [p for a, ps in idx.items() if a.startswith(stem)
+                for p in ps]
+    return hits
+
+
 def classify_row(param: str, idx: dict, pinout: list[dict]):
     """-> (explicit pins set, class name or None, ref pin name or None)."""
     p = param.upper()
@@ -1114,16 +1135,24 @@ def clamp_row(b: dict, ext: dict | None,
 
 
 def _supply_rail(b: dict, ext: dict | None, volts: dict,
-                 floor: float = 0.0) -> tuple[float, float] | None:
+                 floor: float = 0.0,
+                 pad: str | None = None) -> tuple[float, float] | None:
     """(lo, hi) of a part's supplies: every power_in pin on the board on a
     known net (at least one), and its ground pins. None when any supply's
     net is unknown - the rail an output swings between is then unknown.
     With no ground pin on the board the low side is the board's lowest
-    rail (floor), not 0 V: the part may sit on a negative rail (#1006)."""
+    rail (floor), not 0 V: the part may sit on a negative rail (#1006).
+    When pad's pinout entry names its `supply` (an SDO fed from VSDO), only
+    the power_in pins of that name count, not a motor or charge supply
+    the pin never swings to (k2271)."""
+    pins = (ext or {}).get("pinout") or []
+    own = next((p.get("supply") for p in pins if p["pin"] == pad), None)
     sup, gnd = [], []
-    for p in (ext or {}).get("pinout") or []:
+    for p in pins:
         net = b["pads"].get(p["pin"])
         if net is None or p["type"] not in ("power_in", "ground"):
+            continue
+        if own and p["type"] == "power_in" and p["name"] != own:
             continue
         if net not in volts:
             return None
@@ -1259,8 +1288,9 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
                 continue
             # a connector's pins are driven from off the board: its own
             # supply pins say nothing about what arrives on the others
-            rail = (_supply_rail(b, ext, volts, floor) if ptype in OUT_TYPES
-                    and not INPUT_CONN_RE.match(ref) else None)
+            rail = (_supply_rail(b, ext, volts, floor, pad)
+                    if ptype in OUT_TYPES and not INPUT_CONN_RE.match(ref)
+                    else None)
             if rail is None:
                 ok = False
                 break
@@ -1536,6 +1566,7 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                              kind=kind, **extra))
 
     unrated_passives: list[str] = []
+    no_row: dict[str, str] = {}     # ref -> why no rating row judged it
     covered_pins: list[str] = []
     checked_by_ref: dict[str, int] = {}
     rated_by_ref: dict[str, set[str]] = {}
@@ -1596,30 +1627,22 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
             why = power_ic_why_unrated(b, bom, volts, vsrc, netfns) if power_ic \
                 else None
             if tier := _check_unextracted(b, bom_by_lcsc.get(b["lcsc"]), volts,
-                                          emit, unrated_passives, why):
+                                          emit, unrated_passives, why,
+                                          no_row):
                 compared(ref, tier)
             continue
         extracted_output_findings(b, ext, bom_by_lcsc.get(b["lcsc"]), volts,
                                   vsrc, emit, fb_ctx)
         ratings = part_ratings(ext)
+        has_row = any(k[0] == "voltage" for rows in ratings.values()
+                      for k in rows)
         name_of = {p["pin"]: p for p in ext.get("pinout") or []}
         pair_refs = {r["ref"] for rows in ratings.values()
                      for lst in rows.values() for r in lst if r["ref"]}
         idx = pin_index(ext.get("pinout") or [])
 
         def ref_volts(name):
-            hits = idx.get(str(name).upper()) or []
-            if not hits:  # a name aliases() drops: a passive's "2" (rating_fill)
-                hits = [q for q in ext.get("pinout") or []
-                        if str(name) in (q["pin"], q["name"])]
-            if not hits and str(name).upper() in ("VS", "V+"):
-                hits = idx.get("V+") or []
-            if not hits and str(name).upper().startswith("V"):
-                hits = idx.get(str(name).upper()[1:]) or []
-            if not hits:  # VDDIOX -> VDDIO*, VDD*: prefix match
-                stem = str(name).upper().rstrip("X")
-                hits = [p for a, ps in idx.items() if a.startswith(stem)
-                        for p in ps]
+            hits = ref_hits(name, idx, ext.get("pinout") or [])
             vs = [volts[pads[h["pin"]]] for h in hits
                   if h["pin"] in pads and pads[h["pin"]] in volts]
             return max(vs) if vs else None
@@ -1891,6 +1914,13 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                              f"..{_fmt(hi) if hi is not None else '-'} V "
                              f"[{r['src']}]", **base)
         covered_pins.extend(covered_by_rule)
+        if unrated and not has_row:
+            some = ext.get("pin_ratings") or ext.get("abs_max")
+            no_row[ref] = (
+                f"{ref} ({b['lcsc'] or 'no LCSC'}, {ext.get('mpn') or 'no MPN'})"
+                f": no ratings row - its extraction has no pin_ratings or "
+                f"abs_max voltage row{' it can read' if some else ''}, so its "
+                f"{len(unrated)} connected pin(s) were not judged")
         if unrated:
             emit("rating_unrated", "warning", ref, None,
                  f"{ref} ({ext.get('mpn')}): {len(unrated)} connected pin(s) "
@@ -1935,6 +1965,12 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
             rated_by_ref.setdefault(ref, set()).add("distributor")
     temp_facts = temperature_findings(board, bom_by_lcsc, exts, amb, emit)
     unrated_passives = [r for r in unrated_passives if r not in trusted]
+    for r in unrated_passives:
+        no_row.setdefault(r, (
+            f"{r} ({next(b['lcsc'] for b in board if b['ref'] == r) or 'no LCSC'})"
+            ": no ratings row - a two-terminal part with no extraction and "
+            "no voltage field on its parts row, so it was not judged"))
+    no_row = {r: w for r, w in no_row.items() if r not in trusted}
     out = [v for v in out if not (v.get("kind") == "rating_unrated"
                                   and set(v.get("refs") or []) <= trusted
                                   and v.get("refs"))]
@@ -2022,7 +2058,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                  f"not compared ({', '.join(pins[:6])}"
                  f"{' ...' if len(pins) > 6 else ''})"
                  for net, pins in sorted(unknown_rails.items())]
-             + clamp_not_judged + fb_ctx["not_judged"],
+             + clamp_not_judged + fb_ctx["not_judged"]
+             + [no_row[r] for r in sorted(no_row)],
              "nothing_to_judge": nothing,
              "parts_not_compared": unjudged,
              "ambient": amb, "fuses": fuse_facts,
@@ -2064,13 +2101,16 @@ NO_VOLTAGE_RATING_RE = re.compile(r"^(?:L|FB)\d")
 
 def _check_unextracted(b: dict, bom: dict | None, volts: dict, emit,
                        unrated_passives: list[str],
-                       why: str | None = None) -> str | None:
+                       why: str | None = None,
+                       no_row: dict[str, str] | None = None) -> str | None:
     """A part with no extraction: a 2-net part's `Voltage Rated` attribute
     is checked across it, else a capacitor's voltage code (cap_code_rating),
     else a resistor's package limit; anything else is an explicit unrated
     finding (two-terminal BOM parts are collected into one finding by the
     caller). The tier the compared rating came from (distributor, part_code,
-    package) when a rating was compared with known volts, else None."""
+    package) when a rating was compared with known volts, else None. A part
+    with no rating row at all (no why from a power-IC table) goes into
+    no_row by ref, with the reason."""
     ref, pads = b["ref"], b["pads"]
     nets = sorted(set(pads.values()))
     rated = bom_volts(bom)
@@ -2092,6 +2132,7 @@ def _check_unextracted(b: dict, bom: dict | None, volts: dict, emit,
         return tier
     if len(nets) <= 1:
         return None  # a single-net part stresses nothing
+    rowless = why is None
     why = why or ("no datasheet extraction" if bom or b["lcsc"] else
                   "no LCSC part on the footprint and no extraction")
     if len(nets) == 2 and NO_VOLTAGE_RATING_RE.match(ref):
@@ -2101,6 +2142,9 @@ def _check_unextracted(b: dict, bom: dict | None, volts: dict, emit,
         return None
     emit("rating_unrated", "warning", ref, None,
          f"{ref} ({b['lcsc'] or 'no LCSC'}): {why}", pins=[why])
+    if no_row is not None and rowless:
+        no_row[ref] = (f"{ref} ({b['lcsc'] or 'no LCSC'}): no ratings row - "
+                       f"{why}, so it was not judged")
     return None
 
 
@@ -2399,7 +2443,9 @@ def regulator_findings(b: dict, bom: dict | None, volts: dict, vsrc: dict,
                 sign if vsrc.get(net) in RAIL_SOURCES else None)
     judged, hit = divider_findings(b, part, [b.get("value") or "", mpn],
                                    fb_pins_unextracted(b, names, mpn), fb_ctx,
-                                   emit, fixed=made is not None)
+                                   emit, fixed=made is not None,
+                                   gnd_pins=[p for p, n in names.items()
+                                             if GND_PAD_RE.match(n)])
     if judged:
         return found or hit
     if not made and not NOT_REG_RE.search(" ".join(str(bom.get(k) or "")
@@ -2846,7 +2892,8 @@ def worst_case_fits(fbv: dict, v: float) -> bool:
 
 def divider_findings(b: dict, part: str, texts: list[str],
                      fb_pins: list[str], ctx: dict | None, emit,
-                     fixed: bool = False) -> tuple[bool, bool]:
+                     fixed: bool = False,
+                     gnd_pins: list[str] = ()) -> tuple[bool, bool]:
     """An adjustable regulator's output from its FB divider and the datasheet
     Vref (reference/regulator_vref.yaml), against what the board says it makes:
     the rail its top resistor sits on, when the board states that rail, and
@@ -2856,7 +2903,10 @@ def divider_findings(b: dict, part: str, texts: list[str],
     is its worst case and may sit above the window (worst_case_fits). An FB
     pad straight on a rail is judged only with a known Vref and when nothing
     calls the part fixed (fixed: its row, extraction or MPN names an output,
-    so FB may be its output sense).
+    so FB may be its output sense). A part whose own ground pad (gnd_pins)
+    sits off ground is an inverting or floating-ground converter: its
+    divider sets the output against that pad, not the board's ground, so it
+    is not judged and says why (k2271).
     (judged, emitted): judged when a divider was found, so the output needs
     no other 'unjudged' warning; emitted when it raised a finding."""
     if not ctx or not fb_pins:
@@ -2865,6 +2915,13 @@ def divider_findings(b: dict, part: str, texts: list[str],
     if div is None:
         return False, False
     ref = b["ref"]
+    off = sorted({b["pads"][p] for p in gnd_pins if p in b["pads"]
+                  and not is_ground(b["pads"][p])})
+    if off and not div.get("reason"):
+        div = {"fb": div["fb"], "reason": (
+            f"its ground pad sits on {off[0]}, not on ground: an inverting "
+            f"or floating-ground converter, whose divider sets the output "
+            f"against its own ground pad, which this check doesn't model")}
     if div.get("reason"):
         if fixed:       # FB may be a fixed part's output sense
             return False, False
@@ -2933,6 +2990,10 @@ def fb_pins_unextracted(b: dict, names: dict, mpn: str) -> list[str]:
             if any(FB_PAD_RE.match(a) for a in aliases(n))]
 
 
+# an unextracted regulator's ground pads, by pad name
+GND_PAD_RE = re.compile(r"^(?:[APSD]?GND|VSS|GROUND)\d*$")
+
+
 def fb_pins_extracted(b: dict, ext: dict, mpn: str) -> list[str]:
     """An extracted adjustable part's FB pads, by pinout name."""
     if reg_fixed_part(mpn) is not None:
@@ -2977,7 +3038,9 @@ def extracted_output_findings(b: dict, ext: dict, bom: dict | None,
                                 made, emit, sign)
     if divider_findings(b, part, [b.get("value") or "", known_mpn],
                         fb_pins_extracted(b, ext, known_mpn), fb_ctx,
-                        emit, fixed=made is not None)[0]:
+                        emit, fixed=made is not None,
+                        gnd_pins=[p["pin"] for p in ext.get("pinout") or []
+                                  if p["type"] == "ground"])[0]:
         return
     if not made and nets and not NOT_REG_RE.search(" ".join(
             [desc] + [str(bom.get(k) or "") for k in REG_ROW_TEXT])):
@@ -3509,7 +3572,8 @@ def clamp_findings(board: list[dict], exts: dict, bom_by_lcsc: dict,
     rating is judged at the TVS's breakdown max (no clamp current yet) and at
     its clamping voltage (a surge), not at the rail's nominal. Rated: an
     extracted part's pins on the rail by their absolute-max voltage rows
-    (from ground, or from a named pin on a known net); an unextracted 2-net
+    (from ground, or from a named pin on a known net), and by another pin's
+    row taken from them, read backwards (k2271); an unextracted 2-net
     part by its voltage-rated attribute or a capacitor's voltage code; a
     diode by its reverse rating. The clamps themselves, and a part the
     nominal already breaks (rating_over_voltage says so), are not judged.
@@ -3570,7 +3634,7 @@ def clamp_findings(board: list[dict], exts: dict, bom_by_lcsc: dict,
                         continue
                     if r["ref"]:
                         vs = [volts.get(pads.get(h["pin"]))
-                              for h in idx.get(str(r["ref"]).upper()) or []]
+                              for h in ref_hits(r["ref"], idx, pinout)]
                         vs = [x for x in vs if x is not None]
                         if not vs:
                             continue
@@ -3579,6 +3643,21 @@ def clamp_findings(board: list[dict], exts: dict, bom_by_lcsc: dict,
                         vref = 0.0
                     if best is None or r["hi"] + vref < best[0] + best[1]:
                         best = (r["hi"], vref, r["src"])
+                # a row on another pin taken from this one (a 2-terminal
+                # part rated across its terminals from pin 1, a P-FET's VDS
+                # from S), read backwards: V(this) <= V(other) - its min
+                for q, rows in sorted(ratings.items()):
+                    vq = volts.get(pads.get(q))
+                    if q == pin or vq is None:
+                        continue
+                    for r in rows.get(("voltage", "abs"), []):
+                        if not r["ref"] or not isinstance(r["lo"], float) \
+                                or r["lo"] >= 0 or not any(
+                                    h["pin"] == pin for h in
+                                    ref_hits(r["ref"], idx, pinout)):
+                            continue
+                        if best is None or vq - r["lo"] < best[0] + best[1]:
+                            best = (-r["lo"], vq, r["src"])
                 if best:
                     judge(ref, net, best[0], best[2], best[1],
                           volts[net] - best[1], f"{ref}.{pin}",

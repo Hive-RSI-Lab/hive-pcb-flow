@@ -1,0 +1,33 @@
+{
+  "mpn": "PESD5Z3.3,115",
+  "lcsc": "C182940",
+  "package": "SOD-523 (SC-79)",
+  "description": "Nexperia PESD5Z3.3 low capacitance unidirectional ESD protection diode, 3.3 V, SOD-523",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (bar)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode, to ground"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 3.3,
+      "ref": "A",
+      "source": "Nexperia PESD5Z3.3 Product data sheet 2 May 2024 p.4 Table 6 Characteristics: 'VRWM reverse standoff voltage Tamb = 25 °C - - 3.3 V' (no pin abs-max voltage is given; VBR min 5 V at 1 mA)"
+    }
+  ],
+  "source_pdf": "Nexperia PESD5Z3.3 Low capacitance unidirectional ESD protection diodes, Product data sheet 2 May 2024, 11 pages, pin map p.2 Table 2 Pinning information (1 K cathode, 2 A anode); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2410010331_Nexperia-PESD5Z3-3-115_C182940.pdf sha256 1e2ec57ed3335a556fd479f169cb9d41bf1e4abbebc457c8a9c6ad34584cf2fc"
+}

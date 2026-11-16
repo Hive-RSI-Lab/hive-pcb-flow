@@ -1,0 +1,32 @@
+{
+  "mpn": "CL10A105KB8NNNC",
+  "lcsc": "C15849",
+  "package": "0603 (1608 metric)",
+  "description": "Samsung Electro-Mechanics CL10A105KB8NNNC 1uF 50V X5R ±10% 0603 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics MLCC catalog (Nov 2015) p.19 'Product Lineup (Standard & High Capacitors-X5R)': row 6 'CL10A105KB8NNN' 1uF, Rated Voltage (Vdc) column 50 (the text layer prints this table column by column, so the row was read on the page image; the catalog lists the part without the packaging letter that the LCSC model adds; the rated voltage code B in the part number agrees: p.4 Part Numbering System, 6. RATED VOLTAGE CODE, B = 50V); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics MLCC catalog (Nov 2015), 84 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Samsung-Electro-Mechanics-CL10A105KB8NNNC_C15849.pdf sha256 96baebe4bd0ce363e87be28b5b003f511f1502e084a6fc4f02333ded56c808f6 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

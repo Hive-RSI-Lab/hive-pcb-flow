@@ -1,0 +1,62 @@
+{
+  "mpn": "AO3401A",
+  "lcsc": "C15127",
+  "package": "SOT-23",
+  "description": "Alpha & Omega AO3401A 30V P-channel MOSFET, SOT-23",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "G",
+      "type": "input",
+      "notes": "gate (pin-1 dot side)"
+    },
+    {
+      "pin": "2",
+      "name": "S",
+      "type": "passive",
+      "notes": "source"
+    },
+    {
+      "pin": "3",
+      "name": "D",
+      "type": "passive",
+      "notes": "drain"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VDS drain-source voltage",
+      "value": -30,
+      "unit": "V"
+    },
+    {
+      "param": "VGS gate-source voltage",
+      "value": "-12~12",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "D"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -30,
+      "ref": "S",
+      "source": "AOS AO3401A 30V P-Channel MOSFET datasheet Rev 3.1 December 2023 p.1 Absolute Maximum Ratings: 'Drain-Source Voltage -30'"
+    },
+    {
+      "pins": [
+        "G"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -12,
+      "max": 12,
+      "ref": "S",
+      "source": "AOS AO3401A 30V P-Channel MOSFET datasheet Rev 3.1 December 2023 p.1 Absolute Maximum Ratings: 'V±12Gate-Source Voltage'"
+    }
+  ],
+  "source_pdf": "Alpha & Omega Semiconductor AO3401A 30V P-Channel MOSFET, Rev 3.1 December 2023, 5 pages, pin map p.1 (SOT23 top view, pin numbers not printed; pin-1 dot at G, so G, S, D = pins 1, 2, 3); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2412061733_Alpha---Omega-Semicon-AO3401A_C15127.pdf sha256 0d8e3261ae280e007b5837fff60c55142f2d92af71edc4d02aee6f7a760a785c"
+}

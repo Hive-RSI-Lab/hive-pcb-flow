@@ -1,0 +1,104 @@
+{
+  "mpn": "W25Q32JVZPIQ",
+  "lcsc": "C571260",
+  "package": "WSON-8 6x5-mm with exposed pad",
+  "description": "Winbond W25Q32JV 3V 32M-bit serial NOR flash, dual/quad SPI, 8-pad WSON 6x5-mm (package code ZP)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "/CS",
+      "type": "input",
+      "notes": "chip select input"
+    },
+    {
+      "pin": "2",
+      "name": "DO (IO1)",
+      "type": "bidirectional",
+      "notes": "data output (IO1)"
+    },
+    {
+      "pin": "3",
+      "name": "/WP (IO2)",
+      "type": "bidirectional",
+      "notes": "write protect input (IO2)"
+    },
+    {
+      "pin": "4",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "5",
+      "name": "DI (IO0)",
+      "type": "bidirectional",
+      "notes": "data input (IO0)"
+    },
+    {
+      "pin": "6",
+      "name": "CLK",
+      "type": "input",
+      "notes": "serial clock input"
+    },
+    {
+      "pin": "7",
+      "name": "/HOLD or /RESET (IO3)",
+      "type": "bidirectional",
+      "notes": "hold or reset input (IO3)"
+    },
+    {
+      "pin": "8",
+      "name": "VCC",
+      "type": "power_in",
+      "notes": "power supply"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VCC supply voltage",
+      "value": "-0.6~4.6",
+      "unit": "V"
+    },
+    {
+      "param": "VIO voltage applied to any pin, relative to ground",
+      "value": "-0.6~VCC+0.4",
+      "unit": "V"
+    },
+    {
+      "param": "VIOT transient voltage on any pin, <20 ns",
+      "value": "-2.0~VCC+2.0",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VCC"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.6,
+      "max": 4.6,
+      "source": "Winbond W25Q32JV datasheet Revision G (Mar 27, 2018) p.60 9.1 Absolute Maximum Ratings: 'Supply Voltage VCC  -0.6 to 4.6 V'"
+    },
+    {
+      "pins": [
+        "/CS",
+        "DO (IO1)",
+        "/WP (IO2)",
+        "DI (IO0)",
+        "CLK",
+        "/HOLD or /RESET (IO3)"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.6,
+      "max": "VCC+0.4",
+      "source": "Winbond W25Q32JV datasheet Revision G (Mar 27, 2018) p.60 9.1 Absolute Maximum Ratings: 'Voltage Applied to Any Pin VIO Relative to Ground -0.6 to VCC+0.4 V'"
+    }
+  ],
+  "source_pdf": "Winbond W25Q32JV 3V 32M-bit Serial Flash Memory with Dual/Quad SPI, Revision G, Publication Release Date March 27, 2018, 80 pages, pin map p.6 '3.2 Pad Configuration WSON 6x5-mm' and '3.3 Pin Description'; exposed pad p.70 10.4 note: not connected to any internal signal, may float or go to GND; ordering code W25Q32JVZPIQ p.78; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Winbond-Elec-W25Q32JVZPIQ_C571260.pdf sha256 b2585095ac503e7cee7916ab3f025a51699b49e2cad7f6782e92b828c1cc09d8",
+  "exposed_pad": {
+    "present": true,
+    "connect_to": "GND"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "mpn": "APX811-40UG-7",
+  "lcsc": "C155533",
+  "package": "SOT-143",
+  "description": "Diodes APX811 4-pin microprocessor reset supervisor, 4.0V threshold, active-low push-pull reset with manual reset, SOT-143",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "2",
+      "name": "RESET#",
+      "type": "output",
+      "notes": "active-low reset, push-pull"
+    },
+    {
+      "pin": "3",
+      "name": "MR#",
+      "type": "input",
+      "notes": "manual reset"
+    },
+    {
+      "pin": "4",
+      "name": "VCC",
+      "type": "power_in"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VCC Supply voltage",
+      "value": "-0.3~7",
+      "unit": "V"
+    },
+    {
+      "param": "VRESET RESET",
+      "value": "-0.3~VCC+0.3",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VCC"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 7,
+      "source": "Diodes APX811/812 datasheet (DS31960 Rev. 2, October 2009) p.3 Absolute Maximum Ratings: 'VCC Supply voltage -0.3~7 V'"
+    },
+    {
+      "pins": [
+        "RESET#"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VCC+0.3",
+      "source": "Diodes APX811/812 datasheet (DS31960 Rev. 2, October 2009) p.3 Absolute Maximum Ratings: 'VRESET RESET -0.3 to (Vcc+0.3) V'"
+    },
+    {
+      "pins": [
+        "MR#"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "min": 0,
+      "max": "VCC+0.3",
+      "source": "Diodes APX811/812 datasheet (DS31960 Rev. 2, October 2009) p.3 Recommended Operating Conditions (no abs-max row for MR): 'VIN Input Voltage 0 (V CC+0.3) V'"
+    }
+  ],
+  "source_pdf": "Diodes Incorporated APX811/812 4-pin microprocessor reset circuit, DS31960 Rev. 2 October 2009, 10 pages, pin map p.2 SOT143 'GND 1, RESET 2, MR 3, VCC 4'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Diodes-Incorporated-APX811-40UG-7_C155533.pdf sha256 7a730fe754bff472a93b6e9c8a10e0a954d831bb52cfe428363498880a1b700b"
+}

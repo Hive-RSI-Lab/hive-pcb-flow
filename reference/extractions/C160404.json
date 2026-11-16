@@ -1,0 +1,50 @@
+{
+  "mpn": "SM04B-SRSS-TB(LF)(SN)",
+  "lcsc": "C160404",
+  "package": "SMD,P=1mm,Surface Mount，Right Angle",
+  "description": "JST SH 4-pin 1.0mm side-entry (horizontal) SMD header with 2 solder tabs",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    },
+    {
+      "pin": "MP",
+      "name": "MP",
+      "type": "ground",
+      "notes": "solder tab / mounting pad (board pad; not a signal contact)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "source": "JST SH CONNECTOR catalog (1.0mm pitch disconnectable crimp style), no revision printed p.1 Specifications: 'Voltage rating: 50 V AC, DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "JST SH CONNECTOR catalog (1.0mm pitch disconnectable crimp style), no revision printed, 2 PDF pages, pin map: SM04B-SRSS-TB listed p.2; contacts numbered by position; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_JST-SM04B-SRSS-TB-LF-SN_C160404.pdf sha256 27aaa74dc8ee840dff5e50ea387ed777e097f2b23182036c7368604da7e73a6e"
+}

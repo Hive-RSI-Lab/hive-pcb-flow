@@ -1,0 +1,31 @@
+{
+  "mpn": "2201010609TR",
+  "lcsc": "C19270543",
+  "package": "SMD,D6.3xL9mm",
+  "description": "NJCON 2201010609TR polymer aluminium electrolytic 100V 22uF SMD D6.3xL9mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "+",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "-",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 100,
+      "ref": "2",
+      "source": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor MB series, Rev 1 2023-11-24 p.3 Parts list & Characteristics: '2201010609TR 100V22UF 6.3*9' (rated voltage 100 V DC); polarized, + on pad 1 (KiCad CP footprint), rated with ref the - pad"
+    }
+  ],
+  "source_pdf": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor MB series, Rev 1 2023-11-24, 13 pages, case drawing p.4 (PDF page numbers; KiCad CP footprint pad 1 = +); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2311281710_NJCON-2201010609TR_C19270543.pdf sha256 fce2a72d03f9b3e949f6785b6d4578b419a3350a9a763155c24cb4204b17499b"
+}

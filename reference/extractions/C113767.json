@@ -1,0 +1,28 @@
+{
+  "mpn": "W25Q128JVSIQ",
+  "lcsc": "C113767",
+  "package": "SOIC-8 208-mil",
+  "description": "Winbond W25Q128JV 3V 128M-bit serial NOR flash, dual/quad SPI, SOIC-8 208-mil (package code S)",
+  "pinout": [
+    {"pin": "1", "name": "/CS", "type": "input", "notes": "chip select input"},
+    {"pin": "2", "name": "DO (IO1)", "type": "bidirectional", "notes": "data output (IO1)"},
+    {"pin": "3", "name": "/WP (IO2)", "type": "bidirectional", "notes": "write protect input (IO2)"},
+    {"pin": "4", "name": "GND", "type": "ground"},
+    {"pin": "5", "name": "DI (IO0)", "type": "bidirectional", "notes": "data input (IO0)"},
+    {"pin": "6", "name": "CLK", "type": "input", "notes": "serial clock input"},
+    {"pin": "7", "name": "/HOLD or /RESET (IO3)", "type": "bidirectional", "notes": "hold or reset input (IO3)"},
+    {"pin": "8", "name": "VCC", "type": "power_in", "notes": "power supply"}
+  ],
+  "abs_max": [
+    {"param": "VCC supply voltage", "value": "-0.6~4.6", "unit": "V"},
+    {"param": "VIO voltage applied to any pin, relative to ground", "value": "-0.6~VCC+0.4", "unit": "V"},
+    {"param": "VIOT transient voltage on any pin, <20 ns", "value": "-2.0~VCC+2.0", "unit": "V"}
+  ],
+  "pin_ratings": [
+    {"pins": ["VCC"], "kind": "voltage", "level": "abs_max", "min": -0.6, "max": 4.6,
+     "source": "Winbond W25Q128JV datasheet Revision E (Nov 23, 2017) p.61 9.1 Absolute Maximum Ratings: 'Supply Voltage VCC  -0.6 to 4.6 V'"},
+    {"pins": ["/CS", "DO (IO1)", "/WP (IO2)", "DI (IO0)", "CLK", "/HOLD or /RESET (IO3)"], "kind": "voltage", "level": "abs_max", "min": -0.6, "max": "VCC+0.4",
+     "source": "Winbond W25Q128JV datasheet Revision E (Nov 23, 2017) p.61 9.1 Absolute Maximum Ratings: 'Voltage Applied to Any Pin VIO Relative to Ground -0.6 to VCC+0.4 V'"}
+  ],
+  "source_pdf": "Winbond W25Q128JV 3V 128M-bit Serial Flash Memory with Dual/Quad SPI, Revision E, Publication Release Date November 23, 2017, 78 pages, pin map p.6 '3.1 Pin Configuration SOIC 208-mil' and '3.3 Pin Description', ordering code W25Q128JVSIQ p.76; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1912111437_Winbond-Elec-W25Q128JVSIQ_C113767.pdf sha256 cee5c3a5e3367c21261d5fa6730807fe4294539888297882cdcfa6e0eb91b72d"
+}

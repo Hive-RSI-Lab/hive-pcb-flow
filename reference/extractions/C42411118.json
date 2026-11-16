@@ -1,0 +1,494 @@
+{
+ "mpn": "RP2350A",
+ "lcsc": "C42411118",
+ "package": "QFN-60 (7x7) with exposed pad",
+ "description": "Raspberry Pi RP2350A dual Cortex-M33 / Hazard3 RISC-V MCU, 520 KB SRAM, no internal flash, 30 GPIO, QFN-60",
+ "pinout": [
+  {
+   "pin": "1",
+   "name": "IOVDD",
+   "type": "power_in",
+   "notes": "IO supply; pin 1 per p.16 Figure 2 (Table 1432 lists IOVDD as 11, 20, 30, 38, 45, 54)"
+  },
+  {
+   "pin": "2",
+   "name": "GPIO0",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "3",
+   "name": "GPIO1",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "4",
+   "name": "GPIO2",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "5",
+   "name": "GPIO3",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "6",
+   "name": "DVDD",
+   "type": "power_in",
+   "notes": "core supply"
+  },
+  {
+   "pin": "7",
+   "name": "GPIO4",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "8",
+   "name": "GPIO5",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "9",
+   "name": "GPIO6",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "10",
+   "name": "GPIO7",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "11",
+   "name": "IOVDD",
+   "type": "power_in",
+   "notes": "IO supply"
+  },
+  {
+   "pin": "12",
+   "name": "GPIO8",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "13",
+   "name": "GPIO9",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "14",
+   "name": "GPIO10",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "15",
+   "name": "GPIO11",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "16",
+   "name": "GPIO12",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "17",
+   "name": "GPIO13",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "18",
+   "name": "GPIO14",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "19",
+   "name": "GPIO15",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "20",
+   "name": "IOVDD",
+   "type": "power_in",
+   "notes": "IO supply"
+  },
+  {
+   "pin": "21",
+   "name": "XIN",
+   "type": "input",
+   "notes": "Analogue (XOSC), 12 MHz crystal or square wave"
+  },
+  {
+   "pin": "22",
+   "name": "XOUT",
+   "type": "output",
+   "notes": "Analogue (XOSC), crystal"
+  },
+  {
+   "pin": "23",
+   "name": "DVDD",
+   "type": "power_in",
+   "notes": "core supply"
+  },
+  {
+   "pin": "24",
+   "name": "SWCLK",
+   "type": "input",
+   "notes": "Digital In (FT), IOVDD domain"
+  },
+  {
+   "pin": "25",
+   "name": "SWDIO",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "26",
+   "name": "RUN",
+   "type": "input",
+   "notes": "Digital In (FT), chip enable / reset_n, pull-up"
+  },
+  {
+   "pin": "27",
+   "name": "GPIO16",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "28",
+   "name": "GPIO17",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "29",
+   "name": "GPIO18",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "30",
+   "name": "IOVDD",
+   "type": "power_in",
+   "notes": "IO supply"
+  },
+  {
+   "pin": "31",
+   "name": "GPIO19",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "32",
+   "name": "GPIO20",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "33",
+   "name": "GPIO21",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "34",
+   "name": "GPIO22",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "35",
+   "name": "GPIO23",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "36",
+   "name": "GPIO24",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "37",
+   "name": "GPIO25",
+   "type": "bidirectional",
+   "notes": "Digital IO (FT), IOVDD domain"
+  },
+  {
+   "pin": "38",
+   "name": "IOVDD",
+   "type": "power_in",
+   "notes": "IO supply"
+  },
+  {
+   "pin": "39",
+   "name": "DVDD",
+   "type": "power_in",
+   "notes": "core supply"
+  },
+  {
+   "pin": "40",
+   "name": "GPIO26_ADC0",
+   "type": "bidirectional",
+   "notes": "Digital IO / Analogue (not FT), IOVDD / ADC_AVDD domain"
+  },
+  {
+   "pin": "41",
+   "name": "GPIO27_ADC1",
+   "type": "bidirectional",
+   "notes": "Digital IO / Analogue (not FT), IOVDD / ADC_AVDD domain"
+  },
+  {
+   "pin": "42",
+   "name": "GPIO28_ADC2",
+   "type": "bidirectional",
+   "notes": "Digital IO / Analogue (not FT), IOVDD / ADC_AVDD domain"
+  },
+  {
+   "pin": "43",
+   "name": "GPIO29_ADC3",
+   "type": "bidirectional",
+   "notes": "Digital IO / Analogue (not FT), IOVDD / ADC_AVDD domain"
+  },
+  {
+   "pin": "44",
+   "name": "ADC_AVDD",
+   "type": "power_in",
+   "notes": "ADC supply"
+  },
+  {
+   "pin": "45",
+   "name": "IOVDD",
+   "type": "power_in",
+   "notes": "IO supply"
+  },
+  {
+   "pin": "46",
+   "name": "VREG_AVDD",
+   "type": "power_in",
+   "notes": "voltage regulator analogue supply"
+  },
+  {
+   "pin": "47",
+   "name": "VREG_PGND",
+   "type": "ground"
+  },
+  {
+   "pin": "48",
+   "name": "VREG_LX",
+   "type": "power_out",
+   "notes": "voltage regulator switching output (connect to inductor)",
+   "self_driven": true
+  },
+  {
+   "pin": "49",
+   "name": "VREG_VIN",
+   "type": "power_in",
+   "notes": "voltage regulator input supply"
+  },
+  {
+   "pin": "50",
+   "name": "VREG_FB",
+   "type": "input",
+   "notes": "voltage regulator feedback input"
+  },
+  {
+   "pin": "51",
+   "name": "USB_DM",
+   "type": "bidirectional",
+   "notes": "USB IO, USB_OTP_VDD domain"
+  },
+  {
+   "pin": "52",
+   "name": "USB_DP",
+   "type": "bidirectional",
+   "notes": "USB IO, USB_OTP_VDD domain"
+  },
+  {
+   "pin": "53",
+   "name": "USB_OTP_VDD",
+   "type": "power_in",
+   "notes": "USB and OTP supply"
+  },
+  {
+   "pin": "54",
+   "name": "QSPI_IOVDD",
+   "type": "power_in",
+   "notes": "QSPI IO supply"
+  },
+  {
+   "pin": "55",
+   "name": "QSPI_SD3",
+   "type": "bidirectional",
+   "notes": "Digital IO, QSPI_IOVDD domain"
+  },
+  {
+   "pin": "56",
+   "name": "QSPI_SCLK",
+   "type": "bidirectional",
+   "notes": "Digital IO, QSPI_IOVDD domain"
+  },
+  {
+   "pin": "57",
+   "name": "QSPI_SD0",
+   "type": "bidirectional",
+   "notes": "Digital IO, QSPI_IOVDD domain"
+  },
+  {
+   "pin": "58",
+   "name": "QSPI_SD2",
+   "type": "bidirectional",
+   "notes": "Digital IO, QSPI_IOVDD domain"
+  },
+  {
+   "pin": "59",
+   "name": "QSPI_SD1",
+   "type": "bidirectional",
+   "notes": "Digital IO, QSPI_IOVDD domain"
+  },
+  {
+   "pin": "60",
+   "name": "QSPI_SS",
+   "type": "bidirectional",
+   "notes": "Digital IO, QSPI_IOVDD domain; USB BOOTSEL strap"
+  }
+ ],
+ "exposed_pad": {
+  "present": true,
+  "connect_to": "GND"
+ },
+ "abs_max": [
+  {
+   "param": "Core supply (DVDD) voltage",
+   "value": "-0.5~1.21",
+   "unit": "V"
+  },
+  {
+   "param": "I/O supply (IOVDD) and QSPI supply (QSPI_IOVDD) voltage",
+   "value": "-0.5~3.63",
+   "unit": "V"
+  },
+  {
+   "param": "Voltage at IO (Standard) VPIN",
+   "value": "-0.5~IOVDD+0.5",
+   "unit": "V"
+  },
+  {
+   "param": "Voltage at IO (FT) VPIN_FT, IOVDD=3.3V (IOVDD must be present)",
+   "value": "-0.5~5.5",
+   "unit": "V"
+  },
+  {
+   "param": "Voltage at IO (FT) VPIN_FT, IOVDD=2.5V",
+   "value": "-0.5~4.2",
+   "unit": "V"
+  },
+  {
+   "param": "Voltage at IO (FT) VPIN_FT, IOVDD=1.8V or 0V",
+   "value": "-0.5~3.63",
+   "unit": "V"
+  }
+ ],
+ "pin_ratings": [
+  {
+   "pins": [
+    "DVDD"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.5,
+   "max": 1.21,
+   "source": "Raspberry Pi Ltd RP2350 Datasheet (build-date 2025-07-29, build-version d126e9e) p.1339 Table 1433. Absolute maximum ratings: 'DVDD -0.5 1.21 V'"
+  },
+  {
+   "pins": [
+    "IOVDD",
+    "QSPI_IOVDD"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.5,
+   "max": 3.63,
+   "source": "Raspberry Pi Ltd RP2350 Datasheet (build-date 2025-07-29, build-version d126e9e) p.1339 Table 1433. Absolute maximum ratings: 'IOVDD -0.5 3.63 V' (row I/O Supply (IOVDD) and QSPI Supply (QSPI_IOVDD) Voltage)"
+  },
+  {
+   "pins": [
+    "GPIO0",
+    "GPIO1",
+    "GPIO2",
+    "GPIO3",
+    "GPIO4",
+    "GPIO5",
+    "GPIO6",
+    "GPIO7",
+    "GPIO8",
+    "GPIO9",
+    "GPIO10",
+    "GPIO11",
+    "GPIO12",
+    "GPIO13",
+    "GPIO14",
+    "GPIO15",
+    "GPIO16",
+    "GPIO17",
+    "GPIO18",
+    "GPIO19",
+    "GPIO20",
+    "GPIO21",
+    "GPIO22",
+    "GPIO23",
+    "GPIO24",
+    "GPIO25",
+    "SWCLK",
+    "SWDIO",
+    "RUN"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.5,
+   "max": 5.5,
+   "source": "Raspberry Pi Ltd RP2350 Datasheet (build-date 2025-07-29, build-version d126e9e) p.1340 Table 1433. Absolute maximum ratings: 'VPIN_FT IOVDD=3.3V -0.5 5.5 V IOVDD must be'; the limit is 4.2 V at IOVDD=2.5V and 3.63 V at IOVDD=1.8V or 0V; FT pins per p.1336-1338 Tables 1427 and 1430"
+  },
+  {
+   "pins": [
+    "GPIO26_ADC0",
+    "GPIO27_ADC1",
+    "GPIO28_ADC2",
+    "GPIO29_ADC3"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.5,
+   "max": "IOVDD+0.5",
+   "source": "Raspberry Pi Ltd RP2350 Datasheet (build-date 2025-07-29, build-version d126e9e) p.1340 Table 1433. Absolute maximum ratings: 'VPIN -0.5 IOVDD + 0.5 V' (Voltage at IO (Standard)); Digital IO / Analogue, not FT, per p.1337 Table 1427"
+  },
+  {
+   "pins": [
+    "QSPI_SD3",
+    "QSPI_SCLK",
+    "QSPI_SD0",
+    "QSPI_SD2",
+    "QSPI_SD1",
+    "QSPI_SS"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.5,
+   "max": "QSPI_IOVDD+0.5",
+   "source": "Raspberry Pi Ltd RP2350 Datasheet (build-date 2025-07-29, build-version d126e9e) p.1340 Table 1433. Absolute maximum ratings: 'VPIN -0.5 IOVDD + 0.5 V' (Voltage at IO (Standard)); QSPI pins are Digital IO in the QSPI_IOVDD power domain per p.1338 Table 1428, so the bound is taken from QSPI_IOVDD"
+  }
+ ],
+ "source_pdf": "Raspberry Pi Ltd RP2350 Datasheet, build-date 2025-07-29, build-version d126e9e-clean, 1380 pages, pin map p.16 'Figure 2. RP2350 Pinout for QFN-60' and p.1336-1339 'Table 1427. GPIO pins' to 'Table 1432. Power supply pins'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2412101620_Raspberry-Pi-RP2350A_C42411118.pdf sha256 2877d0f270fb6d6a57943bee58aaad536aa027bea1e5b1c4ce2541a3230d4be8"
+}

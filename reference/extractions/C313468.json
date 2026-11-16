@@ -1,0 +1,33 @@
+{
+  "mpn": "SBA330AH_R1_00001",
+  "lcsc": "C313468",
+  "package": "SOD-123HE",
+  "description": "PANJIT SBA330AH 3 A 30 V extreme low VF Schottky rectifier, SOD-123HE",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 30,
+      "ref": "A",
+      "source": "PANJIT SBA320AH / SBA330AH / SBA340AH March 20,2018-REV.04 p.1 Maximum Ratings, columns SBA320AH SBA330AH SBA340AH: 'Maximum repetitive peak reverse voltage VRRM 20 30 40 V' (SBA330AH = 30 V; VR dc blocking also 30 V)"
+    }
+  ],
+  "source_pdf": "PANJIT SBA320AH / SBA330AH / SBA340AH Extreme Low VF Schottky Rectifier, March 20,2018-REV.04, 5 pages, pin map p.1 package symbol (1 Cathode, 2 Anode); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2007130933_PANJIT-International-SBA330AH-R1-00001_C313468.pdf sha256 d698284026e3bde535d11f7dec093caf53bf5be3a9bd483c1c9d00a6123ded9a"
+}

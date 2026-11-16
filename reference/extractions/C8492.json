@@ -1,0 +1,62 @@
+{
+  "mpn": "LBSS84LT1G",
+  "lcsc": "C8492",
+  "package": "SOT-23",
+  "description": "LRC LBSS84LT1G 50V P-channel MOSFET, SOT-23",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "G",
+      "type": "input",
+      "notes": "gate"
+    },
+    {
+      "pin": "2",
+      "name": "S",
+      "type": "passive",
+      "notes": "source"
+    },
+    {
+      "pin": "3",
+      "name": "D",
+      "type": "passive",
+      "notes": "drain"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VDSS drain-source voltage",
+      "value": -50,
+      "unit": "V"
+    },
+    {
+      "param": "VGS gate-source voltage",
+      "value": "-20~20",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "D"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "ref": "S",
+      "source": "Leshan Radio Company LBSS84LT1G datasheet Rev.A p.1 Maximum Ratings: 'Drain–to–Source Voltage VDSS 50 Vdc' (P-channel, so -50 V on D)"
+    },
+    {
+      "pins": [
+        "G"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -20,
+      "max": 20,
+      "ref": "S",
+      "source": "Leshan Radio Company LBSS84LT1G datasheet Rev.A p.1 Maximum Ratings: 'Gate–to–Source Voltage – Continuous VGS ± 20 Vdc'"
+    }
+  ],
+  "source_pdf": "Leshan Radio Company LBSS84LT1G P-Channel SOT-23 MOSFET, Rev.A, 4 pages, pin map p.1 (1 Gate, 2 Source, 3 Drain); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1811031711_LRC-LBSS84LT1G_C8492.pdf sha256 4a0cddadbea0bf5ee41daf8bbe43a0132cb4c0de4684ad5f1260714fbfb6fb8c"
+}

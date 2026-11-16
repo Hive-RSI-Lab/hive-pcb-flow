@@ -1,0 +1,327 @@
+{
+  "mpn": "ESP32-C6-MINI-1-N4",
+  "lcsc": "C5736265",
+  "package": "SMD module 13.2x16.6 mm, 53 pads, PCB antenna",
+  "description": "Espressif ESP32-C6-MINI-1-N4 Wi-Fi 6 / Bluetooth 5 LE / 802.15.4 module, ESP32-C6, 4 MB flash, PCB antenna, 3.0-3.6 V",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "3V3",
+      "type": "power_in",
+      "notes": "3.3 V supply"
+    },
+    {
+      "pin": "4",
+      "name": "NC",
+      "type": "nc",
+      "notes": "not connected"
+    },
+    {
+      "pin": "5",
+      "name": "IO2",
+      "type": "bidirectional",
+      "notes": "GPIO2, ADC1_CH2"
+    },
+    {
+      "pin": "6",
+      "name": "IO3",
+      "type": "bidirectional",
+      "notes": "GPIO3, ADC1_CH3"
+    },
+    {
+      "pin": "7",
+      "name": "NC",
+      "type": "nc",
+      "notes": "not connected"
+    },
+    {
+      "pin": "8",
+      "name": "EN",
+      "type": "input",
+      "notes": "chip enable, high = on; do not leave floating"
+    },
+    {
+      "pin": "9",
+      "name": "IO4",
+      "type": "bidirectional",
+      "notes": "GPIO4, MTMS, strapping"
+    },
+    {
+      "pin": "10",
+      "name": "IO5",
+      "type": "bidirectional",
+      "notes": "GPIO5, MTDI, strapping"
+    },
+    {
+      "pin": "11",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "12",
+      "name": "IO0",
+      "type": "bidirectional",
+      "notes": "GPIO0, XTAL_32K_P"
+    },
+    {
+      "pin": "13",
+      "name": "IO1",
+      "type": "bidirectional",
+      "notes": "GPIO1, XTAL_32K_N"
+    },
+    {
+      "pin": "14",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "15",
+      "name": "IO6",
+      "type": "bidirectional",
+      "notes": "GPIO6, MTCK"
+    },
+    {
+      "pin": "16",
+      "name": "IO7",
+      "type": "bidirectional",
+      "notes": "GPIO7, MTDO"
+    },
+    {
+      "pin": "17",
+      "name": "IO12",
+      "type": "bidirectional",
+      "notes": "GPIO12, USB_D-"
+    },
+    {
+      "pin": "18",
+      "name": "IO13",
+      "type": "bidirectional",
+      "notes": "GPIO13, USB_D+"
+    },
+    {
+      "pin": "19",
+      "name": "IO14",
+      "type": "bidirectional",
+      "notes": "GPIO14"
+    },
+    {
+      "pin": "20",
+      "name": "IO15",
+      "type": "bidirectional",
+      "notes": "GPIO15, JTAG source strapping"
+    },
+    {
+      "pin": "21",
+      "name": "NC",
+      "type": "nc",
+      "notes": "not connected"
+    },
+    {
+      "pin": "22",
+      "name": "IO8",
+      "type": "bidirectional",
+      "notes": "GPIO8, boot mode strapping"
+    },
+    {
+      "pin": "23",
+      "name": "IO9",
+      "type": "bidirectional",
+      "notes": "GPIO9, boot mode strapping, default pull-up"
+    },
+    {
+      "pin": "24",
+      "name": "IO18",
+      "type": "bidirectional",
+      "notes": "GPIO18, SDIO_CMD"
+    },
+    {
+      "pin": "25",
+      "name": "IO19",
+      "type": "bidirectional",
+      "notes": "GPIO19, SDIO_CLK"
+    },
+    {
+      "pin": "26",
+      "name": "IO20",
+      "type": "bidirectional",
+      "notes": "GPIO20, SDIO_DATA0"
+    },
+    {
+      "pin": "27",
+      "name": "IO21",
+      "type": "bidirectional",
+      "notes": "GPIO21, SDIO_DATA1"
+    },
+    {
+      "pin": "28",
+      "name": "IO22",
+      "type": "bidirectional",
+      "notes": "GPIO22, SDIO_DATA2"
+    },
+    {
+      "pin": "29",
+      "name": "IO23",
+      "type": "bidirectional",
+      "notes": "GPIO23, SDIO_DATA3"
+    },
+    {
+      "pin": "30",
+      "name": "RXD0",
+      "type": "bidirectional",
+      "notes": "U0RXD, GPIO17"
+    },
+    {
+      "pin": "31",
+      "name": "TXD0",
+      "type": "bidirectional",
+      "notes": "U0TXD, GPIO16"
+    },
+    {
+      "pin": "32",
+      "name": "NC",
+      "type": "nc",
+      "notes": "not connected"
+    },
+    {
+      "pin": "33",
+      "name": "NC",
+      "type": "nc",
+      "notes": "not connected"
+    },
+    {
+      "pin": "34",
+      "name": "NC",
+      "type": "nc",
+      "notes": "not connected"
+    },
+    {
+      "pin": "35",
+      "name": "NC",
+      "type": "nc",
+      "notes": "not connected"
+    },
+    {
+      "pin": "36",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "37",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "38",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "39",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "40",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "41",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "42",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "43",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "44",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "45",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "46",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "47",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "48",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "49",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "50",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "51",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "52",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "53",
+      "name": "GND",
+      "type": "ground"
+    }
+  ],
+  "exposed_pad": {
+    "present": false
+  },
+  "abs_max": [
+    {
+      "param": "VDD33 power pin voltage",
+      "value": "-0.3~3.6",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "3V3"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 3.6,
+      "source": "Espressif ESP32-C6-MINI-1 & MINI-1U datasheet (Chinese, pre-release v0.6, 2023) p.15 Table 10 Absolute Maximum Ratings (text layer garbles the Chinese and maps the minus sign to another glyph; the page image reads VDD33, power pin voltage, -0.3, 3.6 V): 'VDD33࿢ ⚶0.3 3.6 V'"
+    }
+  ],
+  "source_pdf": "Espressif Systems ESP32-C6-MINI-1 & MINI-1U datasheet (Chinese), pre-release v0.6, 2023, 37 pages, pin map p.10 Figure 3 pin layout and pp.10-11 Table 3 pin definitions (GND 1, 2, 11, 14, 36-53; 3V3 3), ordering code ESP32-C6-MINI-1-N4 p.3; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2410301608_Espressif-Systems-ESP32-C6-MINI-1-N4_C5736265.pdf sha256 941a305ee828129f73a62a17fc0ba9e07261c80672b131f01b5be9a373935fe6"
+}

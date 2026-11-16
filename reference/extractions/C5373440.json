@@ -1,0 +1,212 @@
+{
+  "mpn": "0.5-30P XJH2.0 043",
+  "lcsc": "C5373440",
+  "package": "SMD,P=0.5mm,Surface Mount，Right Angle",
+  "description": "SHOU HAN 0.5-30P XJH2.0 043 30-pin 0.5mm flip-lock FPC connector, 30V 0.2A",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    },
+    {
+      "pin": "5",
+      "name": "P5",
+      "type": "passive"
+    },
+    {
+      "pin": "6",
+      "name": "P6",
+      "type": "passive"
+    },
+    {
+      "pin": "7",
+      "name": "P7",
+      "type": "passive"
+    },
+    {
+      "pin": "8",
+      "name": "P8",
+      "type": "passive"
+    },
+    {
+      "pin": "9",
+      "name": "P9",
+      "type": "passive"
+    },
+    {
+      "pin": "10",
+      "name": "P10",
+      "type": "passive"
+    },
+    {
+      "pin": "11",
+      "name": "P11",
+      "type": "passive"
+    },
+    {
+      "pin": "12",
+      "name": "P12",
+      "type": "passive"
+    },
+    {
+      "pin": "13",
+      "name": "P13",
+      "type": "passive"
+    },
+    {
+      "pin": "14",
+      "name": "P14",
+      "type": "passive"
+    },
+    {
+      "pin": "15",
+      "name": "P15",
+      "type": "passive"
+    },
+    {
+      "pin": "16",
+      "name": "P16",
+      "type": "passive"
+    },
+    {
+      "pin": "17",
+      "name": "P17",
+      "type": "passive"
+    },
+    {
+      "pin": "18",
+      "name": "P18",
+      "type": "passive"
+    },
+    {
+      "pin": "19",
+      "name": "P19",
+      "type": "passive"
+    },
+    {
+      "pin": "20",
+      "name": "P20",
+      "type": "passive"
+    },
+    {
+      "pin": "21",
+      "name": "P21",
+      "type": "passive"
+    },
+    {
+      "pin": "22",
+      "name": "P22",
+      "type": "passive"
+    },
+    {
+      "pin": "23",
+      "name": "P23",
+      "type": "passive"
+    },
+    {
+      "pin": "24",
+      "name": "P24",
+      "type": "passive"
+    },
+    {
+      "pin": "25",
+      "name": "P25",
+      "type": "passive"
+    },
+    {
+      "pin": "26",
+      "name": "P26",
+      "type": "passive"
+    },
+    {
+      "pin": "27",
+      "name": "P27",
+      "type": "passive"
+    },
+    {
+      "pin": "28",
+      "name": "P28",
+      "type": "passive"
+    },
+    {
+      "pin": "29",
+      "name": "P29",
+      "type": "passive"
+    },
+    {
+      "pin": "30",
+      "name": "P30",
+      "type": "passive"
+    },
+    {
+      "pin": "MP1",
+      "name": "MP1",
+      "type": "ground",
+      "notes": "solder tab / mounting pad (board pad; not a signal contact)"
+    },
+    {
+      "pin": "MP2",
+      "name": "MP2",
+      "type": "ground",
+      "notes": "solder tab / mounting pad (board pad; not a signal contact)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5",
+        "P6",
+        "P7",
+        "P8",
+        "P9",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P22",
+        "P23",
+        "P24",
+        "P25",
+        "P26",
+        "P27",
+        "P28",
+        "P29",
+        "P30"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -30,
+      "max": 30,
+      "source": "SHOU HAN (深圳市首韩科技) 0.5-30P XJH2.0 043 specification for approval / product specification, no revision printed p.3 [3] RATINGS: 'Rated Voltage(MAX) 30V [AC/DC(有效值 Virtual value)50Hz]' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "SHOU HAN (深圳市首韩科技) 0.5-30P XJH2.0 043 specification for approval / product specification, no revision printed, 6 PDF pages, pin map: part number on p.1 and p.2; contacts numbered by position; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2303211800_SHOU-HAN-0-5-30P-XJH2-0-043_C5373440.pdf sha256 d6952b77f6e7344bd0d5afe6066b7bae819822930cb92d39c5f9da4958bbc6cf"
+}

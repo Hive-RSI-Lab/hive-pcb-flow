@@ -1,0 +1,32 @@
+{
+  "mpn": "CL10A106MA8NRNC",
+  "lcsc": "C96446",
+  "package": "0603 (1608 metric)",
+  "description": "Samsung Electro-Mechanics CL10A106MA8NRNC 10uF 25V X5R ±20% 0603 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -25,
+      "max": 25,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics SPECIFICATION (Reference Sheet) CL10A106MA8NRNC, issued MAY.09.2024, p.1 A. Samsung Part Number: 'Rated Voltage 25V' (also 'Description : CAP, 10 ㎌ , 25V, ±20%, X5R, 0603'); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics SPECIFICATION (Reference Sheet) for CL10A106MA8NRNC, issued MAY.09.2024, 38 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Samsung-Electro-Mechanics-CL10A106MA8NRNC_C96446.pdf sha256 20cd04b602d5cbe31f33d7c9f41463a27bb408c611a7376b08f7b8cec023580b (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

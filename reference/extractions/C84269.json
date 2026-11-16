@@ -1,0 +1,33 @@
+{
+  "mpn": "NCD0603O1",
+  "lcsc": "C84269",
+  "package": "0603",
+  "description": "Foshan NationStar NCD0603O1 orange LED, 0603",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (-)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode (+)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 5,
+      "ref": "A",
+      "source": "Foshan NationStar NCD0603O1 form FGH/BD-0053.01-21B p.1 Absolute Maximum Ratings: 'Reverse Voltage VR 5 V'"
+    }
+  ],
+  "source_pdf": "Foshan NationStar Optoelectronics NCD0603O1 chip LED datasheet, form FGH/BD-0053.01-21B (no other revision printed), 2 pages, pin map p.2 Polarity (1 -, 2 +; cathode mark); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2008201033_Foshan-NationStar-Optoelectronics-NCD0603O1_C84269.pdf sha256 a7638499609e96d0ddec2acacdae0440561d816250cd4599fc6e9081ebd450ed"
+}

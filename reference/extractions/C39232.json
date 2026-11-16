@@ -1,0 +1,32 @@
+{
+  "mpn": "CL32B106KAJNNNE",
+  "lcsc": "C39232",
+  "package": "1210 (3225 metric)",
+  "description": "Samsung Electro-Mechanics CL32B106KAJNNNE 10uF 25V X7R ±10% 1210 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -25,
+      "max": 25,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics MLCC catalog (Nov 2015) p.4 Part Numbering System: '6. RATED VOLTAGE CODE' 'A = 25V' (the A in CL32B106KAJNNNE, position 6 of 'CL 10 A 106 M P 8 N N N C'; the part is not in the catalog Product Lineup tables); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics MLCC catalog (Nov 2015), 84 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Samsung-Electro-Mechanics-CL32B106KAJNNNE_C39232.pdf sha256 96baebe4bd0ce363e87be28b5b003f511f1502e084a6fc4f02333ded56c808f6 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

@@ -1,0 +1,53 @@
+{
+  "mpn": "AP2112K-3.3TRG1",
+  "lcsc": "C51118",
+  "package": "SOT-25 (SOT-23-5)",
+  "description": "Diodes AP2112K 600mA CMOS LDO, fixed 3.3V, SOT-25",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "VIN",
+      "type": "power_in"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "EN",
+      "type": "input"
+    },
+    {
+      "pin": "4",
+      "name": "NC",
+      "type": "nc",
+      "notes": "no connection"
+    },
+    {
+      "pin": "5",
+      "name": "VOUT",
+      "type": "power_out"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VCC Power Supply Voltage",
+      "value": "6.5",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VIN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 6.5,
+      "source": "Diodes AP2112 datasheet (DS39724 Rev. 2-2, June 2017) p.3 Absolute Maximum Ratings: 'VCC Power Supply Voltage 6.5 V'"
+    }
+  ],
+  "source_pdf": "Diodes Incorporated AP2112 600mA CMOS LDO regulator with enable, DS39724 Rev. 2-2 June 2017, 18 pages, pin map p.2 SOT25 'VIN 1, GND 2, EN 3, NC 4, VOUT 5'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Diodes-Incorporated-AP2112K-3-3TRG1_C51118.pdf sha256 ef8d376f2ec356e29172eb9e053819a0ebdcc576dba7fc9ab0505c568427920f"
+}

@@ -1,0 +1,44 @@
+{
+  "mpn": "ZX-SH1.0-4PWT",
+  "lcsc": "C7430446",
+  "package": "SMD,P=1mm,Surface Mount，Right Angle",
+  "description": "Megastar ZX-SH1.0-4PWT 4-pin 1.0mm SH-style horizontal SMD header with solder tabs",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "source": "Megastar (兆星精密电子) drawing ZX-SH1.0-4PWT (SH1.0 卧贴 4P), 1 page, no revision printed in text p.1 技术参数: '额定电压：50V AC,DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "Megastar (兆星精密电子) drawing ZX-SH1.0-4PWT (SH1.0 卧贴 4P), 1 page, no revision printed in text, 1 PDF pages, pin map: drawing p.1; contacts numbered by position; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2306191203_Megastar-ZX-SH1-0-4PWT_C7430446.pdf sha256 bb78b1df79e134120de39392bcdf415c841550bf820a031bf828b3917f157690"
+}

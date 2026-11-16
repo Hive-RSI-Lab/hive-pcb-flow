@@ -1,0 +1,32 @@
+{
+  "mpn": "CSR0204FTDV2491",
+  "lcsc": "C316473",
+  "package": "MELF-0204",
+  "description": "Viking Tech CSR0204FTDV2491 2.49k 1% 1/4W MELF-0204 metal film resistor",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -200,
+      "max": 200,
+      "ref": "2",
+      "source": "Viking Tech Metal Film Precision Resistor CSR Series, REV.C4 (01-Jun-2017) p.3 Standard Electrical Specifications, Max Operating Voltage column: '0204 Jumper:2A -55 ~ +155 °C 200V 400V' (200 V max operating, 400 V overload); non-polar, across the two terminals"
+    }
+  ],
+  "source_pdf": "Viking Tech Metal Film Precision Resistor CSR Series, Edition REV.C4, 01-Jun-2017, 12 pages (PDF page numbers; there is no pin map: a 2-terminal MELF, pads 1 and 2 interchangeable); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Viking-Tech-CSR0204FTDV2491_C316473.pdf sha256 4dfa81da022acdff348c10da5f2902aa19e9010dccdecebecf743b4768ad2e71"
+}

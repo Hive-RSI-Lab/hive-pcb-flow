@@ -1,0 +1,33 @@
+{
+  "mpn": "SS24FL",
+  "lcsc": "C111630",
+  "package": "SMAF (SOD-123FL style)",
+  "description": "Shikues SS24FL 2 A 40 V Schottky barrier rectifier, SMAF",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 40,
+      "ref": "A",
+      "source": "Shikues SS24FL THRU SS26FL REV.08 p.1 Maximum Ratings table: 'Reverse Voltage - 40 and 60 V' and 'SS24FL THRU SS26FL'; the table body is an image, VRRM 40 V for the SS24FL column read from the rendered page"
+    }
+  ],
+  "source_pdf": "Shikues SS24FL THRU SS26FL Surface Mount Schottky Barrier Rectifier, REV.08, 3 pages, pin map p.1 package drawing (1 Cathode, 2 Anode); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Shikues-SS24FL_C111630.pdf sha256 6dde5cdab036f3461c336b985315385183abad1220c5a4d679de6f38e94704fd"
+}

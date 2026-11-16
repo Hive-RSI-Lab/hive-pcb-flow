@@ -1,0 +1,32 @@
+{
+  "mpn": "B2P-VH-B(LF)(SN)",
+  "lcsc": "C265114",
+  "package": "Plugin,P=3.96mm",
+  "description": "JST VH 2-pin 3.96mm top-entry (vertical) THT header",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -250,
+      "max": 250,
+      "source": "JST VH CONNECTOR catalog (3.96mm pitch disconnectable crimp style, 5-page edition), no revision printed p.1 Features/Specifications: 'Voltage rating: 250V AC, DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "JST VH CONNECTOR catalog (3.96mm pitch disconnectable crimp style, 5-page edition), no revision printed, 5 PDF pages, pin map: part code shown as ex. B2P-VH-B on p.4 (B-type top-entry table p.4); contacts numbered by position; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2004071004_JST-B2P-VH-B-LF-SN_C265114.pdf sha256 6eb59b68b48bc204dd5542e247a774b13e545167c122d798b6f960856e603bba"
+}

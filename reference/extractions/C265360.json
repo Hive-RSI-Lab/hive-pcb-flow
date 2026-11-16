@@ -1,0 +1,38 @@
+{
+  "mpn": "B3P-VH-B(LF)(SN)",
+  "lcsc": "C265360",
+  "package": "Plugin,P=3.96mm",
+  "description": "JST VH 3-pin 3.96mm top-entry (vertical) THT header",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -250,
+      "max": 250,
+      "source": "JST VH CONNECTOR catalog (3.96mm pitch disconnectable crimp style), no revision printed p.1 Specifications: 'Voltage rating:  250 V AC, DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "JST VH CONNECTOR catalog (3.96mm pitch disconnectable crimp style), no revision printed, 4 PDF pages, pin map: B3P-VH-B listed p.3; circuit No.1 marked on p.1 drawing; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2004071004_JST-B3P-VH-B-LF-SN_C265360.pdf sha256 817c2d0c4c229f4079957a8b72caf5b17a6bd989e189bbc01a43649faae254ab"
+}

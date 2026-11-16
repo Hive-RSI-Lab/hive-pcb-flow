@@ -1,0 +1,32 @@
+{
+  "mpn": "CL05B104KB54PNC",
+  "lcsc": "C307331",
+  "package": "0402 (1005 metric)",
+  "description": "Samsung Electro-Mechanics CL05B104KB54PNC 100nF 50V X7R ±10% 0402 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics MLCC catalog (Nov 2015) p.4 Part Numbering System: '6. RATED VOLTAGE CODE' 'B = 50V' (the B in CL05B104KB54PNC, position 6 of 'CL 10 A 106 M P 8 N N N C'; the part is not in the catalog Product Lineup tables); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics MLCC catalog (Nov 2015), 84 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Samsung-Electro-Mechanics-CL05B104KB54PNC_C307331.pdf sha256 96baebe4bd0ce363e87be28b5b003f511f1502e084a6fc4f02333ded56c808f6 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

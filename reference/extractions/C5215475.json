@@ -1,0 +1,49 @@
+{
+  "mpn": "DAC43204RTER",
+  "lcsc": "C5215475",
+  "package": "WQFN-16 (RTE) 3x3 mm with thermal pad",
+  "description": "TI DAC43204 8-bit quad voltage/current-output smart DAC, I2C/PMBus/SPI, 1.7-5.5 V, WQFN-16 RTE",
+  "pinout": [
+    {"pin": "1", "name": "FB3", "type": "input", "notes": "channel 3 voltage feedback"},
+    {"pin": "2", "name": "OUT3", "type": "output", "notes": "DAC channel 3 analog output"},
+    {"pin": "3", "name": "OUT2", "type": "output", "notes": "DAC channel 2 analog output"},
+    {"pin": "4", "name": "FB2", "type": "input", "notes": "channel 2 voltage feedback"},
+    {"pin": "5", "name": "GPIO/SDO", "type": "bidirectional", "notes": "GPIO (LDAC, PD, PROTECT, RESET, SDO, STATUS); may be pulled high before VDD"},
+    {"pin": "6", "name": "SCL/SYNC", "type": "input", "notes": "I2C clock or SPI chip select"},
+    {"pin": "7", "name": "A0/SDI", "type": "input", "notes": "I2C address pin or SPI data in"},
+    {"pin": "8", "name": "SDA/SCLK", "type": "bidirectional", "notes": "I2C data or SPI clock"},
+    {"pin": "9", "name": "FB1", "type": "input", "notes": "channel 1 voltage feedback"},
+    {"pin": "10", "name": "OUT1", "type": "output", "notes": "DAC channel 1 analog output"},
+    {"pin": "11", "name": "OUT0", "type": "output", "notes": "DAC channel 0 analog output"},
+    {"pin": "12", "name": "FB0", "type": "input", "notes": "channel 0 voltage feedback"},
+    {"pin": "13", "name": "CAP", "type": "analog", "self_driven": true, "notes": "internal LDO bypass capacitor (about 1.5 uF to AGND)"},
+    {"pin": "14", "name": "AGND", "type": "ground"},
+    {"pin": "15", "name": "VDD", "type": "power_in", "notes": "supply voltage"},
+    {"pin": "16", "name": "VREF", "type": "analog", "notes": "external reference input; pull up to VDD when unused; must not ramp before VDD"}
+  ],
+  "exposed_pad": {"present": true, "connect_to": "AGND"},
+  "abs_max": [
+    {"param": "VDD supply voltage to AGND", "value": "-0.3~6", "unit": "V"},
+    {"param": "Digital inputs to AGND", "value": "-0.3~VDD+0.3", "unit": "V"},
+    {"param": "CAP to AGND", "value": "-0.3~1.65", "unit": "V"},
+    {"param": "VFBX to AGND", "value": "-0.3~VDD+0.3", "unit": "V"},
+    {"param": "VOUTX to AGND", "value": "-0.3~VDD+0.3", "unit": "V"},
+    {"param": "VREF external reference to AGND", "value": "-0.3~VDD+0.3", "unit": "V"},
+    {"param": "Current into any pin except OUTx", "value": "-10~10", "unit": "mA"}
+  ],
+  "pin_ratings": [
+    {"pins": ["VDD"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": 6,
+     "source": "TI DACx3204 datasheet ZHCSNQ3A (Chinese, Mar 2021 rev. Dec 2021) p.5 6.1 Absolute Maximum Ratings, VDD supply to AGND: 'VDD 电源电压，VDD（至 AGND） –0.3 6 V'"},
+    {"pins": ["GPIO/SDO", "SCL/SYNC", "A0/SDI", "SDA/SCLK"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": "VDD+0.3",
+     "source": "TI DACx3204 datasheet ZHCSNQ3A (Chinese, Mar 2021 rev. Dec 2021) p.5 6.1 Absolute Maximum Ratings, digital inputs to AGND: 'AGND 的数字输入 -0.3 VDD + 0.3 V'"},
+    {"pins": ["CAP"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": 1.65,
+     "source": "TI DACx3204 datasheet ZHCSNQ3A (Chinese, Mar 2021 rev. Dec 2021) p.5 6.1 Absolute Maximum Ratings, CAP to AGND: 'CAP（至 AGND） -0.3 1.65 V'"},
+    {"pins": ["FB0", "FB1", "FB2", "FB3"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": "VDD+0.3",
+     "source": "TI DACx3204 datasheet ZHCSNQ3A (Chinese, Mar 2021 rev. Dec 2021) p.5 6.1 Absolute Maximum Ratings, VFBX to AGND: 'VFBX（至 AGND） -0.3 VDD + 0.3 V'"},
+    {"pins": ["OUT0", "OUT1", "OUT2", "OUT3"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": "VDD+0.3",
+     "source": "TI DACx3204 datasheet ZHCSNQ3A (Chinese, Mar 2021 rev. Dec 2021) p.5 6.1 Absolute Maximum Ratings, VOUTX to AGND: 'VOUTX（至 AGND） -0.3 VDD + 0.3 V'"},
+    {"pins": ["VREF"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": "VDD+0.3",
+     "source": "TI DACx3204 datasheet ZHCSNQ3A (Chinese, Mar 2021 rev. Dec 2021) p.5 6.1 Absolute Maximum Ratings, VREF to AGND: 'VREF 外部基准电压，VREF（至 AGND） -0.3 VDD + 0.3 V'"}
+  ],
+  "source_pdf": "Texas Instruments DAC63204/DAC53204/DAC43204 (DACx3204) 12/10/8-bit quad voltage and current output smart DAC, ZHCSNQ3A (Chinese translation of SLASEX3), March 2021 revised December 2021, 86 pages, pin map p.3 'RTE 16-pin WQFN top view' and Table 5-1 pin functions, thermal pad to AGND p.4, ordering code DAC43204RTER in the package option addendum; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2302220330_Texas-Instruments-DAC43204RTER_C5215475.pdf sha256 248d9713935d59b820a470e00fc7f7ff6673ea91f0774d2107c945bee914d4cb"
+}

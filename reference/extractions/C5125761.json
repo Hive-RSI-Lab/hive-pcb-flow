@@ -1,0 +1,33 @@
+{
+  "mpn": "BZT52C8V2T-7",
+  "lcsc": "C5125761",
+  "package": "SOD-523",
+  "description": "Diodes Incorporated BZT52C8V2T-7 8.2 V 300 mW zener diode, SOD-523",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 8.7,
+      "ref": "A",
+      "source": "Diodes Incorporated BZT52C2V0T - BZT52C36T DS30502 Rev. 17 - 2 p.2 Electrical Characteristics (VZ Nom Min Max): 'BZT52C8V2T WD 8.2 7.7 8.7 5 15 80 1.0 0.7 5.0' (zener voltage range; the datasheet gives no reverse-voltage absolute maximum, only Pd); above this a zener conducts, so a clamp use is intended, bound is the top of its zener range"
+    }
+  ],
+  "source_pdf": "Diodes Incorporated BZT52C2V0T - BZT52C36T surface mount zener diode datasheet, DS30502 Rev. 17 - 2 (December 2017), 5 pages, polarity p.1 (Terminal Connections: Cathode Band); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2208051800_Diodes-Incorporated-BZT52C8V2T-7_C5125761.pdf sha256 f06d3ed08bd0d710f7a31310c5c03c1d4db20cd4c81e7a6d1d2dcef9c550062a"
+}

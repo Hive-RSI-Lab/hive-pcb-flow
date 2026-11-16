@@ -1,0 +1,33 @@
+{
+  "mpn": "1N5819WS",
+  "lcsc": "C191023",
+  "package": "SOD-323",
+  "description": "Hottech 1N5819WS 1 A 40 V Schottky barrier diode, SOD-323",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 40,
+      "ref": "A",
+      "source": "Shenzhen Hottech 1N5817WS-1N5819WS Schottky Barrier Diode (no revision printed) p.1 Maximum Ratings and Electrical Characteristics, columns '1N5817WS 1N5818WS 1N5819WS UNITS': 'Maximum Recurrent Peak Reverse Voltage 20 30 40 V' (1N5819WS = 40 V)"
+    }
+  ],
+  "source_pdf": "Shenzhen Hottech Electronics 1N5817WS-1N5819WS Schottky Barrier Diode datasheet, no revision printed, 4 pages, polarity p.1 package drawing (cathode band, marked - / + only, no pin numbers); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2409300937_Guangdong-Hottech-1N5819WS_C191023.pdf sha256 609a5bc2fcd5bbb36f47f802b11102f1e140eae519c74b067cb615b4d52d0a4f"
+}

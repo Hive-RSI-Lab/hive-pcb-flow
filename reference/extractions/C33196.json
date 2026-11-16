@@ -1,0 +1,118 @@
+{
+  "mpn": "PCA9306DCUR",
+  "lcsc": "C33196",
+  "package": "VSSOP-8 (DCU)",
+  "description": "TI PCA9306 dual bidirectional I2C/SMBus voltage-level translator, VSSOP-8 (DCU)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "2",
+      "name": "VREF1",
+      "type": "power_in",
+      "notes": "low-voltage-side reference"
+    },
+    {
+      "pin": "3",
+      "name": "SCL1",
+      "type": "bidirectional"
+    },
+    {
+      "pin": "4",
+      "name": "SDA1",
+      "type": "bidirectional"
+    },
+    {
+      "pin": "5",
+      "name": "SDA2",
+      "type": "bidirectional"
+    },
+    {
+      "pin": "6",
+      "name": "SCL2",
+      "type": "bidirectional"
+    },
+    {
+      "pin": "7",
+      "name": "VREF2",
+      "type": "power_in",
+      "notes": "high-voltage-side reference"
+    },
+    {
+      "pin": "8",
+      "name": "EN",
+      "type": "input"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VREF1 DC reference voltage range",
+      "value": "-0.5~7",
+      "unit": "V"
+    },
+    {
+      "param": "VREF2 DC reference bias voltage range",
+      "value": "-0.5~7",
+      "unit": "V"
+    },
+    {
+      "param": "VI Input voltage range",
+      "value": "-0.5~7",
+      "unit": "V"
+    },
+    {
+      "param": "VI/O Input/output voltage range",
+      "value": "-0.5~7",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VREF1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": 7,
+      "source": "TI PCA9306 datasheet (SCPS113J, Oct 2004 revised Oct 2010) p.4 Absolute Maximum Ratings: 'VREF1 DC reference voltage range –0.5 7 V'"
+    },
+    {
+      "pins": [
+        "VREF2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": 7,
+      "source": "TI PCA9306 datasheet (SCPS113J, Oct 2004 revised Oct 2010) p.4 Absolute Maximum Ratings: 'VREF2 DC reference bias voltage range –0.5 7 V'"
+    },
+    {
+      "pins": [
+        "EN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": 7,
+      "source": "TI PCA9306 datasheet (SCPS113J, Oct 2004 revised Oct 2010) p.4 Absolute Maximum Ratings: 'VI Input voltage range(2) –0.5 7 V'"
+    },
+    {
+      "pins": [
+        "SCL1",
+        "SDA1",
+        "SCL2",
+        "SDA2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": 7,
+      "source": "TI PCA9306 datasheet (SCPS113J, Oct 2004 revised Oct 2010) p.4 Absolute Maximum Ratings: 'VI/O Input/output voltage range(2) –0.5 7 V'"
+    }
+  ],
+  "source_pdf": "TI PCA9306 dual bidirectional I2C-bus and SMBus voltage-level translator, SCPS113J Oct 2004 revised Oct 2010, 22 pages, pin map p.2 Terminal Functions DCU 'GND 1, VREF1 2, SCL1 3, SDA1 4, SDA2 5, SCL2 6, VREF2 7, EN 8'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2410121941_Texas-Instruments-PCA9306DCUR_C33196.pdf sha256 ca7a67f9c82d010beaea140afa5b0d8b1582d22f88879b11842304e98e25bbf8"
+}

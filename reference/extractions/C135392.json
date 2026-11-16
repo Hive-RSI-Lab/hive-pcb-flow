@@ -1,0 +1,32 @@
+{
+  "mpn": "A16-400",
+  "lcsc": "C135392",
+  "package": "Plugin,P=5.1mm",
+  "description": "JDT A16-400 PPTC resettable fuse 16V 4A hold radial P=5.1mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -16,
+      "max": 16,
+      "ref": "2",
+      "source": "JDT FUSE A16 Series PTC Devices datasheet (Revised 06/11/19) p.3 Performance Specification: 'V max = Maximum operating voltage device can withstand without damage at rated current' row 'A16-400' V max (V dc) 16 (row value read off the table image; the text layer splits the table into columns); non-polar, across the two leads"
+    }
+  ],
+  "source_pdf": "JDT FUSE A16 Series PTC Devices product datasheet, Revised 06/11/19, 7 pages (PDF page numbers; there is no pin map: a 2-lead radial device, pads 1 and 2 interchangeable); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2305151204_Shenzhen-JDT-Fuse-A16-400_C135392.pdf sha256 3f03bf968a46af2508a2051034cc4f2353e07fa15182c95b62837c29185bb664"
+}

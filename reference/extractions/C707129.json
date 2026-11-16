@@ -1,0 +1,33 @@
+{
+  "mpn": "BZT52C3V6",
+  "lcsc": "C707129",
+  "package": "SOD-123",
+  "description": "Slkor (SLKORMICRO) BZT52C3V6 3.6 V 500 mW zener diode, SOD-123",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 3.8,
+      "ref": "A",
+      "source": "Slkor BZT52C2V4-BZT52C39 Surface mount zener diode (no revision printed) p.2 Electrical Characteristics (Vz Nom Min Max): 'BZT52C3V6 W4 3.6 3.4 3.8 5 90 600 1.0 5.0 1.0' (zener voltage range; the datasheet gives no reverse-voltage absolute maximum, only Pd); above this a zener conducts, so a clamp use is intended, bound is the top of its zener range"
+    }
+  ],
+  "source_pdf": "Slkor (SLKORMICRO) BZT52C2V4-BZT52C39 Surface mount zener diode, no revision printed, 3 pages, polarity p.1 (Polarity: Cathode Band); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Slkor-SLKORMICRO-Elec--BZT52C3V6_C707129.pdf sha256 b465af4bea5245273c5fa979da9460feaa7ba0cb292333933b4c71ad592891af"
+}

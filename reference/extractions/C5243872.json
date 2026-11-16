@@ -1,0 +1,31 @@
+{
+  "mpn": "4700250508R00",
+  "lcsc": "C5243872",
+  "package": "Plugin,D5xL8mm",
+  "description": "NJCON 4700250508R00 polymer aluminium electrolytic 25V 47uF radial D5xL8mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "+",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "-",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 25,
+      "ref": "2",
+      "source": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor radial-lead (model no. blank on cover), Rev 1 2022-11-22 p.3 Parts list & Characteristics: '4700250508R00 25V47UF 5*8' (rated voltage 25 V DC); polarized, + on pad 1 (KiCad CP footprint), rated with ref the - pad"
+    }
+  ],
+  "source_pdf": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor radial-lead (model no. blank on cover), Rev 1 2022-11-22, 12 pages, case drawing p.4 (PDF page numbers; KiCad CP footprint pad 1 = +); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2212021030_NJCON-4700250508R00_C5243872.pdf sha256 4b050b0d35f5f7602aef42d5c25cd50378d0b7abc1f8391b1870d9ab0a1f0ba0"
+}

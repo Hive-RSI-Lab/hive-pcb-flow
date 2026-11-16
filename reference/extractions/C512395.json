@@ -1,0 +1,34 @@
+{
+  "mpn": "EVQP2P02W",
+  "lcsc": "C512395",
+  "package": "SMD 4.7x3.5mm",
+  "description": "Panasonic EVQP2P02W 4.7x3.5mm SMD light touch switch, SPST, 15V DC 20mA",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive",
+      "notes": "contact, datasheet terminals 1 and 3 (one side)"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive",
+      "notes": "contact, datasheet terminals 2 and 4 (other side)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1",
+        "2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -15,
+      "max": 15,
+      "source": "Panasonic Light Touch Switches EVQP2/P9/3P2 datasheet ANCTB19E-2 201903-Fd p.1 Specifications: 'Rating 10 μA 2 V DC to 20 mA 15 V DC (Resistive load)' (contact rating, applied to every contact)"
+    }
+  ],
+  "source_pdf": "Panasonic Light Touch Switches EVQP2/P9/3P2, ANCTB19E-2 201903-Fd, 7 pages, terminal map p.5 (terminals 1 and 3 one side, 2 and 4 the other, plus a GND terminal); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2004131006_PANASONIC-EVQP2P02W_C512395.pdf sha256 68b9605c2b787bea2068115202f1c15af97c54d204704ade482ad18021de290c"
+}
