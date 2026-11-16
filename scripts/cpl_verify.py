@@ -103,7 +103,14 @@ small shapes and corner chamfers on the part's own side, and takes each one's
 nearest corner of the pad field. One off pin 1's corner is `silk_mark_wrong` in
 the report and fails the run; none at all is `silk_mark_missing`, a warning,
 since the email costs a delay and not a wrong part
-(reference/jlc_bga_cpl.md).
+(reference/jlc_bga_cpl.md). Q parts (SOT-23 and the like) are held to the same
+pin-1 rule, but with no mark they pass: their 2+1 land shows the way round.
+Two-pad diodes, LEDs and polarised caps go through `polarity_mark()`: a "+"
+must sit by the board's + pad, else (but for electrolytics, whose hatching and
+chamfers lean either way) the silk must lean toward the K or + pad; leaning
+the other way is `silk_mark_wrong`, centred is `silk_mark_missing` (#800).
+Battery holders and switches are keyed housings, left alone. Silk drawn on the
+board rather than in the footprint isn't read.
 
 `derive_rotation()` is what bom_cpl.py uses to WRITE the CPL; the package table
 is only its fallback when this check has no model. `merge_visual()` puts the
@@ -187,7 +194,8 @@ FOOTPRINT_BASIS_NOTE = (
     "part's tape spec before ordering (reference/jlc_bga_cpl.md)")
 TWO_PAD_BASIS = "two-pad axis (no LCSC model)"
 NO_SILK_MARK_NOTE = (
-    "no pin-1 dot or chamfer found on the part's own silkscreen. JLC can't read "
+    "no pin-1 dot or chamfer (or, on a diode, LED or polarised cap, no "
+    "cathode bar or \"+\" off centre) found on the part's own silkscreen. JLC can't read "
     "the polarity with no mark and confirms by email, which holds the order: "
     "add a mark at pin 1, or answer the email (reference/jlc_bga_cpl.md)")
 # What counts as a pin-1 mark: a dot, a small drawn shape, or a line cutting
@@ -199,6 +207,18 @@ CHAMFER_MAX_MM = 3.0
 CORNER_TIE_MM = 0.1
 ARC_CLOSED_MM = 0.01  # EasyEDA dots' ends miss by rounding: SOT-25 U402, 0.002 mm
 _MARK_REF = re.compile(r"^(U|IC)\d")
+# A transistor's 2+1 land shows its pin 1 on its own, so only a mark at the
+# wrong pin counts against it: no mark is no email (#800).
+_TRANSISTOR_REF = re.compile(r"^Q\d")
+# A two-pad polar part's mark: how far the silk sits toward its K or + pad, as
+# a share of half the pad spacing. Every marked diode, LED and tantalum in the
+# training corpus (2026-11-15) sits at 0.22 or more; centred outlines at 0.06
+# or less. An electrolytic's silk is judged by its "+" alone: KiCad hatches
+# CP_Radial's minus side and chamfers CP_Elec's plus side, so where the silk
+# sits says nothing.
+POLAR_MARK_SHARE = 0.15
+PLUS_MIN_MM, PLUS_MAX_MM = 0.3, 2.5
+_ELEC_FP = re.compile(r"^(CP_Radial|CP_Elec|C_Elec)|Elec|CAP-TH", re.I)
 
 # ------------------------------------------------------------ board side
 
@@ -227,6 +247,9 @@ class Footprint:
     fields: dict = field(default_factory=dict)
     # pin-1 mark candidates (x, y) on the part's own side's silk, local frame
     marks: list[tuple[float, float]] = field(default_factory=list)
+    # the part's own side's silk drawings and "+" texts, local frame
+    own_silk: list[list[tuple[float, float]]] = field(default_factory=list)
+    plus_texts: list[tuple[float, float]] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -303,6 +326,12 @@ def _cuts_a_corner(a, b, box) -> bool:
     oy = (a[1] + b[1]) / 2 - (box[1] + box[3]) / 2
     out = math.hypot(ox, oy)
     return out > 0 and abs(dx * ox + dy * oy) / (length * out) < 0.5
+
+
+def _own_side(node, side: str) -> bool:
+    lay = _kid(node, "layer")
+    return bool(lay) and str(_t(lay[1])) == ("F.SilkS" if side == "top"
+                                             else "B.SilkS")
 
 
 def _silk_mark(node, side: str, box) -> tuple[float, float] | None:
@@ -386,6 +415,12 @@ def board_footprints(pcb: Path) -> dict[str, Footprint]:
                 m = _silk_mark(node, f.side, _pad_field(f)) if s else None
                 if m:
                     f.marks.append(m)
+                own = _own_side(node, f.side)
+                if s and own:
+                    f.own_silk.append(s)
+                elif own and _t(node[0]) == "fp_text" and len(node) > 2 \
+                        and str(_t(node[2])).strip() == "+":
+                    f.plus_texts.append(tuple(_nums(_kid(node, "at"))[:2]))
         if ref:
             out[ref] = f
     return out
@@ -852,8 +887,9 @@ def bga_pin1(fp: Footprint) -> KPad | None:
 
 def silk_mark(fp: Footprint) -> dict:
     """Whether the part's pin-1 silk mark is at the board's pin 1. `state` is
-    None for parts the rule leaves alone (only ball grids and U/IC parts with
-    three or more pads and a pin 1), else "none", "wrong" (any mark off pin
+    None for parts the rule leaves alone (only ball grids and U/IC/Q parts
+    with three or more pads and a pin 1, a Q only when it has a mark, and the
+    two-pad polar parts polarity_mark() judges), else "none", "wrong" (any mark off pin
     1's corner: a second dot leaves JLC two to choose from) or "ok". Pads and
     silk share the stored local frame, so a flip or a turn needs no transform;
     the CPL rotation is proved against the same pad 1 by this module's fit, so
@@ -861,16 +897,113 @@ def silk_mark(fp: Footprint) -> dict:
     # footprint_a1, not bga_pin1 alone: a 4-layer USB-C's pads are named like
     # balls in three rows, but they're slots and footprint_a1 knows it
     pin = bga_pin1(fp) if footprint_a1(fp) else None
-    if pin is None and _MARK_REF.match(fp.ref) and len(
+    q = bool(_TRANSISTOR_REF.match(fp.ref))
+    if pin is None and (_MARK_REF.match(fp.ref) or q) and len(
             {p.number for p in fp.pads if p.number}) >= 3:
         pin = next((p for p in fp.pads if p.number == "1"), None)
     if pin is None:
+        return polarity_mark(fp)
+    if q and not fp.marks:
         return {"state": None}
     box = _pad_field(fp)
     want = _nearest_corners(pin.x, pin.y, box)
     off = [m for m in fp.marks if not _nearest_corners(*m, box) & want]
     return {"state": "none" if not fp.marks else "wrong" if off else "ok",
             "pin": pin.number, "off": off}
+
+
+def _plus_signs(fp: Footprint, ux: float, uy: float) -> list[tuple[float, float]]:
+    """Where the part's own silk draws a "+": a text, or two short lines of
+    about one length crossing at their middles, one along the pad axis."""
+    lines = [(s[0], s[1]) for s in fp.own_silk if len(s) == 2]
+    out = list(fp.plus_texts)
+    for i, (a, b) in enumerate(lines):
+        la = math.dist(a, b)
+        if not PLUS_MIN_MM <= la <= PLUS_MAX_MM:
+            continue
+        for c, d in lines[i + 1:]:
+            lc = math.dist(c, d)
+            if not PLUS_MIN_MM <= lc <= PLUS_MAX_MM or max(la, lc) > 1.6 * min(la, lc):
+                continue
+            va = ((b[0] - a[0]) / la, (b[1] - a[1]) / la)
+            vc = ((d[0] - c[0]) / lc, (d[1] - c[1]) / lc)
+            if abs(va[0] * vc[0] + va[1] * vc[1]) > 0.2 or max(
+                    abs(va[0] * ux + va[1] * uy), abs(vc[0] * ux + vc[1] * uy)) < 0.95:
+                continue
+            ma = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            mc = ((c[0] + d[0]) / 2, (c[1] + d[1]) / 2)
+            if math.dist(ma, mc) <= 0.2 * min(la, lc):
+                out.append(((ma[0] + mc[0]) / 2, (ma[1] + mc[1]) / 2))
+    return out
+
+
+def polarity_mark(fp: Footprint) -> dict:
+    """silk_mark for a two-pad diode, LED or polarised cap (#800): whether its
+    cathode bar or "+" is at the board's K or + pad. A "+" decides it where
+    there is one; else, but for electrolytics, the silk's length-weighted
+    centre along the pad axis must sit toward that pad: the centre of the
+    strokes across the axis (a bar, an LED's flat) where there are any, else
+    of all of it. A centred outline, or all of it leaning the other way, is
+    "none". Keyed housings
+    (a battery holder) and switches are left alone."""
+    nums = {p.number for p in fp.pads if p.number}
+    if len(nums) != 2 or not is_polar(fp) or is_keyed(fp) or is_switch(fp):
+        return {"state": None}
+    roles = board_roles(fp, None)
+    mark = next((n for n, r in roles.items() if r in ("K", "+")), None)
+    other = next((n for n, r in roles.items() if r in ("A", "-")), None)
+    if not mark or not other:
+        return {"state": None}
+
+    def at(num):
+        ps = [p for p in fp.pads if p.number == num]
+        return (sum(p.x for p in ps) / len(ps), sum(p.y for p in ps) / len(ps))
+    (mx, my), (ox, oy) = at(mark), at(other)
+    half = math.hypot(mx - ox, my - oy) / 2
+    if half <= 0:
+        return {"state": None}
+    ux, uy = (mx - ox) / (2 * half), (my - oy) / (2 * half)
+    cx, cy = (mx + ox) / 2, (my + oy) / 2
+    share = lambda x, y: ((x - cx) * ux + (y - cy) * uy) / half
+    row = {"pin": mark, "basis": "polarity"}
+    plus = [(round(x, 3), round(y, 3)) for x, y in _plus_signs(fp, ux, uy)
+            if abs(share(x, y)) >= POLAR_MARK_SHARE]
+    if plus:
+        off = [p for p in plus if share(*p) < 0]
+        return {**row, "state": "wrong" if off else "ok", "off": off,
+                "why": (f"the \"+\" silk at {_pts(off)} sits by pad {other}, "
+                        f"the board's {roles[other]} pad, not pad {mark}")}
+    if _ELEC_FP.search(fp.name):
+        return {"state": None}
+    segs = [(a, b) for s in fp.own_silk for a, b in zip(s, s[1:])
+            if math.dist(a, b) > 0]
+    across = [(a, b) for a, b in segs
+              if abs((b[0] - a[0]) * ux + (b[1] - a[1]) * uy) / math.dist(a, b) < 0.3]
+    shares, where = [], None
+    for group in (segs, across):
+        length = sum(math.dist(a, b) for a, b in group)
+        if length:
+            gx = sum(math.dist(a, b) * (a[0] + b[0]) / 2 for a, b in group) / length
+            gy = sum(math.dist(a, b) * (a[1] + b[1]) / 2 for a, b in group) / length
+            shares.append(share(gx, gy))
+            where = (round(gx, 3), round(gy, 3))
+    # the strokes across the axis decide (a round LED's flat is lost in its
+    # circle); the whole silk saying the opposite makes it unclear
+    lead = shares[-1] if shares else 0.0
+    if any(lead * v < 0 and abs(v) >= POLAR_MARK_SHARE for v in shares):
+        return {**row, "state": "none", "off": []}
+    if lead <= -POLAR_MARK_SHARE:
+        return {**row, "state": "wrong", "off": [where],
+                "why": (f"its silk is drawn toward pad {other}, the board's "
+                        f"{roles[other]} pad, not pad {mark} (centre "
+                        f"{_pts([where])})")}
+    if lead >= POLAR_MARK_SHARE:
+        return {**row, "state": "ok", "off": []}
+    return {**row, "state": "none", "off": []}
+
+
+def _pts(pts) -> str:
+    return ", ".join(f"({x:g}, {y:g})" for x, y in pts)
 
 
 def _step(lines: dict) -> tuple[float, float] | None:
@@ -1253,6 +1386,8 @@ def verify(pcb: Path, cpl: dict[str, dict], lcsc: dict[str, str],
         if mark["state"]:
             row["silk_pin"] = mark["pin"]
             row["silk_off"] = mark["off"]
+            if mark.get("why"):
+                row["silk_why"] = mark["why"]
         rows.append(row)
     bad = [r for r in rows if r["verdict"] in FAIL_VERDICTS]
     below = [r["ref"] for r in rows if r.get("side") == "bottom"

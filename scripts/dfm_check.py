@@ -66,9 +66,11 @@ Checks (all thresholds from reference/jlc_capabilities.yaml, keyed
            cpl_footprint_basis, because it rests on a convention JLC doesn't
            publish, so confirm it in the preview (reference/jlc_bga_cpl.md).
            JLC places by the silkscreen when it disagrees with the CPL, so on
-           ball grids and U/IC parts a pin-1 dot or chamfer off pin 1's corner
-           is an ERROR (cpl_silk_mark), and no mark at all raises one warning
-           for the run (cpl_no_silk_mark), since JLC emails to confirm.
+           ball grids and U/IC/Q parts a pin-1 dot or chamfer off pin 1's
+           corner, and on two-pad diodes, LEDs and polarised caps a cathode
+           bar or "+" by the A or - pad, is an ERROR (cpl_silk_mark); no mark
+           at all raises one warning for the run (cpl_no_silk_mark), since
+           JLC emails to confirm (a Q with none passes: its land shows pin 1).
            A model fetch that FAILED (EasyEDA 403/429 rate limit, other HTTP
            status, network) is one finding for the run, cpl_fetch_failed,
            listing the parts and the reason - never cpl_no_model. When it is
@@ -1972,11 +1974,13 @@ def check_placement(pcb: Path, cpl: Path, parts: Path | None,
     for r in rows:
         where = None
         if r.get("silk_mark") == "wrong":
+            said = r.get("silk_why") or (
+                f"the pin-1 silk mark at "
+                f"{', '.join(f'({x:g}, {y:g})' for x, y in r['silk_off'])} sits "
+                f"nearest a corner other than pin {r['silk_pin']}'s")
             vios.append(checklib.violation(
                 CHECK, "error", where, None, None, [r["ref"]],
-                f"{r['ref']}: the pin-1 silk mark at "
-                f"{', '.join(f'({x:g}, {y:g})' for x, y in r['silk_off'])} sits "
-                f"nearest a corner other than pin {r['silk_pin']}'s. JLC places "
+                f"{r['ref']}: {said}. JLC places "
                 f"by the silkscreen when it disagrees with the CPL, so this "
                 f"part would go on turned: fix the footprint's mark",
                 SOURCE, kind="cpl_silk_mark", pin=r["silk_pin"],

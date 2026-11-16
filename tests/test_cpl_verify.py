@@ -1729,10 +1729,8 @@ def test_pin_1_mid_side_accepts_either_corner_of_that_side(tmp_path):
 @pytest.mark.parametrize("ref,fpid,pads", [
     ("R1", "Resistor_SMD:R_0603", [("1", -0.8, 0), ("2", 0.8, 0)]),
     ("C1", "Capacitor_SMD:C_0603", [("1", -0.8, 0), ("2", 0.8, 0)]),
-    ("D1", "Diode_SMD:D_SOD-123", [("1", -1.6, 0), ("2", 1.6, 0)]),
-    # no polarity here and no pin-1 convention we read
+    # no polarity here and no pin-1 convention we read (#800 reads D and Q)
     ("J1", "Conn:Header_1x04", [(str(i + 1), i * 1.0, 0) for i in range(4)]),
-    ("Q1", "Package_TO_SOT_SMD:SOT-23", [("1", -1, 1), ("2", 1, 1), ("3", 0, -1)]),
     # an IC ref, but 2-pad or with no pad 1 to compare
     ("U9", "X:TWO", [("1", -0.8, 0), ("2", 0.8, 0)]),
     ("U9", "X:NAMED", [("VIN", -1, 1), ("GND", 1, 1), ("SW", 0, -1)]),
@@ -1754,6 +1752,148 @@ def test_a_ball_grid_is_judged_whatever_its_ref(tmp_path):
     pcb = tmp_path / "m.kicad_pcb"
     pcb.write_text("(kicad_pcb (version 20240108) " + body + ")")
     assert _mark_row(pcb, "M1")[0]["silk_mark"] == "wrong"
+
+
+# ------- polarity marks on two-pad parts and SOT-23 transistors (#800) -------
+# Silk copied from KiCad's own library footprints, so the shapes are real.
+
+def _lines(segs, layer="F.SilkS", sx=1, sy=1):
+    return "".join(f'(fp_line (start {sx * a} {sy * b}) (end {sx * c} {sy * d}) '
+                   f'(layer "{layer}"))' for a, b, c, d in segs)
+
+
+SOD123 = [("1", -1.65, 0), ("2", 1.65, 0)]           # pad 1 is K
+SOD123_SILK = [(-2.36, -1, -2.36, 1), (-2.36, -1, 1.65, -1), (-2.36, 1, 1.65, 1)]
+SOD123_BOX = [(-2.36, -1, -2.36, 1), (2.36, -1, 2.36, 1),    # no bar: a
+              (-2.36, -1, 2.36, -1), (-2.36, 1, 2.36, 1)]    # centred box
+CPELEC = [("1", -1.8, 0), ("2", 1.8, 0)]             # pad 1 is +
+CPELEC_PLUS = [(-3, -1.56, -2.5, -1.56), (-2.75, -1.81, -2.75, -1.31)]
+CPELEC_BODY = [(-2.26, -1.195563, -2.26, -1.06), (-2.26, -1.195563, -1.195563, -2.26),
+               (-2.26, 1.195563, -2.26, 1.06), (-2.26, 1.195563, -1.195563, 2.26),
+               (-1.195563, -2.26, 2.26, -2.26), (-1.195563, 2.26, 2.26, 2.26),
+               (2.26, -2.26, 2.26, -1.06), (2.26, 2.26, 2.26, 1.06)]
+KICAD_SOT23 = [("1", -0.9375, -0.95), ("2", -0.9375, 0.95), ("3", 0.9375, 0)]
+SOT23_BODY = [(-0.76, -1.56, 0.76, -1.56), (-0.76, -1.51, -0.76, -1.56),
+              (-0.76, 0.39, -0.76, -0.39), (-0.76, 1.56, -0.76, 1.51),
+              (0.76, -1.56, 0.76, -0.56), (0.76, 0.56, 0.76, 1.56),
+              (0.76, 1.56, -0.76, 1.56)]
+SOT23_ARROW = ('(fp_poly (pts (xy -1.3 -0.38) (xy -1.06 -0.05) (xy -1.54 -0.05)) '
+               '(layer "F.SilkS") (fill solid))')
+
+
+def _part_board(tmp_path, ref, fpid, pads, silk, r=0, layer="F.Cu",
+                size=(0.9, 1.2)):
+    body = _fp(ref, fpid, 20.0, 20.0, r, pads, size=size, layer=layer, silk=silk)
+    pcb = tmp_path / f"{ref}.kicad_pcb"
+    pcb.write_text("(kicad_pcb (version 20240108) " + body + ")")
+    return pcb
+
+
+def _sod(tmp_path, segs, **kw):
+    return _part_board(tmp_path, "D1", "Diode_SMD:D_SOD-123", SOD123,
+                       _lines(segs, **{k: v for k, v in kw.items()
+                                       if k in ("sx", "layer")}),
+                       **{k: v for k, v in kw.items() if k in ("r",)})
+
+
+def test_a_diode_bar_at_the_cathode_passes(tmp_path):
+    row, rep = _mark_row(_sod(tmp_path, SOD123_SILK), "D1")
+    assert row["silk_mark"] == "ok" and row["silk_pin"] == "1"
+    assert rep["silk_mark_wrong"] == [] and rep["silk_mark_missing"] is None
+
+
+def test_a_diode_bar_at_the_anode_is_wrong_and_says_why(tmp_path):
+    """The same silk mirrored: JLC turns the diode round to match it."""
+    row, rep = _mark_row(_sod(tmp_path, SOD123_SILK, sx=-1), "D1")
+    assert row["silk_mark"] == "wrong" and rep["silk_mark_wrong"] == ["D1"]
+    assert "toward pad 2" in row["silk_why"]
+
+
+def test_a_diode_drawn_as_a_plain_box_warns(tmp_path):
+    row, rep = _mark_row(_sod(tmp_path, SOD123_BOX), "D1")
+    assert row["silk_mark"] == "none" and rep["silk_mark_wrong"] == []
+    assert rep["silk_mark_missing"]["refs"] == ["D1"]
+
+
+@pytest.mark.parametrize("r", [0, 90, 180, 270])
+def test_a_turned_diode_keeps_its_bar(r, tmp_path):
+    row, _ = _mark_row(_part_board(tmp_path, "D1", "Diode_SMD:D_SOD-123", SOD123,
+                                   _lines(SOD123_SILK), r=r), "D1", rot=float(r))
+    assert row["silk_mark"] == "ok"
+
+
+def test_a_bottom_diode_reads_its_own_sides_bar(tmp_path):
+    # KiCad's flip: silk mirrored in y on B.SilkS; a bar is symmetric in y.
+    def board(sx):
+        return _part_board(tmp_path, "D1", "Diode_SMD:D_SOD-123", SOD123,
+                           _lines(SOD123_SILK, "B.SilkS", sx=sx, sy=-1),
+                           layer="B.Cu")
+    assert _mark_row(board(1), "D1", 180.0, "Bottom")[0]["silk_mark"] == "ok"
+    assert _mark_row(board(-1), "D1", 180.0, "Bottom")[0]["silk_mark"] == "wrong"
+
+
+def test_an_electrolytic_plus_beside_its_plus_pad_passes(tmp_path):
+    pcb = _part_board(tmp_path, "C1", "Capacitor_SMD:CP_Elec_4x5.4", CPELEC,
+                      _lines(CPELEC_PLUS + CPELEC_BODY), size=(2.6, 1.6))
+    assert _mark_row(pcb, "C1")[0]["silk_mark"] == "ok"
+
+
+def test_an_electrolytic_plus_beside_its_minus_pad_is_wrong(tmp_path):
+    plus = [(-a, b, -c, d) for a, b, c, d in CPELEC_PLUS]
+    pcb = _part_board(tmp_path, "C1", "Capacitor_SMD:CP_Elec_4x5.4", CPELEC,
+                      _lines(plus + CPELEC_BODY), size=(2.6, 1.6))
+    row, rep = _mark_row(pcb, "C1")
+    assert row["silk_mark"] == "wrong" and rep["silk_mark_wrong"] == ["C1"]
+
+
+def test_an_electrolytic_with_no_plus_is_not_guessed_from_its_body(tmp_path):
+    """A can's chamfered body leans to + on some libraries and to - on
+    others, so without a + there's nothing safe to read."""
+    pcb = _part_board(tmp_path, "C1", "Capacitor_SMD:CP_Elec_4x5.4", CPELEC,
+                      _lines(CPELEC_BODY), size=(2.6, 1.6))
+    row, rep = _mark_row(pcb, "C1")
+    assert row["silk_mark"] is None and rep["silk_mark_missing"] is None
+
+
+def test_a_sot23_transistor_with_its_arrow_at_pin_1_passes(tmp_path):
+    pcb = _part_board(tmp_path, "Q1", "Package_TO_SOT_SMD:SOT-23", KICAD_SOT23,
+                      _lines(SOT23_BODY) + SOT23_ARROW, size=(1.475, 0.6))
+    assert _mark_row(pcb, "Q1")[0]["silk_mark"] == "ok"
+
+
+def test_a_sot23_transistor_with_no_mark_is_left_alone(tmp_path):
+    """Its three pads already fix the way round, so no mark isn't a fault."""
+    pcb = _part_board(tmp_path, "Q1", "Package_TO_SOT_SMD:SOT-23", KICAD_SOT23,
+                      _lines(SOT23_BODY), size=(1.475, 0.6))
+    row, rep = _mark_row(pcb, "Q1")
+    assert row["silk_mark"] is None and rep["silk_mark_missing"] is None
+
+
+def test_a_sot23_transistor_with_a_dot_by_pin_3_is_wrong(tmp_path):
+    pcb = _part_board(tmp_path, "Q1", "Package_TO_SOT_SMD:SOT-23", KICAD_SOT23,
+                      _lines(SOT23_BODY) + _dot(1.3, 1.4), size=(1.475, 0.6))
+    row, rep = _mark_row(pcb, "Q1")
+    assert row["silk_mark"] == "wrong" and rep["silk_mark_wrong"] == ["Q1"]
+
+
+def test_a_battery_holder_is_not_read_as_a_polar_two_pad(tmp_path):
+    pcb = _part_board(tmp_path, "BT1", "Battery:BatteryHolder_CR2032", SOD123,
+                      _lines(SOD123_SILK))
+    assert _mark_row(pcb, "BT1")[0]["silk_mark"] is None
+
+
+def test_planted_mutant_diode_bar_moved_reaches_the_dfm_gate(tmp_path):
+    good = _sod(tmp_path, SOD123_SILK)
+    marks, facts = _dfm_kinds(good, tmp_path, "D1")
+    assert marks == []
+    assert {p["ref"]: p["silk_mark"] for p in facts["parts"]} == {"D1": "ok"}
+    text = good.read_text()
+    bad = text.replace(_lines(SOD123_SILK), _lines(SOD123_SILK, sx=-1))
+    assert bad != text
+    good.write_text(bad)
+    marks, _ = _dfm_kinds(good, tmp_path, "D1")
+    assert [(m["kind"], m["severity"], m["refs"]) for m in marks] == [
+        ("cpl_silk_mark", "error", ["D1"])]
 
 
 # ------- a foreign board's shipped CPL (oasis v0.2, #880) -------
