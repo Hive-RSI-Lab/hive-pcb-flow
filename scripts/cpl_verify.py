@@ -1015,21 +1015,22 @@ def bga_pin1(fp: Footprint) -> KPad | None:
     return min(balls, key=lambda b: (len(b[0]), b[0], b[1]))[2]
 
 
-def silk_mark(fp: Footprint) -> dict:
+def silk_mark(fp: Footprint, roles: dict | None = None) -> dict:
     """_silk_mark_of the part's own silk; where that has no mark, of the
-    silk drawn on the board by it alone, with `source: board` (#1380)."""
-    mark = _silk_mark_of(fp)
+    silk drawn on the board by it alone, with `source: board` (#1380).
+    `roles` (pad -> K/A/+/-) replaces board_roles for a two-pad part."""
+    mark = _silk_mark_of(fp, roles)
     if mark["state"] in (None, "none") and (fp.board_marks or fp.board_silk
                                             or fp.board_plus):
         alt = _silk_mark_of(replace(fp, marks=fp.board_marks,
                                     own_silk=fp.board_silk,
-                                    plus_texts=fp.board_plus))
+                                    plus_texts=fp.board_plus), roles)
         if alt["state"] in ("ok", "wrong"):
             return {**alt, "source": "board"}
     return mark
 
 
-def _silk_mark_of(fp: Footprint) -> dict:
+def _silk_mark_of(fp: Footprint, roles: dict | None = None) -> dict:
     """Whether the part's pin-1 silk mark is at the board's pin 1. `state` is
     None for parts the rule leaves alone (only ball grids and U/IC/Q parts
     with three or more pads and a pin 1, a Q only when it has a mark, and the
@@ -1046,7 +1047,7 @@ def _silk_mark_of(fp: Footprint) -> dict:
             {p.number for p in fp.pads if p.number}) >= 3:
         pin = next((p for p in fp.pads if p.number == "1"), None)
     if pin is None:
-        return polarity_mark(fp)
+        return polarity_mark(fp, roles)
     if q and not fp.marks:
         return {"state": None}
     box = _pad_field(fp)
@@ -1081,7 +1082,7 @@ def _plus_signs(fp: Footprint, ux: float, uy: float) -> list[tuple[float, float]
     return out
 
 
-def polarity_mark(fp: Footprint) -> dict:
+def polarity_mark(fp: Footprint, roles: dict | None = None) -> dict:
     """silk_mark for a two-pad diode, LED or polarised cap (#800): whether its
     cathode bar or "+" is at the board's K or + pad. A "+" decides it where
     there is one; else, but for electrolytics, the silk's length-weighted
@@ -1089,11 +1090,12 @@ def polarity_mark(fp: Footprint) -> dict:
     strokes across the axis (a bar, an LED's flat) where there are any, else
     of all of it. A centred outline, or all of it leaning the other way, is
     "none". Keyed housings
-    (a battery holder) and switches are left alone."""
+    (a battery holder) and switches are left alone. `roles` (pad -> K/A/+/-)
+    replaces board_roles: check_silk reads an imported LED's from its nets."""
     nums = {p.number for p in fp.pads if p.number}
     if len(nums) != 2 or not is_polar(fp) or is_keyed(fp) or is_switch(fp):
         return {"state": None}
-    roles = board_roles(fp, None)
+    roles = roles or board_roles(fp, None)
     mark = next((n for n, r in roles.items() if r in ("K", "+")), None)
     other = next((n for n, r in roles.items() if r in ("A", "-")), None)
     if not mark or not other:

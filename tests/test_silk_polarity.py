@@ -34,10 +34,12 @@ def _dot(x, y, r=0.1):
             f'(stroke (width 0.12)) (layer "F.SilkS"))')
 
 
-def _fp(ref, fpid, pads, silk, size=(0.9, 1.2), x=20.0, y=20.0):
+def _fp(ref, fpid, pads, silk, size=(0.9, 1.2), x=20.0, y=20.0, nets=None):
+    nets = nets or {}
     pad_txt = "".join(
         f'(pad "{n}" smd rect (at {px} {py}) (size {size[0]} {size[1]}) '
         f'(layers "F.Cu" "F.Mask")'
+        + (f' (net "{nets[n]}")' if n in nets else "")
         + (f' (pinfunction "{fn}")' if fn else "") + ")"
         for n, px, py, *rest in pads for fn in [rest[0] if rest else None])
     return (f'(footprint "{fpid}" (layer "F.Cu") (at {x} {y}) '
@@ -119,17 +121,86 @@ def test_an_imported_led_named_only_led_is_not_judged(sx, tmp_path):
     """An LCSC LED-SMD_... footprint, pads unnamed: KiCad's pin 1 = K is only
     a guess for it (hifi-receiver-2's has its anode on pad 1), so its cut
     corner is not judged at either end, rather than called wrong."""
-    pads = [("1", 0.75, 0), ("2", -0.75, 0)]
-    cut = [(-1.7, -0.4, -1.7, 0.4), (-1.7, 0.4, -1.4, 0.7),
-           (-1.4, -0.7, -1.7, -0.4), (-1.4, 0.7, -0.3, 0.7),
-           (-0.3, -0.7, -1.4, -0.7), (0.2, -0.7, 1.47, -0.7),
-           (1.47, -0.7, 1.47, 0.7), (1.47, 0.7, 0.2, 0.7)]
-    refs, fact = _polarity(_board(tmp_path, _fp(
-        "D3", "X:LED-SMD_L1.6-W0.8-R-RD", pads, _lines(cut, sx=sx),
-        size=(0.6, 0.8))))
+    refs, fact = _polarity(_board(tmp_path, _led(sx)))
     assert refs == [] and fact["ok"] == 0 and fact["not_judged"] == 1
     (row,) = fact["not_judged_refs"]
     assert "guessed" in row["why"]
+
+
+# hifi-receiver-2 core's D3 (LCSC C2286, LED-SMD_L1.6-W0.8-R-RD): pad 1 at
+# +0.75 on /ui/LED_A (its resistor's other end), pad 2 at -0.75 on GND, and
+# the outline's cut corners at x = -1.7 * sx: by pad 2 for sx = 1.
+LED_PADS = [("1", 0.75, 0), ("2", -0.75, 0)]
+LED_CUT = [(-1.7, -0.4, -1.7, 0.4), (-1.7, 0.4, -1.4, 0.7),
+           (-1.4, -0.7, -1.7, -0.4), (-1.4, 0.7, -0.3, 0.7),
+           (-0.3, -0.7, -1.4, -0.7), (0.2, -0.7, 1.47, -0.7),
+           (1.47, -0.7, 1.47, 0.7), (1.47, 0.7, 0.2, 0.7)]
+
+
+def _led(sx, nets=None):
+    return _fp("D3", "X:LED-SMD_L1.6-W0.8-R-RD", LED_PADS,
+               _lines(LED_CUT, sx=sx), size=(0.6, 0.8), nets=nets)
+
+
+def _resistor(net, ref="R7"):
+    """A resistor with one pad on `net`: what makes it a driver net."""
+    return _fp(ref, "R_0402", [("1", -0.5, 0), ("2", 0.5, 0)], "",
+               x=40.0, nets={"1": net, "2": "+3V3"})
+
+
+def test_planted_imported_led_cut_by_its_anode_net_is_an_error(tmp_path):
+    """The planted fault: the same imported LED, its cut corners moved to
+    pad 1, the anode by its nets (pad 2 is on GND, pad 1 on the resistor's
+    LED_A net). A cathode read from the nets is judged, not guessed."""
+    payload, _ = cs.run(["--pcb", str(_board(
+        tmp_path, _led(-1, {"1": "/ui/LED_A", "2": "GND"}),
+        _resistor("/ui/LED_A")))])
+    hits = [v for v in payload["violations"] if v["kind"] == KIND]
+    assert [(v["severity"], v["refs"]) for v in hits] == [("error", ["D3"])]
+    assert "pad 2 on GND" in hits[0]["msg"]
+
+
+def test_quiet_twin_imported_led_cut_by_its_ground_pad_is_ok(tmp_path):
+    """The quiet twin: hifi-receiver-2's D3 as built, cut corners by pad 2
+    on GND, is one ok part."""
+    refs, fact = _polarity(_board(
+        tmp_path, _led(1, {"1": "/ui/LED_A", "2": "GND"}),
+        _resistor("/ui/LED_A")))
+    assert refs == [] and (fact["ok"], fact["not_judged"]) == (1, 0)
+
+
+@pytest.mark.parametrize("sx, want", [(-1, []), (1, ["D3"])])
+def test_a_low_side_led_has_its_anode_on_the_rail(sx, want, tmp_path):
+    """Pad 2 on +5V and pad 1 on a driver: pad 1 is the cathode."""
+    refs, fact = _polarity(_board(
+        tmp_path, _led(sx, {"1": "/LED_K", "2": "+5V"}), _resistor("/LED_K")))
+    assert refs == want and fact["not_judged"] == 0
+
+
+@pytest.mark.parametrize("nets, extra", [
+    ({"1": "+3V3", "2": "GND"}, None),            # both on supplies
+    ({"1": "/LED_A", "2": "/LED_B"}, "/LED_A"),   # both on drivers
+    ({"1": "/LED_A", "2": "-12V"}, "/LED_A"),     # a negative rail
+    ({"1": "/LED_A", "2": "GND"}, None),          # no other pad on LED_A
+    ({"2": "GND"}, None),                         # pad 1 on no net
+])
+def test_nets_that_dont_say_leave_an_imported_led_not_judged(nets, extra, tmp_path):
+    """Only one pad on a ground or positive rail and the other on a net that
+    reaches another part gives the cathode; anything else is not judged."""
+    fps = [_led(-1, nets)] + ([_resistor(extra)] if extra else [])
+    refs, fact = _polarity(_board(tmp_path, *fps))
+    assert refs == [] and fact["not_judged"] == 1
+    assert "nets don't say" in fact["not_judged_refs"][0]["why"]
+
+
+@pytest.mark.parametrize("net, kind", [
+    ("GND", "ground"), ("/power/AGND", "ground"), ("GNDA", "ground"),
+    ("VSS", "ground"), ("+3V3", "rail"), ("3V3", "rail"), ("+3.3V", "rail"),
+    ("VBUS", "rail"), ("VCC_IO", "rail"), ("/ui/LED_A", "driver"),
+    ("Net-(D3-Pad2)", "driver"), ("~{LED_EN}", "driver"), ("-12V", ""),
+    ("unconnected-(D3-Pad1)", ""), ("", "")])
+def test_net_kinds(net, kind):
+    assert cs._net_kind(net, {net: 2}) == kind
 
 
 # An electrolytic: pad 1 is +, and a "+" is drawn beside it.

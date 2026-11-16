@@ -988,7 +988,57 @@ def _roles_guessed(cv, fp) -> bool:
     return not KICAD_POLAR_NAME.match(fp.name)
 
 
-def polarity_mark_of(cv, fp) -> dict:
+# A net's last name part (`/ui/LED_A` -> LED_A), KiCad 10's overbar `~{X}`
+# read as KiCad 5's `~X`.
+GROUND_NET = re.compile(r"^(A|D|P|S|CHASSIS_)?GND(\w*)$|^VSS\w*$|^0V$", re.I)
+RAIL_NET = re.compile(r"^\+\d[\w.]*$|^\+?\d+(V\d*|\.\d+V)\w*$|"
+                      r"^\+?V(CC|DD|BUS|IN|BAT|SYS)\w*$", re.I)
+
+
+def _net_kind(net: str, pads_on: dict) -> str:
+    """"ground", "rail" (a positive supply), "driver" (any other net that
+    reaches another part's pad) or "" (no net, an unconnected pad, a net
+    no other pad is on, or a negative supply)."""
+    name = (net or "").rsplit("/", 1)[-1].replace("~{", "~").replace("}", "")
+    if not name or "unconnected" in name.lower():
+        return ""
+    if GROUND_NET.match(name):
+        return "ground"
+    if name.startswith("-"):
+        return ""
+    if RAIL_NET.match(name):
+        return "rail"
+    return "driver" if pads_on.get(net, 0) >= 2 else ""
+
+
+def net_led_roles(fp, pads_on: dict) -> dict:
+    """An imported LED's K/A from its two nets, where its library numbering
+    can't be trusted: the pad on a ground net is the cathode (high-side
+    drive), or the pad on a positive rail is the anode (low-side drive), and
+    only where the other pad is on a driver net. {} for anything else (both
+    on supplies, both on drivers, a pad on no net or a negative rail).
+    `pads_on`: net -> how many pads on the board sit on it."""
+    pads = [p for p in fp.pads if p.number]
+    if {p.number for p in pads} != {"1", "2"}:
+        return {}
+    kinds = {}
+    for p in pads:
+        kinds.setdefault(p.number, set()).add(_net_kind(p.net, pads_on))
+    if any(len(k) != 1 for k in kinds.values()):
+        return {}
+    k1, k2 = next(iter(kinds["1"])), next(iter(kinds["2"]))
+    pair = {"1": k1, "2": k2}
+    supply = [n for n, k in pair.items() if k in ("ground", "rail")]
+    driver = [n for n, k in pair.items() if k == "driver"]
+    if len(supply) != 1 or len(driver) != 1:
+        return {}
+    s, d = supply[0], driver[0]
+    if pair[s] == "ground":
+        return {s: "K", d: "A"}
+    return {s: "A", d: "K"}
+
+
+def polarity_mark_of(cv, fp, pads_on: dict | None = None) -> dict:
     """{"state": "ok"|"wrong"|"not_judged"|None, "why", ...} for one part's
     silk polarity mark against its pads, from the board alone. cpl_verify's
     reader finds the mark (silk_mark: a two-pad part's band, cut corners or
@@ -997,16 +1047,25 @@ def polarity_mark_of(cv, fp) -> dict:
     show a notch instead. A pin-1 mark is only called wrong when it is the
     part's one mark and sits by a corner pad: a mark by a pad mid-row (a
     display's decimal point, a library's every-tenth-pin tick) or one of
-    several marks says nothing sure about pin 1. None: not a polarised part."""
+    several marks says nothing sure about pin 1. An imported LED whose K/A
+    is only guessed from its name takes them from its nets (net_led_roles,
+    `pads_on`: net -> pads on it) or is not judged. None: not a polarised
+    part."""
     m = cv.silk_mark(fp)
     st = m["state"]
     nums = {p.number for p in fp.pads if p.number}
+    from_nets = False
     if m.get("basis") == "polarity" and _roles_guessed(cv, fp):
-        return {"state": "not_judged",
-                "why": "which pad is the cathode is only guessed from an "
-                       "imported LED footprint's name (no pin function or "
-                       "A/K pad names); its library may number it the "
-                       "other way"}
+        roles = net_led_roles(fp, pads_on or {})
+        if not roles:
+            return {"state": "not_judged",
+                    "why": "which pad is the cathode is only guessed from an "
+                           "imported LED footprint's name (no pin function or "
+                           "A/K pad names), and its nets don't say (not one "
+                           "pad on a ground or rail and the other on a "
+                           "driver); its library may number it the other way"}
+        m, from_nets = cv.silk_mark(fp, roles), True
+        st = m["state"]
     if st is None:
         if (len(nums) != 2 or not cv.is_polar(fp) or cv.is_keyed(fp)
                 or cv.is_switch(fp)):
@@ -1035,8 +1094,13 @@ def polarity_mark_of(cv, fp) -> dict:
     if st == "ok":
         return {"state": "ok", "pin": m.get("pin")}
     if m.get("basis") == "polarity":
+        why = m.get("why")
+        if from_nets:
+            why += " (its cathode read from its nets: " + ", ".join(
+                f"pad {p.number} on {p.net}" for p in sorted(
+                    fp.pads, key=lambda p: p.number) if p.number) + ")"
         return {"state": "wrong", "pin": m.get("pin"), "form": "band",
-                "at": (m.get("off") or [None])[0], "why": m.get("why")}
+                "at": (m.get("off") or [None])[0], "why": why}
     marks = (fp.board_marks if m.get("source") == "board" else fp.marks)
     if len(marks) != 1:
         return {"state": "not_judged",
@@ -1068,9 +1132,14 @@ def check_polarity_marks(pcb) -> tuple[list[dict], dict]:
     import cpl_verify as cv
     vios, ok, unjudged = [], 0, {}
     fps = cv.board_footprints(pcb)
+    pads_on: dict[str, int] = {}
+    for f in fps.values():
+        for p in f.pads:
+            if p.net:
+                pads_on[p.net] = pads_on.get(p.net, 0) + 1
     for ref in sorted(fps, key=cv._natural):
         fp = fps[ref]
-        r = polarity_mark_of(cv, fp)
+        r = polarity_mark_of(cv, fp, pads_on)
         if r["state"] == "ok":
             ok += 1
         elif r["state"] == "not_judged":
