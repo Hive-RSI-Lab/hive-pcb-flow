@@ -1,9 +1,14 @@
 # check_fp_geometry: each placed footprint's pads against a drawing of the
-# part's land pattern (a cited reference/land_patterns.yaml row, KiCad's
-# stock footprint of the same name, the cached LCSC model, its own name's
-# pitch and pin count): pin order and pin-1 corner, pitch and row spacing,
-# pad size and hole. Board only; --live (LCSC models) is for sweeps, and
-# fp_geometry_coverage --fill-cache fills the shared model cache the gate reads.
+# part's land pattern (a cited reference/land_patterns.yaml row, the part's
+# record in the workspace, KiCad's stock footprint of the same name, the
+# cached LCSC model, its own name's pitch and pin count): pin order and pin-1
+# corner, pitch and row spacing, pad size, a two-pad land's gap and toe,
+# and hole.
+# --parts reads the workspace's part records when it has them; --live (LCSC
+# models) is for sweeps, and fp_geometry_coverage --fill-cache fills the
+# shared model cache the gate reads.
 name: check_fp_geometry
 needs: []
 args: []
+optional:
+  parts: [--parts, "{parts}"]

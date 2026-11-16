@@ -3,6 +3,7 @@ pattern (a cited land_patterns row, KiCad's stock footprint of its name,
 its own name). Each kind has a planted fault and a quiet twin."""
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -656,3 +657,233 @@ def test_coverage_counts_an_uncached_model_and_fill_cache_waits_out_the_limit(
     finally:
         easyeda.reset_rate_limit()
     assert f["left"] == ["C900779"] and len(waits) == 1
+
+
+# ------------------------------------------------- part records (#1332)
+
+def record(tmp_path, land, mpn="PARTA", **extra):
+    """parts/<mpn>.json: a part record whose land_pattern is `land`."""
+    d = tmp_path / "parts"
+    d.mkdir(exist_ok=True)
+    rec = {"mpn": mpn, "land_pattern": land, **extra,
+           "source_pdf": "parts/datasheets/X.pdf (Maker doc DS1 Rev C, June 2020; p7)"}
+    (d / f"{mpn}.json").write_text(json.dumps(rec), encoding="utf-8")
+    return d
+
+
+def rcheck(pcb, stock, parts):
+    """(sorted (ref, kind, severity), judged, not_judged, violations)."""
+    v, judged, nj = g.check(pcb, stock=stock, rows=[], parts=parts)
+    return (sorted((x["refs"][0], x["kind"], x["severity"]) for x in v),
+            judged, nj, v)
+
+
+PART = {"MPN": "PARTA"}
+
+
+def soic_land(**kw):
+    return {"pad_count": 8, "pin1": "1", "pitch_mm": 1.27, "row_spacing_mm": 4.95,
+            "pad_size_mm": [1.95, 0.6], "pads_source": "p7 land pattern",
+            "pads": [{"number": k, "at_mm": [x, y]} for k, (x, y) in SOIC.items()],
+            **kw}
+
+
+def test_record_land_quiet_at_any_turn_and_on_the_bottom(tmp_path, stock):
+    parts = record(tmp_path, soic_land())
+    flipped = {k: (x, -y) for k, (x, y) in SOIC.items()}  # KiCad's flip
+    pcb = board(tmp_path,
+                footprint("U1", "Mine:SO8", pads_of(SOIC), props=PART),
+                footprint("U2", "Mine:SO8", pads_of(SOIC, rot=90), at=(60, 50, 90),
+                          props=PART),
+                footprint("U3", "Mine:SO8", pads_of(flipped).replace('"F.', '"B.'),
+                          layer="B.Cu", props=PART),
+                # an origin moved off the pads' centre: only geometry counts
+                footprint("U4", "Mine:SO8",
+                          pads_of({k: (x + 3, y - 1) for k, (x, y) in SOIC.items()}),
+                          props=PART))
+    k, judged, nj, _ = rcheck(pcb, stock, parts)
+    assert k == [] and judged == {"record": 4} and nj == {}
+    # without --parts the same board has nothing to judge it by
+    _, judged, nj = g.check(pcb, stock=stock, rows=[])
+    assert judged == {} and sum(len(r) for r in nj.values()) == 4
+
+
+def test_record_pin_order_and_pitch(tmp_path, stock):
+    parts = record(tmp_path, soic_land())
+    cw = {str(i + 1): (2.475, -1.905 + 1.27 * i) for i in range(4)}
+    cw.update({str(8 - i): (-2.475, -1.905 + 1.27 * i) for i in range(4)})
+    tight = {k: (x, y / 1.27) for k, (x, y) in SOIC.items()}  # a 1.0 mm pitch
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8", pads_of(cw), props=PART),
+                footprint("U2", "Mine:SO8", pads_of(tight), at=(80, 50), props=PART))
+    k, judged, _, v = rcheck(pcb, stock, parts)
+    assert ("U1", "fp_pin_order_vs_record", "error") in k
+    assert ("U2", "fp_pitch_vs_record", "error") in k
+    assert judged == {"record": 2}
+    order, = [x for x in v if x["kind"] == "fp_pin_order_vs_record"]
+    assert order["record"] == "PARTA.json" and order["drawing"] == "parts/datasheets/X.pdf"
+    # the cite is the source's first clause, not its every page
+    assert "against its part record PARTA (Maker doc DS1 Rev C, p7 land pattern):" in order["msg"]
+    assert order["hint"] == "bottom_view_numbering"
+
+
+CHIP = {"pad_count": 2, "pin1": "1", "pitch_mm": 1.5, "pad_size_mm": [0.8, 0.9]}
+
+
+def chip(half, along=0.8, across=0.9):
+    return pad("1", -half, 0, along, across) + pad("2", half, 0, along, across)
+
+
+def test_record_two_terminal_land_gap_and_toe(tmp_path, stock):
+    """A chip's record gives its pitch and pad size: the gap is the pitch
+    less the pad length (0.7 mm, +-0.1), info up to 25 % outside it, an
+    error beyond; the toe a warning past 0.35 mm."""
+    parts = record(tmp_path, CHIP)
+    pcb = board(tmp_path,
+                footprint("C1", "Mine:CHIP", chip(0.75), props=PART),
+                footprint("C2", "Mine:CHIP", chip(0.825), at=(60, 50), props=PART),
+                footprint("C3", "Mine:CHIP", chip(0.9), at=(70, 50), props=PART),
+                footprint("C4", "Mine:CHIP", chip(0.6), at=(80, 50), props=PART),
+                footprint("C5", "Mine:CHIP", chip(0.95, 1.2, 1.3), at=(90, 50),
+                          props=PART))
+    k, judged, nj, v = rcheck(pcb, stock, parts)
+    assert judged == {"record": 5} and nj == {}
+    assert k == [("C2", "fp_land_gap_vs_record", "info"),
+                 ("C2", "fp_pitch_vs_record", "info"),
+                 ("C3", "fp_land_gap_vs_record", "error"),
+                 ("C3", "fp_pitch_vs_record", "info"),
+                 ("C4", "fp_land_gap_vs_record", "error"),
+                 ("C4", "fp_pitch_vs_record", "info"),
+                 ("C5", "fp_land_edge_vs_record", "warning"),
+                 ("C5", "fp_pad_size_vs_record", "info"),
+                 ("C5", "fp_pitch_vs_record", "info")]
+    by = {(x["refs"][0], x["kind"]): x for x in v}
+    gap = by[("C2", "fp_land_gap_vs_record")]
+    assert gap["measured_mm"] == pytest.approx(0.85)
+    assert gap["stated_mm"] == [0.7, 0.7] and gap["expected_mm"] == [0.6, 0.8]
+    assert "21% wider than the maker's" in gap["msg"] and "Fix:" not in gap["msg"]
+    assert by[("C2", "fp_pitch_vs_record")]["basis"] == "nearest_pads"
+    wide = by[("C3", "fp_land_gap_vs_record")]
+    assert "43% wider" in wide["msg"] and "tombstone" in wide["msg"] and "Fix:" in wide["msg"]
+    narrow = by[("C4", "fp_land_gap_vs_record")]
+    assert "43% narrower" in narrow["msg"] and "bridge" in narrow["msg"]
+    toe = by[("C5", "fp_land_edge_vs_record")]
+    assert toe["toe_mm"] == pytest.approx(1.55)
+    assert toe["toe_expected_mm"] == pytest.approx([1.15, 1.15])
+    assert "beyond the maker's" in toe["msg"] and "float" in toe["msg"]
+    assert by[("C5", "fp_pad_size_vs_record")]["basis"] == "sorted"
+
+
+def test_record_gap_mm_severity_by_how_far_out(tmp_path, stock):
+    parts = record(tmp_path, {"pad_count": 2, "pin1": "1", "gap_mm": 0.7,
+                              "pad_size_mm": [0.8, 0.9]})
+    pcb = board(tmp_path,
+                footprint("C1", "Mine:CHIP", chip(0.75), props=PART),
+                footprint("C2", "Mine:CHIP", chip(0.825), at=(60, 50), props=PART),
+                footprint("C3", "Mine:CHIP", chip(0.9), at=(70, 50), props=PART))
+    k, judged, _, v = rcheck(pcb, stock, parts)
+    assert judged == {"record": 3}
+    assert k == [("C2", "fp_land_gap_vs_record", "info"),
+                 ("C3", "fp_land_gap_vs_record", "error")]
+    info, = [x for x in v if x["refs"] == ["C2"]]
+    assert info["stated_mm"] == [0.7, 0.7] and "(21% wider than the maker's" in info["msg"]
+
+
+SOT23 = {"1": (-0.95, 1.0), "2": (0.95, 1.0), "3": (0.0, -1.0)}
+
+
+def test_record_nearest_pad_pitch_is_info(tmp_path, stock):
+    # SOT-23's e is 0.95 mm, but no two of its pads are 0.95 apart: a
+    # nearest-pad pitch is a weak basis, so info
+    parts = record(tmp_path, {"pad_count": 3, "pin1": "1", "pitch_mm": 0.95})
+    pcb = board(tmp_path, footprint("Q1", "Mine:SOT", pads_of(SOT23, w=0.6, h=0.7),
+                                    props=PART))
+    k, judged, _, v = rcheck(pcb, stock, parts)
+    assert k == [("Q1", "fp_pitch_vs_record", "info")] and judged == {"record": 1}
+    assert v[0]["basis"] == "nearest_pads"
+
+
+def test_record_with_nothing_to_judge_still_counts_pads(tmp_path, stock):
+    parts = record(tmp_path, {"pad_count": 3, "pin1": "1"})
+    pcb = board(tmp_path, footprint("C1", "Mine:CHIP", chip(0.75), props=PART))
+    k, judged, nj, _ = rcheck(pcb, stock, parts)
+    assert k == [("C1", "fp_pad_count_vs_record", "error")] and judged == {}
+    assert nj == {"its part record states nothing to judge the land by (no pitch, "
+                  "pad size, row spacing, land gap or hole)": ["C1"]}
+
+
+def test_record_it_cannot_read_is_named_not_raised(tmp_path, stock):
+    parts = record(tmp_path, {**CHIP, "pitch_mm": "abc"})
+    pcb = board(tmp_path, footprint("C1", "Mine:CHIP", chip(0.75), props=PART))
+    k, judged, nj, _ = rcheck(pcb, stock, parts)
+    assert k == [] and judged == {}
+    why, = nj
+    assert why.startswith("its part record PARTA.json could not be read as a land "
+                          "(ValueError: ") and nj[why] == ["C1"]
+
+
+def test_load_records(tmp_path):
+    assert g.load_records(None) == {} and g.load_records(tmp_path / "none") == {}
+    d = record(tmp_path, CHIP, lcsc="C123")
+    record(tmp_path, CHIP, mpn="PARTB")
+    (d / "PARTA.grounding.json").write_text(json.dumps({"land_pattern": CHIP}))
+    (d / "BAD.json").write_text("{not json")
+    (d / "NOLAND.json").write_text(json.dumps({"mpn": "NOLAND", "land_pattern": {}}))
+    # a second record claiming PARTA's mpn: the first file by name keeps it
+    (d / "ZZ.json").write_text(json.dumps({"mpn": "PARTA", "land_pattern": {"pad_count": 9}}))
+    got = g.load_records(d / "parts.json")   # a file in the dir, not there
+    assert set(got) == {"parta", "c123", "partb", "zz"}
+    assert got["parta"][0].name == "PARTA.json" and got["c123"][0].name == "PARTA.json"
+    assert got["zz"][1]["land_pattern"] == {"pad_count": 9}
+    assert g.load_records(d) == got
+
+
+def test_cite_first_clause():
+    fc = g._first_clause
+    assert fc("Maker doc DS123 Rev C, June 2020, 8 pages; p1") == "Maker doc DS123 Rev C"
+    assert fc("TI SLVS (Rev C, 2020), p3") == "TI SLVS (Rev C, 2020)"
+    assert fc("'Package A, B' drawing; p3") == "'Package A, B' drawing"
+    assert fc("Maker's doc, p3") == "Maker's doc"
+    assert fc("Maker doc: land p7") == "Maker doc"
+    assert fc(" ".join(["word"] * 20)) == " ".join(["word"] * 16) + "..."
+    p = Path("parts/PARTA.json")
+    assert g._cite({"source_pdf": "parts/datasheets/X.pdf (Maker doc, Rev C; p7)"}, p) == (
+        "Maker doc", "parts/datasheets/X.pdf")
+    assert g._cite({"source_pdf": "parts/datasheets/X.pdf"}, p) == (
+        "parts/datasheets/X.pdf", "parts/datasheets/X.pdf")
+    assert g._cite({}, p) == ("PARTA.json", "")
+    # the land's pads_source (the page and figure the pads came from) follows
+    assert g._cite({"source_pdf": "parts/datasheets/X.pdf (Maker doc, Rev C; p7)",
+                    "land_pattern": {"pads_source": "p27 Table 2; reflow row"}}, p) == (
+        "Maker doc, p27 Table 2", "parts/datasheets/X.pdf")
+    assert g._cite({"land_pattern": {"pads_source": "p3 Fig 4"}}, p) == (
+        "PARTA.json, p3 Fig 4", "")
+
+
+def test_gap_rule():
+    assert g.gap_allowed([0.7, 0.7]) == pytest.approx((0.6, 0.8))
+    assert g.gap_allowed([0.2, 0.25]) == (0.2, 0.25)
+    assert g.gap_off(0.7, [0.7, 0.7]) == 0.0
+    assert g.gap_off(0.75, [0.7, 0.7]) == pytest.approx(0.05 / 0.7)
+    assert g.gap_off(0.85, [0.7, 0.7]) == pytest.approx(0.15 / 0.7)
+    assert g.gap_off(0.4, [0.7, 0.7]) == pytest.approx(-0.3 / 0.7)
+    assert g.gap_off(-0.1, [0.0, 0.2]) is None
+    # inside +-0.1 of one number: no finding, however far in fraction
+    assert g.gap_severity(0.79, [0.7, 0.7]) is None
+    assert g.gap_severity(0.85, [0.7, 0.7]) == "info"
+    assert g.gap_severity(0.875, [0.7, 0.7]) == "info"     # 25 % exactly
+    assert g.gap_severity(1.0, [0.7, 0.7]) == "error"
+    assert g.gap_severity(0.4, [0.7, 0.7]) == "error"
+    # a range is the maker's own: no +-0.1 round it
+    assert g.gap_severity(0.26, [0.2, 0.25]) == "info"
+    assert g.gap_severity(0.18, [0.2, 0.25]) == "info"
+    assert g.gap_severity(0.14, [0.2, 0.25]) == "error"
+    # a bound not above zero has no fraction: below it the pads overlap,
+    # above it the record's own pads touch
+    assert g.gap_severity(-0.5, [-0.2, -0.2]) == "error"
+    assert g.gap_severity(0.3, [-0.2, -0.2]) == "warning"
+    assert g.gap_severity(0.3, [0.0, 0.0]) == "warning"
+    assert g.gap_note(0.7, [0.7, 0.7]) == ""
+    assert g.gap_note(0.85, [0.7, 0.7]).startswith("21% wider than the maker's; lands")
+    assert "likely a land for another part" in g.gap_note(1.0, [0.7, 0.7])
+    assert g.gap_note(-0.5, [-0.2, -0.2]) == "the pads overlap"
+    assert "check the record's pitch" in g.gap_note(0.3, [-0.2, -0.2])
