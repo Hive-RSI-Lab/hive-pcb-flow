@@ -40,8 +40,8 @@ Per pair (from constraints.json["diff_pairs"], else auto-discovered by name):
    the sum per net gives diffpair_skew, the copper beyond coupling_max of
    the partner, over the strip's width, diffpair_uncoupled, and the via
    counts diffpair_via_asymmetry, at the track limits (#1000). A zone that
-   is not one strip (a pad, a pour, a stepped width) leaves skew
-   not_judged with where; phase is always not_judged on a zone, which has
+   is not one strip (a pad, a pour, a stepped width) leaves skew and
+   uncoupled length not_judged with where; phase is always not_judged on a zone, which has
    no drawn centreline. A MIXED pair, tracks into a zone strip and out,
    closes its trunk through the strip at the strip's length and judges the
    layer both nets fill as above.
