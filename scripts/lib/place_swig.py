@@ -54,12 +54,18 @@ unscriptable):
 Pad and part-attribute ops (U-ECO: the hi-fi boards scripted these by hand):
   {"op": "set_pad", "ref": R, "pad": N | [N...], ["net": NAME | ""],
    ["size": mm | [w, h]], ["zone_connection": "solid"|"thermal"|"none"|
-   "inherit"]}
+   "inherit"], ["drill": mm | [w, h]], ["shape": "circle"|"oval"|"rect"|
+   "roundrect"], ["at": [x, y]]}
      - re-nets (a net not on the board is created; "" clears it, for an NC
        pin), resizes and/or sets the zone connection of the named pads
        (solid = no thermal spokes, for a pad carrying amps into a plane;
        inherit = the footprint's/zone's setting again). Zones are not
        refilled here: refill after. Absolute, so idempotent.
+     - drill re-holes them (w != h: an oval slot; refused on an SMD pad),
+       shape sets the copper's shape, at moves one pad (its hole and copper)
+       to [x, y] in the part's frame (SetFPRelativePosition). pad "" = the
+       part's unnumbered pads (NPTH legs). The driver checks the ring and
+       hole-to-hole after.
   {"op": "set_dnp", "ref": R, "dnp": bool}
 
 Re-pad ops (part_repair), resolved by the driver (place_edit._resolve_repad)
@@ -331,6 +337,8 @@ ZONE_CONNECTIONS = {"inherit": "ZONE_CONNECTION_INHERITED",
                     "none": "ZONE_CONNECTION_NONE",
                     "thermal": "ZONE_CONNECTION_THERMAL",
                     "solid": "ZONE_CONNECTION_FULL"}
+PAD_SHAPES = {"circle": "PAD_SHAPE_CIRCLE", "oval": "PAD_SHAPE_OVAL",
+              "rect": "PAD_SHAPE_RECTANGLE", "roundrect": "PAD_SHAPE_ROUNDRECT"}
 
 
 def apply_set_pad(board, op: dict) -> dict:
@@ -354,6 +362,20 @@ def apply_set_pad(board, op: dict) -> dict:
     zc = op.get("zone_connection")
     if zc is not None:
         zc = getattr(pcbnew, ZONE_CONNECTIONS[zc])
+    drill = op.get("drill")
+    if drill is not None and not isinstance(drill, list):
+        drill = [drill, drill]
+    if drill is not None:
+        smd = [p.GetNumber() for p in pads if p.GetAttribute() in
+               (pcbnew.PAD_ATTRIB_SMD, pcbnew.PAD_ATTRIB_CONN)]
+        if smd:
+            raise ValueError(f"{op['ref']}: pad {sorted(smd)} is SMD - a "
+                             "drill needs a through-hole pad")
+    shape = op.get("shape")
+    if shape is not None:
+        shape = getattr(pcbnew, PAD_SHAPES[shape])
+    if op.get("at") is not None and len(pads) != 1:
+        raise ValueError(f"{op['ref']}: at moves one pad, {len(pads)} match")
     for p in pads:
         if "net" in op:
             if net is None:
@@ -364,9 +386,20 @@ def apply_set_pad(board, op: dict) -> dict:
             p.SetSize(pcbnew.VECTOR2I(iu(size[0]), iu(size[1])))
         if zc is not None:
             p.SetLocalZoneConnection(zc)
+        if shape is not None:
+            p.SetShape(shape)
+        if drill is not None:
+            p.SetDrillShape(pcbnew.PAD_DRILL_SHAPE_OBLONG
+                            if abs(drill[0] - drill[1]) > 1e-6
+                            else pcbnew.PAD_DRILL_SHAPE_CIRCLE)
+            p.SetDrillSize(pcbnew.VECTOR2I(iu(drill[0]), iu(drill[1])))
+        if op.get("at") is not None:
+            p.SetFPRelativePosition(pcbnew.VECTOR2I(iu(op["at"][0]),
+                                                    iu(op["at"][1])))
     return {"ref": op["ref"], "pads": sorted(p.GetNumber() for p in pads),
             "net": op.get("net"), "size": size,
-            "zone_connection": op.get("zone_connection")}
+            "zone_connection": op.get("zone_connection"),
+            "drill": drill, "shape": op.get("shape"), "at": op.get("at")}
 
 
 # swap_fp: (old part, new part, uuid to carry) - the old parts are removed,
