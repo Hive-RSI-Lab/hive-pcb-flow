@@ -400,14 +400,14 @@ VIN_PIN = re.compile(r"[PA]?V?IN\d?", re.I)
 
 
 def _pin(pad) -> str:
-    """A pad's pin name as VIN_PIN reads it: KiCad overbars and subscripts
-    dropped and a trailing _<pad number> cut ('~{VIN}', 'VIN_3' on pad 3 and
-    'V_{IN}_6' on pad 6 -> 'VIN')."""
+    """A pad's pin name as VIN_PIN reads it: a trailing _<pad number> cut,
+    then KiCad's overbar, subscript and superscript markup dropped
+    (check_current.unmarked): '~{VIN}', 'VIN_3' on pad 3, 'V_{IN}_6' on pad
+    6 and 'V^{IN}' -> 'VIN' (#1458, #1460)."""
     name = str(pad.pinfunction or "").strip()
     if name.endswith(f"_{pad.number}"):
         name = name[: -len(pad.number) - 1]
-    name = re.sub(r"~\{([^}]*)\}", r"\1", name)
-    return re.sub(r"_\{([^}]*)\}", r"\1", name)
+    return cc.unmarked(name).strip()
 
 
 def _no_volts(net: str, conflicts: dict) -> str:

@@ -1541,6 +1541,234 @@
    "kind": "dfm_tombstone",
    "verdict": "real",
    "reason": "the PVDD pour is set to join pads solid (connect_pads yes) and touches one end of each listed 0603-or-smaller part on F.Cu, while the other end leaves on a 0.2-0.9 mm track: the pour end lags at reflow, the tombstoning setup IPC-7351 cures with a thermal relief (#328)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/CC1",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    82.615,
+    67.778
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB-C CC line at the receptacle with no clamp: a touched, cable-facing connector"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/USB_DP",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    81.615,
+    67.778
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB data at the receptacle with no ESD array"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/USB_DM",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    81.115,
+    67.778
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB data at the receptacle with no ESD array"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/CC2",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    79.615,
+    67.778
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB-C CC line at the receptacle with no clamp: a touched, cable-facing connector"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/LINEIN_L",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    46.465,
+    77.073
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "RCA line-in with no clamp: a touched external plug"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/LINEIN_R",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    38.465,
+    77.073
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "RCA line-in with no clamp: a touched external plug"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SUB_L",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    68.665,
+    77.073
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "RCA sub-out with no clamp: a touched external plug"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SUB_R",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    60.665,
+    77.073
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "RCA sub-out with no clamp: a touched external plug"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SPK_L_P",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    98.045,
+    65.923
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "speaker output with a 1 uF shunt at the terminal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SPK_L_N",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    103.125,
+    65.923
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "speaker output with a 1 uF shunt at the terminal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SPK_R_P",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    108.205,
+    65.923
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "speaker output with a 1 uF shunt at the terminal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/SPK_R_N",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    113.285,
+    65.923
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "speaker output with a 1 uF shunt at the terminal"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": "VBUS",
+   "refs": [
+    "U1"
+   ],
+   "pos": null,
+   "kind": "rating_over_clamp",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": "VBUS",
+   "refs": [
+    "U1"
+   ],
+   "pos": null,
+   "kind": "rating_over_clamp",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": "VBUS",
+   "refs": [
+    "U2"
+   ],
+   "pos": null,
+   "kind": "rating_over_clamp",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [
+    "D2"
+   ],
+   "pos": null,
+   "kind": "cpl_silk_mark",
+   "verdict": "?",
+   "reason": ""
   }
  ]
 }

@@ -4868,6 +4868,497 @@
    "kind": "dfm_tombstone",
    "verdict": "real",
    "reason": "the GND pour is set to join pads solid (connect_pads yes) and touches one end of each listed 0603-or-smaller part on F.Cu, while the other end leaves on a 0.2-0.9 mm track: the pour end lags at reflow, the tombstoning setup IPC-7351 cures with a thermal relief (#328)"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/power_in/CC1",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    40.687,
+    177.42
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB-C CC line at the receptacle with no clamp: a touched, cable-facing connector"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/power_in/CC2",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    39.337,
+    179.98
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "USB-C CC line at the receptacle with no clamp: a touched, cable-facing connector"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/amp_b/B_SPK_L+",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    84.487,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/amp_b/B_SPK_L-",
+   "refs": [
+    "J10"
+   ],
+   "pos": [
+    79.487,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/amp_b/B_SPK_R+",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    96.987,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/amp_b/B_SPK_R-",
+   "refs": [
+    "J11"
+   ],
+   "pos": [
+    91.987,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/ethernet/ETH_TXP",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    51.437,
+    198.247
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "behind the HR911105A magjack's internal transformer: the cable side is isolated from the PHY"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/ethernet/ETH_TXN",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    53.977,
+    199.517
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "behind the HR911105A magjack's internal transformer: the cable side is isolated from the PHY"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/ethernet/ETH_RXP",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    51.437,
+    200.787
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "behind the HR911105A magjack's internal transformer: the cable side is isolated from the PHY"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/ethernet/ETH_RXN",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    53.977,
+    204.597
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "behind the HR911105A magjack's internal transformer: the cable side is isolated from the PHY"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/dac/SUB1_OUT",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    111.587,
+    137.147
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "subwoofer line-out at an external jack with only 470 R and 1 nF: nothing clamps a touched plug"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/dac/SUB2_OUT",
+   "refs": [
+    "J4"
+   ],
+   "pos": [
+    103.587,
+    136.347
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "subwoofer line-out at an external jack with only 470 R and 1 nF: nothing clamps a touched plug"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/linein/LIN_L",
+   "refs": [
+    "J5"
+   ],
+   "pos": [
+    129.587,
+    137.147
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "line-in at an external jack with 4.7 k series and no clamp: the strike reaches the codec input"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/linein/LIN_R",
+   "refs": [
+    "J5"
+   ],
+   "pos": [
+    121.587,
+    136.347
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "line-in at an external jack with 4.7 k series and no clamp: the strike reaches the codec input"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/A_SPK_L+",
+   "refs": [
+    "J6"
+   ],
+   "pos": [
+    51.587,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/amp_a/A_SPK_L-",
+   "refs": [
+    "J6"
+   ],
+   "pos": [
+    46.587,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/A_SPK_R+",
+   "refs": [
+    "J7"
+   ],
+   "pos": [
+    64.087,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/amp_a/A_SPK_R-",
+   "refs": [
+    "J7"
+   ],
+   "pos": [
+    59.087,
+    126.197
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "class-D speaker output at a screw terminal with a 1 uF shunt at the connector: the cap and the output stage's body diodes take the charge"
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": "VBUS_IN",
+   "refs": [
+    "J1"
+   ],
+   "pos": null,
+   "kind": "rating_over_clamp",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": "VBUS_IN",
+   "refs": [
+    "J1"
+   ],
+   "pos": null,
+   "kind": "rating_over_clamp",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": "VBUS_IN",
+   "refs": [
+    "J1"
+   ],
+   "pos": null,
+   "kind": "rating_over_clamp",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": "VBUS_IN",
+   "refs": [
+    "J1"
+   ],
+   "pos": null,
+   "kind": "rating_over_clamp",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_ratings",
+   "net": null,
+   "refs": [
+    "C1",
+    "C10",
+    "C11",
+    "C120",
+    "C121",
+    "C122",
+    "C13",
+    "C14",
+    "C15",
+    "C16",
+    "C17",
+    "C18",
+    "C19",
+    "C2",
+    "C201",
+    "C202",
+    "C206",
+    "C207",
+    "C208",
+    "C209",
+    "C210",
+    "C22",
+    "C30",
+    "C301",
+    "C302",
+    "C306",
+    "C307",
+    "C308",
+    "C309",
+    "C31",
+    "C310",
+    "C311",
+    "C32",
+    "C33",
+    "C34",
+    "C37",
+    "C38",
+    "C39",
+    "C400",
+    "C42",
+    "C43",
+    "C44",
+    "C45",
+    "C46",
+    "C5",
+    "C50",
+    "C51",
+    "C52",
+    "C53",
+    "C54",
+    "C55",
+    "C56",
+    "C57",
+    "C6",
+    "C68",
+    "C69",
+    "C7",
+    "C70",
+    "C9",
+    "D1",
+    "R1",
+    "R17",
+    "R18",
+    "R19",
+    "R20",
+    "R205",
+    "R30",
+    "R305",
+    "R34",
+    "R35",
+    "R36",
+    "R400",
+    "R50",
+    "R51",
+    "R52",
+    "R53",
+    "R54",
+    "R55",
+    "R56",
+    "R58",
+    "R62",
+    "R63",
+    "R64",
+    "R65",
+    "R66",
+    "SW2",
+    "SW3"
+   ],
+   "pos": null,
+   "kind": "rating_no_datasheet_read",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/USB_DP",
+   "refs": [
+    "J1",
+    "U2"
+   ],
+   "pos": [
+    48.637,
+    189.047
+   ],
+   "kind": "esd_clamp_far",
+   "verdict": "real",
+   "reason": "USB data clamp U2 is about 20 mm of track from the receptacle (22.5 / 18.7 mm): the strike loop runs past other nets first"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/USB_DM",
+   "refs": [
+    "J1",
+    "U2"
+   ],
+   "pos": [
+    50.537,
+    189.047
+   ],
+   "kind": "esd_clamp_far",
+   "verdict": "real",
+   "reason": "USB data clamp U2 is about 20 mm of track from the receptacle (22.5 / 18.7 mm): the strike loop runs past other nets first"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+3V3E",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    53.977,
+    202.057
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "the magjack's centre-tap/LED supply, behind its transformer and not on the cable"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/power_in/ISNS_P",
+   "refs": [
+    "J1",
+    "U2"
+   ],
+   "pos": [
+    46.146,
+    184.119
+   ],
+   "kind": "esd_corridor_coupled",
+   "verdict": "false",
+   "reason": "ISNS_P is the INA186 IN+ (behind 10 R / 100 nF), rated to 42 V abs max (SBOS318B 6.1), not 3.6 V: ~5.8 V coupled is harmless"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": null,
+   "refs": [
+    "D3"
+   ],
+   "pos": null,
+   "kind": "cpl_silk_mark",
+   "verdict": "?",
+   "reason": ""
   }
  ]
 }

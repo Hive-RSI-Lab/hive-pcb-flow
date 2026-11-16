@@ -37,10 +37,15 @@ def _serve(pages: dict):
 
 
 @pytest.fixture(autouse=True)
-def _fresh_breaker():
+def _fresh_breaker(monkeypatch):
     dsresolve._DEAD.clear()
+    monkeypatch.setattr(dsresolve, "_sleep", SLEPT.append)  # no real backoff
+    SLEPT.clear()
     yield
     dsresolve._DEAD.clear()
+
+
+SLEPT: list[float] = []
 
 
 TI = "https://www.ti.com/lit/ds/symlink/{}.pdf"
@@ -152,7 +157,7 @@ def test_lcsc_copy_is_the_named_fallback_and_skips_a_longer_part(tmp_path):
     urls = [t["url"] for t in got["tried"]]
     assert wrong not in urls and clone not in urls
     assert got["tried"][0]["kind"] == "stalled"
-    assert "analog.com" in dsresolve._DEAD.get("www.analog.com", "")
+    assert "analog.com" in dsresolve._DEAD["www.analog.com"][1]
 
 
 def test_a_stalled_host_is_not_asked_again_this_run(tmp_path):
@@ -165,7 +170,7 @@ def test_a_stalled_host_is_not_asked_again_this_run(tmp_path):
     for mpn in ("AD724", "AD8221"):
         dsresolve.resolve(mpn, "Analog Devices", tmp_path / "p.pdf",
                           transport=transport, search=lambda q: [])
-    assert asked == [url.format("AD724")]
+    assert asked == [url.format("AD724")] * 2     # one retry, then no more
 
 
 def test_names_part_wants_the_part_as_a_word_of_its_own():
@@ -224,7 +229,8 @@ def test_a_board_listing_and_a_users_guide_are_not_the_part(tmp_path):
     got = dsresolve.resolve("TLV320AIC3104", "Texas Instruments",
                             tmp_path / "p.pdf", transport=_serve(pages),
                             search=lambda q: hits)
-    assert got["miss"] == "not found" and evm not in [t["url"] for t in got["tried"]]
+    # ti.com stalled twice: not judged, not "not found" (#1480)
+    assert got["miss"] == "stalled" and evm not in [t["url"] for t in got["tried"]]
     assert any("a board" in t["why"] for t in got["tried"])
 
     dsresolve._DEAD.clear()             # ti.com answers again
@@ -242,3 +248,64 @@ def test_a_scan_is_unjudged_not_wrong():
         "reasons": reasons}}) == ("unjudged", reasons[0])
     assert dsresolve._verdict({"status": "suspect", "assessment": {
         "reasons": ["x"]}})[0] == "wrong"
+
+
+# --- #1480: one retry after a stall, then not judged --------------------------
+ST = "https://www.st.com/resource/en/datasheet/{}.pdf"
+
+
+def _flaky(pages: dict, stalls: dict):
+    """_serve, but each URL in `stalls` times out that many times first."""
+    serve, asked = _serve(pages), []
+
+    def transport(url):
+        asked.append(url)
+        if stalls.get(url, 0) > 0:
+            stalls[url] -= 1
+            raise TimeoutError("read timed out")
+        return serve(url)
+    return transport, asked
+
+
+def test_a_stall_is_retried_once_after_a_backoff(tmp_path):
+    """Quiet twin: st.com times out once, then serves LPS331AP's sheet."""
+    url = ST.format("lps331ap")
+    transport, asked = _flaky({url: _sheet("LPS331AP")}, {url: 1})
+    got = dsresolve.resolve("LPS331AP", "STMicroelectronics", tmp_path / "p.pdf",
+                            transport=transport, search=lambda q: [])
+    assert got["url"] == url, got
+    assert asked == [url, url] and SLEPT == [dsresolve.STALL_BACKOFF]
+    assert "www.st.com" not in dsresolve._DEAD
+    # a later part on st.com is fetched, not skipped
+    url2 = ST.format("lps35hw")
+    got = dsresolve.resolve("LPS35HW", "STMicroelectronics", tmp_path / "q.pdf",
+                            transport=_serve({url2: _sheet("LPS35HW")}),
+                            search=lambda q: [])
+    assert got["url"] == url2, got
+
+
+def test_a_host_that_stalls_twice_leaves_the_part_not_judged(tmp_path):
+    """Planted fault: st.com times out on the retry too. The part is
+    "stalled" (not judged), not "not found", and so is the next one,
+    which skips st.com without asking it again."""
+    url = ST.format("lps331ap")
+    transport, asked = _flaky({url: _sheet("LPS331AP")}, {url: 2})
+    got = dsresolve.resolve("LPS331AP", "STMicroelectronics", tmp_path / "p.pdf",
+                            transport=transport, search=lambda q: [])
+    assert got["miss"] == "stalled" and "url" not in got, got
+    assert asked == [url, url] and SLEPT == [dsresolve.STALL_BACKOFF]
+    assert got["tried"][0]["why"].startswith("twice, 15 s apart")
+    got = dsresolve.resolve("LPS35HW", "STMicroelectronics", tmp_path / "q.pdf",
+                            transport=transport, search=lambda q: [])
+    assert got["miss"] == "stalled", got
+    assert asked == [url, url] and len(SLEPT) == 1
+    assert got["tried"][0]["kind"] == "skipped"
+
+
+def test_a_404_is_not_retried(tmp_path):
+    """A missing PDF is no stall: one ask, no pause, "not found"."""
+    transport, asked = _flaky({}, {})
+    got = dsresolve.resolve("LPS331AP", "STMicroelectronics", tmp_path / "p.pdf",
+                            transport=transport, search=lambda q: [])
+    assert got["miss"] == "not found" and SLEPT == [], got
+    assert len(asked) == len(set(asked))

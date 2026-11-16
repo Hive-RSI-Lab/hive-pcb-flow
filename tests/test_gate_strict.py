@@ -960,9 +960,12 @@ def test_verify_all_strict_with_declared_na_passes(tmp_path, monkeypatch,
             if not shutil.which("kicad-cli", path=d)))
     na = list(CONSTRAINT_NEEDING)
     cpath = tmp_path / "constraints.json"
+    # J1/J2 are blinky2's bench-only headers, declared as its golden
+    # constraints do, so check_esd (#312) has no user-facing port to judge
     cpath.write_text(json.dumps({"verification": {"not_applicable": {
         n: {"reason": "no such nets on this board", "approved": "test 2026"}
-        for n in na}}}), encoding="utf-8")
+        for n in na}}, "esd": {"internal": ["J1", "J2"]}}),
+        encoding="utf-8")
     summary, _ = verify_all.run(["--pcb", str(BLINKY), "--strict",
                                  "--constraints", str(cpath),
                                  "--reports-dir", str(tmp_path / "rep")])
@@ -990,7 +993,7 @@ def test_verify_all_strict_with_declared_na_passes(tmp_path, monkeypatch,
                   "check_fp_geometry", "check_converter", "check_ldo_esr",
                   "check_length_groups", "check_cap_load",
                   "check_wicking", "check_ddr_timing",
-                  "check_testpoints", "check_rf_match", "check_surge",
+                  "check_testpoints", "check_rf_match", "check_surge", "check_esd",
                   "check_via_stubs", "check_isolation",
                   "check_kelvin", "check_transformer",
                   "check_stackup", "check_body_clash", "check_current",

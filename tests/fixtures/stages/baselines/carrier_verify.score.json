@@ -4,11 +4,9 @@
  "fixture": "carrier_verify",
  "board": "lumina-carrier",
  "metrics": {
-  "errors": 188,
-  "warnings": 209,
+  "errors": 214,
+  "warnings": 230,
   "by_check": {
-   "check_ldo_esr": 0,
-   "check_converter": 0,
    "check_return_path": 4,
    "check_current": 21,
    "check_decoupling": 14,
@@ -26,14 +24,17 @@
    "check_bom_sync": 0,
    "check_cap_load": 0,
    "check_connector_fit": 0,
+   "check_converter": 0,
    "check_courtyard": 105,
    "check_ddr_timing": 0,
    "check_ep_paste": 12,
+   "check_esd": 47,
    "check_fp_attr": 0,
    "check_fp_geometry": 0,
    "check_fp_package": 0,
    "check_isolation": 0,
    "check_kelvin": 0,
+   "check_ldo_esr": 0,
    "check_length_groups": 0,
    "check_mate_pins": 0,
    "check_model_fit": 0,
@@ -72,6 +73,11 @@
    "diffpair_phase": 2,
    "diffpair_skew": 1,
    "ep_paste_low": 1,
+   "esd_behind_series": 5,
+   "esd_clamp_far": 4,
+   "esd_corridor_coupled": 3,
+   "esd_ground_far": 4,
+   "esd_unclamped": 31,
    "gnd_stub_long": 1,
    "insufficient_transition_vias": 6,
    "model_path_absolute": 2,
@@ -95,8 +101,8 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 188.0,
-  "warnings": 209.0,
+  "errors": 214.0,
+  "warnings": 230.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
@@ -110,7 +116,7 @@
  },
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-15",
+  "created": "2026-11-16",
   "kicad_version": null
  }
 }

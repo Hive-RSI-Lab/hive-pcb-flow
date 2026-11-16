@@ -362,6 +362,20 @@ def test_the_resolver_finds_the_datasheet_and_a_miss_is_named(
     assert rep["resolver"] == "not found" and "so8y.pdf" in rep["why"]
     assert asked == ["SO8X", "SO8Y"] and len(calls) == 1
 
+    # #1480: a miss because the maker's site stalled is not judged, not
+    # "no listing with a datasheet URL"
+    (lst / "C999011.json").write_text(json.dumps({
+        "lcsc": "C999011", "mpn": "SO8Z", "brand": "", "package": "SOIC-8",
+        "datasheet": ""}))
+    monkeypatch.setattr(dsresolve, "resolve", lambda mpn, brand, dest: {
+        "maker": "Texas Instruments", "miss": "stalled",
+        "tried": [{"url": "https://www.ti.com/so8z.pdf", "kind": "stalled",
+                   "why": "twice, 15 s apart: transport failure"}]})
+    rep = lb.read_part("C999011", [_board_part("U9", 8, "C999011")], out,
+                       store, reader)
+    assert rep["status"] == "datasheet site stalled, not judged", rep
+    assert rep["resolver"] == "stalled" and len(calls) == 1
+
 
 # ------------------------------------------------- parts keyed by Value
 

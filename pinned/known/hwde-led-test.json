@@ -66,6 +66,21 @@
    "kind": "body_unjudged",
    "verdict": "real",
    "reason": "the footprints point at aiee.3dshapes .wrl models the board doesn't ship, so no body can be judged until the models are added"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+5V",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    10.9,
+    18.93
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "bench power header with 4.7 uF at the connector"
   }
  ]
 }

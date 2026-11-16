@@ -1054,11 +1054,10 @@ def fetch_datasheet(url: str, dest: Path, transport=None,
         return {**out, "status": "error",
                 "error": f"transport failure: {type(exc).__name__}: {exc}"}
     out["hops"] = resp.get("hops") or [resp.get("final_url") or url]
-    for hop in out["hops"]:
-        hk = researchlib.check_url(hop, domains)
-        if not hk["ok"]:
-            return {**out, "status": "refused",
-                    "error": f"redirect to {hop} refused: {hk['reason']}"}
+    # every hop on the allowlist; an http hop only as a step to https (#1476)
+    why = researchlib.hop_refusal(out["hops"], domains)
+    if why:
+        return {**out, "status": "refused", "error": why}
     blk = researchlib.host_block(resp, url)
     if blk:
         return {**out, "status": "refused", "blocked_by_host": blk,

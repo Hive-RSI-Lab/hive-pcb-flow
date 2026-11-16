@@ -922,3 +922,45 @@ def test_the_sweep_gives_footprints_their_boms_part_numbers(tmp_path):
     mtime = got.stat().st_mtime_ns
     assert ec._pcb(b, "rev_a", repo, empty) == got
     assert got.stat().st_mtime_ns == mtime     # reused, not rewritten
+
+
+def _corpus_sheet(path, lib):
+    """A one-symbol schematic whose MCU has a bidirectional SPAN_SCS and a
+    VCC typed bidirectional, its symbol named "LIB:MCU"."""
+    pins = "\n".join(
+        f'      (pin {t} line (at 0 0 0) (length 2.54) (name "{n}" (effects)) '
+        f'(number "{i}" (effects)))'
+        for i, (n, t) in enumerate([("SPAN_SCS", "bidirectional"),
+                                    ("VCC", "bidirectional")], 1))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        '(kicad_sch (version 20231120) (generator eeschema)\n'
+        ' (lib_symbols\n'
+        f'  (symbol "{lib}:MCU" (property "Reference" "U" (at 0 0 0))\n'
+        '    (symbol "MCU_1_1"\n' + pins + ')))\n'
+        f' (symbol (lib_id "{lib}:MCU") (at 50 50 0)\n'
+        '  (property "Reference" "U1" (at 0 0 0))))\n', encoding="utf-8")
+    return path
+
+
+def test_an_imported_revision_is_read_retyped(tmp_path):
+    # planted (#1494): an Eagle-imported sheet types every pin from Eagle's
+    # `io`; the corpus reads it as the flow does, retyped by lib_pin_types
+    b = {"id": "imp", "commit": "a" * 40, "rev_a": {"sch": "hw/top.kicad_sch"}}
+    repo = ec.repo_dir(tmp_path, b, "rev_a")
+    sch = _corpus_sheet(repo / "hw" / "top.kicad_sch", "top-eagle-import")
+    (repo / "hw" / "top.kicad_pcb").write_text("(kicad_pcb)")
+    typed = ec.typed_repo(tmp_path, b, "rev_a")
+    assert typed != repo and (typed / "hw" / "top.kicad_pcb").is_file()
+    text = (typed / "hw" / "top.kicad_sch").read_text()
+    assert "(pin passive line" in text and "(pin power_in line" in text
+    assert "bidirectional" in sch.read_text()   # the checkout is untouched
+    assert ec.typed_repo(tmp_path, b, "rev_a") == typed
+
+
+def test_a_kicad_drawn_revision_is_read_as_it_is(tmp_path):
+    # twin: the same sheet drawn in KiCad (bedlift SPAN_SCS) is not copied
+    b = {"id": "kc", "commit": "b" * 40, "rev_a": {"sch": "hw/top.kicad_sch"}}
+    repo = ec.repo_dir(tmp_path, b, "rev_a")
+    _corpus_sheet(repo / "hw" / "top.kicad_sch", "bedlift")
+    assert ec.typed_repo(tmp_path, b, "rev_a") == repo
