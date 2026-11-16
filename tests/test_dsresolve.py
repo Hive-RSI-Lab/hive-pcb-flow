@@ -86,6 +86,40 @@ def test_a_maker_the_table_does_not_know_is_named(tmp_path, mpn, brand):
     assert got == {"miss": "maker not known", "why": got["why"], "tried": []}
 
 
+# #1434: the brand strings LCSC lists fmcw-radar's passives and connectors
+# under; "CJ" (Jiangsu Changjing) is not cjiang (Changjiang Microelectronics)
+@pytest.mark.parametrize("brand,maker", [
+    ("FH (Guangdong Fenghua Advanced Tech)", "Fenghua"),
+    ("Hubei KENTO Elec", "KENTO"),
+    ("TXC Corp", "TXC"),
+    ("Korean Hroparts Elec", "HRO"),
+    ("JSMSEMI", "JSMSEMI"),
+    ("cjiang (Changjiang Microelectronics Tech)", "Changjiang Microelectronics"),
+    ("XKB Connection", "XKB"),
+    ("CJ(江苏长电/长晶)", None),
+])
+def test_a_listing_brand_names_its_maker(brand, maker):
+    m, _ = dsresolve.maker_of("KT-0603R", brand, dsresolve.load_makers())
+    assert (m and m["name"]) == maker
+
+
+def test_a_known_maker_with_no_pattern_tries_lcscs_copy_under_its_brand(tmp_path):
+    """KENTO has no URL pattern: LCSC's copy is tried, and one listed under
+    another brand is passed over."""
+    right = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/KT-0603R_C2286.pdf"
+    other = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/KT-0603R_C9.pdf"
+    hits = [{"lcsc": "C9", "mpn": "KT-0603R", "brand": "Everlight", "datasheet": other},
+            {"lcsc": "C2286", "mpn": "KT-0603R", "brand": "Hubei KENTO Elec",
+             "datasheet": right}]
+    got = dsresolve.resolve("KT-0603R", "Hubei KENTO Elec", tmp_path / "p.pdf",
+                            transport=_serve({right: _sheet("KT-0603R"),
+                                              other: _sheet("KT-0603R")}),
+                            search=lambda q: hits)
+    assert got["url"] == right and got["maker"] == "KENTO", got
+    assert [t["url"] for t in got["tried"]][-1] == right
+    assert other not in [t["url"] for t in got["tried"]]
+
+
 def test_no_pdf_anywhere_is_not_found(tmp_path):
     got = dsresolve.resolve("TPS62086RLTR", None, tmp_path / "p.pdf",
                             transport=_serve({}), search=lambda q: [])
