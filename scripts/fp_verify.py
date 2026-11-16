@@ -1498,7 +1498,9 @@ def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
     pad_numbering findings kept, under the placed reference and position.
     A part with neither takes its record from its Value when that reads as
     a part number and exactly one record file carries it as its name or
-    mpn (#1406); none, or two or more, leaves it not_judged and says so."""
+    mpn (#1406); none, or two or more, leaves it without a record and says
+    why under no_record (and in not_judged when nothing else is judged).
+    A perimeter package with no record still has its direction read."""
     import tempfile
 
     import sexpdata
@@ -1576,6 +1578,9 @@ def board_report(pcb: Path, parts: Path | None, only: set[str] | None,
                 "side": "bottom" if bottom else "top",
                 "record": str(rec) if rec else None, "pad_numbering": num,
                 **({"found_by": "value"} if rec and value else {}),
+                # why no record was used, kept when the direction is read
+                # without one (#1285 with #1406)
+                **({"no_record": no_rec} if not rec else {}),
                 "not_judged": ([n["why"] for n in facts["not_judged"]
                                 if n["check"] == "pad_numbering"] if rec
                                else [no_rec] if not num

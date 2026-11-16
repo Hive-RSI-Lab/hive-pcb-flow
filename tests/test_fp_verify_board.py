@@ -160,8 +160,9 @@ def test_board_mode_finds_a_record_by_value_alone(tmp_path):
 
 def test_board_mode_value_lookup_is_exact_and_unique(tmp_path):
     """#1406: a Value two records carry, or one no record carries exactly
-    (no prefix match), or one that is a component value, judges nothing,
-    and says why."""
+    (no prefix match), or one that is a component value, finds no record,
+    and says why. Since #1285 the SO8's direction is still read without
+    one: U9 and U10, numbered from the bottom view, are warned of, U7 fits."""
     parts = tmp_path / "parts"
     parts.mkdir()
     rec = (BOARD / "parts" / "C999008.json").read_text(encoding="utf-8")
@@ -171,11 +172,23 @@ def test_board_mode_value_lookup_is_exact_and_unique(tmp_path):
     code, rep = _run(tmp_path, "--pcb", str(_value_keyed(tmp_path, "so8x")),
                      "--parts", str(parts))
     by = {p["ref"]: p for p in rep["parts"]}
-    assert {v["refs"][0] for v in rep["violations"]} == {"U5", "U6"}
+    def _split(rep):
+        errs = {v["refs"][0] for v in rep["violations"]
+                if v["severity"] == "error"}
+        warns = {v["refs"][0]: v["kind"] for v in rep["violations"]
+                 if v["severity"] == "warning"}
+        return errs, warns
+
+    errs, warns = _split(rep)
+    assert errs == {"U5", "U6"}
+    assert warns == {"U9": "pad_numbering_direction",
+                     "U10": "pad_numbering_direction"}
+    assert by["U7"]["pad_numbering"]["fit"] is True
     for ref in ("U7", "U9", "U10"):
-        assert by[ref]["pad_numbering"] is None and by[ref]["record"] is None
-        [why] = by[ref]["not_judged"]
-        assert "names 2 records (C999008.json, SO8X.json)" in why
+        assert by[ref]["pad_numbering"]["from"] == "direction"
+        assert by[ref]["record"] is None and "found_by" not in by[ref]
+        assert "names 2 records (C999008.json, SO8X.json)" in \
+            by[ref]["no_record"]
 
     # a record whose number only starts with the Value is not a match
     longer = tmp_path / "longer"
@@ -190,8 +203,10 @@ def test_board_mode_value_lookup_is_exact_and_unique(tmp_path):
         code, rep = _run(tmp_path, "--pcb", str(_value_keyed(tmp_path, value)),
                          "--parts", str(where))
         by = {p["ref"]: p for p in rep["parts"]}
-        assert not {"U7", "U9", "U10"} & {v["refs"][0] for v in rep["violations"]}
-        assert said in by["U9"]["not_judged"][0], value
+        errs, warns = _split(rep)
+        assert not {"U7", "U9", "U10"} & errs, value
+        assert set(warns) & {"U7", "U9", "U10"} == {"U9", "U10"}, value
+        assert said in by["U9"]["no_record"], value
 
 
 def test_board_mode_value_never_overrides_a_part_number(tmp_path):
@@ -205,7 +220,8 @@ def test_board_mode_value_never_overrides_a_part_number(tmp_path):
     by = {p["ref"]: p for p in rep["parts"]}
     assert code == 1    # U5 and U6 still caught through their own records
     assert by["U9"]["record"] is None and "found_by" not in by["U9"]
-    assert "LCSC number or MPN" in by["U9"]["not_judged"][0]
+    assert "LCSC number or MPN" in by["U9"]["no_record"]
+    assert by["U9"]["pad_numbering"]["from"] == "direction"
 
 
 def test_board_mode_finds_a_record_by_its_lcsc_field(tmp_path):
