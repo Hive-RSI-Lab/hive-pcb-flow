@@ -728,3 +728,42 @@ def test_no_headroom_when_ripple_alone_hits_the_limit(tmp_path_factory):
                               _cons(iout=None, vin_max_v=5.5), TABLE)
     assert viols == [] and recs[0]["iout_max_a"] == pytest.approx(2.3915,
                                                                   abs=1e-3)
+
+
+# -- Murata DFE322520F / DFE322520FD rows (#1532) ----------------------------
+
+def _dfe_board(tmp_path_factory, name, ic, mpn):
+    return _mpn_board(tmp_path_factory, name,
+                      _rpart("U1", 10, [("IN", "VIN"), ("/SW", "SW"),
+                                        ("GND", "GND"), ("OUT", "FB")], ic)
+                      + _rpart("L1", 20, [("/SW", ""), ("OUT", "")], "2.2uH"),
+                      "L1", mpn)
+
+
+def test_murata_dfe322520_rows_split_f_from_fd(tmp_path_factory):
+    # The consumer F part is Isat 4.4 A, the automotive FD 5.0 A (both
+    # "max." in Murata's spec sheets). On a buck whose typical peak limit is
+    # 4.7 A (a test row with the AP63203's other values), the F warns and
+    # the FD is quiet; '^DFE322520F-' must not catch the FD.
+    rows = TABLE + [dict(r, match="^TESTBUCK47", mpn="test 4.7 A",
+                         peak_limit_a={"min": 4.0, "typ": 4.7, "max": 5.4},
+                         rx=re.compile("^TESTBUCK47"))
+                    for r in TABLE if r["match"] == "^AP6320[0135]"]
+    cons = _cons(iout=1.0, vin_max_v=5.5, fsw_khz=1100)  # no fsw row
+    bg = _dfe_board(tmp_path_factory, "dfef", "TESTBUCK47", "DFE322520F-2R2M=P2")
+    viols, recs, _ = cv.judge(bg, cons, rows)
+    hit, = _kinds(viols, "converter_isat_below_limit")
+    assert hit["isat_a"] == 4.4 and hit["limit_a"] == 4.7
+    assert "DFE322520F-2R2M" in recs[0]["isat_source"]
+    bg = _dfe_board(tmp_path_factory, "dfefd", "TESTBUCK47",
+                    "DFE322520FD-2R2M=P2")
+    viols, recs, _ = cv.judge(bg, cons, rows)
+    assert viols == [] and recs[0]["isat_a"] == 5.0
+    # the board these rows came for: a TLV62569DBV (peak limit 3.0 A min)
+    # now has an Isat to judge, and clears it
+    bg = _dfe_board(tmp_path_factory, "dfetlv", "TLV62569DBV",
+                    "DFE322520FD-2R2M=P2")
+    viols, recs, nj = cv.judge(bg, _cons(iout=None, vin_max_v=5.5), TABLE)
+    assert not _kinds(viols, "converter_isat_below_limit")
+    assert recs[0]["isat_a"] == 5.0
+    assert not any("states no saturation current" in n for n in nj)
