@@ -13,7 +13,8 @@ so a part keyed by its Value is left out), whose hwde record does not
 already state its pad places or numbering direction (land_pattern.pads or
 numbering in reference/extractions). The listing and the datasheet are the
 ones abs_max_batch.py fetches, in the same cache (abs-max/<set>/listings,
-pdfs): a part is fetched once for both.
+pdfs), the maker's datasheet too where reference/datasheet_urls.yaml names
+the part: a part is fetched once for both.
 
 For each part: the datasheet's pin-drawing pages (a page whose text says
 "top view" or "bottom view", those that also name the pins first) and its
@@ -363,18 +364,32 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
     rep: dict = {"key": key, "boards": len(on_boards)}
     name = amb.ext_name(key)
     try:
-        hit = amb.find_listing(key, store)
+        hit, err = amb.find_listing(key, store), None
     except Exception as exc:  # noqa: BLE001 - counted, not fatal
-        return {**rep, "status": "no listing", "why": str(exc)[:200]}
-    if not hit or not hit.get("datasheet"):
+        hit, err = None, exc
+    hit = dict(hit or {})
+    mpn = key[4:] if key.startswith("mpn:") else hit.get("mpn") or ""
+    # the maker's datasheet when reference/datasheet_urls.yaml names the
+    # part, as abs_max_batch does (#815), so both read the same PDF
+    maker = amb.maker_datasheet(mpn) or amb.maker_datasheet(hit.get("mpn"))
+    if maker:
+        hit.update(datasheet=maker["url"], brand=maker["brand"],
+                   package=maker["package"])
+        rep["datasheet_from"] = "reference/datasheet_urls.yaml"
+    elif err is not None:
+        return {**rep, "status": "no listing", "why": str(err)[:200]}
+    if not hit.get("datasheet"):
         return {**rep, "status": "no listing with a datasheet URL"}
     lcsc = hit.get("lcsc") or ""
-    mpn = key[4:] if key.startswith("mpn:") else hit.get("mpn") or ""
     pkg = hit.get("package") or ""
     rep.update(mpn=mpn, lcsc=lcsc, package=pkg)
     pdf = store / "pdfs" / f"{name}.pdf"
     meta = store / "pdfs" / f"{name}.json"
-    if not (pdf.is_file() and meta.is_file()):
+    fix = datasheet_extract._lib("partslib").fix_datasheet_url
+    if not (pdf.is_file() and meta.is_file()) or json.loads(
+            meta.read_text(encoding="utf-8")).get("url") != fix(hit["datasheet"]):
+        # not fetched yet, or from another URL than the one wanted now
+        pdf.unlink(missing_ok=True)
         got = datasheet_extract.fetch_datasheet(hit["datasheet"], pdf, mpn=mpn)
         meta.parent.mkdir(parents=True, exist_ok=True)
         meta.write_text(json.dumps(got, indent=1), encoding="utf-8")

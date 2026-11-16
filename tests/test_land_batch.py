@@ -291,6 +291,31 @@ def test_a_datasheet_with_no_view_is_not_read(stand_ins):
     assert rep["status"] == "no top or bottom view in the text" and calls == []
 
 
+def test_the_maker_table_supplies_the_datasheet_the_listing_lacks(
+        stand_ins, tmp_path, monkeypatch):
+    """As abs_max_batch (#815): reference/datasheet_urls.yaml's entry for
+    the part gives the PDF when its listing names none, so both read one."""
+    out, store, reader, calls, _, _ = stand_ins
+    lst = lb.amb.parts_enrich.cache_dir()
+    (lst / "C999008.json").write_text(json.dumps({
+        "lcsc": "C999008", "mpn": "SO8X", "brand": "Acme",
+        "package": "SOIC-8", "datasheet": ""}))
+    board = [_board_part("U7", 8, "C999008")]
+    assert lb.read_part("C999008", board, out, store, reader)["status"] == \
+        "no listing with a datasheet URL"
+    t = tmp_path / "datasheet_urls.yaml"
+    t.write_text("version: 1\nparts:\n  - mpns: [so8x]\n"
+                 "    brand: Maker Inc\n    package: SOIC-8 (D)\n"
+                 "    url: https://maker.example.com/so8x.pdf\n")
+    monkeypatch.setattr(lb.amb, "DATASHEET_URLS", t)
+    rep = lb.read_part("C999008", board, out, store, reader)
+    assert rep["status"] == "kept"
+    assert rep["datasheet_from"] == "reference/datasheet_urls.yaml"
+    assert "Maker Inc" in calls[0]
+    ext = json.loads((out / "ext" / "C999008.json").read_text())
+    assert "https://maker.example.com/so8x.pdf" in ext["source_pdf"]
+
+
 # ------------------------------------------------- what fp_verify is given
 
 def test_errata_corpus_passes_the_sets_folder_to_fp_verify(tmp_path):
