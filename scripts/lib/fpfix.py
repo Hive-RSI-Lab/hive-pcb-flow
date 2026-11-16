@@ -65,9 +65,11 @@ them measured against real DRC on the shipped boards (LEARNINGS 2026-07-28
      draw the board edge the part sits on as an open line on Edge.Cuts. On
      a board KiCad merges a footprint's Edge.Cuts into the outline, so the
      line is a stray open contour inside it (DRC's malformed outline, a
-     fab's unclosed edge file). An open run of lines or arcs on Edge.Cuts
-     (one whose ends meet no other Edge.Cuts end) moves to Dwgs.User, where
-     it still shows where the edge goes; a closed cut-out stays.
+     fab's unclosed edge file). When every open run on Edge.Cuts (lines
+     whose ends meet no other Edge.Cuts end) lies on one straight line,
+     those lines move to Dwgs.User, where they still show where the edge
+     goes. A closed cut-out stays, and so do open runs that turn (a
+     mid-mount notch drawn to meet the board's own outline).
      check_model_fit.fit_footprint reads the mark (edge_mark) before this
      runs, to face and seat the model on the edge (#405).
 
@@ -675,7 +677,9 @@ def sanitize(text: str, *, min_gap: float = MIN_GAP,
                 actions.append(act)
 
     # ---- I: an open edge mark on Edge.Cuts -> Dwgs.User
-    if fix_edge_mark:
+    if fix_edge_mark and edge_mark(text) is not None:
+        # only a straight mark: open runs that turn (a mid-mount notch drawn
+        # to meet the board's outline) are the board's cut, and stay
         for head, s, e, node in _open_edge_cuts(nodes):
             sub = text[s:e]
             new = _EDGE_LAYER.sub(lambda m: m.group(1) + "Dwgs.User" + m.group(2),

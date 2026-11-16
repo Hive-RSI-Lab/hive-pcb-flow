@@ -43,6 +43,11 @@ LOOP = "".join(
     for a, b in (("-1.5 -1", "-1.5 1"), ("-1.5 1", "-1 1"),
                  ("-1 1", "-1 -1"), ("-1 -1", "-1.5 -1")))
 
+# a mid-mount notch: three open lines meeting the board's outline
+NOTCH = "".join(
+    f"\t(fp_line (start {a}) (end {b}) (layer Edge.Cuts) (width 0.1))\n"
+    for a, b in (("1.5 -3", "-1 -3"), ("-1 -3", "-1 3"), ("-1 3", "1.5 3")))
+
 MOD = '''(module easyeda2kicad:SMA-EDGE (layer F.Cu) (tedit 5DC5F6A4)
 \t(pad 1 smd rect (at 0 0 0) (size 1.2 1.2) (layers F.Cu F.Paste F.Mask))
 \t(pad 2 smd rect (at 0 -2.4 0) (size 1.2 1.2) (layers F.Cu F.Paste F.Mask))
@@ -157,3 +162,13 @@ def test_lib_pull_reports_the_edge_fit(tmp_path):
     assert "Edge.Cuts" not in fp.read_text(encoding="utf-8")
     assert [a["action"] for r in auto["results"] for a in r["actions"]
             if a["rule"] == "I"] == ["edge_mark_to_dwgs_user"]
+
+
+def test_an_open_notch_that_turns_is_no_edge_mark(tmp_path):
+    """Open Edge.Cuts runs that turn a corner meet the board's own outline
+    (a mid-mount cut-out): no edge to face, and rule I leaves them."""
+    text = MOD.format(lines=NOTCH, path="x", rot=0)
+    assert fpfix.edge_mark(text) is None
+    out, actions = fpfix.sanitize(text)
+    assert not [a for a in actions if a["rule"] == "I"]
+    assert out.count("(layer Edge.Cuts)") == 3
