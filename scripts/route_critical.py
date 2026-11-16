@@ -830,42 +830,101 @@ def dru_neck_rules(dru_path: Path | None,
     return out
 
 
+NOT_JUDGED = "not_judged"
+
+
+def _net_settings_unread(proj) -> bool:
+    """Whether a .kicad_pro's net_settings has a part build_net_clearances
+    cannot read: not an object, a class or netclass_patterns entry that
+    isn't one (or whose name, pattern or class isn't text), a clearance
+    that is set but not a number, or a netclass_assignments value that is
+    neither a class name nor a list of them (#1274). Any of them could
+    put some net in a class, or set a clearance, that a reading which
+    skipped it would miss."""
+    if not isinstance(proj, dict):
+        return True
+    ns = proj.get("net_settings")
+    if ns is None:
+        return False
+    if not isinstance(ns, dict):
+        return True
+    classes = ns.get("classes") or []
+    pats = ns.get("netclass_patterns") or []
+    assigned = ns.get("netclass_assignments") or {}
+    if not (isinstance(classes, list) and isinstance(pats, list)
+            and isinstance(assigned, dict)):
+        return True
+    for c in classes:
+        if not isinstance(c, dict) or not isinstance(c.get("name"), str):
+            return True
+        v = c.get("clearance")
+        if v is not None and (isinstance(v, bool)
+                              or not isinstance(v, (int, float))):
+            return True
+    for e in pats:
+        if not isinstance(e, dict) or not isinstance(e.get("pattern"), str) \
+                or not isinstance(e.get("netclass"), str):
+            return True
+    for v in assigned.values():
+        if not (isinstance(v, str) or v is None or (isinstance(v, list) and all(
+                isinstance(x, str) for x in v))):
+            return True
+    return False
+
+
+def class_clearances(proj, nets) -> dict[str, float]:
+    """{net: clearance} the .kicad_pro's netclasses give each of nets as
+    KiCad 10 composes them (#1274): the net's classes from its
+    netclass_assignments entry (a name or a list) and every matching
+    netclass_patterns entry (routelib.pro_net_classes), in priority order,
+    the first that sets a clearance giving it; a class with none falls
+    through to the next. KiCad 10's DRC holds a net in classes A (priority
+    0, 0.5 mm) and B (priority 1, 0.8 mm) to 0.5 mm, and to 0.8 mm when A
+    sets no clearance. A net none of whose classes sets one is left out
+    (the board's Default)."""
+    import routelib  # noqa: PLC0415
+    ns = (proj or {}).get("net_settings") or {}
+    clr = {c["name"]: float(c["clearance"]) for c in ns.get("classes") or []
+           if isinstance(c, dict) and isinstance(c.get("clearance"), (int, float))
+           and not isinstance(c.get("clearance"), bool)}
+    out: dict[str, float] = {}
+    for net, names in routelib.pro_net_classes(proj, nets).items():
+        v = next((clr[n] for n in names if n in clr), None)
+        if v is not None:
+            out[net] = v
+    return out
+
+
 def build_net_clearances(pro_path: Path | None, dru_path: Path | None,
-                         board_nets) -> dict[str, float] | None:
+                         board_nets) -> dict[str, float] | str:
     """Per-net clearance map for KRT's --net-clearances (LEARNINGS 1522):
     KRT's --clearance is a CAP on its auto-read netclass map (it silently
     pulled 0.635 mm HV nets DOWN to 0.2), and KRT cannot read a .kicad_dru,
     so DRU-only HV clearance never reaches the router without this file.
 
-    Values = max(netclass clearance, DRU per-net clearance rules) - the max
-    over the class value means nothing is ever capped DOWN. Fails OPEN
-    (returns None -> no file emitted -> today's behavior) on anything
-    unparseable rather than emit wrong values."""
+    Values = max(netclass clearance, DRU per-net clearance rules), the
+    netclass clearance composed as KiCad 10 does from netclass_assignments
+    and netclass_patterns (class_clearances): nothing is ever capped DOWN.
+    {} when nothing sets a net's clearance. NOT_JUDGED when the .kicad_pro
+    or its net_settings can't be read (_net_settings_unread), never a
+    reading that skipped what it couldn't read (#1274): KRT's caller then
+    emits no file (KRT's own netclass map, as before), and a checking
+    caller holds every net to the largest clearance it can find
+    (route_cleanup._rules_clearance)."""
     try:
         out: dict[str, float] = {}
         nets = list(board_nets)
         if pro_path is not None and Path(pro_path).is_file():
             proj = json.loads(Path(pro_path).read_text(encoding="utf-8"))
-            ns = proj.get("net_settings") or {}
-            classes = {c.get("name"): c for c in ns.get("classes") or []
-                       if isinstance(c, dict)}
-            for pat in ns.get("netclass_patterns") or []:
-                cls = classes.get(pat.get("netclass"))
-                pattern = pat.get("pattern")
-                if not cls or not pattern \
-                        or not isinstance(cls.get("clearance"), (int, float)):
-                    continue
-                for net in nets:
-                    if fnmatch.fnmatchcase(net, pattern):
-                        out[net] = max(out.get(net, 0.0),
-                                       float(cls["clearance"]))
+            if _net_settings_unread(proj):
+                return NOT_JUDGED
+            out.update(class_clearances(proj, nets))
         for net, clr in dru_net_floors(dru_path, "clearance").items():
             if net in board_nets:
                 out[net] = max(out.get(net, 0.0), clr)
-        out = {n: round(v, 4) for n, v in sorted(out.items()) if v > 0}
-        return out or None
-    except Exception:  # noqa: BLE001 - fail open, never emit wrong values
-        return None
+        return {n: round(v, 4) for n, v in sorted(out.items()) if v > 0}
+    except Exception:  # noqa: BLE001 - not judged, never wrong values
+        return NOT_JUDGED
 
 
 def pair_geometry(bg: geom.BoardGeom, impedance_ohm: float,
@@ -2551,11 +2610,16 @@ def run(argv: list[str] | None = None):
     # HV clearance must travel in an explicit --net-clearances file.
     ncl = build_net_clearances(work / (pcb.stem + ".kicad_pro"),
                                work / (pcb.stem + ".kicad_dru"), bg0.nets)
-    if ncl:
+    if isinstance(ncl, dict) and ncl:
         ncl_file = work / "net_clearances.json"
         ncl_file.write_text(json.dumps(ncl, indent=1, sort_keys=True) + "\n",
                             encoding="utf-8")
         ctx["net_clearances"] = ncl_file
+    elif ncl == NOT_JUDGED:
+        # #1274: say so rather than route as if no net had its own clearance
+        print("route_critical: per-net clearances not judged: the "
+              ".kicad_pro's net_settings can't be read; KRT routes by its "
+              "own netclass map", file=sys.stderr)
 
     # fresh fills before the baseline so stale pours don't skew the DRC delta
     if bg0.zones_of():

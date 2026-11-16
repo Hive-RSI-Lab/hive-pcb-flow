@@ -484,6 +484,27 @@ def test_unscoped_floor_leaves_footprint_rules_out(tmp_path):
     assert got[1] == 0.1 and got[4] == 0.19
 
 
+def test_unread_netclasses_hold_every_net_to_the_largest(tmp_path):
+    """#1274: when the .kicad_pro's netclasses can't be read, every net is
+    held to the largest clearance a class sets (from the raw text where it
+    isn't JSON), with its own .kicad_dru rules on top, never to nothing."""
+    pcb = tmp_path / "u.kicad_pcb"
+    pcb.with_suffix(".kicad_dru").write_text(
+        '(version 1)\n(rule "v"\n\t(constraint clearance (min 0.9mm))\n'
+        "\t(condition \"A.NetName == 'VCC'\")\n)\n", encoding="utf-8")
+    pro = pcb.with_suffix(".kicad_pro")
+    pro.write_text(json.dumps({"net_settings": {
+        "classes": [{"name": "Default", "clearance": 0.2},
+                    {"name": "HV", "clearance": 0.6}],
+        "netclass_patterns": ["SIG -> HV"]}}), encoding="utf-8")
+    per_net = rcl._rules_clearance(pcb, ["VCC", "SIG"])[0]
+    assert per_net == {"VCC": 0.9, "SIG": 0.6}
+    pro.write_text('{"net_settings": {"classes": [{"name": "HV", '
+                   '"clearance": 0.7}, ', encoding="utf-8")
+    per_net = rcl._rules_clearance(pcb, ["VCC", "SIG"])[0]
+    assert per_net == {"VCC": 0.9, "SIG": 0.7}
+
+
 def test_no_clearance_rule_keeps_fallback_off(tmp_path):
     pcb = tmp_path / "n.kicad_pcb"
     pcb.with_suffix(".kicad_dru").write_text(
