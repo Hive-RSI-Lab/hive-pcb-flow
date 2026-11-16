@@ -18,7 +18,14 @@ board's own sources, by reference, first found wins:
      designators it names are footprints on this board (else it is taken to
      be another board's);
   3. parts_json: a parts.json beside the board (as check_fp_package finds
-     it), its rows' `refdes`.
+     it), its rows' `refdes`;
+  4. other_revision: with --other-pcb, what sources 1-3 of the board's other
+     revision (its own schematic, BOM files and parts.json) name for the same
+     ref, where that revision's footprint has the same footprint name and
+     Value as this one's (else it is counted in `other_revision_unmatched`
+     and nothing is borrowed). So two revisions of one board, one shipping a
+     BOM and one not, are given part numbers from the same sources, and a
+     finding does not look gone or new only because one of them has a BOM.
 
 A field counts as a code when check_fp_package would read it as an LCSC or
 JLC one, as an MPN when it would read it as an MPN field. A source naming
@@ -29,7 +36,9 @@ property where it has no MPN (or fills an empty one of that name), hidden,
 by text, so the rest of the file stays byte for byte. Nothing else changes.
 
   partnum_backfill.py --pcb B.kicad_pcb [--src-pcb ORIG] [--repo R]
-      [--netlist N.net] [--sch S] --out C.kicad_pcb --out-report r.json
+      [--netlist N.net] [--sch S] [--other-pcb B2 [--other-src-pcb O2]
+      [--other-repo R2] [--other-netlist N2] [--other-sch S2]]
+      --out C.kicad_pcb --out-report r.json
 
 status: "written" (the copy has at least one new field), "nothing_to_add".
 Exit 0 when the report is written, 2 on error.
@@ -54,7 +63,7 @@ import bom_cpl  # noqa: E402  (is_lcsc_field)
 import check_fp_package as cfp  # noqa: E402  (is_jlc_field, _MPN_FIELD, _CODE)
 
 SCRIPT = "partnum_backfill"
-SOURCES = ("schematic", "bom", "parts_json")
+SOURCES = ("schematic", "bom", "parts_json", "other_revision")
 MIN_BOM_ON_BOARD = 0.8
 MAX_BOM_BYTES = 5_000_000
 BLANK = {"", "~", "-", "--", "n/a", "na", "none", "dnp", "dnf", "nc", "tbd",
@@ -127,10 +136,14 @@ def footprints(text: str) -> list[dict]:
         if expect_head:
             expect_head = False
             if depth == 2 and tok in ("footprint", "module"):
-                cur = {"ref": None, "props": {}, "last_prop_end": None,
-                       "end": None, "head_end": m.end()}
+                cur = {"ref": None, "name": None, "props": {},
+                       "last_prop_end": None, "end": None,
+                       "head_end": m.end()}
             elif depth == 3 and cur is not None and tok == "property":
                 prop, pdepth = [None, None], depth
+            continue
+        if cur is not None and depth == 2 and cur["name"] is None:
+            cur["name"] = unq(tok)
             continue
         if prop is not None and depth == pdepth:
             if prop[0] is None:
@@ -382,6 +395,7 @@ def plan(fps: list[dict], sources: dict[str, dict]) -> tuple[list, dict]:
          "with_part_number": 0, "given_part_number": 0,
          "codes_added": 0, "mpns_added": 0, "conflicting": 0,
          "sources_disagree": 0, "without_part_number": 0,
+         "other_revision_unmatched": 0,
          "added_from": {s: 0 for s in SOURCES}}
     edits = []
     for fp in fps:
@@ -440,6 +454,54 @@ def apply(text: str, edits) -> str:
     return text
 
 
+def own_sources(fps: list[dict], src: Path, repo: Path | None,
+                netlist: str | None, sch: str | None) -> tuple[dict, list, list]:
+    """Sources 1-3 for one board: {source: {ref: {kind: set}}}, the BOMs
+    read and the BOMs skipped."""
+    refs = {fp["ref"] for fp in fps if fp["ref"]}
+    sch_f = from_netlist(Path(netlist) if netlist else None)
+    for r, kinds in from_legacy_sch(Path(sch) if sch else None).items():
+        for k, v in kinds.items():
+            sch_f.setdefault(r, {}).setdefault(k, set()).update(v)
+    boms, used, skipped = from_boms(bom_files(src, repo), refs, repo)
+    return ({"schematic": sch_f, "bom": boms,
+             "parts_json": from_parts_json(src)}, used, skipped)
+
+
+def fp_key(fp: dict) -> tuple[str, str]:
+    """What must match for a ref to borrow the other revision's number: the
+    footprint name (without its library) and the Value."""
+    name = (fp.get("name") or "").split(":")[-1].strip().lower()
+    val = fp["props"].get("Value")
+    return name, (val[0] if val else "").strip().lower()
+
+
+def from_other_revision(fps: list[dict], other_fps: list[dict],
+                        other: dict) -> tuple[dict, int]:
+    """{ref: {kind: {value}}} the other revision's own sources give the same
+    ref, first source wins as in plan(), where the two footprints match; and
+    how many refs were not borrowed because they did not."""
+    mine = {fp["ref"]: fp_key(fp) for fp in fps if fp["ref"]}
+    theirs = {fp["ref"]: fp_key(fp) for fp in other_fps if fp["ref"]}
+    out: dict[str, dict[str, set]] = {}
+    unmatched = 0
+    for ref in sorted(mine):
+        got = {}
+        for kind in ("code", "mpn"):
+            for s in SOURCES[:3]:
+                vals = other[s].get(ref, {}).get(kind)
+                if vals:
+                    got[kind] = set(vals)
+                    break
+        if not got:
+            continue
+        if theirs.get(ref) != mine[ref]:
+            unmatched += 1
+            continue
+        out[ref] = got
+    return out, unmatched
+
+
 def run(argv=None) -> tuple[dict, int, str | None]:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--pcb", required=True, help="the board to read")
@@ -448,6 +510,11 @@ def run(argv=None) -> tuple[dict, int, str | None]:
     ap.add_argument("--repo", help="the checkout's root")
     ap.add_argument("--netlist")
     ap.add_argument("--sch")
+    ap.add_argument("--other-pcb", help="the board's other revision, as read")
+    ap.add_argument("--other-src-pcb", help="where it sits in its checkout")
+    ap.add_argument("--other-repo")
+    ap.add_argument("--other-netlist")
+    ap.add_argument("--other-sch")
     ap.add_argument("--out", required=True)
     ap.add_argument("--out-report")
     a = ap.parse_args(argv)
@@ -456,18 +523,26 @@ def run(argv=None) -> tuple[dict, int, str | None]:
     repo = Path(a.repo).resolve() if a.repo else None
     text = pcb.read_text(encoding="utf-8")
     fps = footprints(text)
-    refs = {fp["ref"] for fp in fps if fp["ref"]}
-    sch = from_netlist(Path(a.netlist) if a.netlist else None)
-    for r, kinds in from_legacy_sch(Path(a.sch) if a.sch else None).items():
-        for k, v in kinds.items():
-            sch.setdefault(r, {}).setdefault(k, set()).update(v)
-    boms, used, skipped = from_boms(bom_files(src, repo), refs, repo)
-    sources = {"schematic": sch, "bom": boms,
-               "parts_json": from_parts_json(src)}
+    sources, used, skipped = own_sources(fps, src, repo, a.netlist, a.sch)
+    sources["other_revision"], unmatched = {}, 0
+    other_rep = None
+    if a.other_pcb:
+        opcb = Path(a.other_pcb)
+        ofps = footprints(opcb.read_text(encoding="utf-8"))
+        orepo = Path(a.other_repo).resolve() if a.other_repo else None
+        other, oused, _ = own_sources(ofps, Path(a.other_src_pcb or opcb),
+                                      orepo, a.other_netlist, a.other_sch)
+        sources["other_revision"], unmatched = from_other_revision(
+            fps, ofps, other)
+        other_rep = {"boms_read": oused,
+                     "refs_named": {s: len(v) for s, v in other.items()}}
     edits, n = plan(fps, sources)
+    n["other_revision_unmatched"] = unmatched
     rep = {"script": SCRIPT, "counts": n, "boms_read": used,
            "boms_skipped": skipped,
            "refs_named": {s: len(v) for s, v in sources.items()}}
+    if other_rep is not None:
+        rep["other_revision"] = other_rep
     if edits:
         Path(a.out).write_text(apply(text, edits), encoding="utf-8")
         rep["status"] = "written"

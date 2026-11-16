@@ -492,9 +492,43 @@ def _pad_polygon(shape: str, w: float, h: float, rratio: float,
     return affinity.translate(g, center[0], center[1])
 
 
-def _copper_prim(n):
+# The last pcbnew file version without fill tokens: KiCad fills a gr_poly or
+# gr_rect that names no fill in a file this old (#1165).
+LEGACY_FILL_VERSION = 20210108
+
+
+def _has_fill_token(node) -> bool:
+    """Whether any (fill ...) node is anywhere under `node`."""
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if _head(n) == "fill":
+            return True
+        stack.extend(x for x in n[1:] if _is_node(x))
+    return False
+
+
+def legacy_fill(root) -> bool:
+    """Whether a closed poly or rect that names no fill is filled in this file,
+    decided per file (#1165): yes when it is KiCad 5 format - a `(module` head,
+    no (version), or a version up to LEGACY_FILL_VERSION - or when it has no
+    fill token anywhere (easyeda2kicad writes `(gr_poly (pts ...) (width 0.1))`
+    and nothing else). A newer file that writes fill tokens means no fill by
+    leaving one out, so its stroked, fill-less shapes stay outlines."""
+    if _head(root) == "module":
+        return True
+    vn = _kid(root, "version")
+    ver = _nums(vn)[0] if vn is not None and _nums(vn) else None
+    if ver is None or ver <= LEGACY_FILL_VERSION:
+        return True
+    return not _has_fill_token(root)
+
+
+def _copper_prim(n, legacy=False):
     """One copper graphic's shape in its own frame: a pad primitive (gr_*) or a
-    footprint graphic (fp_*), filled or stroked. None when it isn't one."""
+    footprint graphic (fp_*), filled or stroked. None when it isn't one.
+    `legacy` (see legacy_fill): a poly or rect with no fill token is filled; a
+    circle with none stays a ring, as KiCad 5 drew it."""
     kind = _head(n)[3:]
     wn = _kid(n, "width")
     st = _kid(n, "stroke")
@@ -502,7 +536,10 @@ def _copper_prim(n):
         wn = _kid(st, "width")
     sw = _nums(wn)[0] if wn is not None and _nums(wn) else 0.0
     fill = _kid(n, "fill")
-    filled = fill is not None and any(_tok(x) in ("yes", "solid", "true") for x in fill[1:])
+    if fill is None:
+        filled = legacy and kind in ("poly", "rect")
+    else:
+        filled = any(_tok(x) in ("yes", "solid", "true") for x in fill[1:])
     try:
         if kind == "poly":
             pts = _pts(_kid(n, "pts"), arcs=True)
@@ -535,7 +572,7 @@ def _copper_prim(n):
     return None
 
 
-def _custom_pad(pad, w: float, h: float):
+def _custom_pad(pad, w: float, h: float, legacy=False):
     """A custom pad's copper in its own frame: the anchor (rect or circle,
     `size`) unioned with its primitives - gr_poly (filled, or its outline
     stroked), gr_rect, gr_circle, gr_line, gr_arc. None when it has none,
@@ -551,7 +588,7 @@ def _custom_pad(pad, w: float, h: float):
              else box(-w / 2, -h / 2, w / 2, h / 2)]
     for n in prims[1:]:
         if _is_node(n):
-            parts.append(_copper_prim(n))
+            parts.append(_copper_prim(n, legacy))
     return _union(parts)
 
 
@@ -711,6 +748,8 @@ class BoardGeom:
     def __init__(self, path: Path, root: list):
         self.path = Path(path)
         self._union_cache: dict[tuple, object] = {}
+        # an absent fill on a poly or rect means filled in this file (#1165)
+        self.legacy_fill = legacy_fill(root)
 
         # ---- layers (copper order = file order, top->bottom) ----
         self._layer_by_ord: dict[int, str] = {}
@@ -960,7 +999,9 @@ class BoardGeom:
     def _fp_graphics(self, fp, fx, fy, fangle, layers=None):
         """(layer, board-frame shape) of each fp_poly, fp_rect, fp_circle,
         fp_line and fp_arc the footprint draws, on `layers` (a set) or on
-        any layer."""
+        any layer. check_wicking calls it unbound, with self None: then a
+        fill-less shape reads as the modern format has it."""
+        legacy = self.legacy_fill if self is not None else False
         c, s = _rot(1.0, 0.0, -fangle)
         for kind in ("fp_poly", "fp_rect", "fp_circle", "fp_line", "fp_arc"):
             for n in _kids(fp, kind):
@@ -968,7 +1009,7 @@ class BoardGeom:
                 ln = _strs(layer)[0] if layer is not None and _strs(layer) else None
                 if ln is None or (layers is not None and ln not in layers):
                     continue
-                g = _copper_prim(n)
+                g = _copper_prim(n, legacy)
                 if g is not None and not g.is_empty:
                     yield ln, affinity.affine_transform(g, [c, -s, s, c, fx, fy])
 
@@ -1021,7 +1062,7 @@ class BoardGeom:
                 on = _nums(onode)
                 if len(on) >= 2:
                     drill_off = (on[0], on[1])
-        custom = _custom_pad(pad, w, h) if pshape == "custom" else None
+        custom = _custom_pad(pad, w, h, self.legacy_fill) if pshape == "custom" else None
         th = _thermal_of(pad)
         for k, v in (fp_th or {}).items():
             if th[k] is None or (k == "zone_connect"

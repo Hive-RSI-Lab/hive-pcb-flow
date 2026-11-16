@@ -229,3 +229,117 @@ def test_a_buck_with_no_pin_names_says_so(tmp_path):
                     [("/sw", "1"), ("+3V3", "2")], at=(26, 20)))
     c = _cand(_run(_board(tmp_path, body), _loads(U3=0.5)))
     assert c["reason"] == "no_load" and "no pin names" in c["detail"]
+
+
+# ---- a limit given only as typical / minimum, and boosts ----------------
+
+def test_planted_typical_limit_over_is_over_at_limit(tmp_path):
+    """Planted fault: a TPS62A01 in SOT-563 (180 mOhm, 157 C/W) at its
+    typical 1.8 A limit loses 0.87 W, ~162 C: flagged over_at_limit,
+    the detail saying the limit is typical."""
+    c = _cand(_run(_board(tmp_path, _buck(
+        value="TPS62A01DRLR", lib="Package_TO_SOT_SMD:SOT-563",
+        extra_loads=("U3", "U4"))), _loads(U3=0.1)))
+    assert c["reason"] == "over_at_limit" and c["i_limit_kind"] == "typical"
+    assert c["tj_at_limit_c"] > 125
+    assert "typical, the datasheet gives no maximum" in c["detail"]
+
+
+def test_quiet_typical_limit_under_does_not_clear_the_part(tmp_path):
+    """Quiet twin: a TPS62A01 in SOT-23-THIN (100 mOhm, 132 C/W) at 1.8 A
+    reaches ~89 C, under its 125 C, but a typical limit is no ceiling: it
+    stays no_load, fires nothing and says why."""
+    p = _run(_board(tmp_path, _buck(
+        value="TPS62A01DDCR", lib="Package_TO_SOT_SMD:SOT-23-6",
+        extra_loads=("U3", "U4"))), _loads(U3=0.1))
+    c = _cand(p)
+    assert c["reason"] == "no_load" and c["tj_at_limit_c"] < 125
+    assert "isn't a ceiling" in c["detail"] and _facts(p) is None
+    assert not [v for v in p["violations"]
+                if v["kind"] == "thermal_stated_load"]
+
+
+def test_planted_boost_over_at_its_max_limit(tmp_path):
+    """Planted fault: an SY7200 boost (200 mOhm, 170 C/W) at its 3.5 A
+    switch limit: over_at_limit, and a small stated load on the inductor's
+    far net is not used as its load."""
+    p = _run(_board(tmp_path, _buck(value="SY7200AABC",
+                                    lib="Package_TO_SOT_SMD:SOT-23-6")),
+             _loads(U3=0.05))
+    c = _cand(p)
+    assert c["reason"] == "over_at_limit" and "boost" in c["detail"]
+    assert _facts(p) is None
+
+
+def test_quiet_boost_at_a_minimum_limit_stays_no_load(tmp_path):
+    """Quiet twin: an SY7208 at its 0.6 A minimum limit loses 81 mW
+    (~38 C): a minimum isn't a ceiling, so it stays no_load, saying so."""
+    p = _run(_board(tmp_path, _buck(value="SY7208ABC",
+                                    lib="Package_TO_SOT_SMD:SOT-23-6")),
+             _loads(U3=0.05))
+    c = _cand(p)
+    assert c["reason"] == "no_load" and "minimum" in c["detail"]
+    assert "boost" in c["detail"] and _facts(p) is None
+
+
+def test_no_loss_model_reason_is_the_rows_text(tmp_path):
+    """An LM2596T (TO-220, no exposed pad) switches with a bipolar
+    transistor: its row says why no on-resistance model applies, and the
+    candidate says that."""
+    c = _cand(_run(_board(tmp_path, _buck(
+        value="LM2596T-5.0", lib="Package_TO_SOT_THT:TO-220-5_Vertical")),
+        _loads(U3=0.5)))
+    assert c["reason"] == "no_load" and "VSAT" in c["detail"]
+
+
+# ---- the rail's current reaches past ties, switches and ferrites --------
+
+def _reach(kind):
+    """The buck, U3 on +3V3, and U4 on /b reached through KIND."""
+    via = {
+        "nt": _part("NT1", "Net-Tie", "NetTie:NetTie-2_SMD",
+                    [("+3V3", "1"), ("/b", "2")], at=(40, 10)),
+        "fb": _part("FB1", "600R", "Inductor_SMD:L_0603",
+                    [("+3V3", "1"), ("/b", "2")], at=(40, 10)),
+        "q": _part("Q1", "AO3401", "Package_TO_SOT_SMD:SOT-23",
+                   [("/en2", "G"), ("+3V3", "S"), ("/b", "D")],
+                   at=(40, 10)),
+        "rz": _part("RP1", "0", "Resistor_SMD:R_0402",
+                    [("+3V3", "1"), ("/b", "2")], at=(40, 10)),
+    }[kind]
+    return (_buck() + via
+            + _part("U4", "MCU", "Package_QFP:LQFP-48",
+                    [("/b", "VDD"), ("GND", "VSS")], at=(44, 32))
+            + _part("D2", "PESD5V0S1BL", "Diode_SMD:D_SOD-323",
+                    [("/b", "K"), ("/data", "A")], at=(48, 10)))
+
+
+def test_planted_load_past_a_net_tie_is_summed_and_fires(tmp_path):
+    """Planted fault: 0.5 A on +3V3 and 0.7 A past a net tie: 1.2 A
+    through the LMR54406 is ~193 C, past 150 C."""
+    p = _run(_board(tmp_path, _reach("nt")), _loads(U3=0.5, U4=0.7))
+    [v] = [v for v in p["violations"] if v["kind"] == "thermal_stated_load"]
+    assert v["refs"] == ["U2"]
+    assert _facts(p)["load_a"] == 1.2
+
+
+def test_quiet_reach_sums_are_full_facts(tmp_path):
+    """Quiet twins: through a net tie, a ferrite, a load-switch FET and a
+    role-named 0 ohm resistor, 0.2 A + 0.2 A is judged in full (the ESD
+    part draws nothing) and fires nothing."""
+    for kind in ("nt", "fb", "q", "rz"):
+        d = tmp_path / kind
+        d.mkdir()
+        p = _run(_board(d, _reach(kind)), _loads(U3=0.2, U4=0.2))
+        f = _facts(p)
+        assert f["load_source"] == "rail_sum" and f["full"] is True, kind
+        assert f["load_a"] == 0.4 and _cand(p) is None, kind
+        assert not [v for v in p["violations"]
+                    if v["kind"] == "thermal_stated_load"], kind
+
+
+def test_an_unstated_load_past_a_net_tie_is_named(tmp_path):
+    """U4 past the net tie states no current: the sum isn't full, and the
+    candidate names U4."""
+    c = _cand(_run(_board(tmp_path, _reach("nt")), _loads(U3=0.2)))
+    assert c["reason"] == "over_at_limit" and "U4" in c["detail"]

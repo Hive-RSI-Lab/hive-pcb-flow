@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from shapely.geometry import LineString, Point
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / "scripts"
@@ -73,8 +74,8 @@ def _grid(n, pitch, pad, prefix="S", skip=()):
 
 def board(tmp_path, *, n=6, pitch=0.8, pad=0.35, rot=0, extra="",
           name="b", zone_layer=None, pro=True, connector=True,
-          layers=4) -> Path:
-    balls = _grid(n, pitch, pad)
+          layers=4, skip=()) -> Path:
+    balls = _grid(n, pitch, pad, skip=skip)
     u1 = "".join(_pad(num, x, y, net, pad) for num, x, y, net in balls)
     half = (n - 1) / 2 * pitch + 0.8
     body = _fp("U1", 20.0, 15.0, u1, (half, half), rot)
@@ -967,3 +968,121 @@ def test_live_fault_fine_via_outside_the_courtyard_is_ripped(tmp_path,
     bg = geom.BoardGeom.from_file(pcb)
     assert uid not in {v.uuid for v in bg.vias_of()}
     assert b["kept_nets"] >= 29
+
+
+# ---- row 139: enclosed balls out through a gate ----------------------------
+
+RING_B = [(r, c) for r in range(1, 5) for c in range(1, 5)
+          if r in (1, 4) or c in (1, 4)]
+INNER = [(2, 2), (2, 3), (3, 2), (3, 3)]
+
+
+def _ball_xy(r, c, pitch=0.5):
+    return 20 + (c - 2.5) * pitch, 15 + (r - 2.5) * pitch
+
+
+def _fenced(tmp_path, skip=()):
+    """The 6x6 0.5 mm field on 6 layers after KRT: every ring-B ball has its
+    filled 0.25/0.15 via in the pad. Through vias 0.5 apart leave 0.35 mm
+    hole to hole and no lane a 0.0889 track can take (it needs 0.489)."""
+    extra = "".join(_via(*_ball_xy(r, c), f"/S{r}_{c}", UID % (100 + i),
+                         0.25, 0.15)
+                    for i, (r, c) in enumerate(RING_B) if (r, c) not in skip)
+    pcb = board(tmp_path, pitch=0.5, pad=0.25, layers=6, extra=extra,
+                skip=skip)
+    bg = geom.BoardGeom.from_file(pcb)
+    (b,) = bgalib.find_bgas(bg)
+    n = len(bg.copper_layers)
+    floors = re_.escape_floors(pcb.with_suffix(".kicad_pro"))
+    fv = bgalib.fine_via(b, n, re_.fine_cap_row(n),
+                         re_.free_filled_via_layers())
+    ep = bgalib.escape_params(b, {**floors, **fv})
+    ep.update(fine_via=fv,
+              rule_clearance=bgalib.escape_params(b, floors)["clearance"])
+    layers, _ = re_.escape_layers(bg, b, None)
+    return bg, b, ep, layers
+
+
+def _inner_nets():
+    return {f"/S{r}_{c}" for r, c in INNER}
+
+
+def test_gate_trade_lets_the_enclosed_2x2_out(tmp_path):
+    """The planted fault (row 139): KRT left the inner 2x2 unescaped, fenced
+    by the ring-B vias. One ring-B ball per side gives up its via (the
+    gate); both balls beside it jog through on an inner layer, each with a
+    filled via in its own pad: 4 balls out for 2 traded."""
+    bg, b, ep, layers = _fenced(tmp_path)
+    pl = re_.gate_trade_plan(bg, b, ep, layers, _inner_nets(), set(), set())
+    assert sorted(pl["escaped"]) == sorted(_inner_nets())
+    assert pl["not_escaped"] == {}
+    assert len(pl["traded"]) == 2
+    ring_b = {f"/S{r}_{c}" for r, c in RING_B}
+    assert set(pl["traded"]) <= ring_b
+    assert sorted(n for v in pl["traded"].values() for n in v) == \
+        sorted(_inner_nets())
+    assert all(ly not in ("F.Cu", "B.Cu") for ly in pl["layer"].values())
+    vias = [o for o in pl["ops"] if o["op"] == "add_via"]
+    assert len(vias) == 4 and {(o["size"], o["drill"]) for o in vias} == \
+        {(0.25, 0.15)}
+    # every new track keeps the field's clearance to the vias that stay
+    paths = [o for o in pl["ops"] if o["op"] == "add_path"]
+    kept = [v for v in bg.vias_of() if v.net not in pl["traded"]]
+    for o in paths:
+        line = LineString(o["points"]).buffer(o["width"] / 2)
+        for v in kept:
+            if v.net != o["net"]:
+                assert line.distance(v.poly) >= ep["rule_clearance"] - 1e-6
+                assert line.distance(Point(v.at).buffer(v.drill / 2)) >= \
+                    ep["fine_via"]["hole_clearance"] - 1e-6
+
+
+def test_gate_trade_never_trades_a_protected_ball(tmp_path):
+    """Pairs and held wide nets are never a gate: with all of ring B
+    protected the enclosed balls stay unescaped, each with its reason."""
+    bg, b, ep, layers = _fenced(tmp_path)
+    ring_b = {f"/S{r}_{c}" for r, c in RING_B}
+    pl = re_.gate_trade_plan(bg, b, ep, layers, _inner_nets(), ring_b, set())
+    assert pl["escaped"] == [] and pl["ops"] == [] and pl["traded"] == {}
+    assert set(pl["not_escaped"]) == _inner_nets()
+
+
+def test_gate_trade_quiet_when_nothing_is_enclosed(tmp_path):
+    """The quiet twin: no inner 2x2 (depopulated), and a ring-A ball KRT
+    left is no enclosed ball: no gate is traded, nothing is added."""
+    bg, b, ep, layers = _fenced(tmp_path, skip=INNER)
+    for unesc in (set(), {"/S0_0"}):
+        pl = re_.gate_trade_plan(bg, b, ep, layers, unesc, set(), set())
+        assert pl["traded"] == {} and pl["ops"] == []
+        assert pl["escaped"] == [] and pl["not_escaped"] == {}
+
+
+def test_gate_trade_quiet_when_krt_escaped_them(tmp_path):
+    """The quiet twin on the full field: the inner balls are there but KRT
+    escaped them (none unescaped): the trade is only for a ball with no
+    other way out."""
+    bg, b, ep, layers = _fenced(tmp_path)
+    pl = re_.gate_trade_plan(bg, b, ep, layers, set(), set(), set())
+    assert pl["traded"] == {} and pl["ops"] == []
+
+
+def test_live_gate_trade_escapes_the_enclosed_2x2(tmp_path):
+    """The planted fault, live: KRT leaves the synthetic field's inner 2x2
+    fenced by its ring-B vias. The gate trade lets all four out on an inner
+    layer, DRC-clean, for two ring-B balls left to the routers (34 kept, not
+    32); their in-pad vias are filled and teardropped like the rest."""
+    pcb, f, b = _fine_run(tmp_path)
+    ee = b["enclosed_escape"]
+    assert sorted(ee["escaped"]) == sorted(_inner_nets())
+    assert len(ee["traded"]) == 2 and "via in pad" in ee["fab_cost"]
+    assert f["drc_delta"]["new"] == {} and not b.get("ripped_by_drc")
+    assert b["kept_nets"] >= 34
+    assert sorted(b["left_for_routers"]) == sorted(ee["traded"])
+    bg = geom.BoardGeom.from_file(pcb)
+    inner = {_ball_xy(r, c) for r, c in INNER}
+    got = [v for v in bg.vias_of()
+           if (round(v.at[0], 3), round(v.at[1], 3)) in inner]
+    assert len(got) == 4
+    tb = tdl.read(pcb, tdl.config(None))
+    assert sum(1 for it in tb.items if it.kind == "via") == b["teardrops"]
+    assert b["via_in_pad"]["filled"] >= 12 - 2 + 4

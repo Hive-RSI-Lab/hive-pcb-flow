@@ -29,6 +29,7 @@ CHECKS = {
     "check_fp_geometry": "no footprint could be compared",
     "check_fp_package": "no part whose footprint and package",
     "check_silk": "no silk and no reference text",
+    "fp_verify": "no placed footprint could have its pad numbering judged",
 }
 
 

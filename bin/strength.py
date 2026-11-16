@@ -318,19 +318,25 @@ def dfm_faults(found: dict | None = None) -> list[tuple[str, str, bool]]:
     stages = ROOT / "tests" / "fixtures" / "stages"
     fixtures = yaml.safe_load((stages / "manifest.yaml").read_text(encoding="utf-8"))["fixtures"]
     out = []
-    for fid, fx in fixtures.items():
-        if fx.get("stage") != "P9" or not fx.get("known_answer"):
-            continue
-        vs = _dfm(fx, ROOT / fx["dirs"]["gerbers"]["path"])
-        ka = benchlib.match_known_answer(fx["known_answer"], vs)
-        out.append(("dfm", f"dfm {fid}", ka["status"] == "ok"))
-    fx = fixtures[DRILL_BOARD]
-    src = ROOT / fx["dirs"]["gerbers"]["path"]
 
     def mine(vs, kind):
         return [v for v in vs if v.get("kind") == kind and v.get("severity") == "error"]
-    clean = _dfm(fx, src)
+    # dfm runs on a copy of each fixture's gerbers: a run may keep what it
+    # learns (a fetched model, EasyEDA's "no model") beside the CPL, and a
+    # pinned fixture must stay as frozen
     with tempfile.TemporaryDirectory(prefix="hwde-strength-") as tmp:
+        for fid, fx in fixtures.items():
+            if fx.get("stage") != "P9" or not fx.get("known_answer"):
+                continue
+            work = Path(tmp) / "fixtures" / fid
+            shutil.copytree(ROOT / fx["dirs"]["gerbers"]["path"], work)
+            vs = _dfm(fx, work)
+            ka = benchlib.match_known_answer(fx["known_answer"], vs)
+            out.append(("dfm", f"dfm {fid}", ka["status"] == "ok"))
+        fx = fixtures[DRILL_BOARD]
+        src = Path(tmp) / "fixtures" / "drill_clean"
+        shutil.copytree(ROOT / fx["dirs"]["gerbers"]["path"], src)
+        clean = _dfm(fx, src)
         for name, kind, fault in DRILL_FAULTS:
             work = Path(tmp) / name
             shutil.copytree(src, work)

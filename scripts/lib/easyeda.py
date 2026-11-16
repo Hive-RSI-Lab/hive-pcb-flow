@@ -8,7 +8,8 @@ row). This module gets that model from the EasyEDA endpoint easyeda2kicad reads
 only the shapes a placement check needs, and caches them one JSON per LCSC
 number so tests and reruns never touch the network.
 
-Cache file `<cache_dir>/<LCSC>.json`:
+Cache file `<cache_dir>/<LCSC>.json` (and `<LCSC>.none` for a part EasyEDA
+answered with no footprint, which an offline run reads as "no model"):
   {"lcsc", "title", "package", "origin": [x, y], "pads": [PAD~ strings],
    "silk": [package shapes on the top silk layer], "pins": [symbol P~ strings]}
 Coordinates are EasyEDA canvas units (10 mil = 0.254 mm), y pointing down,
@@ -220,9 +221,11 @@ def get(lcsc: str, cache_dir: Path | None = None, fetch: bool = True,
         pace_s: float = 0.0, fetcher=None,
         errors: dict | None = None) -> Model | None:
     """The part's model from cache, else (fetch=True) from EasyEDA, cached.
-    A part the API has no footprint for returns None and is not cached, so a
-    later run asks again. A fetch that RAISES (network, 403) still returns
-    None, but when `errors` is given it records `errors[lcsc] = "<why>"`, so a
+    A part the API has no footprint for returns None; a fetching run asks
+    again, but the answer is kept as `<LCSC>.none` beside the models, so an
+    offline run (fetch=False: tests, score) knows it and only a part never
+    asked about is a miss, recorded in `errors` with the reason. A fetch
+    that RAISES (network, 403) still returns None, but when `errors` is given it records `errors[lcsc] = "<why>"`, so a
     caller can tell "could not ask" from "EasyEDA has nothing". Once a 403/429
     has latched the rate limit, an uncached part is not fetched at all: it
     returns None with the skip recorded the same way."""
@@ -239,6 +242,16 @@ def get(lcsc: str, cache_dir: Path | None = None, fetch: bool = True,
         _keep(path, cached)  # into the board's cache, to be committed
         return parse(cached)
     if not fetch:
+        # offline: a part EasyEDA was asked about and had nothing for is a
+        # known "no model"; one never asked about is a miss the caller
+        # passing `errors` must not read as "no model" (a cold cache)
+        # (read, never written: an offline run adds nothing to the dir it
+        # checks, so a test or score leaves a pinned fixture as it was)
+        if none_known(lcsc, path.parent) or none_known(lcsc, shared.parent):
+            return None
+        if errors is not None:
+            errors[lcsc] = (f"offline (HWDE_EASYEDA_OFFLINE): {lcsc}'s model "
+                            f"is not in the cache {path.parent}")
         return None
     if _RATE_LIMITED:
         if errors is not None:
@@ -250,8 +263,9 @@ def get(lcsc: str, cache_dir: Path | None = None, fetch: bool = True,
         raw = (fetcher or _fetch_raw)(lcsc)
     except Exception as exc:  # noqa: BLE001 - reported, never "no model"
         code, why = classify(exc)
-        if code == 404:
-            return None  # EasyEDA answered: it has no such part
+        if code == 404:     # EasyEDA answered: it has no such part
+            _keep_none(lcsc, path, shared, why)
+            return None
         if code in RATE_LIMIT_CODES:
             _RATE_LIMITED = why
             print(f"easyeda: {why} at {lcsc}; skipping every further model "
@@ -261,14 +275,39 @@ def get(lcsc: str, cache_dir: Path | None = None, fetch: bool = True,
             errors[lcsc] = why
         return None
     if not raw.get("packageDetail"):
+        _keep_none(lcsc, path, shared, "no package in EasyEDA's answer")
         return None
     cached = trim(raw, lcsc)
     if not cached["pads"]:
+        _keep_none(lcsc, path, shared, "no pads in EasyEDA's footprint")
         return None
+    for d in {path.parent, shared.parent}:
+        none_path(lcsc, d).unlink(missing_ok=True)
     _keep(path, cached)
     if shared != path:
         _keep(shared, cached)
     return parse(cached)
+
+
+def none_path(lcsc: str, cache_dir: Path) -> Path:
+    """`<cache_dir>/<LCSC>.none`: EasyEDA was asked and has no model."""
+    return Path(cache_dir) / f"{lcsc.strip().upper()}.none"
+
+
+def none_known(lcsc: str, cache_dir: Path) -> bool:
+    return none_path(lcsc, cache_dir).is_file()
+
+
+def _keep_none(lcsc: str, path: Path, shared: Path, why: str) -> None:
+    """Keep EasyEDA's "no model" answer beside the models (board and shared
+    cache), so an offline run can tell it from a part never asked about."""
+    text = json.dumps({"lcsc": lcsc, "none": why}) + "\n"
+    for d in {path.parent, shared.parent}:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            none_path(lcsc, d).write_text(text, encoding="utf-8")
+        except OSError:
+            pass
 
 
 def shared_cache() -> Path:

@@ -174,7 +174,10 @@ A pin on a net of unknown voltage is not a finding (counted in facts); a
 supply pin on one is named in not_judged by rail, since nothing compared it
 (#601). A connected pad the extraction's pinout has no row for is
 rating_unrated. A board where nothing could be compared with known volts
-reports nothing_to_judge. Facts `parts_rated_unextracted` names each part
+reports nothing_to_judge, led by the reason that kept out the most parts (no
+part number, a passive with no voltage field, no datasheet read, a datasheet
+with no pin rating, or no known voltage on its nets), and facts
+`parts_not_compared` lists each part under its reason (#1330). Facts `parts_rated_unextracted` names each part
 compared with no extraction behind it (a distributor's listing, a part-number
 voltage code or diode family, a package table), which pins_checked does not count (#1307).
 
@@ -188,6 +191,16 @@ and a
 `pinout` fact (pinout_fact: the board's pad numbers and names against the
 extraction's pinout; no extraction is unknown). Written into <ws>/ledger.json
 when the board sits in a workspace; `ledger_counts` in the report.
+
+Pins go by where the copper puts them (#843): when the extraction has a land
+drawing (land_pattern.pads, top-view places) and its places fall on the
+footprint's pads under one quarter turn only, each pad is read as the pin
+drawn at its place, whatever its number, before any rating, name or pinout
+fact is read. A symbol and footprint renumbered alike (a mirrored drawing)
+then rate right, and a footprint whose numbers agree with the datasheet but
+whose pads sit on other pins rates by the copper. Facts `pins_by_position`
+({ref: {pad: pin}}, the pads that moved) and `pins_by_number_why` (a drawing
+that could not settle it, so pins kept their numbers).
 
 CLI: --pcb board.kicad_pcb [--parts DIR] [--constraints c.json]
      [--power-tree power_tree.md] [--out report.json]
@@ -276,11 +289,22 @@ def load_parts_on_board(pcb: Path) -> list[dict]:
         for p in _kids(fp, "property"):
             if len(p) >= 3 and isinstance(p[1], str):
                 props[p[1]] = str(p[2])
-        pads, fns, nums = {}, {}, set()
+        pads, fns, nums, xy = {}, {}, set(), {}
+        bottom = any(str(_t(x)).startswith("B.")
+                     for x in (_kids(fp, "layer") or [[None, ""]])[0][1:2])
         for pad in _kids(fp, "pad"):
             num = str(pad[1]) if len(pad) > 1 else ""
             if num:
                 nums.add(num)
+                at = (_kids(pad, "at") or [[]])[0]
+                if len(at) >= 3 and all(isinstance(_t(c), (int, float))
+                                        for c in at[1:3]):
+                    # the pad in its footprint's own frame; KiCad stores a
+                    # flipped footprint's pads mirrored, so undo that to
+                    # get the part's own top view
+                    xy.setdefault(num, []).append(
+                        (float(at[1]), -float(at[2]) if bottom
+                         else float(at[2])))
             net = None
             for nn in _kids(pad, "net"):
                 strs = [x for x in nn[1:] if isinstance(x, str)]
@@ -299,8 +323,64 @@ def load_parts_on_board(pcb: Path) -> list[dict]:
                                  if (props.get(k) or "").strip()), ""),
                     "value": props.get("Value", ""),
                     "footprint": str(fp[1]) if len(fp) > 1 else "",
-                    "pads": pads, "fns": fns, "nums": sorted(nums)})
+                    "pads": pads, "fns": fns, "nums": sorted(nums),
+                    "pad_xy": {k: (sum(x for x, _ in v) / len(v),
+                                   sum(y for _, y in v) / len(v))
+                               for k, v in xy.items()}})
     return out
+
+
+POS_TOL_MM = 0.1  # turns within this of the best fit are equally good
+
+
+def pin_map(b: dict, ext: dict | None) -> tuple[dict | None, str | None]:
+    """(pad -> extraction pin, None) when the extraction's land drawing
+    (land_pattern.pads, top-view at_mm) places the footprint's pads on other
+    pins than their numbers, else (None, why not or None). Pins are matched
+    the way the copper maps them, not by number (#843): a symbol and
+    footprint renumbered alike (hifi-receiver's PLR237, pads 1 and 3 the
+    drawing's 3 and 1) put the datasheet's pin 1 on the footprint's pad 3.
+    Only quarter turns are tried, never the mirror: a part on its own side
+    can be turned, not flipped. The map is used only when every turn that
+    fits gives the same one, so a symmetric row of pins with nothing to fix
+    its turn keeps matching by number."""
+    stated = ((ext or {}).get("land_pattern") or {}).get("pads") or []
+    got = b.get("pad_xy") or {}
+    if not stated or not got:
+        return None, None
+    import fp_verify as fpv
+    acc: dict[str, list] = {}
+    for q in stated:
+        try:
+            acc.setdefault(str(q["number"]), []).append(
+                (float(q["at_mm"][0]), float(q["at_mm"][1])))
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    # a number drawn twice (a SOT-223's lead and tab) is its places' mean
+    ref_all = {k: (sum(x for x, _ in v) / len(v), sum(y for _, y in v) / len(v))
+               for k, v in acc.items()}
+    common = sorted(set(ref_all) & set(got))
+    if len(common) < 2:
+        return None, None
+    maps = fpv._clean({k: ref_all[k] for k in common},
+                      {k: got[k] for k in common}, POS_TOL_MM)
+    if not maps:
+        return None, ("its pads don't fall one to one on the land "
+                      "drawing's places, so pins were matched by number")
+    if len({tuple(sorted(m.items())) for _, m in maps}) > 1:
+        return None, ("the land drawing fits its pads at more than one turn "
+                      "with different pins, so pins were matched by number")
+    moved = {k: r for k, r in maps[0][1].items() if k != r}
+    return (moved or None), None
+
+
+def apply_pin_map(b: dict, moved: dict) -> None:
+    """Renumber a board part's pads, names and numbers into the
+    extraction's pin space (pin_map's {pad: pin})."""
+    b["pads"] = {moved.get(k, k): v for k, v in b["pads"].items()}
+    b["fns"] = {moved.get(k, k): v for k, v in b["fns"].items()}
+    b["nums"] = sorted(moved.get(k, k) for k in b["nums"])
+    b["pin_map"] = dict(sorted(moved.items()))
 
 
 # --- net voltages -------------------------------------------------------------
@@ -1296,6 +1376,15 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     for lcsc in {b["lcsc"] for b in board if b["lcsc"]}:
         if (ext := load_extraction(parts_dir, lcsc)) is not None:
             exts[lcsc] = ext
+    # pins as the copper maps them (#843), before any pin is read
+    by_position, position_not_used = {}, {}
+    for b in board:
+        moved, why = pin_map(b, exts.get(b["lcsc"]))
+        if moved:
+            apply_pin_map(b, moved)
+            by_position[b["ref"]] = b["pin_map"]
+        elif why:
+            position_not_used[b["ref"]] = why
 
     nets = {n for b in board for n in b["pads"].values()}
     volts: dict[str, float] = {}
@@ -1350,6 +1439,13 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     def emit(kind, sev, ref, net, msg, **extra):
         if ref in by_mpn:
             extra.setdefault("part_key", f"MPN {by_mpn[ref]}")
+        pin = str(extra.get("pin") or "")
+        back = {v: k for k, v in by_position.get(ref, {}).items()}
+        if pin.startswith(f"{ref}.") and (pad := back.get(pin[len(ref) + 1:])):
+            # pins are the datasheet's here (#843): name the copper too
+            extra["board_pad"] = pad
+            msg += (f" (datasheet pin {pin[len(ref) + 1:]} is the "
+                    f"footprint's pad {pad}, by the land drawing)")
         out.append(violation(SCRIPT, sev, None, None, net, [ref], msg, SCRIPT,
                              kind=kind, **extra))
 
@@ -1364,6 +1460,9 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
         rated_by_ref.setdefault(ref, set()).add(tier)
 
     netfns = net_pinfunctions(pcb)
+    for ref, moved in by_position.items():  # into the extraction's pins too
+        if ref in netfns:
+            netfns[ref] = {moved.get(k, k): v for k, v in netfns[ref].items()}
     fb_ctx = {"board": board, "bom_by_lcsc": bom_by_lcsc, "volts": volts,
               "vsrc": vsrc, "blocks": block_vouts(constraints),
               "vrefs": load_vrefs()}
@@ -1810,6 +1909,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
     listing_compared, listing_skipped = listing_findings(
         board, exts, bom_by_lcsc, read_from, held_back, rated_by_ref, trusted,
         emit, out)
+    nothing, unjudged = (None, None) if checked_by_ref else \
+        why_nothing_judged(board, exts, out, volts, bom_by_lcsc)
     facts = {"parts_on_board": len(board), "extractions": sorted(exts),
              "keyed_by_mpn": by_mpn,
              "net_volts": {n: {"v": volts[n], "src": vsrc[n]}
@@ -1818,6 +1919,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
              "parts_rated_unextracted": sorted(
                  r for r, t in rated_by_ref.items() if "datasheet" not in t),
              "pins_covered_by_rule": covered_pins,
+             "pins_by_position": by_position,
+             "pins_by_number_why": position_not_used,
              "reversed_inputs": reversed_inputs,
              "pins_on_unknown_nets": unknown_net_pins,
              "not_judged": [
@@ -1826,8 +1929,8 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
                  f"{' ...' if len(pins) > 6 else ''})"
                  for net, pins in sorted(unknown_rails.items())]
              + clamp_not_judged,
-             "nothing_to_judge": None if checked_by_ref else
-             "no rating could be compared with a known voltage",
+             "nothing_to_judge": nothing,
+             "parts_not_compared": unjudged,
              "ambient": amb, "fuses": fuse_facts,
              "operating_range": temp_facts,
              "suspect_datasheets": suspect,
@@ -3037,8 +3140,13 @@ def pinout_fact(b: dict, ext: dict | None) -> tuple[str, str]:
         return "unknown", ("pin names differ, check by eye: "
                            + "; ".join(differ[:6]))
     named = sum(1 for n in nums if (b.get("fns") or {}).get(n))
+    moved = b.get("pin_map") or {}
     return "verified", (f"{len(nums)} pads are pins of the extraction"
-                        + (f", {named} named alike" if named else ""))
+                        + (f", {named} named alike" if named else "")
+                        + (" (matched by place on the land drawing: "
+                           + ", ".join(f"pad {k} is pin {v}"
+                                       for k, v in list(moved.items())[:6])
+                           + ")" if moved else ""))
 
 
 PDF_NAME_RE = re.compile(r"[^/\\\s]+\.pdf", re.I)
@@ -3249,6 +3357,59 @@ def _rating_source(tiers: set[str], b: dict, src: str,
     if "distributor" not in tiers:
         return src
     return f"{src}; {listing}" if "datasheet" in tiers else listing
+
+
+# Two-terminal parts rated by a field on their parts row (a voltage), not a
+# datasheet's pin table.
+PASSIVE_REF = re.compile(r"^(C|R|RN|D|LED|F|FB|L|Y|X|TVS|Z)\d", re.I)
+
+
+def why_nothing_judged(board: list[dict], exts: dict, vios: list[dict],
+                       volts: dict, bom_by_lcsc: dict | None = None
+                       ) -> tuple[str, dict[str, list[str]]]:
+    """Why a board where no rating met a known voltage judged nothing: each
+    part with a non-ground net by the first thing that kept it out (#1330).
+    A part with a rating source (a datasheet read, or a field on its parts
+    row) that the check didn't call unrated: no net it touches has a known
+    voltage. Any other part: no part number, a two-terminal part whose parts
+    row has no voltage field, a part number with no datasheet read, or a
+    datasheet read whose pins carry no rating it uses. The reason reads
+    biggest group first, with its count; the rest follow in brackets."""
+    bom_by_lcsc = bom_by_lcsc or {}
+    unrated = {r for v in vios if v.get("kind") in
+               ("rating_unrated", "rating_no_attributes")
+               for r in v.get("refs") or () if r}
+    why: dict[str, list[str]] = {}
+    for b in sorted(board, key=lambda x: x["ref"]):
+        nets = set(b["pads"].values()) - {""}
+        if not nets or all(is_ground(n) for n in nets):
+            continue
+        has_src = b["lcsc"] in exts or bool(
+            (bom_by_lcsc.get(b["lcsc"]) or {}).get("attributes"))
+        if b["ref"] not in unrated and has_src:
+            r = "no known voltage on its nets"
+        elif PASSIVE_REF.match(b["ref"]) and len(nets) <= 2:
+            r = "passive with no voltage field on its parts row"
+        elif not (b["lcsc"] or b.get("mpn")):
+            r = "no part number"
+        elif b["lcsc"] in exts:
+            r = "datasheet read but no pin rating it can use"
+        else:
+            r = "no datasheet read for its part number"
+        why.setdefault(r, []).append(b["ref"])
+    if not why:
+        return "no connected part on the board", why
+    if not any(v for n, v in volts.items() if not is_ground(n)):
+        lead = "no net on the board has a known voltage; "
+    else:
+        lead = ""
+    total = sum(len(v) for v in why.values())
+    order = sorted(why.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    (top, refs), rest = order[0], order[1:]
+    text = f"{lead}{top} ({len(refs)} of {total} parts not compared)"
+    if rest:      # bracketed, so the corpus's blocker label is the top reason
+        text += " [also " + "; ".join(f"{r}: {len(v)}" for r, v in rest) + "]"
+    return text, why
 
 
 def ledger_facts(board: list[dict], exts: dict, vios: list[dict],

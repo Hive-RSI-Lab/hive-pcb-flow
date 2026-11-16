@@ -306,3 +306,57 @@ def test_with_no_pad_on_the_piece_nothing_moves():
                          box(24, 49, 28, 49.9)])
     assert len(_edge(piece)) == 2
     assert len(_edge(piece, cast=[(80, 0, 1.0)])) == 2
+
+
+# ---- #822: another net's pad splits a run it does not touch
+
+def _clear_of(run, holes, gap=0.2):
+    """run with each pad of holes taken out, grown by a pour clearance."""
+    return run.difference(unary_union([_pad(*h)[1].buffer(gap)
+                                       for h in holes]))
+
+
+@pytest.mark.parametrize("n", [1, 2, 3, 5, 8])
+def test_a_run_past_other_nets_pads_is_one_place(n):
+    """The planted fault: a pour along the edge, kept 0.2 mm clear of a row of
+    other nets' castellated pads, is one run in pieces, not n + 1 places."""
+    vios = _edge(_clear_of(_run(10, 80), _row(n)), cast=_row(n))
+    assert [v["kind"] for v in vios] == ["dfm_copper_to_edge"]
+    assert vios[0]["distance_mm"] == pytest.approx(0.1)
+    assert "pinches_not_shown" not in vios[0]
+
+
+@pytest.mark.parametrize("n", [1, 3, 8])
+def test_the_band_counts_a_run_past_other_nets_pads_as_one(n):
+    piece = _clear_of(_run(10, 80, top=49.75), _row(n))
+    vios = _edge(piece, rules=BAND, cast=_row(n))
+    assert [v["kind"] for v in vios] == ["dfm_copper_to_edge_preferred"]
+    assert vios[0]["count"] == 1
+
+
+def test_a_half_mm_pour_clearance_still_joins():
+    vios = _edge(_clear_of(_run(10, 80), _row(3), gap=0.5), cast=_row(3))
+    assert len(vios) == 1
+
+
+def test_two_pieces_either_side_of_a_pad_stay_two_places():
+    """The quiet twin: the same shapes as two pieces of copper (a cut through
+    the backing too) are two pours to fix, pad or no pad."""
+    left, right = box(10, 40, 20.2, 49.9), box(21.8, 40, 32, 49.9)
+    vios = _edge(left, right, cast=[HOLE])
+    assert len(vios) == 2
+
+
+def test_a_run_well_clear_of_the_pad_keeps_two_places():
+    """The run backs off the edge 1 mm either side of the pad: nothing carries
+    on past it, so the two close stretches are two places."""
+    piece = unary_union([box(5, 40, 40, 49), box(5, 49, 19.0, 49.9),
+                         box(23.0, 49, 37, 49.9)])
+    vios = _edge(piece, cast=[HOLE])
+    assert len(vios) == 2
+
+
+def test_with_no_castellated_pad_the_clear_run_reads_as_before():
+    piece = _clear_of(_run(10, 80), _row(3))
+    assert len(_edge(piece)) == 4
+    assert len(_edge(piece, cast=[(5, 0, 1.0)])) == 4

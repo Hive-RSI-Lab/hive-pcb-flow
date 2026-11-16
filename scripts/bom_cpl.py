@@ -699,9 +699,11 @@ def model_deriver(pcb: Path, parts_map: dict[str, dict], cache_dir: Path,
         fp, lcsc = fps.get(ref), parts_map.get(ref, {}).get("lcsc")
         if fp is None or not lcsc:
             return None
+        # offline, an uncached part uses the table: only a fetch that was
+        # tried and failed is a fetch failure here
         errs: dict = {}
         model = easyeda.get(lcsc, cache_dir, fetch=fetch, pace_s=1.0,
-                            errors=errs)
+                            errors=errs if fetch else None)
         if errs:
             derive.errors[ref] = next(iter(errs.values()))
         return cpl_verify.derive_rotation(fp, model)

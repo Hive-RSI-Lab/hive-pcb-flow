@@ -1,0 +1,16 @@
+# Seeded fault for check_ratings matching pins by place (hive-hwde #843).
+# Quiet twin: tests/test_check_ratings.py (a mirrored numbering that agrees).
+mutants:
+  ldo-leads-by-place:
+    board: blinky2
+    script: mutations/ldo_leads_by_place.py
+    check: check_ratings
+    defect: >-
+      SIDECAR fault (+ an LCSC property on U2 so the parts dir finds it):
+      a datasheet extraction whose pin numbers and names agree with the
+      board, but whose land drawing runs the SOT-223's leads the other way
+      round, so the GND lead sits on the footprint's +5V pad; by number
+      nothing is out of rating (#843)
+    expect:
+      kind: rating_reverse_polarity
+      ref: U2

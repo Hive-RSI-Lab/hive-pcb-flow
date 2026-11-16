@@ -218,6 +218,7 @@ def read_board(root, dflt: dict, pcb: Path) -> list[dict]:
     import matinglib
     metas = matinglib.board_meta(pcb)
     fps = []
+    legacy = geom.legacy_fill(root)
     for fp in _kids(root, "footprint"):
         fpid = str(_tok(fp[1])) if len(fp) > 1 and not geom._is_node(fp[1]) \
             else ""
@@ -255,7 +256,7 @@ def read_board(root, dflt: dict, pcb: Path) -> list[dict]:
             rr = _kid(pad, "roundrect_rratio")
             rratio = _nums(rr)[0] if rr is not None and _nums(rr) else 0.0
             if shape == "custom" and \
-                    (cg := geom._custom_pad(pad, w, h)) is not None:
+                    (cg := geom._custom_pad(pad, w, h, legacy)) is not None:
                 cg = affinity.rotate(cg, -angle, origin=(0, 0),
                                      use_radians=False)
                 copper = affinity.translate(cg, c[0], c[1])

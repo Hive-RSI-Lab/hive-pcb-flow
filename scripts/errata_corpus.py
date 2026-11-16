@@ -36,7 +36,9 @@ from net names: no parts/ and no power tree), check_pinouts on the
 schematic, check_bom_sync on the board with --live (the package of each LCSC part
 comes from JLC's record, as nothing in the foreign tree holds it),
 check_fp_package on the board with --live (each part's package from JLC's
-record of its LCSC/JLC number or of the exact part its MPN names), check_thermal on the board
+record of its LCSC/JLC number or of the exact part its MPN names), fp_verify's
+board mode (pad numbering of each placed footprint against the record its LCSC
+number or MPN finds in hwde's extractions), check_thermal on the board
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
@@ -304,6 +306,11 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
     partnum_backfill gives them: the schematic's symbol fields, the BOM files
     in the board's folder, parts.json. Every board gets the same step; it
     only adds an LCSC or MPN field where the footprint has no such field.
+    The other revision's own sources come last (partnum_backfill's
+    other_revision: the same ref, where its footprint and Value match), so
+    a board whose BOM ships with one revision only gets its part numbers
+    from the same sources on both, and a finding does not look gone or new
+    only because of the BOM.
     The copy sits in the run dir (`{rev}-partnum.kicad_pcb`, with what
     partnum_backfill said in `{rev}-partnum.json`), nothing is written into
     the checkout, and it is reused while its inputs are unchanged."""
@@ -321,9 +328,11 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
             net = None
     else:
         sch = None
+    other = _other_rev(b, rev, empty)
     digest = hashlib.sha256(
         base.read_bytes() + b"\0" + str(repo / b[rev]["pcb"]).encode()
         + b"\0" + (net.read_bytes() if net else b"")
+        + b"\0" + json.dumps(other.get("key")).encode()
         + b"\0" + (SCRIPTS / "partnum_backfill.py").read_bytes()).hexdigest()
     if stamp.is_file() and stamp.read_text().split("\n")[0] == digest:
         return dest if stamp.read_text().split("\n")[1:2] == ["written"] \
@@ -338,6 +347,7 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
         cmd += ["--netlist", str(net)]
     if sch:
         cmd += ["--sch", str(sch)]
+    cmd += other.get("args", [])
     subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     try:
         status = json.loads(report.read_text(encoding="utf-8"))["status"]
@@ -348,6 +358,40 @@ def _pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
         status = status if status != "written" else "error"
     stamp.write_text(f"{digest}\n{status}")
     return dest if status == "written" else base
+
+
+def _other_rev(b: dict, rev: str, empty: Path) -> dict:
+    """partnum_backfill's --other-* arguments for the board's other
+    revision (its pin-named board, checkout, netlist and schematic), and a
+    key of their contents for _pcb's reuse stamp; {} when there is none or
+    it cannot be read."""
+    import hashlib
+    orev = "rev_b" if rev == "rev_a" else "rev_a"
+    if not (b.get(orev) or {}).get("pcb"):
+        return {}
+    cache = empty.parent.parent.parent
+    orepo = repo_dir(cache, b, orev)
+    if not (orepo / b[orev]["pcb"]).is_file():
+        return {}
+    try:
+        opcb = _pins_pcb(b, orev, orepo, empty)
+    except (SystemExit, subprocess.SubprocessError, OSError):
+        return {}
+    args = ["--other-pcb", str(opcb),
+            "--other-src-pcb", str(orepo / b[orev]["pcb"]),
+            "--other-repo", str(orepo)]
+    key = [hashlib.sha256(opcb.read_bytes()).hexdigest(),
+           str(orepo / b[orev]["pcb"])]
+    osch = orepo / b[orev]["sch"] if b[orev].get("sch") else None
+    if osch is not None and osch.is_file():
+        try:
+            onet = _netlist(b, orev, orepo, empty)
+            args += ["--other-netlist", str(onet)]
+            key.append(hashlib.sha256(onet.read_bytes()).hexdigest())
+        except (SystemExit, subprocess.SubprocessError, OSError):
+            pass
+        args += ["--other-sch", str(osch)]
+    return {"args": args, "key": key}
 
 
 def _pins_pcb(b: dict, rev: str, repo: Path, empty: Path) -> Path:
@@ -496,6 +540,13 @@ def _check_fp_geometry(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--live"]
 
 
+def _fp_verify(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """fp_verify's board mode (#1285): the pad-numbering checks on each
+    footprint as placed, against the record its LCSC number or MPN finds in
+    hwde's extractions (no parts/ in a foreign tree)."""
+    return ["fp_verify.py", "--pcb", str(_pcb(b, rev, repo, empty))]
+
+
 def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """On the board alone: with no thermal entry it screens the power ICs
     reference/thermal_parts.yaml knows (#884)."""
@@ -542,6 +593,7 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_ratings": _check_ratings,
            "check_wicking": _check_wicking,
            "check_mounting": _check_mounting,
+           "fp_verify": _fp_verify,
            "dfm": _dfm}
 
 
@@ -657,12 +709,14 @@ EVIDENCE = {
     "check_fp_geometry": lambda r: sum(_n(v) for v in (r.get("judged") or {}).values())
     if isinstance(r.get("judged"), dict) else _n(r.get("judged")),
     "check_fp_package": lambda r: _n(r.get("judged")),
+    "fp_verify": lambda r: sum(_n(v) for v in (r.get("judged") or {}).values()),
     "check_ratings": lambda r: _n(r.get("pins_checked")) + _n(
         (r.get("operating_range") or {}).get("parts_checked"))
     + _n(r.get("listing_comparison")) + _n(r.get("parts_rated_unextracted")),
     "check_pinouts": lambda r: _n(r.get("connectors")),
     "check_mate_pins": lambda r: sum(_n(r.get(k)) for k in
-                                     ("pairs", "stated_mates", "standard_headers")),
+                                     ("pairs", "stated_mates", "standard_headers",
+                                      "unkeyed_groups")),
     "check_connector_fit": lambda r: _n(r.get("edges")) + sum(
         1 for p in r.get("parts") or () if isinstance(p, dict) and p.get("pins")),
     "check_bom_sync": lambda r: sum(1 for v in (r.get("legs") or {}).values() if v),
@@ -697,7 +751,7 @@ def coverage(rep: dict, script: str | None = None) -> dict:
     `parts_judged` and `parts_by_source` count the parts it rated."""
     n = _not_judged_count(rep.get("not_judged"))
     out: dict = {"not_judged": n}
-    if script in ("check_fp_geometry", "check_fp_package"):
+    if script in ("check_fp_geometry", "check_fp_package", "fp_verify"):
         out["parts_judged"] = EVIDENCE[script](rep)
         out["parts_not_judged"] = n
     if script == "check_ratings" and isinstance(rep.get("rated_from"), dict):

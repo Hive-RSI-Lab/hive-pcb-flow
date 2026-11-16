@@ -271,23 +271,30 @@ copper there is a board fault whatever the load. A leaded or no-pad part
 on its loss. A no-pad buck with r_on_ohm in its row is judged from a load
 the design states, never a guessed one, in this order:
   1. rail_sum: the loads on its output rail (its VOUT/VOS/OUT pin's net,
-     else the far side of the 2-pad inductor on its SW/LX/PH pin), summed
-     as netlist_audit does, constraints rail_budget.loads[REF].current_a
+     else the far side of the 2-pad inductor on its SW/LX/PH pin) and the
+     nets its current reaches through a net tie, a 0 ohm resistor, a
+     2-pad series inductor / ferrite not to ground or a 3-pin FET switch's
+     source / drain, summed as netlist_audit does, constraints rail_budget.loads[REF].current_a
      and power[].sinks first, then source_limits rows. Conduction loss is
      I^2 x the larger switch on-resistance x RDS_HOT_FACTOR (1.5, typical
      at 25 C to a hot die; 1 when the row's figure is already a maximum);
      switching loss is left out, so the loss is a floor. A continuous sum
      past tj_max_c fires a thermal_stated_load warning (advisory). Under
      it, the part is judged only when every part on the rail is counted
-     (`full`: the converter, its inductor and parts that draw nothing,
-     R / C / test point / hole / fiducial / a diode wholly on the rail or
-     ground, aside).
+     (`full`: the converter, its inductor, those pass-through parts and
+     parts that draw nothing, R / C / test point / hole / fiducial / an
+     ESD or TVS part / a diode wholly on the rail or ground, aside).
   2. current_limit: else its datasheet current limit (i_limit_a, the
      maximum) bounds the load: under tj_max_c there, a checked fact with
      screen: true; over it, a candidate over_at_limit (the limit doesn't
-     bound it; a screen, not a finding).
+     bound it; a screen, not a finding). A limit the datasheet gives only
+     as typical or minimum (i_limit_kind) can flag a part over_at_limit
+     but never clear it: under, it stays no_load and says so. A boost
+     (topology: boost) skips step 1, since its switch current isn't its
+     load current, and is screened at its limit the same way.
   3. else it stays a no_load candidate, its detail saying which of these
-     was missing.
+     was missing, or the row's no_loss_model text where the part has no
+     on-resistance loss to model (a bipolar switch, a gate driver).
 An LDO source_limits.yaml gives a theta_ja is worked the same way:
 (Vin - Vout) x I from the rail volts (net name or constraints voltages,
 Vout also from the part number) and its output rail's summed loads. It
@@ -1458,6 +1465,10 @@ _SW_PIN_RE = re.compile(r"^(SW|LX|PH)\d*$", re.I)
 _NO_LOAD_RE = re.compile(r"^(R|RN|C|TP|H|MH|FID)\d")
 # the same for a 2-pad R or C named by role (Rfbt1, Cout2; not CN1)
 _NO_LOAD_2PAD_RE = re.compile(r"^(R|C)(?!N\d)[A-Za-z_]*\d+$")
+# an ESD / TVS part on a rail clamps, it draws no load
+_ESD_RE = re.compile(r"ESD|TVS|PESD|USBLC|PRTR|SMAJ|SMBJ", re.I)
+# a FET switch's source / drain pins (a load switch on the rail passes it on)
+_FET_SD_RE = re.compile(r"^(S|D|SOURCE|DRAIN)$", re.I)
 
 
 def pin_name(nets, ref: str, pin: str, net: str) -> str:
@@ -1549,20 +1560,77 @@ class NetCtx:
         self.table = na.load_source_limits()
         self.given = stated_loads(cons)
 
+    def rail_reach(self, ref: str, out: str) -> tuple[list[str], set]:
+        """The nets OUT's current flows on to (module doc): OUT, then
+        through net ties, 0 ohm resistors (role-named too), 2-pad series
+        inductors / ferrites that aren't REF's own and don't end on
+        ground, and a 3-pin FET switch with source or drain on a reached
+        net. Returns (nets, the pass-through refs)."""
+        import engcalc  # noqa: PLC0415
+        from check_ratings import is_ground  # noqa: PLC0415
+        nets, todo, via = [out], [out], set()
+        while todo:
+            n = todo.pop(0)
+            for m in self.nets.get(n, []):
+                r = m["ref"]
+                if r == ref or r in via:
+                    continue
+                c = self.comps.get(r, {})
+                pins = self.comp_pins.get(r, {})
+                far = [nn for p, nn in pins.items() if p != m["pin"]]
+                if c.get("dnp"):
+                    continue
+                if len(pins) == 2 and (
+                        re.match(r"^NT\d", r)
+                        or (re.match(r"^R[A-Za-z_]*\d", r)
+                            and engcalc.parse_value(c.get("value")) == 0)
+                        or (re.match(r"^(L|FB)\d", r)
+                            and far and not is_ground(far[0])
+                            and ref not in {
+                                mm["ref"] for nn in pins.values()
+                                for mm in self.nets.get(nn, [])})):
+                    nxt = far
+                elif (re.match(r"^Q\d", r) and len(pins) == 3
+                      and _FET_SD_RE.match(pin_name(self.nets, r,
+                                                    m["pin"], n))):
+                    nxt = [nn for p, nn in pins.items()
+                           if p != m["pin"] and _FET_SD_RE.match(
+                               pin_name(self.nets, r, p, nn))]
+                else:
+                    continue
+                via.add(r)
+                for nn in nxt:
+                    if nn and nn not in nets and not is_ground(nn):
+                        nets.append(nn)
+                        todo.append(nn)
+        return nets, via
+
     def rail_load(self, ref: str, out: str, given: bool = True) -> dict:
-        """netlist_audit's sum of what hangs on OUT, the stated loads
-        first, and whether it is full: every part on the rail counted but
-        the converter, its inductor and parts that draw nothing (DNP,
+        """netlist_audit's sum of what hangs on OUT and the nets its
+        current reaches (rail_reach), the stated loads first, and whether
+        it is full: every part on them counted but the converter, its
+        inductor, the pass-through parts and parts that draw nothing (DNP,
         R / C / test point / hole / fiducial, a diode with every pad on
-        the rail or ground). `uncounted` names the rest."""
+        the rail or ground, an ESD / TVS part). `uncounted` names the
+        rest."""
         import netlist_audit as na  # noqa: PLC0415
         from check_ratings import is_ground  # noqa: PLC0415
-        ld = na._sl_rail_load(out, self.nets, self.comps, self.comp_pins,
-                              self.table, self.rails, {ref},
-                              given=self.given if given else None)
-        reach = na._zero_ohm_reach(out, self.nets, self.comps,
-                                   self.comp_pins)
-        counted = set(ld["refs"]) | {ref}
+        reach, via = self.rail_reach(ref, out)
+        ld = {"peak": 0.0, "cont": 0.0, "known": [], "unknown": [],
+              "rows": [], "refs": []}
+        counted = {ref} | via
+        for n in reach:
+            sub = na._sl_rail_load(n, self.nets, self.comps, self.comp_pins,
+                                   self.table, self.rails, set(counted),
+                                   given=self.given if given else None)
+            for k in ld:
+                ld[k] += sub[k]
+            counted |= set(sub["refs"])
+            counted |= {u.split(" (")[0] for u in sub["unknown"]}
+        reach = list(dict.fromkeys(
+            reach + [x for n in reach for x in na._zero_ohm_reach(
+                n, self.nets, self.comps, self.comp_pins)]))
+        counted = set(ld["refs"]) | {ref} | via
         unc = []
         for n in reach:
             for m in self.nets.get(n, []):
@@ -1570,7 +1638,8 @@ class NetCtx:
                 c = self.comps.get(r, {})
                 pins = self.comp_pins.get(r, {})
                 if (r in counted or c.get("dnp") or _NO_LOAD_RE.match(r)
-                        or (len(pins) == 2 and _NO_LOAD_2PAD_RE.match(r))):
+                        or (len(pins) == 2 and _NO_LOAD_2PAD_RE.match(r))
+                        or _ESD_RE.search(str(c.get("value") or ""))):
                     continue
                 if re.match(r"^D\d", r) and all(
                         nn in reach or is_ground(nn) for nn in pins.values()):
@@ -1608,11 +1677,24 @@ def judge_stated(bg, ref: str, row: dict, pkg: dict, ctx: NetCtx,
     tj_max = float(row["tj_max_c"])
     r_on = pkg.get("r_on_ohm", row.get("r_on_ohm"))
     is_max = bool(pkg.get("r_on_max", row.get("r_on_max")))
-    out = output_rail(ref, ctx.nets, ctx.comps, ctx.comp_pins)
+    boost = row.get("topology") == "boost"
+    out = (None if boost else
+           output_rail(ref, ctx.nets, ctx.comps, ctx.comp_pins))
+    if row.get("no_loss_model"):
+        return [], None, {"why": " ".join(str(row["no_loss_model"]).split())}
     if r_on is None:
         return [], None, {"why": "its thermal_parts.yaml row gives no "
                           "on-resistance (r_on_ohm), so no buck loss model "
                           "turns a load into heat"}
+    base = {"ref": ref, "part": part, "inferred": True, "rail": out,
+            "package": pkg.get("name", ""), "theta_ja_datasheet_cw": theta,
+            "tj_max_c": tj_max, "air_c": air, "r_on_ohm": r_on,
+            "rds_hot_factor": 1.0 if is_max else RDS_HOT_FACTOR,
+            "source": row["source"]}
+    if boost:
+        return judge_limit(row, pkg, base, r_on, is_max, air, (
+            "a boost's switch current isn't its load current (its "
+            "inductor's far side is its input), so no rail sum bounds it"))
     if out is None:
         pins = ctx.comp_pins.get(ref, {})
         if not any(pin_name(ctx.nets, ref, p, n) for p, n in pins.items()):
@@ -1621,11 +1703,7 @@ def judge_stated(bg, ref: str, row: dict, pkg: dict, ctx: NetCtx,
                               "be told"}
         return [], None, {"why": "no output rail found (no VOUT/VOS/OUT "
                           "pin, no SW pin to an inductor but to ground)"}
-    base = {"ref": ref, "part": part, "inferred": True, "rail": out,
-            "package": pkg.get("name", ""), "theta_ja_datasheet_cw": theta,
-            "tj_max_c": tj_max, "air_c": air, "r_on_ohm": r_on,
-            "rds_hot_factor": 1.0 if is_max else RDS_HOT_FACTOR,
-            "source": row["source"]}
+    base["rail"] = out
     ld = ctx.rail_load(ref, out)
     p_cont = conduction_w(r_on, ld["cont"], is_max)
     tj_cont = air + p_cont * theta
@@ -1658,10 +1736,20 @@ def judge_stated(bg, ref: str, row: dict, pkg: dict, ctx: NetCtx,
                         power_w=checklib.rnd(p_peak),
                         tj_c=checklib.rnd(tj_peak), loads=ld["known"],
                         full=True), {}
-    lim = pkg.get("i_limit_a", row.get("i_limit_a"))
     unc = ld["uncounted"] or ["no load the constraints or a row states"]
     loads_why = (f"the loads on '{out}' can't all be counted "
                  f"({', '.join(unc[:4])}{', ...' if len(unc) > 4 else ''})")
+    return judge_limit(row, pkg, base, r_on, is_max, air, loads_why)
+
+
+def judge_limit(row, pkg, base, r_on, is_max, air, loads_why):
+    """judge_stated's last source: the datasheet current limit as a
+    ceiling on the load (module doc). A limit the datasheet gives only as
+    typical or minimum (i_limit_kind) can't clear a part, only flag it."""
+    theta = base["theta_ja_datasheet_cw"]
+    tj_max = base["tj_max_c"]
+    lim = pkg.get("i_limit_a", row.get("i_limit_a"))
+    kind = pkg.get("i_limit_kind", row.get("i_limit_kind"))
     if lim is None:
         return [], None, {"why": loads_why + ", and its row gives no "
                           "current limit (i_limit_a) to bound them"}
@@ -1671,10 +1759,20 @@ def judge_stated(bg, ref: str, row: dict, pkg: dict, ctx: NetCtx,
     nums = dict(load_source="current_limit", i_limit_a=lim,
                 power_at_limit_w=checklib.rnd(p_lim),
                 tj_at_limit_c=checklib.rnd(tj_lim))
-    if tj_lim <= tj_max:
+    if kind:
+        nums["i_limit_kind"] = kind
+    said = (f"{kind}, the datasheet gives no maximum" if kind
+            else "datasheet max")
+    if tj_lim <= tj_max and not kind:
         return [], dict(base, **nums, screen=True, advisory=True), {}
+    if tj_lim <= tj_max:
+        return [], None, dict(nums, why=(
+            f"{loads_why}; at its {lim:g} A current limit ({said}) it "
+            f"would lose {p_lim:.3g} W and reach {tj_lim:.0f} C, under its "
+            f"{tj_max:g} C, but a {kind} limit isn't a ceiling on the "
+            "current, so it can't clear the part"))
     return [], None, dict(nums, reason="over_at_limit", why=(
-        f"{loads_why}; at its {lim:g} A current limit (datasheet max) it "
+        f"{loads_why}; at its {lim:g} A current limit ({said}) it "
         f"would lose {p_lim:.3g} W and reach {tj_lim:.0f} C, past its "
         f"{tj_max:g} C, so the limit doesn't bound it (a screen, not a "
         "finding)"))

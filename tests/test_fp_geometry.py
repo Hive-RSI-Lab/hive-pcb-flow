@@ -21,11 +21,11 @@ SOIC.update({str(8 - i): (2.475, -1.905 + 1.27 * i) for i in range(4)})
 SOIC_NAME = "SOIC-8_3.9x4.9mm_P1.27mm"
 
 
-def pad(num, x, y, w=1.95, h=0.6, rot=0.0, drill=None, kind="smd"):
+def pad(num, x, y, w=1.95, h=0.6, rot=0.0, drill=None, kind="smd", shape="rect"):
     layers = '"*.Cu" "*.Mask"' if drill else '"F.Cu" "F.Paste" "F.Mask"'
     d = f" (drill {drill})" if drill else ""
     r = f" {rot:g}" if rot else ""
-    return (f'\t\t(pad "{num}" {kind} rect (at {x:g} {y:g}{r}) '
+    return (f'\t\t(pad "{num}" {kind} {shape} (at {x:g} {y:g}{r}) '
             f'(size {w:g} {h:g}){d} (layers {layers}))\n')
 
 
@@ -373,6 +373,93 @@ def test_connector_mirror_goes_to_mate_check_and_own_library_numbering(tmp_path,
     k, judged, nj = kinds(pcb, st)
     assert k == [] and judged == {}
     assert sorted(r for refs in nj.values() for r in refs) == ["J1", "U1"]
+
+
+HDR8 = "PinHeader_1x08_P2.54mm_Vertical"
+# KiCad's 1x08 header: pad 1 square, the rest round, a chamfered fab
+# corner and a silk L by pad 1
+HDR8_FAB = ('\t\t(fp_line (start -1.27 -0.635) (end -0.635 -1.27) '
+            '(stroke (width 0.1) (type solid)) (layer "F.Fab"))\n'
+            '\t\t(fp_line (start -0.635 -1.27) (end 1.27 -1.27) '
+            '(stroke (width 0.1) (type solid)) (layer "F.Fab"))\n')
+
+
+def _hdr8(m, shapes=True, fab=True):
+    """A 1x08 header body: pad numbers at the centres in `m`; with
+    `shapes`, the pad at the first position (0, 0) is the rect one."""
+    return "".join(pad(k, x, y, 1.7, 1.7, drill=1.0, kind="thru_hole",
+                       shape="rect" if not shapes or (x, y) == (0.0, 0.0) else "circle")
+                   for k, (x, y) in m.items()) + (HDR8_FAB if fab else "")
+
+
+@pytest.fixture
+def stock8(stock):
+    hdr = {str(i + 1): (0.0, 2.54 * i) for i in range(8)}
+    (stock.root / "Connector_PinHeader_2.54mm.pretty" / f"{HDR8}.kicad_mod").write_text(
+        f'(footprint "{HDR8}"\n' + _hdr8(hdr) + ")\n", encoding="utf-8")
+    return g.Stock(stock.root), hdr
+
+
+def test_header_numbered_from_the_marked_pins_other_end_is_caught(tmp_path, stock8):
+    """#1253: a symmetric 1xN header with pads 1 and 8 swapped, or numbered
+    from the other end, fits the stock pad set; the pin-1 cue (the square
+    pad, the fab chamfer) says which end is pin 1."""
+    st, hdr = stock8
+    swap = dict(hdr)
+    swap["1"], swap["8"] = hdr["8"], hdr["1"]
+    rev = {str(8 - i): (0.0, 2.54 * i) for i in range(8)}
+    cases = {
+        "J1": ("aiee", swap, {}),                              # own copy, 1<->8
+        "J2": ("Connector_PinHeader_2.54mm", rev, {}),         # stock, reversed
+        "J3": ("Connector_PinHeader_2.54mm", rev, {"shapes": False}),  # fab only
+        "J4": ("aiee", hdr, {}),                               # quiet twin
+        "J5": ("Connector_PinHeader_2.54mm", hdr, {}),         # quiet twin
+    }
+    fps = [footprint(r, f"{lib}:{HDR8}", _hdr8(m, **kw), at=(10 * i, 50, 90 * i))
+           for i, (r, (lib, m, kw)) in enumerate(cases.items())]
+    k, judged, nj = kinds(board(tmp_path, *fps), st)
+    assert k == [("J1", "fp_pin1_mark_vs_number"), ("J2", "fp_pin1_mark_vs_number"),
+                 ("J3", "fp_pin1_mark_vs_number")]
+    assert not {"J4", "J5"} & {r for refs in nj.values() for r in refs}
+    v, _, _ = g.check(board(tmp_path, fps[0]), stock=st, rows=[])
+    assert v[0]["pad"] == "8" and "renumber" in v[0]["msg"]
+
+
+def test_header_with_no_pin1_mark_is_not_judged_and_cues_must_agree(tmp_path, stock8):
+    st, hdr = stock8
+    rev = {str(8 - i): (0.0, 2.54 * i) for i in range(8)}
+    # the square pad says pad 8 is pin 1, the fab chamfer (moved to the
+    # far end) says pad 1: the cues disagree, so no call
+    far = _hdr8(rev, fab=False) + (
+        '\t\t(fp_line (start -1.27 18.415) (end -0.635 19.05) '
+        '(stroke (width 0.1) (type solid)) (layer "F.Fab"))\n')
+    plain = "".join(pad(k, x, y, 1.7, 1.7, drill=1.0, kind="thru_hole", shape="circle")
+                    for k, (x, y) in rev.items())
+    pcb = board(tmp_path,
+                footprint("J1", f"Connector_PinHeader_2.54mm:{HDR8}", plain),
+                footprint("J2", f"Connector_PinHeader_2.54mm:{HDR8}", far, at=(70, 50)))
+    k, judged, nj = kinds(pcb, st)
+    assert k == []
+    why = {r: w for w, refs in nj.items() for r in refs}
+    assert "no pin-1 mark" in why["J1"] and "no pin-1 mark" in why["J2"]
+
+
+def test_2xn_header_in_stock_order_is_quiet_and_marks_read_from_fab(tmp_path, stock):
+    hdr = {}
+    for i in range(4):
+        hdr[str(2 * i + 1)] = (0.0, 2.54 * i)
+        hdr[str(2 * i + 2)] = (2.54, 2.54 * i)
+    fpn = "PinHeader_2x04_P2.54mm_Vertical"
+    body = _hdr8(hdr)
+    (stock.root / "Connector_PinHeader_2.54mm.pretty" / f"{fpn}.kicad_mod").write_text(
+        f'(footprint "{fpn}"\n' + body + ")\n", encoding="utf-8")
+    st = g.Stock(stock.root)
+    pcb = board(tmp_path, footprint("J1", f"Connector_PinHeader_2.54mm:{fpn}", body,
+                                    at=(50, 50, 180)))
+    k, judged, nj = kinds(pcb, st)
+    assert k == [] and nj == {} and judged
+    assert g._marked(g.board_footprints(pcb)[0].pads,
+                     g.board_footprints(pcb)[0].marks) == "1"
 
 
 def _model(monkeypatch, pads, package):

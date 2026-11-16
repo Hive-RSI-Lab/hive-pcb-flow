@@ -635,6 +635,56 @@ def test_404_or_empty_is_no_model_and_network_error_is_not(tmp_path):
     assert errs["C5"] == "HTTP 500 from EasyEDA"
 
 
+def test_no_model_answer_is_kept_and_read_offline(tmp_path):
+    """404 / empty / padless: EasyEDA answered, kept as <LCSC>.none, read
+    offline as "no model" (no error); a part never asked about is a miss
+    with the reason; a later model replaces the marker."""
+    board, shared = tmp_path / "board", easyeda.shared_cache()
+    assert easyeda.get("C1", board, fetcher=_http(404)) is None
+    assert easyeda.get("C2", board, fetcher=lambda _: {}) is None
+    for c in ("C1", "C2"):
+        assert easyeda.none_known(c, board) and easyeda.none_known(c, shared)
+        errs: dict = {}
+        assert easyeda.get(c, board, fetch=False, errors=errs) is None
+        assert errs == {}, c
+    errs = {}
+    assert easyeda.get("C3", board, fetch=False, errors=errs) is None
+    assert "offline" in errs["C3"] and "not in the cache" in errs["C3"]
+    # a marker only in the shared cache is read, and nothing is written
+    # into the dir an offline run checks (a pinned fixture stays frozen)
+    other = tmp_path / "other"
+    assert easyeda.get("C1", other, fetch=False, errors=errs) is None
+    assert "C1" not in errs and not other.exists()
+    # a network error is not an answer: no marker
+    import urllib.error
+
+    def down(_):
+        raise urllib.error.URLError("x")
+    assert easyeda.get("C4", board, fetcher=down, errors={}) is None
+    assert not easyeda.none_known("C4", board)
+    # a model now: the marker goes
+    raw = json.loads((FIX / "C106245.json").read_text())
+    assert easyeda.get("C1", board, fetcher=lambda _: _raw(raw)) is not None
+    assert not easyeda.none_known("C1", board)
+    assert not easyeda.none_known("C1", shared)
+
+
+def test_offline_cold_cache_names_the_fetch_and_the_way_to_fill_it(
+        ws, tmp_path):
+    pcb, _ = ws
+    cpl = tmp_path / "CPL.csv"
+    cpl.write_text("Designator,Mid X,Mid Y,Layer,Rotation\nU1,10,-10,Top,90\n")
+    pj = tmp_path / "parts.json"
+    pj.write_text(json.dumps({"U1": {"lcsc": "C116592"}}))
+    vios: list = []
+    dfm_check.check_placement(pcb, cpl, pj, None, tmp_path / "empty",
+                              False, vios)
+    v = [v for v in vios if v["kind"] == "cpl_fetch_failed"][0]
+    assert "EasyEDA footprint model" in v["msg"] and "CPL pin-1" in v["msg"]
+    assert "offline" in v["reason"] and "HWDE_EASYEDA_OFFLINE" in v["msg"]
+    assert "rerun once EasyEDA answers" not in v["msg"]
+
+
 def test_cpl_verify_403_fails_first_part_and_skips_the_rest(ws, tmp_path,
                                                             monkeypatch):
     pcb, _ = ws
@@ -1302,12 +1352,24 @@ def test_fetch_failure_on_a_bga_stays_fetch_failed(tmp_path, monkeypatch):
     assert rep["footprint_basis"] is None
 
 
-def test_offline_bga_with_an_uncached_lcsc_number_stays_no_model(tmp_path):
-    """One fetch away from the real model: a convention must not stand in."""
+def test_offline_bga_with_an_uncached_lcsc_number_is_fetch_failed(tmp_path):
+    """One fetch away from the real model: a convention must not stand in,
+    and a cold cache offline is a fetch not made, not "no model"."""
     fp = _ball_fp()
     rep = cv.verify(Path("x.kicad_pcb"), {"U1": {"x": 10.0, "y": 10.0, "rot": 0.0}},
                     {"U1": "C999999"}, tmp_path, fetch=False, fps={"U1": fp})
-    assert rep["parts"][0]["verdict"] == "no_model"
+    row = rep["parts"][0]
+    assert row["verdict"] == "fetch_failed" and "basis" not in row
+    assert "offline" in row["fetch_error"] and "C999999" in row["fetch_error"]
+
+
+def test_offline_bga_easyeda_had_no_model_for_gets_footprint_basis(tmp_path):
+    """A kept "no model" answer (<LCSC>.none) judges offline as online."""
+    (tmp_path / "C999999.none").write_text('{"lcsc": "C999999", "none": "x"}')
+    fp = _ball_fp()
+    rep = cv.verify(Path("x.kicad_pcb"), {"U1": {"x": 10.0, "y": 10.0, "rot": 0.0}},
+                    {"U1": "C999999"}, tmp_path, fetch=False, fps={"U1": fp})
+    assert rep["parts"][0]["verdict"] == cv.FOOTPRINT_MATCH
 
 
 def test_bga_the_api_has_no_model_for_gets_footprint_basis(tmp_path, monkeypatch):
@@ -1969,12 +2031,40 @@ def test_polar_or_keyed_two_pad_part_with_no_model_stays_no_model(ref, fpid):
     assert _footprint_row(fp, 0.0)["parts"][0]["verdict"] == "no_model"
 
 
-def test_offline_two_pad_part_with_an_uncached_lcsc_number_stays_no_model(tmp_path):
-    """One fetch away from the real model: the stand-in waits, as a BGA does."""
+def test_offline_two_pad_part_with_an_uncached_lcsc_number_is_fetch_failed(tmp_path):
+    """One fetch away from the real model: the stand-in waits, as a BGA
+    does, and says the fetch wasn't made (offline), not "no model"."""
     fp = _two_pad()
     rep = cv.verify(Path("x.kicad_pcb"), {"L3": {"x": 10.0, "y": 10.0, "rot": 180.0}},
                     {"L3": "C999999"}, tmp_path, fetch=False, fps={"L3": fp})
-    assert rep["parts"][0]["verdict"] == "no_model"
+    row = rep["parts"][0]
+    assert row["verdict"] == "fetch_failed" and "offline" in row["fetch_error"]
+    assert rep["fetch_failed"] == ["L3"]
+
+
+def test_offline_two_pad_part_easyeda_had_no_model_for_gets_the_stand_in(tmp_path):
+    """oasis v0.2's L3 in a score run: EasyEDA answered C844983 with no
+    footprint once (kept as C844983.none), so offline it is judged by the
+    stand-in as online, not left `not judged (fetch failed)`."""
+    (tmp_path / "C844983.none").write_text('{"lcsc": "C844983", "none": "x"}')
+    fp = _two_pad()
+    rep = cv.verify(Path("x.kicad_pcb"), {"L3": {"x": 10.0, "y": 10.0, "rot": 180.0}},
+                    {"L3": "C844983"}, tmp_path, fetch=False, fps={"L3": fp})
+    row = rep["parts"][0]
+    assert row["verdict"] == "ok" and row["basis"] == cv.TWO_PAD_BASIS
+    assert rep["fetch_failed"] == [] and rep["failed"] == []
+    # the planted fault still fails offline: laid across its pads
+    rep = cv.verify(Path("x.kicad_pcb"), {"L3": {"x": 10.0, "y": 10.0, "rot": 90.0}},
+                    {"L3": "C844983"}, tmp_path, fetch=False, fps={"L3": fp})
+    assert rep["parts"][0]["verdict"] == "wrong_rotation"
+
+
+def test_pinned_oasis_keeps_easyedas_no_model_answer_for_l3():
+    """The score reads oasis offline: its L3 answer must be in the pin."""
+    pin = Path(__file__).resolve().parent.parent / "pinned" / "oasis-v0-2"
+    if not pin.is_dir():
+        pytest.skip("no pinned oasis")
+    assert easyeda.none_known("C844983", pin / "fab" / "easyeda")
 
 
 def test_two_pad_part_the_api_has_no_model_for_gets_the_stand_in(tmp_path, monkeypatch):
