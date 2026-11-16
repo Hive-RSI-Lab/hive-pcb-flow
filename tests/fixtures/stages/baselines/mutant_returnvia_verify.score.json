@@ -52,6 +52,7 @@
    "check_via_stubs": 0,
    "check_vias": 0,
    "check_wicking": 1,
+   "fp_verify": 0,
    "mlcc_dcbias": 0,
    "netlist_audit": 0
   },
