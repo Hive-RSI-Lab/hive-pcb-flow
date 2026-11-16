@@ -891,6 +891,41 @@ def test_escape_drop_keeps_an_enclosed_fine_balls_escape(tmp_path):
     assert [d["ball"] for d in esc(0.8, 2, 2, "c3w")] == ["C3"]
 
 
+def test_stub_trim_may_cut_escape_copper_but_not_a_hand_route(tmp_path):
+    """#1531, planted fault: /S0_0's dog-bone was laid before routing, so
+    5d's protect set shielded it and the failed stub stayed: _escape_pre
+    picks it out (its island reaches one pad, a ball) so 5d may trim it,
+    and once it is gone _trimmed_pre drops it from the lost-copper audit.
+    Quiet twin: a hand route from the same kind of dog-bone (/S1_1) to
+    J1's pad reaches two pads and stays protected and audited."""
+    bg0 = geom.BoardGeom.from_file(_escaped(tmp_path))
+    j1 = [p for p in bg0.pads_of(net="/S1_1") if p.ref == "J1"][0]
+    u1 = [p for p in bg0.pads_of(net="/S1_1") if p.ref == "U1"][0]
+    (x, y) = u1.center
+    hand = (_seg(x, y, x + 0.4, y + 0.4, "/S1_1", "hand-s")
+            + _seg(x + 0.4, y + 0.4, j1.center[0], j1.center[1], "/S1_1",
+                   "hand-j"))
+    before = _escaped(tmp_path, hand, name="h")
+    bg = geom.BoardGeom.from_file(before)
+    pre = route_auto._preexisting(bg)
+    esc = route_auto._escape_pre(pre, bg)
+    assert [v[0] for v in esc["vias"]] == ["/S0_0"]
+    assert [t[0] for t in esc["tracks"]] == ["/S0_0"]
+    protect = (route_auto._protect_uuids(pre, bg)
+               - route_auto._protect_uuids(esc, bg))
+    assert {"hand-s", "hand-j"} <= protect
+    assert not {"esc-s", "esc-v"} & protect
+    # 5d trims the dog-bone: the audit no longer counts it lost
+    from test_route_escape import board
+    after = geom.BoardGeom.from_file(board(tmp_path, extra=hand, name="a"))
+    assert len(route_auto._lost_preexisting(pre, after)) == 2
+    pre2, k = route_auto._trimmed_pre(pre, esc, bg, after)
+    assert k == 2 and route_auto._lost_preexisting(pre2, after) == []
+    assert len(pre2["tracks"]) == len(pre["tracks"]) - 1
+    # nothing cut: pre comes back as it was
+    assert route_auto._trimmed_pre(pre, esc, bg, bg) == (pre, 0)
+
+
 def test_maze_wide_rip_runs_when_a_pad_needs_up_to_six_nets():
     """#1374: the maze's last pass left U2 /B5_2 refused for the count
     (rip_over_budget 6): the maze runs once more with a budget of 6. Quiet

@@ -1210,6 +1210,56 @@ def _drop_pre(pre: dict, bg, uuids: set[str]) -> dict:
             "tracks": [t for t in pre["tracks"] if not dropped_track(*t)]}
 
 
+def _escape_pre(pre: dict, bg) -> dict:
+    """The part of pre that is escape stub copper (#1531): the tracks and
+    vias of an island that reaches one pad, a BGA ball (route_escape's
+    dog-bone, before routing joins it to anything). 5d may trim it when the
+    route leaves it dangling; copper on an island that reaches two pads or
+    none (a hand route, a stitching via) stays protected. Same entries as
+    pre (the same tuples), so the audit can drop what 5d removed."""
+    import bgalib
+    uu: set[str] = set()
+    for b in bgalib.find_bgas(bg):
+        for net in sorted(set(b.nets.values())):
+            for isl in _ball_islands(bg, net):
+                if len(isl["pads"]) == 1 and isl["pads"][0][0] == b.ref:
+                    uu.update(isl["uuids"])
+    if not uu:
+        return {"vias": [], "tracks": []}
+    keep = _drop_pre(pre, bg, uu)
+    kv, kt = {id(v) for v in keep["vias"]}, {id(t) for t in keep["tracks"]}
+    return {"vias": [v for v in pre["vias"] if id(v) not in kv],
+            "tracks": [t for t in pre["tracks"] if id(t) not in kt]}
+
+
+def _trimmed_pre(pre: dict, esc: dict, before, after) -> tuple[dict, int]:
+    """pre without the escape copper 5d cut (lost on after, not on
+    before), so the lost-copper audit does not count a trim the run
+    reports itself (facts.stub_trim). Returns (pre, entries dropped)."""
+    def keys(bg):
+        lost = _lost_preexisting(esc, bg)
+        return {(d["kind"], d["net"], d.get("layer"),
+                 tuple(d.get("at") or d.get("start")),
+                 tuple(d.get("end") or ())) for d in lost}
+    cut = keys(after) - keys(before)
+    if not cut:
+        return pre, 0
+
+    def key_v(net, at, _d):
+        return ("via", net, None, (round(at[0], 4), round(at[1], 4)), ())
+
+    def key_t(net, layer, line):
+        (x1, y1), (x2, y2) = line.coords[0], line.coords[-1]
+        return ("track", net, layer, (round(x1, 4), round(y1, 4)),
+                (round(x2, 4), round(y2, 4)))
+    gone = {id(v) for v in esc["vias"] if key_v(*v) in cut} \
+        | {id(t) for t in esc["tracks"] if key_t(*t) in cut}
+    out = {"vias": [v for v in pre["vias"] if id(v) not in gone],
+           "tracks": [t for t in pre["tracks"] if id(t) not in gone]}
+    return out, len(pre["vias"]) + len(pre["tracks"]) \
+        - len(out["vias"]) - len(out["tracks"])
+
+
 def run(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pcb", required=True)
@@ -1290,6 +1340,7 @@ def run(argv: list[str] | None = None):
     routable = _routable_nets(bg)
     tracks_before = len(bg.tracks_of())
     pre = _preexisting(bg)
+    esc_pre = _escape_pre(pre, bg)
     td_vias = _teardrop_vias(staged)
 
     # 2. DSN export (plane layers marked power)
@@ -1600,12 +1651,17 @@ def run(argv: list[str] | None = None):
     if not args.keep_stubs:
         import route_finish
         stub_trim = {}
+        sbg = geom.BoardGeom.from_file(staged)
         n, drc = route_finish.sweep_dangling(
             cli, staged, routable - plane_skip, drc, parity=sch.is_file(),
             refill=has_zones, facts=stub_trim,
-            protect=_protect_uuids(pre, geom.BoardGeom.from_file(staged)),
+            protect=_protect_uuids(pre, sbg) - _protect_uuids(esc_pre, sbg),
             key="stub")
         stub_trim["items"] = n
+        if n:
+            pre, k = _trimmed_pre(pre, esc_pre, sbg,
+                                  geom.BoardGeom.from_file(staged))
+            stub_trim["escape_copper_cut"] = k
     if not fr_ok and not (finish_facts and finish_facts.get("kept")):
         if _all_timed_out(rungs):
             return _timeout_report(

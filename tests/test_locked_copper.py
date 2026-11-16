@@ -151,11 +151,13 @@ def test_error_rip_keeps_locked_copper_and_takes_the_twin(tmp_path):
 
 
 def test_dangling_sweep_treats_a_locked_stub_as_an_anchor():
-    """_sweep_dangling clears the uuid of locked copper before
+    """sweep_dangling (route_finish's sweep and, since #1531, route_auto's
+    stub trim) clears the uuid of locked copper before
     route_cleanup.find_dangling, which only removes what has a uuid."""
     import inspect
-    src = inspect.getsource(rf._sweep_dangling)
+    src = inspect.getsource(rf.sweep_dangling)
     assert "locked_uuids(bg)" in src and "uuid=None" in src
+    assert "sweep_dangling(" in inspect.getsource(rf._sweep_dangling)
 
 
 # ------------------------------------------------------------ the import
