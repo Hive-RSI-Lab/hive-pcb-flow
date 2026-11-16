@@ -50,3 +50,13 @@ datasheet, or one the fetcher refuses, is read from the maker's datasheet
 when `reference/datasheet_urls.yaml` names its MPN (rules for an entry are
 at the top of that file). An exposed pad goes in `exposed_pad`, not the
 pinout, so a board's pad one past the last pin is that pad.
+
+`scripts/land_batch.py` reads the pad numbering of the same ICs from their
+datasheets' pin drawings (#1288), with the same listings and PDFs and the
+same one-reading-then-fixed-check shape. Its records go in
+`<cache>/land/<set>/ext/`, never here, and fp_verify reads them only through
+`--parts` (errata_corpus.py's fp_verify runner passes that folder when it
+exists). A record states the numbering direction (`land_pattern.numbering:
+ccw_top`), and the pad places too only when the dimension page's text prints
+the pitch and spans; a part whose drawing, view or pinout the check can't
+confirm is left out, so fp_verify leaves it not judged.

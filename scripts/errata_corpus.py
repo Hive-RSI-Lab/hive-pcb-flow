@@ -39,7 +39,8 @@ comes from JLC's record, as nothing in the foreign tree holds it),
 check_fp_package on the board with --live (each part's package from JLC's
 record of its LCSC/JLC number or of the exact part its MPN names), fp_verify's
 board mode (pad numbering of each placed footprint against the record its LCSC
-number or MPN finds in hwde's extractions), check_thermal on the board
+number or MPN finds in the set's land_batch.py readings, else hwde's
+extractions), check_thermal on the board
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
@@ -546,6 +547,12 @@ def abs_max_dir(cache: Path, b: dict) -> Path:
     return cache / "abs-max" / set_label(b) / "ext"
 
 
+def land_dir(cache: Path, b: dict) -> Path:
+    """Where land_batch.py writes the pad numbering read for the board's
+    set (#1288), in the cache that holds the board's checkout."""
+    return cache / "land" / set_label(b) / "ext"
+
+
 def _check_bom_sync(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     return ["check_bom_sync.py", "--pcb", str(_pcb(b, rev, repo, empty)), "--live"]
 
@@ -563,8 +570,11 @@ def _check_fp_geometry(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
 def _fp_verify(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
     """fp_verify's board mode (#1285): the pad-numbering checks on each
     footprint as placed, against the record its LCSC number or MPN finds in
-    hwde's extractions (no parts/ in a foreign tree)."""
-    return ["fp_verify.py", "--pcb", str(_pcb(b, rev, repo, empty))]
+    the set's land_batch.py readings (land_dir, passed as --parts; #1288),
+    else hwde's extractions (no parts/ in a foreign tree)."""
+    cmd = ["fp_verify.py", "--pcb", str(_pcb(b, rev, repo, empty))]
+    ext = land_dir(repo.parent.parent, b)
+    return cmd + (["--parts", str(ext)] if ext.is_dir() else [])
 
 
 def _check_thermal(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
@@ -1114,6 +1124,8 @@ round, pinned and swept before those rules are:
    check_ratings read the round's ICs' absolute-maximum ratings, run
    `abs_max_batch.py --round N` (`--sealed N` for a sealed round) before
    the sweep: it prints counts only, and the sweep reads its folder.
+   `land_batch.py --round N` (`--sealed N`) does the same for fp_verify's
+   pad numbering, read from the datasheets' pin drawings (#1288).
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board

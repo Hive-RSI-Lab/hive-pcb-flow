@@ -49,6 +49,8 @@ round, pinned and swept before those rules are:
    check_ratings read the round's ICs' absolute-maximum ratings, run
    `abs_max_batch.py --round N` (`--sealed N` for a sealed round) before
    the sweep: it prints counts only, and the sweep reads its folder.
+   `land_batch.py --round N` (`--sealed N`) does the same for fp_verify's
+   pad numbering.
 3. Each defect's `blind` is then judged from that sweep alone and never
    changes. Rules written after it may still catch it (`verdict`, with the
    rule in `caught_by`); a rule seeded from a holdout defect moves its board
