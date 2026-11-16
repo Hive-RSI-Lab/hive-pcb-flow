@@ -1,0 +1,90 @@
+{
+  "mpn": "LM2596S-5.0",
+  "lcsc": "C347421",
+  "package": "TO-263-5",
+  "description": "UMW LM2596S-5.0 3A 150kHz step-down regulator, fixed 5V, TO-263-5",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "VIN",
+      "type": "power_in"
+    },
+    {
+      "pin": "2",
+      "name": "Output",
+      "type": "power_out",
+      "notes": "switch output"
+    },
+    {
+      "pin": "3",
+      "name": "GND",
+      "type": "ground",
+      "notes": "tab"
+    },
+    {
+      "pin": "4",
+      "name": "Feedback",
+      "type": "input",
+      "notes": "output sense for fixed version"
+    },
+    {
+      "pin": "5",
+      "name": "ON/OFF",
+      "type": "input"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "Maximum Supply Voltage (VIN)",
+      "value": "45",
+      "unit": "V"
+    },
+    {
+      "param": "ON/OFF Pin Input Voltage",
+      "value": "-0.3~25",
+      "unit": "V"
+    },
+    {
+      "param": "Feedback Pin Voltage",
+      "value": "-0.3~25",
+      "unit": "V"
+    },
+    {
+      "param": "Output Voltage to Ground (Steady State)",
+      "value": "min -1",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VIN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 45,
+      "source": "UMW LM2596 datasheet (www.umw-ic.com, Jun.2025) p.4 Absolute Maximum Ratings: 'Maximum Supply Voltage', 'LM2596', '45V' (column layout; 63V is the LM2596HV row)"
+    },
+    {
+      "pins": [
+        "ON/OFF",
+        "Feedback"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 25,
+      "source": "UMW LM2596 datasheet (www.umw-ic.com, Jun.2025) p.4 Absolute Maximum Ratings: 'ON /OFF Pin Input Voltage', 'Feedback Pin Voltage', '-0.3 ≤ V ≤ +25V', '-0.3 ≤ V ≤+25V'"
+    },
+    {
+      "pins": [
+        "Output"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -1,
+      "source": "UMW LM2596 datasheet (www.umw-ic.com, Jun.2025) p.4 Absolute Maximum Ratings: 'Output Voltage to Ground (Steady State)', '-1V'"
+    }
+  ],
+  "source_pdf": "UMW (Youtai Semiconductor) LM2596 3A step-down voltage regulator, www.umw-ic.com Jun.2025, 28 pages, pin map p.3 TO-263 '1 VIN, 2 Output, 3 GND, 4 Feedback, 5 ON/OFF'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2305060948_UMW-Youtai-Semiconductor-Co---Ltd--LM2596S-5-0_C347421.pdf sha256 26d031e9696524e9a99055635d15cf828d57d33cf08f12a4009f5e2c60aef27e"
+}

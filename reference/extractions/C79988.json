@@ -1,0 +1,28 @@
+{
+  "mpn": "M24C64-RMN6TP",
+  "lcsc": "C79988",
+  "package": "SO8 (MN) 150 mil",
+  "description": "ST M24C64-R 64-Kbit serial I2C bus EEPROM, 1.8-5.5 V, SO8 150 mil (MN), industrial, tape and reel",
+  "pinout": [
+    {"pin": "1", "name": "E0", "type": "input", "notes": "chip enable"},
+    {"pin": "2", "name": "E1", "type": "input", "notes": "chip enable"},
+    {"pin": "3", "name": "E2", "type": "input", "notes": "chip enable"},
+    {"pin": "4", "name": "VSS", "type": "ground"},
+    {"pin": "5", "name": "SDA", "type": "open_collector", "notes": "serial data I/O, open drain"},
+    {"pin": "6", "name": "SCL", "type": "input", "notes": "serial clock"},
+    {"pin": "7", "name": "WC", "type": "input", "notes": "write control (active low)"},
+    {"pin": "8", "name": "VCC", "type": "power_in", "notes": "supply voltage"}
+  ],
+  "abs_max": [
+    {"param": "VCC supply voltage", "value": "-0.50~6.5", "unit": "V"},
+    {"param": "VIO input or output range", "value": "-0.50~6.5", "unit": "V"},
+    {"param": "IOL DC output current (SDA = 0)", "value": "5", "unit": "mA"}
+  ],
+  "pin_ratings": [
+    {"pins": ["VCC"], "kind": "voltage", "level": "abs_max", "min": -0.5, "max": 6.5,
+     "source": "ST M24C64 datasheet DocID16891 Rev 33 (June 2016) p.24 Table 6. Absolute maximum ratings: 'VCC Supply voltage -0.50 6.5 V'"},
+    {"pins": ["E0", "E1", "E2", "SDA", "SCL", "WC"], "kind": "voltage", "level": "abs_max", "min": -0.5, "max": 6.5,
+     "source": "ST M24C64 datasheet DocID16891 Rev 33 (June 2016) p.24 Table 6. Absolute maximum ratings: 'VIO Input or output range -0.50 6.5 V'"}
+  ],
+  "source_pdf": "STMicroelectronics M24C64-W M24C64-R M24C64-F M24C64-DF 64-Kbit serial I2C bus EEPROM, DocID16891 Rev 33, June 2016, 53 pages, pin map p.7 'Figure 2. 8-pin package connections, top view' (drawing, text layer garbled), ordering scheme p.47 Table 27 (R = 1.8-5.5 V, MN = SO8, 6 = industrial, T = tape and reel); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1809261911_STMicroelectronics-M24C64-RMN6TP_C79988.pdf sha256 bc1cf4e6780622949a020f301d65bf9b999ff0144e341d85c426f4dbb76df0dd"
+}

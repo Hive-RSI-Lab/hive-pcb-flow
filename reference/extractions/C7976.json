@@ -1,0 +1,94 @@
+{
+  "mpn": "LMV331IDCKR",
+  "lcsc": "C7976",
+  "package": "SC70-5 (DCK)",
+  "description": "TI LMV331 single low-voltage comparator, open-collector output, SC70-5 (DCK)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "IN+",
+      "type": "input"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "IN-",
+      "type": "input"
+    },
+    {
+      "pin": "4",
+      "name": "OUT",
+      "type": "output",
+      "notes": "open collector"
+    },
+    {
+      "pin": "5",
+      "name": "VCC+",
+      "type": "power_in"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VCC Supply voltage",
+      "value": "5.5",
+      "unit": "V"
+    },
+    {
+      "param": "VID Differential input voltage",
+      "value": "+-5.5",
+      "unit": "V"
+    },
+    {
+      "param": "VI Input voltage range (either input)",
+      "value": "0~VCC+",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VCC+"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 5.5,
+      "source": "TI LMV331/LMV393/LMV339 datasheet (SLCS136S, Aug 1999 revised Oct 2012) p.3 Absolute Maximum Ratings: 'VCC Supply voltage(2) 5.5 V'"
+    },
+    {
+      "pins": [
+        "IN+",
+        "IN-"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": 0,
+      "max": "(VCC+)",
+      "source": "TI LMV331/LMV393/LMV339 datasheet (SLCS136S, Aug 1999 revised Oct 2012) p.3 Absolute Maximum Ratings: 'VI Input voltage range (either input) 0 VCC+ V'"
+    },
+    {
+      "pins": [
+        "IN+"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -5.5,
+      "max": 5.5,
+      "ref": "IN-",
+      "source": "TI LMV331/LMV393/LMV339 datasheet (SLCS136S, Aug 1999 revised Oct 2012) p.3 Absolute Maximum Ratings: 'VID Differential input voltage(3) ±5.5 V', note (3) 'Differential voltages are at IN+ with respect to IN–'"
+    },
+    {
+      "pins": [
+        "OUT"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": "(VCC+)+0.3",
+      "source": "TI LMV331/LMV393/LMV339 datasheet (SLCS136S, Aug 1999 revised Oct 2012) p.3 Recommended Operating Conditions (garbled text; read off the table image as VCC+ + 0.3 max): 'VCC+ +VOUT Output voltage V0.3'"
+    }
+  ],
+  "source_pdf": "TI LMV331 single, LMV393 dual, LMV339 quad general-purpose low-voltage comparators, SLCS136S Aug 1999 revised Oct 2012, 30 pages, pin map p.1 LMV331 DBV or DCK package '1IN+ 1, GND 2, 1IN– 3, OUT 4, VCC+ 5'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Texas-Instruments-LMV331IDCKR_C7976.pdf sha256 f16c28a91f97444cf1351e3de292b7d3379f07b6227953c2256dc1fdc0937f4d"
+}

@@ -1,0 +1,89 @@
+{
+  "mpn": "74LVC1G17W5-7",
+  "lcsc": "C151394",
+  "package": "SOT25 (SOT-23-5)",
+  "description": "Diodes 74LVC1G17 single Schmitt-trigger buffer, 1.65-5.5V, SOT25",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "NC",
+      "type": "nc",
+      "notes": "no connection"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "input"
+    },
+    {
+      "pin": "3",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "4",
+      "name": "Y",
+      "type": "output"
+    },
+    {
+      "pin": "5",
+      "name": "VCC",
+      "type": "power_in"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VCC Supply Voltage Range",
+      "value": "-0.5~6.5",
+      "unit": "V"
+    },
+    {
+      "param": "VI Input Voltage Range",
+      "value": "-0.5~6.5",
+      "unit": "V"
+    },
+    {
+      "param": "VO Voltage Applied to Output in High Impedance or IOFF State",
+      "value": "-0.5~6.5",
+      "unit": "V"
+    },
+    {
+      "param": "VO Voltage Applied to Output in High or Low State",
+      "value": "-0.5~VCC+0.5",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VCC"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": 6.5,
+      "source": "Diodes 74LVC1G17 datasheet (DS35124 Rev. 8-2, April 2021) p.2 Absolute Maximum Ratings: 'VCC Supply Voltage Range -0.5 to 6.5 V'"
+    },
+    {
+      "pins": [
+        "A"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": 6.5,
+      "source": "Diodes 74LVC1G17 datasheet (DS35124 Rev. 8-2, April 2021) p.2 Absolute Maximum Ratings: 'VI Input Voltage Range -0.5 to 6.5 V'"
+    },
+    {
+      "pins": [
+        "Y"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.5,
+      "max": "VCC+0.5",
+      "source": "Diodes 74LVC1G17 datasheet (DS35124 Rev. 8-2, April 2021) p.2 Absolute Maximum Ratings: 'VO Voltage Applied to Output in High or Low State -0.5 to VCC + 0.5 V'"
+    }
+  ],
+  "source_pdf": "Diodes Incorporated 74LVC1G17 single Schmitt-trigger buffer, DS35124 Rev. 8-2 (p.1 footer says Rev. 7-2) April 2021, 18 pages, pin map p.1 SOT25/SOT353 'NC 1, A 2, GND 3, Y 4, Vcc 5'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1912111437_Diodes-Incorporated-74LVC1G17W5-7_C151394.pdf sha256 029f345a1e7be917fee46d47c49a61963938e0aab1631b019fe7eddb014fb548"
+}

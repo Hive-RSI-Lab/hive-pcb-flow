@@ -1,0 +1,38 @@
+{
+  "mpn": "S3B-XH-A(LF)(SN)",
+  "lcsc": "C157928",
+  "package": "Push-Pull,P=2.5mm",
+  "description": "JST XH 3-pin 2.5mm side-entry (horizontal) THT header",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -250,
+      "max": 250,
+      "source": "JST XH CONNECTOR catalog (2.5mm pitch disconnectable crimp style), no revision printed p.1 Specifications: 'Voltage rating:  250 V AC, DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "JST XH CONNECTOR catalog (2.5mm pitch disconnectable crimp style), no revision printed, 5 PDF pages, pin map: S3B-XH-A listed p.3; contacts numbered by position; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_JST-S3B-XH-A-LF-SN_C157928.pdf sha256 389be59ed37c479038b3b5902d064f056f27a3c966bebbdda2f1a5a4bbde20a8"
+}

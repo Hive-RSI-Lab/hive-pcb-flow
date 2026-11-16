@@ -1,0 +1,61 @@
+{
+  "mpn": "S8550(RANGE:120-200)",
+  "lcsc": "C105432",
+  "package": "SOT-23",
+  "description": "JCET S8550 PNP transistor 25V 500mA, rank L (hFE 120-200), SOT-23",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "B",
+      "type": "input",
+      "notes": "base"
+    },
+    {
+      "pin": "2",
+      "name": "E",
+      "type": "passive",
+      "notes": "emitter"
+    },
+    {
+      "pin": "3",
+      "name": "C",
+      "type": "passive",
+      "notes": "collector"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VCEO collector-emitter voltage",
+      "value": -25,
+      "unit": "V"
+    },
+    {
+      "param": "VEBO emitter-base voltage",
+      "value": -5,
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "C"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -25,
+      "ref": "E",
+      "source": "JCET (Jiangsu Changjiang) S8550 SOT-23 PNP transistor datasheet D,Oct,2014 p.1 Maximum Ratings: 'Collector-Emitter Voltage -25 V'"
+    },
+    {
+      "pins": [
+        "B"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 5,
+      "ref": "E",
+      "source": "JCET (Jiangsu Changjiang) S8550 SOT-23 PNP transistor datasheet D,Oct,2014 p.1 Maximum Ratings: 'Emitter-Base Voltage -5 V' (VEB -5 V, so B at most 5 V above E)"
+    }
+  ],
+  "source_pdf": "Jiangsu Changjiang Electronics Technology (JCET) S8550 SOT-23 plastic-encapsulate PNP transistor, revision D,Oct,2014, 4 pages, pin map p.1 (1 BASE, 2 EMITTER, 3 COLLECTOR); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Jiangsu-Changjing-Electronics-Technology-Co---Ltd--S8550-RANGE-120-200_C105432.pdf sha256 3d1e3f3b160e2c19883a2a8b586ab50a0a54e39778a90b167a4ed4f02cb72fee"
+}

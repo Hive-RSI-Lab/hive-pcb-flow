@@ -1,0 +1,31 @@
+{
+  "mpn": "6810250814R00",
+  "lcsc": "C5243855",
+  "package": "Plugin,D8xL14mm",
+  "description": "NJCON 6810250814R00 polymer aluminium electrolytic 25V 680uF radial D8xL14mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "+",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "-",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 25,
+      "ref": "2",
+      "source": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor radial-lead (model no. blank on cover), Rev 1 2022-11-22 p.3 Parts list & Characteristics: '6810250814R00 25V680UF 8*14' (rated voltage 25 V DC); polarized, + on pad 1 (KiCad CP footprint), rated with ref the - pad"
+    }
+  ],
+  "source_pdf": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor radial-lead (model no. blank on cover), Rev 1 2022-11-22, 12 pages, case drawing p.4 (PDF page numbers; KiCad CP footprint pad 1 = +); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2212050930_NJCON-6810250814R00_C5243855.pdf sha256 9d2494af61040fe3eb384cb9a4e1e41168c403c3693ac38c2df16aef8e6ef204"
+}

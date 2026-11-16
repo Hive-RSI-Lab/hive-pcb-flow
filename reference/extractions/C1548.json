@@ -1,0 +1,32 @@
+{
+  "mpn": "0402CG150J500NT",
+  "lcsc": "C1548",
+  "package": "0402 (1005 metric)",
+  "description": "FH 0402CG150J500NT 15pF 50V C0G +-5% 0402 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "ref": "2",
+      "source": "FH (Guangdong Fenghua Advanced Technology) Product Specification General Series Multi-layer Ceramic Capacitors 1005~1812 (cover leaves version blank; last revision-history entry A0005 2025-4-13) p.4 How To Order, rated voltage code: '500 50×100' (the 500 in 0402CG150J500NT, 50 V); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "FH (Guangdong Fenghua Advanced Technology) Product Specification General Series Multi-layer Ceramic Capacitors 1005~1812 (cover leaves version blank; last revision-history entry A0005 2025-4-13) (revision history on p.30), 30 pages (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_FH--Guangdong-Fenghua-Advanced-Tech-0402CG150J500NT_C1548.pdf sha256 705023d3be0454148a96fc2715d249a32d8ff442e70b64d1116d3490ed1d8136"
+}

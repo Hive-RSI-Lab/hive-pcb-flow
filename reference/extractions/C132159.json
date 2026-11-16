@@ -1,0 +1,47 @@
+{
+  "mpn": "FT231XQ-R",
+  "lcsc": "C132159",
+  "package": "QFN-20 (4x4) with exposed pad",
+  "description": "FTDI FT231X USB to full-handshake UART IC, QFN-20, tape and reel",
+  "pinout": [
+    {"pin": "1", "name": "RXD", "type": "input", "notes": "UART receive data input; Table 3.3 note 1: pulled to VCCIO via ~75k in input mode"},
+    {"pin": "2", "name": "RI#", "type": "input", "notes": "ring indicator input"},
+    {"pin": "3", "name": "GND", "type": "ground"},
+    {"pin": "4", "name": "DSR#", "type": "input", "notes": "data set ready input"},
+    {"pin": "5", "name": "DCD#", "type": "input", "notes": "data carrier detect input"},
+    {"pin": "6", "name": "CTS#", "type": "input", "notes": "clear to send input"},
+    {"pin": "7", "name": "CBUS2", "type": "bidirectional", "notes": "configurable CBUS I/O, default TXLED#"},
+    {"pin": "8", "name": "USBDP", "type": "bidirectional", "notes": "USB data plus"},
+    {"pin": "9", "name": "USBDM", "type": "bidirectional", "notes": "USB data minus"},
+    {"pin": "10", "name": "3V3OUT", "type": "power_out", "notes": "3V3 regulator output, 50 mA; an input to be driven with 3V3 when VCC is 3V3"},
+    {"pin": "11", "name": "RESET#", "type": "input", "notes": "reset input, active low"},
+    {"pin": "12", "name": "VCC", "type": "power_in", "notes": "5 V or 3V3 supply"},
+    {"pin": "13", "name": "GND", "type": "ground"},
+    {"pin": "14", "name": "CBUS1", "type": "bidirectional", "notes": "configurable CBUS I/O, default RXLED#"},
+    {"pin": "15", "name": "CBUS0", "type": "bidirectional", "notes": "configurable CBUS I/O, default TXDEN"},
+    {"pin": "16", "name": "CBUS3", "type": "bidirectional", "notes": "configurable CBUS I/O, default SLEEP#"},
+    {"pin": "17", "name": "TXD", "type": "output", "notes": "UART transmit data output"},
+    {"pin": "18", "name": "DTR#", "type": "output", "notes": "data terminal ready output"},
+    {"pin": "19", "name": "RTS#", "type": "output", "notes": "request to send output"},
+    {"pin": "20", "name": "VCCIO", "type": "power_in", "notes": "1V8-3V3 supply for the IO cells"}
+  ],
+  "exposed_pad": {"present": true, "connect_to": "GND"},
+  "abs_max": [
+    {"param": "VCC supply voltage", "value": "-0.3~5.5", "unit": "V"},
+    {"param": "VCCIO IO voltage", "value": "-0.3~4.0", "unit": "V"},
+    {"param": "DC input voltage USBDP and USBDM", "value": "-0.5~3.63", "unit": "V"},
+    {"param": "DC input voltage high impedance bi-directionals (powered from VCCIO)", "value": "-0.3~5.8", "unit": "V"},
+    {"param": "DC output current, outputs", "value": "22", "unit": "mA"}
+  ],
+  "pin_ratings": [
+    {"pins": ["VCC"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": 5.5,
+     "source": "FTDI FT231X Datasheet Version 1.2 (FT_000565) p.16 Table 5.1 Absolute Maximum Ratings: 'VCC Supply Voltage -0.3 to +5.5 V'"},
+    {"pins": ["VCCIO"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": 4.0,
+     "source": "FTDI FT231X Datasheet Version 1.2 (FT_000565) p.16 Table 5.1 Absolute Maximum Ratings: 'VCCIO IO Voltage -0.3 to +4.0 V'"},
+    {"pins": ["USBDP", "USBDM"], "kind": "voltage", "level": "abs_max", "min": -0.5, "max": 3.63,
+     "source": "FTDI FT231X Datasheet Version 1.2 (FT_000565) p.16 Table 5.1 Absolute Maximum Ratings: 'DC Input Voltage – USBDP and USBDM -0.5 to +3.63 V'"},
+    {"pins": ["RXD", "RI#", "DSR#", "DCD#", "CTS#", "TXD", "DTR#", "RTS#", "CBUS0", "CBUS1", "CBUS2", "CBUS3"], "kind": "voltage", "level": "abs_max", "min": -0.3, "max": 5.8,
+     "source": "FTDI FT231X Datasheet Version 1.2 (FT_000565) p.16 Table 5.1 Absolute Maximum Ratings: 'DC Input Voltage – High Impedance', 'Bi-directionals (powered from VCCIO)', '-0.3 to +5.8 V'; p.8 Table 3.3 UART Interface and CBUS Group note 1 puts these pins on VCCIO"}
+  ],
+  "source_pdf": "FTDI FT231X USB to Full Handshake UART IC Datasheet, Version 1.2, Document No. FT_000565, Clearance No. FTDI# 261, 44 pages, pin map p.7 '3.1 20-LD QFN Package' Figure 3.1 and Tables 3.1-3.3 (p.7-8); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_FTDI-FT231XQ-R_C132159.pdf sha256 8999a05c9ad906a0183c02a27f48b1d056623c876dd28d565c027f7510f0b3f9"
+}

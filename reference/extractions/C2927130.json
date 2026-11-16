@@ -1,0 +1,95 @@
+{
+  "mpn": "SY8301ABC",
+  "lcsc": "C2927130",
+  "package": "SOT-23-6",
+  "description": "Silergy SY8301 40V 1A synchronous step-down regulator, SOT-23-6",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "BS",
+      "type": "input",
+      "notes": "bootstrap, cap to LX",
+      "self_driven": true
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "FB",
+      "type": "input",
+      "notes": "feedback"
+    },
+    {
+      "pin": "4",
+      "name": "EN",
+      "type": "input"
+    },
+    {
+      "pin": "5",
+      "name": "IN",
+      "type": "power_in"
+    },
+    {
+      "pin": "6",
+      "name": "LX",
+      "type": "power_out",
+      "notes": "switch node"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "Supply Input Voltage",
+      "value": "-0.3~40",
+      "unit": "V"
+    },
+    {
+      "param": "LX, FB, EN Voltage",
+      "value": "-0.3~40",
+      "unit": "V"
+    },
+    {
+      "param": "BS-LX Voltage",
+      "value": "-0.3~4",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "IN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 40,
+      "source": "Silergy SY8301 datasheet (AN_SY8301 Rev. 0.9A) p.3 Absolute Maximum Ratings: 'Supply Input Voltage', '-0.3 to 40V'"
+    },
+    {
+      "pins": [
+        "LX",
+        "FB",
+        "EN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 40,
+      "source": "Silergy SY8301 datasheet (AN_SY8301 Rev. 0.9A) p.3 Absolute Maximum Ratings: 'LX, FB, EN Voltage', '-0.3 to 40V'"
+    },
+    {
+      "pins": [
+        "BS"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 4,
+      "ref": "LX",
+      "source": "Silergy SY8301 datasheet (AN_SY8301 Rev. 0.9A) p.3 Absolute Maximum Ratings: 'BS-LX Voltage', '-0.3 to 4V'"
+    }
+  ],
+  "source_pdf": "Silergy SY8301 high efficiency 1.6MHz 1A synchronous step down regulator, AN_SY8301 Rev. 0.9A, 14 pages, pin map p.2 SOT23-6 'BS 1, GND 2, FB 3, EN 4, IN 5, LX 6'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2207131830_Silergy-Corp-SY8301ABC_C2927130.pdf sha256 d2a1acae6a41e7e6e62ad498280c74a0fe549e62d20f5176c8367640b77a1621"
+}

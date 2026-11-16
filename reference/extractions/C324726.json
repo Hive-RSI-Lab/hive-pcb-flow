@@ -1,0 +1,164 @@
+{
+  "mpn": "FH34SRJ-24S-0.5SH(50)",
+  "lcsc": "C324726",
+  "package": "SMD,P=0.5mm,Surface Mount，Right Angle",
+  "description": "Hirose FH34SRJ-24S-0.5SH(50) 24-pin 0.5mm top/bottom contact back-flip FPC connector, 50Vrms 0.5A",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    },
+    {
+      "pin": "5",
+      "name": "P5",
+      "type": "passive"
+    },
+    {
+      "pin": "6",
+      "name": "P6",
+      "type": "passive"
+    },
+    {
+      "pin": "7",
+      "name": "P7",
+      "type": "passive"
+    },
+    {
+      "pin": "8",
+      "name": "P8",
+      "type": "passive"
+    },
+    {
+      "pin": "9",
+      "name": "P9",
+      "type": "passive"
+    },
+    {
+      "pin": "10",
+      "name": "P10",
+      "type": "passive"
+    },
+    {
+      "pin": "11",
+      "name": "P11",
+      "type": "passive"
+    },
+    {
+      "pin": "12",
+      "name": "P12",
+      "type": "passive"
+    },
+    {
+      "pin": "13",
+      "name": "P13",
+      "type": "passive"
+    },
+    {
+      "pin": "14",
+      "name": "P14",
+      "type": "passive"
+    },
+    {
+      "pin": "15",
+      "name": "P15",
+      "type": "passive"
+    },
+    {
+      "pin": "16",
+      "name": "P16",
+      "type": "passive"
+    },
+    {
+      "pin": "17",
+      "name": "P17",
+      "type": "passive"
+    },
+    {
+      "pin": "18",
+      "name": "P18",
+      "type": "passive"
+    },
+    {
+      "pin": "19",
+      "name": "P19",
+      "type": "passive"
+    },
+    {
+      "pin": "20",
+      "name": "P20",
+      "type": "passive"
+    },
+    {
+      "pin": "21",
+      "name": "P21",
+      "type": "passive"
+    },
+    {
+      "pin": "22",
+      "name": "P22",
+      "type": "passive"
+    },
+    {
+      "pin": "23",
+      "name": "P23",
+      "type": "passive"
+    },
+    {
+      "pin": "24",
+      "name": "P24",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5",
+        "P6",
+        "P7",
+        "P8",
+        "P9",
+        "P10",
+        "P11",
+        "P12",
+        "P13",
+        "P14",
+        "P15",
+        "P16",
+        "P17",
+        "P18",
+        "P19",
+        "P20",
+        "P21",
+        "P22",
+        "P23",
+        "P24"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "source": "Hirose FH34SRJ Series catalog (0.5mm pitch back-flip FPC/FFC ZIF), Nov.1.2018 p.2 Product Specifications, Ratings: 'Voltage rating 50Vrms AC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "Hirose FH34SRJ Series catalog (0.5mm pitch back-flip FPC/FFC ZIF), Nov.1.2018, 12 PDF pages, pin map: FH34SRJ-24S-0.5SH(50) listed p.3, p.4 and p.6; Contact No.1 marked on p.3 and p.4 drawings; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1811071030_HRS-Hirose-FH34SRJ-24S-0-5SH-50_C324726.pdf sha256 072e59cf39b16282d3ff9a909f4c69a3e254181c9a9b81510f83a969fb022df7"
+}

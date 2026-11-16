@@ -1,0 +1,32 @@
+{
+  "mpn": "S2P-VH(LF)(SN)",
+  "lcsc": "C160355",
+  "package": "Push-Pull,P=3.96mm",
+  "description": "JST VH 2-pin 3.96mm side-entry (horizontal) THT header",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -250,
+      "max": 250,
+      "source": "JST VH CONNECTOR catalog (3.96mm pitch disconnectable crimp style), no revision printed p.1 Specifications: 'Voltage rating:  250 V AC, DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "JST VH CONNECTOR catalog (3.96mm pitch disconnectable crimp style), no revision printed, 4 PDF pages, pin map: S2P-VH listed p.3; circuit No.1 marked on p.1 drawing; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_JST-S2P-VH-LF-SN_C160355.pdf sha256 81749febb7219778f775bff9dd1f486f6ea31aaa0088500936e872308de94e25"
+}

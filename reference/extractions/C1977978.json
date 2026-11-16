@@ -1,0 +1,34 @@
+{
+  "mpn": "SD20C-7",
+  "lcsc": "C1977978",
+  "package": "SOD-323",
+  "description": "Diodes Incorporated SD20C-7 bidirectional TVS diode, 20 V stand-off, SOD-323",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive",
+      "notes": "bidirectional, no polarity"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive",
+      "notes": "bidirectional, no polarity"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "2"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "min": -20,
+      "max": 20,
+      "ref": "1",
+      "source": "Diodes Incorporated SD20C datasheet DS41690 Rev. 3 - 2 p.2 Electrical Characteristics: 'Reverse Standoff Voltage VRWM — — 20.0 V' (no pin abs-max voltage is given; bidirectional so the bound applies both ways)"
+    }
+  ],
+  "source_pdf": "Diodes Incorporated SD20C TVS diode datasheet, DS41690 Rev. 3 - 2 (December 2019), 5 pages, pin map p.1 (bidirectional, no polarity); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2201300500_Diodes-Incorporated-SD20C-7_C1977978.pdf sha256 50d072e0774be05b537f021534d315028ad0d138e44341a5af85b5da9e3ed46a"
+}

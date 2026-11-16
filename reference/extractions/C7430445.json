@@ -1,0 +1,44 @@
+{
+  "mpn": "ZX-SH1.0-3PWT",
+  "lcsc": "C7430445",
+  "package": "SMD,P=1mm,Surface Mount，Right Angle",
+  "description": "Megastar ZX-SH1.0-3PWT 3-pin 1.0mm SH-style horizontal SMD header with solder tabs",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "MP",
+      "name": "MP",
+      "type": "ground",
+      "notes": "solder tab / mounting pad (board pad; not a signal contact)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "source": "Megastar (兆星精密电子) drawing ZX-SH1.0-3PWT (SH1.0 卧贴 3P), 1 page, no revision printed in text p.1 技术参数: '额定电压：50V AC,DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "Megastar (兆星精密电子) drawing ZX-SH1.0-3PWT (SH1.0 卧贴 3P), 1 page, no revision printed in text, 1 PDF pages, pin map: drawing p.1; contacts numbered by position; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2306191203_Megastar-ZX-SH1-0-3PWT_C7430445.pdf sha256 2c571c7c808f9db021e7585d2d97d873bf6f927d46da078ee8e5adefc589b9ca"
+}

@@ -1,0 +1,71 @@
+{
+  "mpn": "TLV6001IDCKR",
+  "lcsc": "C2057455",
+  "package": "SC70-5 (DCK)",
+  "description": "TI TLV6001 1MHz low-power RRIO op amp, SC70-5 (DCK)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "+IN",
+      "type": "input",
+      "notes": "non-inverting input"
+    },
+    {
+      "pin": "2",
+      "name": "V-",
+      "type": "ground",
+      "notes": "negative supply"
+    },
+    {
+      "pin": "3",
+      "name": "-IN",
+      "type": "input",
+      "notes": "inverting input"
+    },
+    {
+      "pin": "4",
+      "name": "OUT",
+      "type": "output"
+    },
+    {
+      "pin": "5",
+      "name": "V+",
+      "type": "power_in"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "Supply voltage",
+      "value": "7",
+      "unit": "V"
+    },
+    {
+      "param": "Signal input pins",
+      "value": "(V-)-0.5~(V+)+0.5",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "V+"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 7,
+      "source": "TI TLV600x datasheet (ZHCSF46D, Jun 2016 revised May 2017; English SBOS779) p.7 7.1 Absolute Maximum Ratings: '电源电压 7 V'"
+    },
+    {
+      "pins": [
+        "+IN",
+        "-IN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": "(V-)-0.5",
+      "max": "(V+)+0.5",
+      "source": "TI TLV600x datasheet (ZHCSF46D, Jun 2016 revised May 2017; English SBOS779) p.7 7.1 Absolute Maximum Ratings: '信号输入引脚，电压 (2) (V–) – 0.5 (V+) + 0.5 V'"
+    }
+  ],
+  "source_pdf": "TI TLV6001/TLV6002/TLV6004 1MHz low-power RRIO op amp (Chinese datasheet ZHCSF46D Jun 2016 revised May 2017, English SBOS779), 40 pages, pin map p.3 TLV6001 DCK (SC70) column '+IN 1, V– 2, –IN 3, OUT 4, V+ 5'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2302221330_Texas-Instruments-TLV6001IDCKR_C2057455.pdf sha256 91e6a364acee534b21a512380b02f8b8a97fd85880ed61ec8215a3ab28d4fdee"
+}

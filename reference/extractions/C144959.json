@@ -1,0 +1,62 @@
+{
+  "mpn": "SIA445EDJ-T1-GE3",
+  "lcsc": "C144959",
+  "package": "PowerPAK SC-70-6L Single",
+  "description": "Vishay Siliconix SiA445EDJ 20V P-channel MOSFET, PowerPAK SC-70-6L",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "D",
+      "type": "passive",
+      "notes": "drain: footprint pad 1 is the custom drain pad covering pins 1, 2, 5, 6 and the drain paddle"
+    },
+    {
+      "pin": "3",
+      "name": "G",
+      "type": "input",
+      "notes": "gate"
+    },
+    {
+      "pin": "4",
+      "name": "S",
+      "type": "passive",
+      "notes": "source"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VDS drain-source voltage",
+      "value": -20,
+      "unit": "V"
+    },
+    {
+      "param": "VGS gate-source voltage",
+      "value": "-12~12",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "D"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -20,
+      "ref": "S",
+      "source": "Vishay Siliconix SiA445EDJ datasheet, Document Number 63619, S11-2525-Rev. A, 26-Dec-11 p.1 Absolute Maximum Ratings: 'Drain-Source Voltage V' 'DS - 20' (VDS -20 V, P-channel)"
+    },
+    {
+      "pins": [
+        "G"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -12,
+      "max": 12,
+      "ref": "S",
+      "source": "Vishay Siliconix SiA445EDJ datasheet, Document Number 63619, S11-2525-Rev. A, 26-Dec-11 p.1 Absolute Maximum Ratings: 'Gate-Source Voltage V GS ± 12'"
+    }
+  ],
+  "source_pdf": "Vishay Siliconix SiA445EDJ P-Channel 20 V (D-S) MOSFET, Document Number 63619, S11-2525-Rev. A, 26-Dec-11, 9 pages, pin map p.1 (PowerPAK SC-70-6L single, bottom view: pins 1, 2, 5, 6 D, 3 G, 4 S); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1804171930_Vishay-Intertech-SIA445EDJ-T1-GE3_C144959.pdf sha256 d7bed2fd5c6d7f7badf035d064fa2f212a73dac3e8269c74a33ec73b61559b48"
+}

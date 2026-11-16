@@ -2,8 +2,11 @@
 
 SIDECAR + one board property. C6 (10 uF on the 5 V input rail) gets an
 `LCSC` property on the board (goldens carry none; check_ratings finds parts
-through it) and this mutant's parts/ dir describes that LCSC part (C15850) as a
-10 uF 0603 cap with `Voltage Rated` 4 V - below the 5 V rail it sits on.
+through it) and this mutant's parts/ dir describes that LCSC part as a 10 uF 0603 cap with
+`Voltage Rated` 4 V - below the 5 V rail it sits on. The code (C9999901) is
+planted: no library extraction covers it, so the listing is the only rating
+(a real code such as C15850 now has a datasheet row, 25 V, which outranks a
+listing; k2271).
 Must be caught by check_ratings (kind "rating_over_voltage").
 """
 import sys
@@ -12,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mutlib
 
-LCSC = "C15850"
+LCSC = "C9999901"
 PROP = (f'(property "LCSC" "{LCSC}"\n'
         '\t\t\t(at 0 0 0)\n'
         '\t\t\t(layer "F.Fab")\n'

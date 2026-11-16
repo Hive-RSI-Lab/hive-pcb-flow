@@ -1,0 +1,31 @@
+{
+  "mpn": "2210250609R00",
+  "lcsc": "C2887216",
+  "package": "Plugin,D6.3xL9mm",
+  "description": "NJCON 2210250609R00 polymer aluminium electrolytic 25V 220uF radial D6.3xL9mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "+",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "-",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 25,
+      "ref": "2",
+      "source": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor PC series, Rev 1 2021-8-23 p.3 Parts list & Characteristics: '2210250609R00 25V220UF 6.3*9' (rated voltage 25 V DC); polarized, + on pad 1 (KiCad CP footprint), rated with ref the - pad"
+    }
+  ],
+  "source_pdf": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor PC series, Rev 1 2021-8-23, 13 pages, case drawing p.4 (PDF page numbers; KiCad CP footprint pad 1 = +); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2109031530_NJCON-2210250609R00_C2887216.pdf sha256 44f16191e8d477fdb7843bd7bd77e1152fc500b37d0234281a85d41b2817f251"
+}

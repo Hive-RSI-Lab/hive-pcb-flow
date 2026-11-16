@@ -1,0 +1,62 @@
+{
+  "mpn": "IRLML2060TRPBF",
+  "lcsc": "C67275",
+  "package": "SOT-23 (Micro3)",
+  "description": "International Rectifier (Infineon) IRLML2060TRPbF 60V N-channel HEXFET MOSFET, SOT-23",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "G",
+      "type": "input",
+      "notes": "gate"
+    },
+    {
+      "pin": "2",
+      "name": "S",
+      "type": "passive",
+      "notes": "source"
+    },
+    {
+      "pin": "3",
+      "name": "D",
+      "type": "passive",
+      "notes": "drain"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VDS drain-source voltage",
+      "value": 60,
+      "unit": "V"
+    },
+    {
+      "param": "VGS gate-source voltage",
+      "value": "-16~16",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "D"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 60,
+      "ref": "S",
+      "source": "International Rectifier IRLML2060TRPbF datasheet PD-97448A 03/09/12 p.1 summary table: 'VDS 60 V' (Absolute Maximum Ratings row 'VDS Drain-Source Voltage V'; that table's values are garbled in the text)"
+    },
+    {
+      "pins": [
+        "G"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -16,
+      "max": 16,
+      "ref": "S",
+      "source": "International Rectifier IRLML2060TRPbF datasheet PD-97448A 03/09/12 p.1 summary table: 'VGS Max ± 16 V'"
+    }
+  ],
+  "source_pdf": "International Rectifier IRLML2060TRPbF HEXFET Power MOSFET, PD-97448A, dated 03/09/12, 10 pages, pin map p.1 (Micro3/SOT-23: G 1, S 2, D 3); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1808281608_Infineon-Technologies-IRLML2060TRPBF_C67275.pdf sha256 1b3a2ac370da409f89237a1f3e40656f2f8df7aacfa0e5cdcfe5f95777dbe18e"
+}

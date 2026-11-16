@@ -1,0 +1,86 @@
+{
+  "mpn": "TLV62569DBVR",
+  "lcsc": "C141836",
+  "package": "SOT-23-5 (DBV)",
+  "description": "TI TLV62569 2A 1.5MHz synchronous step-down converter, adjustable, SOT-23-5 (DBV)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "EN",
+      "type": "input"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "SW",
+      "type": "power_out",
+      "notes": "switch node"
+    },
+    {
+      "pin": "4",
+      "name": "VIN",
+      "type": "power_in"
+    },
+    {
+      "pin": "5",
+      "name": "FB",
+      "type": "input",
+      "notes": "feedback"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VIN, EN, PG",
+      "value": "-0.3~6",
+      "unit": "V"
+    },
+    {
+      "param": "SW (DC)",
+      "value": "-0.3~VIN+0.3",
+      "unit": "V"
+    },
+    {
+      "param": "FB",
+      "value": "-0.3~5.5",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VIN",
+        "EN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 6,
+      "source": "TI TLV62569 datasheet (SLVSDG1C, Dec 2016 revised Oct 2017) p.3 7.1 Absolute Maximum Ratings: 'VIN, EN, PG –0.3 6 V'"
+    },
+    {
+      "pins": [
+        "SW"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VIN+0.3",
+      "source": "TI TLV62569 datasheet (SLVSDG1C, Dec 2016 revised Oct 2017) p.3 7.1 Absolute Maximum Ratings: 'SW (DC) –0.3 VIN+0.3 V'"
+    },
+    {
+      "pins": [
+        "FB"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 5.5,
+      "source": "TI TLV62569 datasheet (SLVSDG1C, Dec 2016 revised Oct 2017) p.3 7.1 Absolute Maximum Ratings: 'FB –0.3 5.5 V'"
+    }
+  ],
+  "source_pdf": "TI TLV62569 2-A high-efficiency synchronous buck converter, SLVSDG1C Dec 2016 revised Oct 2017, 27 pages, pin map p.3 Pin Functions SOT23-5 column 'EN 1, GND 2, SW 3, VIN 4, FB 5'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1809251629_Texas-Instruments-TLV62569DBVR_C141836.pdf sha256 a2a1ca02355d7de90df84d15b6745f76e59a765cb8ab3cfe8d6f3b49e3b2287d"
+}

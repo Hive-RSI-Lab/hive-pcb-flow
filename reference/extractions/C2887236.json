@@ -1,0 +1,31 @@
+{
+  "mpn": "1011001013R00",
+  "lcsc": "C2887236",
+  "package": "Plugin,D10xL12mm",
+  "description": "NJCON 1011001013R00 polymer aluminium electrolytic 100V 100uF radial D10xL12mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "+",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "-",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 100,
+      "ref": "2",
+      "source": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor PH series, Rev 1 2021-8-23 p.3 Parts list & Characteristics: '1011001013R00 100V100UF 10*12' (rated voltage 100 V DC); polarized, + on pad 1 (KiCad CP footprint), rated with ref the - pad"
+    }
+  ],
+  "source_pdf": "Nanjing Winner Electronics (NJCON) Specification for Approval, solid aluminium electrolytic capacitor PH series, Rev 1 2021-8-23, 12 pages, case drawing p.3 (PDF page numbers; KiCad CP footprint pad 1 = +); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2109021730_NJCON-1011001013R00_C2887236.pdf sha256 746976ec84e790f1731dd7444853effb2f7331ff48baaf4584ebe70602b8c42a"
+}

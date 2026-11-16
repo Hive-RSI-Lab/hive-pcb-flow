@@ -1,0 +1,31 @@
+{
+  "mpn": "RSL0J221MCN1GB",
+  "lcsc": "C2161512",
+  "package": "SMD,D6.3xL4.2mm",
+  "description": "Nichicon RSL0J221MCN1GB 6.3V 220uF polymer aluminium SMD D6.3xL4.2mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "+",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "-",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 6.3,
+      "ref": "2",
+      "source": "Nichicon RSL series conductive polymer aluminum solid electrolytic capacitors, CAT.8100K p.2 Standard Ratings table: 'RSL0J221MCN1GB' in the '6.3 (0J)' rated voltage row (6.3 V, read off the table image; the text layer of the table is garbled); polarized, + on pad 1, rated with ref the - pad"
+    }
+  ],
+  "source_pdf": "Nichicon RSL series datasheet CAT.8100K, 2 pages, polarity drawing p.1 (PDF page numbers; KiCad CP footprint pad 1 = +); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Nichicon-RSL0J221MCN1GB_C2161512.pdf sha256 c33a55ad6fa1d00d391559fccea7232f247519d18a2b34eaa4e2212a02414ad8"
+}

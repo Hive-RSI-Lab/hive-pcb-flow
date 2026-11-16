@@ -1,8 +1,9 @@
 """Mutant: coded-ldo-no-attributes (blinky2).
 
 SIDECAR + one board property. U2 (the LDO) gets an `LCSC` property on the board,
-and this mutant's parts/ dir lists that LCSC part (C5446) with empty `attributes`
-and no extraction. No word in the row says regulator: only the code in its MPN
+and this mutant's parts/ dir lists that LCSC part with empty `attributes`
+and no extraction. The code (C9999902) is planted: C5446, the XC6206's real
+code, now has a library extraction (k2271), which would rate it. No word in the row says regulator: only the code in its MPN
 does (#751, linux-computer U603).
 Must be caught by check_ratings (kind "rating_no_attributes").
 """
@@ -12,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mutlib
 
-LCSC = "C5446"
+LCSC = "C9999902"
 PROP = (f'(property "LCSC" "{LCSC}"\n'
         '\t\t\t(at 0 0 0)\n'
         '\t\t\t(layer "F.Fab")\n'

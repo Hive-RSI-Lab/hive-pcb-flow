@@ -26,7 +26,12 @@ datasheet for the same MPN, or memory does not count.
 - `source_pdf` gives the maker, title, revision, page count, the page of the
   pin map, the URL, and `sha256 <hex>` of the copy that was read.
 - Bounds relative to another pin use `ref`: a BJT's VCEO is `max` on C with
-  `ref: "E"`, and a P-FET's VDS is `min` on D with `ref: "S"`.
+  `ref: "E"`, and a P-FET's VDS is `min` on D with `ref: "S"`. A
+  two-terminal part (a capacitor) is rated on pin `1` with `ref: "2"` and
+  `min: -V, max: V`; check_ratings reads the row backwards for pin 2.
+- An output pin powered from one of several supplies names it in
+  `supply` (a driver's SDO fed from `VSDO`, not `VM`): the net it drives is
+  then bounded by that supply's rail, not by the part's highest one.
 - If a pin has no rating in the PDF, leave it unrated: it is better reported
   as unrated than given a number nobody read. Connectors and switches use
   the contact rating printed for every contact.

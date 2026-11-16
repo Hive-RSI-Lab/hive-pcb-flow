@@ -1,0 +1,249 @@
+{
+ "mpn": "STM32G031G6U6TR",
+ "lcsc": "C724053",
+ "package": "UFQFPN-28 (4x4)",
+ "description": "ST STM32G031G6U6 Arm Cortex-M0+ MCU, 32 KB Flash, 8 KB RAM, 1.7-3.6 V, UFQFPN28, -40 to 85 C",
+ "pinout": [
+  {
+   "pin": "1",
+   "name": "PC14-OSC32_IN",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "2",
+   "name": "PC15-OSC32_OUT",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "3",
+   "name": "VDD/VDDA",
+   "type": "power_in",
+   "notes": "supply, S type"
+  },
+  {
+   "pin": "4",
+   "name": "VSS/VSSA",
+   "type": "ground"
+  },
+  {
+   "pin": "5",
+   "name": "PF2-NRST",
+   "type": "input",
+   "notes": "I/O, I/O structure '-' in Table 12; NRST function"
+  },
+  {
+   "pin": "6",
+   "name": "PA0",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_a"
+  },
+  {
+   "pin": "7",
+   "name": "PA1",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_ea"
+  },
+  {
+   "pin": "8",
+   "name": "PA2",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_a"
+  },
+  {
+   "pin": "9",
+   "name": "PA3",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_ea"
+  },
+  {
+   "pin": "10",
+   "name": "PA4",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_a"
+  },
+  {
+   "pin": "11",
+   "name": "PA5",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_ea"
+  },
+  {
+   "pin": "12",
+   "name": "PA6",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_ea"
+  },
+  {
+   "pin": "13",
+   "name": "PA7",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_a"
+  },
+  {
+   "pin": "14",
+   "name": "PB0",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_ea"
+  },
+  {
+   "pin": "15",
+   "name": "PB1",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_ea"
+  },
+  {
+   "pin": "16",
+   "name": "PA8",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "17",
+   "name": "PC6",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "18",
+   "name": "PA11 [PA9]",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_fa; PA9/PA10 remappable in place of PA11/PA12"
+  },
+  {
+   "pin": "19",
+   "name": "PA12 [PA10]",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_fa; PA9/PA10 remappable in place of PA11/PA12"
+  },
+  {
+   "pin": "20",
+   "name": "PA13",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_ea"
+  },
+  {
+   "pin": "21",
+   "name": "PA14-BOOT0",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_a"
+  },
+  {
+   "pin": "22",
+   "name": "PA15",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "23",
+   "name": "PB3",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "24",
+   "name": "PB4",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "25",
+   "name": "PB5",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "26",
+   "name": "PB6",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_f"
+  },
+  {
+   "pin": "27",
+   "name": "PB7",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_fa"
+  },
+  {
+   "pin": "28",
+   "name": "PB8",
+   "type": "bidirectional",
+   "notes": "I/O structure FT_f"
+  }
+ ],
+ "abs_max": [
+  {
+   "param": "VDD external supply voltage",
+   "value": "-0.3~4.0",
+   "unit": "V"
+  },
+  {
+   "param": "VIN input voltage on FT_xx",
+   "value": "-0.3~VDD+4.0",
+   "unit": "V"
+  },
+  {
+   "param": "VIN input voltage on any other pin",
+   "value": "-0.3~4.0",
+   "unit": "V"
+  }
+ ],
+ "pin_ratings": [
+  {
+   "pins": [
+    "VDD/VDDA"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.3,
+   "max": 4.0,
+   "source": "ST DS12992 Rev 2 (April 2020) STM32G031x4/x6/x8 datasheet p.45 Table 18. Voltage characteristics: 'VDD External supply voltage - 0.3 4.0'"
+  },
+  {
+   "pins": [
+    "PC14-OSC32_IN",
+    "PC15-OSC32_OUT",
+    "PA0",
+    "PA1",
+    "PA2",
+    "PA3",
+    "PA4",
+    "PA5",
+    "PA6",
+    "PA7",
+    "PB0",
+    "PB1",
+    "PA8",
+    "PC6",
+    "PA11 [PA9]",
+    "PA12 [PA10]",
+    "PA13",
+    "PA14-BOOT0",
+    "PA15",
+    "PB3",
+    "PB4",
+    "PB5",
+    "PB6",
+    "PB7",
+    "PB8"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.3,
+   "max": "VDD+4.0",
+   "source": "ST DS12992 Rev 2 (April 2020) STM32G031x4/x6/x8 datasheet p.45 Table 18. Voltage characteristics: 'Input voltage on FT_xx - 0.3 V DD + 4.0(2)'; I/O structure per p.36-39 Table 12 UFQFPN28 column"
+  },
+  {
+   "pins": [
+    "PF2-NRST"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.3,
+   "max": 4.0,
+   "source": "ST DS12992 Rev 2 (April 2020) STM32G031x4/x6/x8 datasheet p.45 Table 18. Voltage characteristics: 'Input voltage on any other pin - 0.3 4.0'; p.36 Table 12 gives PF2-NRST I/O structure '-' (not FT_xx)"
+  }
+ ],
+ "source_pdf": "STMicroelectronics STM32G031x4/x6/x8 datasheet DS12992 Rev 2 (April 2020), 117 pages, pin map p.34 'Figure 7. STM32G031GxU UFQFPN28 pinout' and p.36-39 'Table 12. Pin assignment and description'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_STMicroelectronics-STM32G031G6U6TR_C724053.pdf sha256 0fc5e46abdba3d02d7fd3a2389b9bb2b4793e6781b7074d055bfdddae0c2cd6c"
+}

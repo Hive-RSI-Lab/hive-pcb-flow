@@ -1,0 +1,15 @@
+{
+  "mpn": "CC0603KRX7R9BB104",
+  "lcsc": "C14663",
+  "package": "0603 (1608 metric)",
+  "description": "YAGEO CC0603KRX7R9BB104 100nF 50V X7R +-10% 0603 MLCC",
+  "pinout": [
+    {"pin": "1", "name": "1", "type": "passive"},
+    {"pin": "2", "name": "2", "type": "passive"}
+  ],
+  "pin_ratings": [
+    {"pins": ["1"], "kind": "voltage", "level": "abs_max", "min": -50, "max": 50, "ref": "2",
+     "source": "YAGEO Surface-Mount Ceramic Multilayer Capacitors, General Purpose & High Capacitance, Class 2 X7R, Product Specification V.26 (Nov 19, 2024) p.2 Ordering Information, YAGEO brand ordering code: '(4) RATED VOLTAGE' '9 = 50 V' (the 9 in CC0603KRX7R9BB104); non-polar, rated across the two terminals"}
+  ],
+  "source_pdf": "YAGEO Data Sheet Surface-Mount Ceramic Multilayer Capacitors, General Purpose & High Capacitance, Class 2 X7R, 6.3 V to 250 V, Product Specification V.26 (Nov 19, 2024), 29 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2211101700_YAGEO-CC0603KRX7R9BB104_C14663.pdf sha256 61a606825ab314ea318cfb5362848a62fdffb851efa9818d642e9a541c56a648 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

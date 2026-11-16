@@ -236,6 +236,11 @@ DATASHEET_SCHEMA: dict = {
                     # LDO's core pin): the datasheet's typical volts, which
                     # check_ratings puts on a net of decoupling only (#843)
                     "internal_v": {"type": "number"},
+                    # an output pin's own supply: the name of the power_in
+                    # pin its level comes from (an SDO on VSDO, an I/O bank
+                    # on VDDIO). check_ratings takes that pin's rail, not
+                    # the hull of every supply (k2271)
+                    "supply": {"type": "string", "minLength": 1},
                 },
             },
         },

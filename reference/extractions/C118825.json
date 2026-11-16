@@ -1,0 +1,398 @@
+{
+ "mpn": "STM32F401CBU6",
+ "lcsc": "C118825",
+ "package": "UFQFPN-48 (7x7) with exposed pad",
+ "description": "ST STM32F401CBU6 Arm Cortex-M4 MCU with FPU, 128 KB Flash, 64 KB RAM, 84 MHz, 1.7-3.6 V, UFQFPN48, -40 to 85 C",
+ "pinout": [
+  {
+   "pin": "1",
+   "name": "VBAT",
+   "type": "power_in",
+   "notes": "supply, pin type S"
+  },
+  {
+   "pin": "2",
+   "name": "PC13",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "3",
+   "name": "PC14-OSC32_IN",
+   "type": "bidirectional",
+   "notes": "I/O structure FT; Table 8 note 4: not 5 V tolerant in analog or oscillator mode"
+  },
+  {
+   "pin": "4",
+   "name": "PC15-OSC32_OUT",
+   "type": "bidirectional",
+   "notes": "I/O structure FT; Table 8 note 4: not 5 V tolerant in analog or oscillator mode"
+  },
+  {
+   "pin": "5",
+   "name": "PH0-OSC_IN",
+   "type": "bidirectional",
+   "notes": "I/O structure FT; Table 8 note 4: not 5 V tolerant in analog or oscillator mode"
+  },
+  {
+   "pin": "6",
+   "name": "PH1-OSC_OUT",
+   "type": "bidirectional",
+   "notes": "I/O structure FT; Table 8 note 4: not 5 V tolerant in analog or oscillator mode"
+  },
+  {
+   "pin": "7",
+   "name": "NRST",
+   "type": "bidirectional",
+   "notes": "reset, active low; Table 8 gives I/O structure FT"
+  },
+  {
+   "pin": "8",
+   "name": "VSSA/VREF-",
+   "type": "ground"
+  },
+  {
+   "pin": "9",
+   "name": "VDDA/VREF+",
+   "type": "power_in",
+   "notes": "supply, pin type S"
+  },
+  {
+   "pin": "10",
+   "name": "PA0",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "11",
+   "name": "PA1",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "12",
+   "name": "PA2",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "13",
+   "name": "PA3",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "14",
+   "name": "PA4",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "15",
+   "name": "PA5",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "16",
+   "name": "PA6",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "17",
+   "name": "PA7",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "18",
+   "name": "PB0",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "19",
+   "name": "PB1",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "20",
+   "name": "PB2",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "21",
+   "name": "PB10",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "22",
+   "name": "VCAP_1",
+   "type": "passive",
+   "notes": "pin type S; core regulator decoupling capacitor"
+  },
+  {
+   "pin": "23",
+   "name": "VSS",
+   "type": "ground"
+  },
+  {
+   "pin": "24",
+   "name": "VDD",
+   "type": "power_in",
+   "notes": "supply, pin type S"
+  },
+  {
+   "pin": "25",
+   "name": "PB12",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "26",
+   "name": "PB13",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "27",
+   "name": "PB14",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "28",
+   "name": "PB15",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "29",
+   "name": "PA8",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "30",
+   "name": "PA9",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "31",
+   "name": "PA10",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "32",
+   "name": "PA11",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "33",
+   "name": "PA12",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "34",
+   "name": "PA13",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "35",
+   "name": "VSS",
+   "type": "ground"
+  },
+  {
+   "pin": "36",
+   "name": "VDD",
+   "type": "power_in",
+   "notes": "supply, pin type S"
+  },
+  {
+   "pin": "37",
+   "name": "PA14",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "38",
+   "name": "PA15",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "39",
+   "name": "PB3",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "40",
+   "name": "PB4",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "41",
+   "name": "PB5",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "42",
+   "name": "PB6",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "43",
+   "name": "PB7",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "44",
+   "name": "BOOT0",
+   "type": "input",
+   "notes": "I/O structure B: dedicated BOOT0 pin"
+  },
+  {
+   "pin": "45",
+   "name": "PB8",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "46",
+   "name": "PB9",
+   "type": "bidirectional",
+   "notes": "I/O structure FT"
+  },
+  {
+   "pin": "47",
+   "name": "VSS",
+   "type": "ground"
+  },
+  {
+   "pin": "48",
+   "name": "VDD",
+   "type": "power_in",
+   "notes": "supply, pin type S"
+  }
+ ],
+ "exposed_pad": {
+  "present": true,
+  "connect_to": "GND"
+ },
+ "abs_max": [
+  {
+   "param": "VDD-VSS external main supply voltage (including VDDA, VDD and VBAT)",
+   "value": "-0.3~4.0",
+   "unit": "V"
+  },
+  {
+   "param": "VIN input voltage on FT pins",
+   "value": "-0.3~VDD+4.0",
+   "unit": "V"
+  },
+  {
+   "param": "VIN input voltage on any other pin",
+   "value": "-0.3~4.0",
+   "unit": "V"
+  },
+  {
+   "param": "VIN input voltage for BOOT0",
+   "value": "0~9.0",
+   "unit": "V"
+  }
+ ],
+ "pin_ratings": [
+  {
+   "pins": [
+    "VDD",
+    "VDDA/VREF+",
+    "VBAT"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.3,
+   "max": 4.0,
+   "source": "ST DocID024738 Rev 8 (May 2017) STM32F401xB STM32F401xC datasheet p.57 Table 11. Voltage characteristics: 'External main supply voltage (including VDDA, VDD and', 'VBAT)(1)', '–0.3 4.0'"
+  },
+  {
+   "pins": [
+    "PC13",
+    "NRST",
+    "PA0",
+    "PA1",
+    "PA2",
+    "PA3",
+    "PA4",
+    "PA5",
+    "PA6",
+    "PA7",
+    "PB0",
+    "PB1",
+    "PB2",
+    "PB10",
+    "PB12",
+    "PB13",
+    "PB14",
+    "PB15",
+    "PA8",
+    "PA9",
+    "PA10",
+    "PA11",
+    "PA12",
+    "PA13",
+    "PA14",
+    "PA15",
+    "PB3",
+    "PB4",
+    "PB5",
+    "PB6",
+    "PB7",
+    "PB8",
+    "PB9"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.3,
+   "max": "VDD+4.0",
+   "source": "ST DocID024738 Rev 8 (May 2017) STM32F401xB STM32F401xC datasheet p.57 Table 11. Voltage characteristics: 'Input voltage on FT pins(2)', 'VSS–0.3 V DD+4.0'; I/O structure FT per p.37-43 Table 8 UQFN48 column"
+  },
+  {
+   "pins": [
+    "PC14-OSC32_IN",
+    "PC15-OSC32_OUT",
+    "PH0-OSC_IN",
+    "PH1-OSC_OUT"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.3,
+   "max": 4.0,
+   "source": "ST DocID024738 Rev 8 (May 2017) STM32F401xB STM32F401xC datasheet p.57 Table 11. Voltage characteristics: 'Input voltage on any other pin V SS–0.3 4.0'; Table 8 note 4 (p.43) makes PC14, PC15, PH0 and PH1 not 5 V tolerant in analog or oscillator mode, so the any-other-pin row is used"
+  },
+  {
+   "pins": [
+    "BOOT0"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": 0,
+   "max": 9.0,
+   "source": "ST DocID024738 Rev 8 (May 2017) STM32F401xB STM32F401xC datasheet p.57 Table 11. Voltage characteristics: 'Input voltage for BOOT0 V SS 9.0'"
+  }
+ ],
+ "source_pdf": "STMicroelectronics STM32F401xB STM32F401xC datasheet DocID024738 Rev 8 (May 2017), 139 pages, pin map p.33 'Figure 11. STM32F401xB/STM32F401xC UFQFPN48 pinout' and p.37-43 'Table 8. STM32F401xB/STM32F401xC pin definitions'; exposed pad p.118 Figure 49 note 3; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1809032024_STMicroelectronics-STM32F401CBU6_C118825.pdf sha256 ea0100f21bbbb0dab4407f28d5d81492b1f223a1fec482da6d1f706b464e0770"
+}

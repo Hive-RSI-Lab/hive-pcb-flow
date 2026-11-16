@@ -1,0 +1,33 @@
+{
+  "mpn": "KT-0805G",
+  "lcsc": "C2297",
+  "package": "0805 (2.0x1.25x0.85mm)",
+  "description": "Hubei KENTO KT-0805G emerald green LED, 0805, water clear lens",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (-)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode (+)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 5,
+      "ref": "A",
+      "source": "Hubei KENTO 0805 emerald green Specification for approval Rev A.0 2018-12-06 p.3 Absolute Maximum Ratings: 'Backward Voltage VR 5 V'"
+    }
+  ],
+  "source_pdf": "Hubei KENTO Electronics (Hubei Kuangtong) Specification for approval 0805 emerald green, Rev A.0, issued 2018-12-06, 11 pages, pin map p.2 (outline: datasheet pin 1 marked +, pin 2 marked -, i.e. reversed against the KiCad LED footprint where pad 1 = K; nets on the board confirm pad 2 = A); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1806151820_Hubei-KENTO-Elec-KT-0805G_C2297.pdf sha256 853e6752f600e247475ba548092207fa4fc707a3f8a0b1562a834bc9a901a8d9"
+}

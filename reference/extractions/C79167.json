@@ -1,0 +1,34 @@
+{
+  "mpn": "EVQP7A01P",
+  "lcsc": "C79167",
+  "package": "SMD 3.6x3.5mm",
+  "description": "Panasonic EVQP7A01P 3.5mm side-push SMD light touch switch, SPST, 12V DC 50mA",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive",
+      "notes": "contact"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive",
+      "notes": "contact"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1",
+        "2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -12,
+      "max": 12,
+      "source": "Panasonic Light Touch Switches EVQP7/P3/9P7 datasheet 01 Sep. 2013 p.1 Specifications: 'Rating 10 μA 2 Vdc to 50 mA 12 Vdc (Resistive load)' (contact rating, applied to every contact)"
+    }
+  ],
+  "source_pdf": "Panasonic Light Touch Switches EVQP7/P3/9P7, 01 Sep. 2013, 4 pages, terminal map p.2; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_PANASONIC-EVQP7A01P_C79167.pdf sha256 83bc8bce68a8332b5bb19fd87527b7d48b928e833ba550cde1aa0f1a315011a5"
+}

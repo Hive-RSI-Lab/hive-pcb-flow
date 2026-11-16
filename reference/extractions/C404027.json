@@ -1,0 +1,84 @@
+{
+  "mpn": "TLV75533PDBVR",
+  "lcsc": "C404027",
+  "package": "SOT-23-5 (DBV)",
+  "description": "TI TLV755P 500mA LDO, fixed 3.3V, active discharge, SOT-23-5 (DBV)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "IN",
+      "type": "power_in"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "EN",
+      "type": "input"
+    },
+    {
+      "pin": "4",
+      "name": "NC",
+      "type": "nc",
+      "notes": "no internal connection"
+    },
+    {
+      "pin": "5",
+      "name": "OUT",
+      "type": "power_out"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "Supply voltage, VIN",
+      "value": "-0.3~6.0",
+      "unit": "V"
+    },
+    {
+      "param": "Enable voltage, VEN",
+      "value": "-0.3~6.0",
+      "unit": "V"
+    },
+    {
+      "param": "Output voltage, VOUT",
+      "value": "-0.3~VIN+0.3",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "IN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 6.0,
+      "source": "TI TLV755P datasheet (SBVS320A, Nov 2017 revised May 2018) p.4 6.1 Absolute Maximum Ratings: 'Supply voltage, VIN -0.3 6.0 V'"
+    },
+    {
+      "pins": [
+        "EN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 6.0,
+      "source": "TI TLV755P datasheet (SBVS320A, Nov 2017 revised May 2018) p.4 6.1 Absolute Maximum Ratings: 'Enable voltage, VEN -0.3 6.0 V'"
+    },
+    {
+      "pins": [
+        "OUT"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "IN+0.3",
+      "source": "TI TLV755P datasheet (SBVS320A, Nov 2017 revised May 2018) p.4 6.1 Absolute Maximum Ratings: 'Output voltage, VOUT -0.3 VIN + 0.3'"
+    }
+  ],
+  "source_pdf": "TI TLV755P 500-mA low-IQ small-size LDO, SBVS320A Nov 2017 revised May 2018, 42 pages, pin map p.3 Pin Functions DBV 'IN 1, GND 2, EN 3, NC 4, OUT 5'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1912111437_Texas-Instruments-TLV75533PDBVR_C404027.pdf sha256 44ac688d7e51f85259134abcffeed6cd1ae61234dfd2b6dea2b0607d8ad0d015"
+}

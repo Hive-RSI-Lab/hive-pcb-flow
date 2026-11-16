@@ -1,0 +1,50 @@
+{
+  "mpn": "BM04B-SRSS-TB(LF)(SN)",
+  "lcsc": "C160390",
+  "package": "SMD,P=1mm",
+  "description": "JST SR/SZ-family BM04B-SRSS-TB 4-pin 1.0mm top-entry (vertical) SMD header with 2 solder tabs",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    },
+    {
+      "pin": "MP",
+      "name": "MP",
+      "type": "ground",
+      "notes": "solder tab / mounting pad (board pad; not a signal contact)"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "source": "JST SR/SZ CONNECTOR catalog (1.0mm pitch, IDC and mating style), no revision printed p.1 Specifications line \"Voltage rating: 50 V AC/DC\" read off the page image; the text layer is font-shifted with digits as control codes, rendering it as '7PMUBHF' + 'SBUJOH' + '7ɹ\"$' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "JST SR/SZ CONNECTOR catalog (1.0mm pitch, IDC and mating style), no revision printed, 4 PDF pages, pin map: BM02B to BM14B-SRSS-TB SMT headers listed p.3; contacts numbered by position; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_JST-BM04B-SRSS-TB-LF-SN_C160390.pdf sha256 25c2aa750d4a0918ba86cd8181b9eb7f30db70c22dc4ec975a07bcdb17257655"
+}

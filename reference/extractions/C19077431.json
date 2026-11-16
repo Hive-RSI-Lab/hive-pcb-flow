@@ -1,0 +1,33 @@
+{
+  "mpn": "MMSZ5250B",
+  "lcsc": "C19077431",
+  "package": "SOD-123",
+  "description": "hongjiacheng (Zhuhai Hongjiacheng) MMSZ5250B 20 V 500 mW zener diode, SOD-123",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 21.0,
+      "ref": "A",
+      "source": "Zhuhai Hongjiacheng MMSZ5221B THRU MMSZ5267B Rev:1.1 p.2 Electrical Characteristics (VZ Min Nom Max): 'MMSZ5250B J5 19.00 20.0 21.00 6.2 25 0.1 15.0' (zener voltage range; the datasheet gives no reverse-voltage absolute maximum, only Pd); above this a zener conducts, so a clamp use is intended, bound is the top of its zener range"
+    }
+  ],
+  "source_pdf": "Zhuhai Hongjiacheng Technology MMSZ5221B THRU MMSZ5267B Surface Mount Zener Diodes, Rev:1.1 in header and Rev:2.0 in footer, 5 pages, polarity p.1 (cathode line denotes the cathode end); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2403200025_hongjiacheng-MMSZ5250B_C19077431.pdf sha256 8894d63b414fbe8314e4e18e317b682da3265f03cc92ac8f6b0c39290733bcd2"
+}

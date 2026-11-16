@@ -1,0 +1,32 @@
+{
+  "mpn": "TC0350D1802T5E",
+  "lcsc": "C425614",
+  "package": "0603 (1608 metric)",
+  "description": "Uni-Royal TC0350D1802T5E 18k 0.5% 0603 thin film resistor",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -75,
+      "max": 75,
+      "ref": "2",
+      "source": "Uni-Royal (Uniroyal Electronics) Product Catalog 2017~2018, High Precision Thin Film Chip Resistors-TC Series p.35 electrical characteristics table, Max Working Voltage column: 'TC03 1/10W -55°C~+155°C 75V 150V 300V' (75 V max working); non-polar, across the two terminals"
+    }
+  ],
+  "source_pdf": "Uni-Royal (Uniroyal Electronics) Product Catalog 2017~2018, High Precision Thin Film Chip Resistors-TC Series (catalog 2017~2018), 172 pages (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_UNI-ROYAL-Uniroyal-Elec-TC0350D1802T5E_C425614.pdf sha256 239b837a440fe4ec0e399fcf2e35100fdfccd5f85936a58e0e0b1cd509dbecfb"
+}

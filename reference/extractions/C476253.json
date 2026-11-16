@@ -1,0 +1,384 @@
+{
+ "mpn": "CBM9002A-56ILG",
+ "lcsc": "C476253",
+ "package": "QFN-56 (8x8) with exposed pad",
+ "description": "Corebai CBM9002A USB 2.0 high-speed 8051 microcontroller (FX2LP-type), QFN-56, -40 to 85 C",
+ "pinout": [
+  {
+   "pin": "1",
+   "name": "RDY0_SLRD",
+   "type": "input"
+  },
+  {
+   "pin": "2",
+   "name": "RDY1_SLWR",
+   "type": "input"
+  },
+  {
+   "pin": "3",
+   "name": "AVCC",
+   "type": "power_in",
+   "notes": "analog VCC"
+  },
+  {
+   "pin": "4",
+   "name": "XTALOUT",
+   "type": "output",
+   "notes": "24 MHz crystal output"
+  },
+  {
+   "pin": "5",
+   "name": "XTALIN",
+   "type": "input",
+   "notes": "24 MHz crystal input"
+  },
+  {
+   "pin": "6",
+   "name": "AGND",
+   "type": "ground"
+  },
+  {
+   "pin": "7",
+   "name": "AVCC",
+   "type": "power_in",
+   "notes": "analog VCC"
+  },
+  {
+   "pin": "8",
+   "name": "DPLUS",
+   "type": "bidirectional",
+   "notes": "USB D+"
+  },
+  {
+   "pin": "9",
+   "name": "DMINUS",
+   "type": "bidirectional",
+   "notes": "USB D-"
+  },
+  {
+   "pin": "10",
+   "name": "AGND",
+   "type": "ground"
+  },
+  {
+   "pin": "11",
+   "name": "VCC",
+   "type": "power_in",
+   "notes": "digital VCC"
+  },
+  {
+   "pin": "12",
+   "name": "GND",
+   "type": "ground"
+  },
+  {
+   "pin": "13",
+   "name": "IFCLK",
+   "type": "bidirectional",
+   "notes": "interface clock"
+  },
+  {
+   "pin": "14",
+   "name": "RESERVED",
+   "type": "input",
+   "notes": "reserved pin, must connect to GND"
+  },
+  {
+   "pin": "15",
+   "name": "SCL",
+   "type": "open_collector"
+  },
+  {
+   "pin": "16",
+   "name": "SDA",
+   "type": "open_collector"
+  },
+  {
+   "pin": "17",
+   "name": "VCC",
+   "type": "power_in",
+   "notes": "digital VCC"
+  },
+  {
+   "pin": "18",
+   "name": "PB0_FD0",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "19",
+   "name": "PB1_FD1",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "20",
+   "name": "PB2_FD2",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "21",
+   "name": "PB3_FD3",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "22",
+   "name": "PB4_FD4",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "23",
+   "name": "PB5_FD5",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "24",
+   "name": "PB6_FD6",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "25",
+   "name": "PB7_FD7",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "26",
+   "name": "GND",
+   "type": "ground"
+  },
+  {
+   "pin": "27",
+   "name": "VCC",
+   "type": "power_in",
+   "notes": "digital VCC"
+  },
+  {
+   "pin": "28",
+   "name": "GND",
+   "type": "ground"
+  },
+  {
+   "pin": "29",
+   "name": "CTL0_FLAGA",
+   "type": "tristate"
+  },
+  {
+   "pin": "30",
+   "name": "CTL1_FLAGB",
+   "type": "tristate"
+  },
+  {
+   "pin": "31",
+   "name": "CTL2_FLAGC",
+   "type": "tristate"
+  },
+  {
+   "pin": "32",
+   "name": "VCC",
+   "type": "power_in",
+   "notes": "digital VCC"
+  },
+  {
+   "pin": "33",
+   "name": "PA0_INT0#",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "34",
+   "name": "PA1_INT1#",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "35",
+   "name": "PA2_SLOE",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "36",
+   "name": "PA3_WU2",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "37",
+   "name": "PA4_FIFOADR0",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "38",
+   "name": "PA5_FIFOADR1",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "39",
+   "name": "PA6_PKEND",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "40",
+   "name": "PA7_FLAGD_SLCS#",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "41",
+   "name": "GND",
+   "type": "ground"
+  },
+  {
+   "pin": "42",
+   "name": "RESET#",
+   "type": "input",
+   "notes": "chip reset, active low"
+  },
+  {
+   "pin": "43",
+   "name": "VCC",
+   "type": "power_in",
+   "notes": "digital VCC"
+  },
+  {
+   "pin": "44",
+   "name": "WAKEUP",
+   "type": "input",
+   "notes": "USB wakeup input"
+  },
+  {
+   "pin": "45",
+   "name": "PD0_FD8",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "46",
+   "name": "PD1_FD9",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "47",
+   "name": "PD2_FD10",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "48",
+   "name": "PD3_FD11",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "49",
+   "name": "PD4_FD12",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "50",
+   "name": "PD5_FD13",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "51",
+   "name": "PD6_FD14",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "52",
+   "name": "PD7_FD15",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "53",
+   "name": "GND",
+   "type": "ground"
+  },
+  {
+   "pin": "54",
+   "name": "CLKOUT",
+   "type": "tristate",
+   "notes": "12/24/48 MHz clock output, can be tri-stated"
+  },
+  {
+   "pin": "55",
+   "name": "VCC",
+   "type": "power_in",
+   "notes": "digital VCC"
+  },
+  {
+   "pin": "56",
+   "name": "GND",
+   "type": "ground"
+  }
+ ],
+ "exposed_pad": {
+  "present": true,
+  "connect_to": "GND"
+ },
+ "abs_max": [
+  {
+   "param": "VCC to GND",
+   "value": "-0.5~4.0",
+   "unit": "V"
+  },
+  {
+   "param": "VIO any IO input voltage",
+   "value": "-0.5~5.25",
+   "unit": "V"
+  },
+  {
+   "param": "IIO any IO max output current",
+   "value": "10",
+   "unit": "mA"
+  }
+ ],
+ "pin_ratings": [
+  {
+   "pins": [
+    "VCC"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.5,
+   "max": 4.0,
+   "source": "Corebai CBM9002A datasheet (www.corebai.com, no revision printed) p.10 绝对最大等级 (absolute maximum ratings): 'VCC VCC 对 GND 电压 -0.5 4.0 V'"
+  },
+  {
+   "pins": [
+    "RDY0_SLRD",
+    "RDY1_SLWR",
+    "IFCLK",
+    "RESERVED",
+    "SCL",
+    "SDA",
+    "PB0_FD0",
+    "PB1_FD1",
+    "PB2_FD2",
+    "PB3_FD3",
+    "PB4_FD4",
+    "PB5_FD5",
+    "PB6_FD6",
+    "PB7_FD7",
+    "CTL0_FLAGA",
+    "CTL1_FLAGB",
+    "CTL2_FLAGC",
+    "PA0_INT0#",
+    "PA1_INT1#",
+    "PA2_SLOE",
+    "PA3_WU2",
+    "PA4_FIFOADR0",
+    "PA5_FIFOADR1",
+    "PA6_PKEND",
+    "PA7_FLAGD_SLCS#",
+    "RESET#",
+    "WAKEUP",
+    "PD0_FD8",
+    "PD1_FD9",
+    "PD2_FD10",
+    "PD3_FD11",
+    "PD4_FD12",
+    "PD5_FD13",
+    "PD6_FD14",
+    "PD7_FD15",
+    "CLKOUT"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -0.5,
+   "max": 5.25,
+   "source": "Corebai CBM9002A datasheet (www.corebai.com, no revision printed) p.10 绝对最大等级 (absolute maximum ratings): 'VIO 任意 IO 输入电压 -0.5 5.25 V' (any IO input voltage)"
+  }
+ ],
+ "source_pdf": "Corebai Microelectronics CBM9002A series datasheet (Chinese, www.corebai.com; no revision or date printed), 22 pages, pin map p.5 '图 4 CBM9002A QFN56 引脚分配' and pin table p.7-9 '引脚简述' (QFN-56 column); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Corebai-Microelectronics-CBM9002A-56ILG_C476253.pdf sha256 bee109afc82d2fc8c9ce49a5b808feed86c7f5fab3cf60b66175d90e9d829f49"
+}

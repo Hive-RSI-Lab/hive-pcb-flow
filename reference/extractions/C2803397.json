@@ -1,0 +1,32 @@
+{
+  "mpn": "CL32Y475KCIVPNE",
+  "lcsc": "C2803397",
+  "package": "1210 (3225 metric)",
+  "description": "Samsung Electro-Mechanics CL32Y475KCIVPNE 100V 4.7uF X7S ±10% 1210 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -100,
+      "max": 100,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics Multilayer Ceramic Capacitors for Automotive (November 2019) p.2 Premium Capacitors for Automotive Applications, part numbering: '6  RATED VOLTAGE CODE' 'C = 100V' (the C in CL32Y475KCIVPNE, position 6; the part is not in the catalog Product Line up tables); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics catalog MULTILAYER CERAMIC CAPACITORS for AUTOMOTIVE (November 2019), 27 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2202131900_Samsung-Electro-Mechanics-CL32Y475KCIVPNE_C2803397.pdf sha256 f819ec406883c393d66975a8d756eca956c53d890575bd3a0318c5712dff4e55 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

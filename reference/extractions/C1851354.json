@@ -1,0 +1,34 @@
+{
+  "mpn": "SMF16CA",
+  "lcsc": "C1851354",
+  "package": "SOD-123FL",
+  "description": "Littelfuse SMF16CA 200 W bidirectional TVS diode, 16 V stand-off, SOD-123FL",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive",
+      "notes": "bidirectional, no polarity"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive",
+      "notes": "bidirectional, no polarity"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "2"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "min": -16,
+      "max": 16,
+      "ref": "1",
+      "source": "Littelfuse TVS Diodes SMF Series, Revised: 05/15/20 p.2 Electrical Characteristics table, row for SMF16CA (columns: uni part, bi part, uni mark, bi mark, VBR min, VBR max, IT, VR stand-off): 'SMF16A SMF16CA BP IP 17 .80 19.70 1 16' (VR = 16 V reverse stand-off voltage; p.3 defines VR as the maximum voltage that can be applied without operation; no pin abs-max voltage is given; bidirectional so the bound applies both ways)"
+    }
+  ],
+  "source_pdf": "Littelfuse TVS Diodes Surface Mount 200W SMF Series datasheet, Revised: 05/15/20, 6 pages, pin map p.1 Functional Diagram (bidirectional symbol, no polarity); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Littelfuse-SMF16CA_C1851354.pdf sha256 3a45fa80d044fa43b906e470e9615a0e5f210adb5818d95c26d6e4a7ca95edd7"
+}

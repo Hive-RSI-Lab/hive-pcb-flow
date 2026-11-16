@@ -1,0 +1,37 @@
+{
+  "mpn": "3362P-1-502LF",
+  "lcsc": "C81260",
+  "package": "Plugin-3P,7x6.6mm",
+  "description": "Bourns 3362P-1-502LF 5k 10% 0.5W single-turn cermet trimmer, top adjust",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "CCW",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "WIPER",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "CW",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -300,
+      "max": 300,
+      "ref": "3",
+      "source": "Bourns 3362 - 1/4 inch Square Trimpot Trimming Potentiometer datasheet (no revision printed) p.1 Environmental Characteristics: 'Power Rating (300 volts max.)'; across the resistive element CCW (1) to CW (3)"
+    }
+  ],
+  "source_pdf": "Bourns 3362 1/4 inch Square Trimpot Trimming Potentiometer datasheet (no revision printed), 2 pages, pin map p.1 (3362P drawing and schematic: 1 CCW, 2 WIPER, 3 CW; PDF page numbers); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2410121851_BOURNS-3362P-1-502LF_C81260.pdf sha256 4f7d51675e2a77f903a0e2687b141fa77741f2ea261cf6e2df789e1f1c14e8ec"
+}

@@ -1,0 +1,68 @@
+{
+  "mpn": "DMN10H120SE-13",
+  "lcsc": "C460989",
+  "package": "SOT-223",
+  "description": "Diodes Incorporated DMN10H120SE 100V N-channel MOSFET, SOT-223",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "G",
+      "type": "input",
+      "notes": "gate"
+    },
+    {
+      "pin": "2",
+      "name": "D",
+      "type": "passive",
+      "notes": "drain"
+    },
+    {
+      "pin": "3",
+      "name": "S",
+      "type": "passive",
+      "notes": "source"
+    },
+    {
+      "pin": "4",
+      "name": "D",
+      "type": "passive",
+      "notes": "drain tab, same node as pin 2"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "VDSS drain-source voltage",
+      "value": 100,
+      "unit": "V"
+    },
+    {
+      "param": "VGSS gate-source voltage",
+      "value": "-20~20",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "D"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 100,
+      "ref": "S",
+      "source": "Diodes Incorporated DMN10H120SE datasheet DS37484 Rev. 3 - 2, January 2015 p.2 Maximum Ratings: 'Drain-Source Voltage VDSS 100 V'"
+    },
+    {
+      "pins": [
+        "G"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -20,
+      "max": 20,
+      "ref": "S",
+      "source": "Diodes Incorporated DMN10H120SE datasheet DS37484 Rev. 3 - 2, January 2015 p.2 Maximum Ratings: 'Gate-Source Voltage VGSS ±20 V'"
+    }
+  ],
+  "source_pdf": "Diodes Incorporated DMN10H120SE N-Channel Enhancement Mode MOSFET, Document number DS37484 Rev. 3 - 2, January 2015, 6 pages, pin map p.1 (SOT223 top view, pin numbers not printed: G, D, S = pins 1, 2, 3, tab = D); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1912111437_Diodes-Incorporated-DMN10H120SE-13_C460989.pdf sha256 f524f5582a34ffc1ab9a11ccb7763aeab3768ad1bc86d18f611d6b58a50cbe53"
+}

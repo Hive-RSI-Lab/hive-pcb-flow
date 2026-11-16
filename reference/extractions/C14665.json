@@ -1,0 +1,32 @@
+{
+  "mpn": "CC0603JRNPO9BN101",
+  "lcsc": "C14665",
+  "package": "0603 (1608 metric)",
+  "description": "YAGEO CC0603JRNPO9BN101 100pF 50V NP0 +-5% 0603 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -50,
+      "max": 50,
+      "ref": "2",
+      "source": "YAGEO Surface-Mount Ceramic Multilayer Capacitors, General Purpose, Class 1, NP0, 16 V to 250 V, Product Specification V.21 (May 14, 2025) p.2 Ordering Information, YAGEO brand ordering code: '(4) RATED VOLTAGE' '9 = 50 V' (the 9 in CC0603JRNPO9BN101); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "YAGEO Data Sheet Surface-Mount Ceramic Multilayer Capacitors, General Purpose, Class 1, NP0, 16 V to 250 V, Product Specification V.21 (May 14, 2025), 23 pages (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_YAGEO-CC0603JRNPO9BN101_C14665.pdf sha256 495287fc811dc714366f2edd3bc974d98d2d80133266a0a73bb01ac01237e3eb"
+}

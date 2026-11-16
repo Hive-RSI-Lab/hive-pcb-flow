@@ -1,0 +1,343 @@
+{
+  "mpn": "DRV8434SPWPR",
+  "lcsc": "C3681202",
+  "package": "HTSSOP-28 (PWP) with PowerPAD",
+  "description": "TI DRV8434S stepper motor driver, SPI, integrated current sense, 1/256 microstepping, 4.5-48 V, 2.5 A full-scale, HTSSOP-28 PowerPAD",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "VCP",
+      "type": "power_out",
+      "self_driven": true,
+      "notes": "charge pump output; 0.22 uF 16 V X7R to VM"
+    },
+    {
+      "pin": "2",
+      "name": "VM",
+      "type": "power_in",
+      "notes": "motor supply"
+    },
+    {
+      "pin": "3",
+      "name": "PGND",
+      "type": "ground"
+    },
+    {
+      "pin": "4",
+      "name": "AOUT1",
+      "type": "output",
+      "notes": "winding A output"
+    },
+    {
+      "pin": "5",
+      "name": "AOUT1",
+      "type": "output",
+      "notes": "winding A output"
+    },
+    {
+      "pin": "6",
+      "name": "AOUT2",
+      "type": "output",
+      "notes": "winding A output"
+    },
+    {
+      "pin": "7",
+      "name": "AOUT2",
+      "type": "output",
+      "notes": "winding A output"
+    },
+    {
+      "pin": "8",
+      "name": "BOUT2",
+      "type": "output",
+      "notes": "winding B output"
+    },
+    {
+      "pin": "9",
+      "name": "BOUT2",
+      "type": "output",
+      "notes": "winding B output"
+    },
+    {
+      "pin": "10",
+      "name": "BOUT1",
+      "type": "output",
+      "notes": "winding B output"
+    },
+    {
+      "pin": "11",
+      "name": "BOUT1",
+      "type": "output",
+      "notes": "winding B output"
+    },
+    {
+      "pin": "12",
+      "name": "PGND",
+      "type": "ground"
+    },
+    {
+      "pin": "13",
+      "name": "VM",
+      "type": "power_in",
+      "notes": "motor supply"
+    },
+    {
+      "pin": "14",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "15",
+      "name": "DVDD",
+      "type": "power_out",
+      "self_driven": true,
+      "notes": "internal logic regulator output; 0.47-1 uF X7R to GND"
+    },
+    {
+      "pin": "16",
+      "name": "nFAULT",
+      "type": "open_collector",
+      "notes": "fault indication, open drain, needs external pull-up"
+    },
+    {
+      "pin": "17",
+      "name": "VREF",
+      "type": "analog",
+      "notes": "current set reference input, max 3.3 V operating"
+    },
+    {
+      "pin": "18",
+      "name": "nSCS",
+      "type": "input",
+      "notes": "SPI chip select, active low, internal pull-up to DVDD"
+    },
+    {
+      "pin": "19",
+      "name": "VSDO",
+      "type": "power_in",
+      "notes": "supply for SDO output level"
+    },
+    {
+      "pin": "20",
+      "name": "SDO",
+      "type": "output",
+      "notes": "SPI data out, push-pull, swings between GND and VSDO (p.3 5.1 pin functions: 'VSDO ... 适用于 SDO 输出的电源引脚'; p.6 6.5 electrical characteristics: 'RPU，SDO 内部上拉电阻 5mA 负载，以 VSDO 为基准')",
+      "supply": "VSDO"
+    },
+    {
+      "pin": "21",
+      "name": "SDI",
+      "type": "input",
+      "notes": "SPI data in"
+    },
+    {
+      "pin": "22",
+      "name": "SCLK",
+      "type": "input",
+      "notes": "SPI clock"
+    },
+    {
+      "pin": "23",
+      "name": "STEP",
+      "type": "input",
+      "notes": "step input, internal pull-down"
+    },
+    {
+      "pin": "24",
+      "name": "DIR",
+      "type": "input",
+      "notes": "direction input, internal pull-down"
+    },
+    {
+      "pin": "25",
+      "name": "ENABLE",
+      "type": "input",
+      "notes": "output enable, internal pull-up to DVDD"
+    },
+    {
+      "pin": "26",
+      "name": "nSLEEP",
+      "type": "input",
+      "notes": "sleep input, internal pull-down; low pulse clears faults"
+    },
+    {
+      "pin": "27",
+      "name": "CPL",
+      "type": "passive",
+      "self_driven": true,
+      "notes": "charge pump switch node; 0.022 uF X7R rated VM between CPH and CPL"
+    },
+    {
+      "pin": "28",
+      "name": "CPH",
+      "type": "passive",
+      "self_driven": true,
+      "notes": "charge pump switch node"
+    }
+  ],
+  "exposed_pad": {
+    "present": true,
+    "connect_to": "GND"
+  },
+  "abs_max": [
+    {
+      "param": "Power supply voltage (VM)",
+      "value": "-0.3~50",
+      "unit": "V"
+    },
+    {
+      "param": "Charge pump voltage (VCP, CPH)",
+      "value": "-0.3~VM+7",
+      "unit": "V"
+    },
+    {
+      "param": "Charge pump negative switching pin (CPL)",
+      "value": "-0.3~VM",
+      "unit": "V"
+    },
+    {
+      "param": "nSLEEP pin voltage",
+      "value": "-0.3~VM",
+      "unit": "V"
+    },
+    {
+      "param": "Internal regulator voltage (DVDD)",
+      "value": "-0.3~5.75",
+      "unit": "V"
+    },
+    {
+      "param": "SDO output reference voltage (VSDO)",
+      "value": "-0.3~5.75",
+      "unit": "V"
+    },
+    {
+      "param": "Control pin voltage (STEP, DIR, ENABLE, nFAULT, SDI, SDO, SCLK, nSCS)",
+      "value": "-0.3~5.75",
+      "unit": "V"
+    },
+    {
+      "param": "Open-drain output current (nFAULT)",
+      "value": "0~10",
+      "unit": "mA"
+    },
+    {
+      "param": "Reference input pin voltage (VREF)",
+      "value": "-0.3~5.75",
+      "unit": "V"
+    },
+    {
+      "param": "Continuous phase node pin voltage (AOUT1, AOUT2, BOUT1, BOUT2)",
+      "value": "-1~VM+1",
+      "unit": "V"
+    },
+    {
+      "param": "Transient 100 ns phase node pin voltage (AOUT1, AOUT2, BOUT1, BOUT2)",
+      "value": "-3~VM+3",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VM"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 50,
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, supply voltage: '电源电压 (VM) –0.3 50 V'"
+    },
+    {
+      "pins": [
+        "VCP",
+        "CPH"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VM+7",
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, charge pump voltage: '电荷泵电压（VCP、CPH） –0.3 VVM + 7 V'"
+    },
+    {
+      "pins": [
+        "CPL"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VM",
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, charge pump negative switching pin: '电荷泵负开关引脚 (CPL) –0.3 VVM V'"
+    },
+    {
+      "pins": [
+        "nSLEEP"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VM",
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, nSLEEP pin voltage: 'nSLEEP 引脚电压 (nSLEEP) –0.3 VVM V'"
+    },
+    {
+      "pins": [
+        "DVDD"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 5.75,
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, internal regulator voltage: '内部稳压器电压 (DVDD) -0.3 5.75 V'"
+    },
+    {
+      "pins": [
+        "VSDO"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 5.75,
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, SDO output reference voltage: 'SDO 输出基准电压 (VSDO) -0.3 5.75 V'"
+    },
+    {
+      "pins": [
+        "STEP",
+        "DIR",
+        "ENABLE",
+        "nFAULT",
+        "SDI",
+        "SDO",
+        "SCLK",
+        "nSCS"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 5.75,
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, control pin voltage: '控制引脚电压（STEP、DIR、ENABLE、nFAULT、SDI、SDO、SCLK、nSCS） -0.3 5.75 V'"
+    },
+    {
+      "pins": [
+        "VREF"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 5.75,
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, reference input pin voltage: '基准输入引脚电压 (VREF) -0.3 5.75 V'"
+    },
+    {
+      "pins": [
+        "AOUT1",
+        "AOUT2",
+        "BOUT1",
+        "BOUT2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -1,
+      "max": "VM+1",
+      "source": "TI DRV8434S datasheet ZHCSN22 (Chinese, initial release Dec 2020) p.4 6.1 Absolute Maximum Ratings, continuous phase node pin voltage: '连续相节点引脚电压（AOUT1、AOUT2、BOUT1、BOUT2） –1 VVM + 1 V'"
+    }
+  ],
+  "source_pdf": "Texas Instruments DRV8434S stepper motor driver with integrated current sense, 1/256 microstepping, SPI interface, smart tune and stall detection, ZHCSN22 (Chinese translation; revision history: Dec 2020 initial release, header ZHCSN22 - APRIL 2020), 72 pages, pin map p.2 Figure 5-1 PWP 28-pin HTSSOP and p.3 5.1 pin functions (PAD thermal pad to system ground), ordering code DRV8434SPWPR p.1 device information; https://www.ti.com/cn/lit/gpn/drv8434s sha256 25f2e8540e04853a400e3305cc51818b69f51a3be77a5408fb7a6e1385edcb24"
+}

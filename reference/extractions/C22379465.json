@@ -1,0 +1,33 @@
+{
+  "mpn": "MM1Z24",
+  "lcsc": "C22379465",
+  "package": "SOD-123",
+  "description": "hongjiacheng (Zhuhai Hongjiacheng) MM1Z24 24 V 500 mW zener diode, SOD-123",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K",
+      "type": "passive",
+      "notes": "cathode (band)"
+    },
+    {
+      "pin": "2",
+      "name": "A",
+      "type": "passive",
+      "notes": "anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 25.6,
+      "ref": "A",
+      "source": "Zhuhai Hongjiacheng MM1Z2V0 THRU MM1Z75 Rev:1.0 p.2 Electrical Characteristics (VZ Min Nom Max): 'MM1Z24 5N 22 .8 24 25 .6' (zener voltage range; the datasheet gives no reverse-voltage absolute maximum, only Pd); above this a zener conducts, so a clamp use is intended, bound is the top of its zener range"
+    }
+  ],
+  "source_pdf": "Zhuhai Hongjiacheng Technology MM1Z2V0 THRU MM1Z75 Surface Mount Zener Diodes, Rev:1.0 in header and Rev:2.0 in footer, 4 pages, polarity p.1 (cathode line denotes the cathode end); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2404091617_hongjiacheng-MM1Z24_C22379465.pdf sha256 ab0465caa1e7182c25cea543e08d09267f4952ed72ea61cddfe7518cf72802ee"
+}

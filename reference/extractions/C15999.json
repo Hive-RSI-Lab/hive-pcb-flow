@@ -1,0 +1,54 @@
+{
+  "mpn": "USBLC6-2P6",
+  "lcsc": "C15999",
+  "package": "SOT-666",
+  "description": "STMicroelectronics USBLC6-2P6 very low capacitance 2-line ESD protection with VBUS, SOT-666",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "I/O1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "I/O2",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "I/O2",
+      "type": "passive"
+    },
+    {
+      "pin": "5",
+      "name": "VBUS",
+      "type": "passive",
+      "notes": "protected rail, diode-steered"
+    },
+    {
+      "pin": "6",
+      "name": "I/O1",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "I/O1",
+        "I/O2",
+        "VBUS"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "min": -5.25,
+      "max": 5.25,
+      "source": "STMicroelectronics USBLC6-2 Very low capacitance ESD protection, Doc ID 11265 Rev 5 p.2 Table 2 Electrical characteristics: 'IRM Leakage current V RM = 5.25 V 10 150 nA' (no VRWM and no pin abs-max voltage is printed; the leakage test voltage VRM 5.25 V is the only working-voltage figure, VBR min 6 V)"
+    }
+  ],
+  "source_pdf": "STMicroelectronics USBLC6-2 Very low capacitance ESD protection datasheet, Doc ID 11265 Rev 5 (October 2011), 14 pages, pin map p.1 Figure 1 Functional diagram (top view) for SOT-666: 1 I/O1, 2 GND, 3 I/O2, 4 I/O2, 5 VBUS, 6 I/O1; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1809192323_STMicroelectronics-USBLC6-2P6_C15999.pdf sha256 8ba7ab4ec1781b7f6052f5999a2304bd611c0ed2b5e8f36ffa5092552932a42e"
+}

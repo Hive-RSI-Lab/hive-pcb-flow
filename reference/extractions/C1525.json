@@ -1,0 +1,32 @@
+{
+  "mpn": "CL05B104KO5NNNC",
+  "lcsc": "C1525",
+  "package": "0402 (1005 metric)",
+  "description": "Samsung Electro-Mechanics CL05B104KO5NNNC 100nF 16V X7R ±10% 0402 MLCC",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -16,
+      "max": 16,
+      "ref": "2",
+      "source": "Samsung Electro-Mechanics MLCC catalog (Nov 2015) p.25 'Product Lineup (Standard & High Capacitors-X7R, X7S)': row 32 'CL05B104KO5NNN' 100nF, Rated Voltage (Vdc) column 16 (the text layer prints this table column by column, so the row was read on the page image; the catalog lists the part without the packaging letter that the LCSC model adds; the rated voltage code O in the part number agrees: p.4 Part Numbering System, 6. RATED VOLTAGE CODE, O = 16V); non-polar, rated across the two terminals"
+    }
+  ],
+  "source_pdf": "Samsung Electro-Mechanics MLCC catalog (Nov 2015), 84 pages; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Samsung-Electro-Mechanics-CL05B104KO5NNNC_C1525.pdf sha256 96baebe4bd0ce363e87be28b5b003f511f1502e084a6fc4f02333ded56c808f6 (PDF page numbers; there is no pin map: a 2-terminal chip, pads 1 and 2 interchangeable)"
+}

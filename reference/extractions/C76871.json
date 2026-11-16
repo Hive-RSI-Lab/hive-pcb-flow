@@ -1,0 +1,32 @@
+{
+  "mpn": "PS1240P02BT",
+  "lcsc": "C76871",
+  "package": "Radial, D=12.2mm",
+  "description": "TDK PS1240P02BT piezoelectric buzzer, externally driven, 12.2mm",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "2",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -30,
+      "max": 30,
+      "ref": "2",
+      "source": "TDK Piezoelectronic buzzers PS series datasheet 20220222 (February 2022) p.4 PS1240P02BT Specifications: 'Maximum input voltage 30V0-P max. [without DC bias]' (non-polar, across the two terminals)"
+    }
+  ],
+  "source_pdf": "TDK Piezoelectronic buzzers PS series, 20220222 (February 2022), 11 pages, PS1240P02BT spec and dimensions p.4 (2 pins, non-polar; pads 1 and 2 interchangeable); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_TDK-PS1240P02BT_C76871.pdf sha256 1cc2789af2cb03705e09b8b6e49710c4003f4e5f6fbeb7f0873b8a25c686e60e"
+}

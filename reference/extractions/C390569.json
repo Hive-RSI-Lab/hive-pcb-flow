@@ -1,0 +1,44 @@
+{
+  "mpn": "SG-8101CA 25.000000MHz TBGSA",
+  "lcsc": "C390569",
+  "package": "SMD 7.0x5.0mm 4-pad",
+  "description": "Seiko Epson SG-8101CA programmable CMOS crystal oscillator, 1.62-3.63V, 7.0x5.0mm (ordering code TBGSA: function S = standby)",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "ST",
+      "type": "input",
+      "notes": "standby (active low); function S in the ordering code TBGSA; OE on P versions"
+    },
+    {
+      "pin": "2",
+      "name": "GND",
+      "type": "ground"
+    },
+    {
+      "pin": "3",
+      "name": "OUT",
+      "type": "clock",
+      "notes": "clock output"
+    },
+    {
+      "pin": "4",
+      "name": "VCC",
+      "type": "power_in",
+      "notes": "power supply"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VCC"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "min": 1.62,
+      "max": 3.63,
+      "source": "Seiko Epson SG-8101 series datasheet (no revision printed) p.1 Features: 'Supply voltage : 1.62 V to 3.63 V' (operating supply range; the datasheet prints no absolute maximum ratings table, so the top of the operating range is the bound)"
+    }
+  ],
+  "source_pdf": "Seiko Epson Crystal oscillator SG-8101 series (Programmable, CMOS output), no revision or date printed, 8 pages, pin map p.1 (Pin description: 1 OE/ST, 2 GND, 3 OUT, 4 VCC; pad drawing p.2); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Seiko-Epson-SG-8101CA-25-000000MHz-TBGSA_C390569.pdf sha256 8512e56b503f0470862d0c5eebbfc3a29bbe798023b0cd0ca71280e7b71207d2"
+}

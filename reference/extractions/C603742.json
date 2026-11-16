@@ -1,0 +1,79 @@
+{
+  "mpn": "NCP456RFCCT2G",
+  "lcsc": "C603742",
+  "package": "WLCSP-6",
+  "description": "onsemi NCP456R ultra-small load switch with slew rate control, WLCSP6 (LCSC listing says VDFN-10)",
+  "pinout": [
+    {
+      "pin": "A1",
+      "name": "EN",
+      "type": "input"
+    },
+    {
+      "pin": "A2",
+      "name": "GATE",
+      "type": "input",
+      "notes": "OUT slew rate control"
+    },
+    {
+      "pin": "B1",
+      "name": "IN",
+      "type": "power_in"
+    },
+    {
+      "pin": "B2",
+      "name": "OUT",
+      "type": "power_out"
+    },
+    {
+      "pin": "C1",
+      "name": "VBIAS",
+      "type": "power_in"
+    },
+    {
+      "pin": "C2",
+      "name": "GND",
+      "type": "ground"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "IN, OUT, EN, VBIAS, GATE Pins",
+      "value": "-0.3~6.5",
+      "unit": "V"
+    },
+    {
+      "param": "From IN to OUT Pins",
+      "value": "+-6.5",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "IN",
+        "OUT",
+        "EN",
+        "VBIAS",
+        "GATE"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": 6.5,
+      "source": "onsemi NCP456 datasheet (NCP456/D Rev. 2, April 2019) p.4 MAXIMUM RATINGS: 'IN, OUT, EN, VBIAS, GATE Pins', '−0.3 to + 6.5 V'"
+    },
+    {
+      "pins": [
+        "OUT"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -6.5,
+      "max": 6.5,
+      "ref": "IN",
+      "source": "onsemi NCP456 datasheet (NCP456/D Rev. 2, April 2019) p.4 MAXIMUM RATINGS: 'From IN to OUT Pins: Input/Output', '±6.5 V'"
+    }
+  ],
+  "source_pdf": "onsemi NCP456 ultra-small load switch with integrated bias, NCP456/D Rev. 2 April 2019, 13 pages, pin map p.2 WLCSP6 'EN A1, GATE A2, IN B1, OUT B2, VBIAS C1, GND C2'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2201131030_onsemi-NCP456RFCCT2G_C603742.pdf sha256 fbf57bfaac95a92e8dd37e9109b011f6b027a91b33b10941c535825485b940c5"
+}

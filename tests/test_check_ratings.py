@@ -833,8 +833,9 @@ def test_bare_cap_blocks_and_one_finding_names_every_ref_on_the_code(tmp_path):
     {"mpn": "LP5907-3.3"},                                # output in the MPN
     {"mpn": "AP2112", "description": "LDO regulator"},    # the row's words
     {"mpn": "SY8303AIC", "role": "VBUS to 5.1 V"},        # what it converts
-    # the family's code, and no word says regulator (#751, linux-computer U603)
-    {"mpn": "XC6206P332MR-G", "lcsc": "C5446"},
+    # the family's code, and no word says regulator (#751, linux-computer U603;
+    # its real code C5446 now has a library entry, so the part is extracted)
+    {"mpn": "XC6206P332MR-G"},
     {"mpn": "TLV75733PDBVR", "description": "", "category": ""},
     # a switching family, and no word or code says regulator (#763)
     {"mpn": "AP63205WU-7", "role": "5V"},             # rf-plasma U102
@@ -4354,3 +4355,166 @@ def test_internal_regulator_net_with_more_than_decoupling_stays_unknown(tmp_path
                                 if k != "internal_v"} for r in CORE["pinout"]]}
     p = _run(_ws(tmp_path / "n", base, {"C1": bare}, _dvdd_cap("2.5V")))
     assert "/DVDD" not in p["net_volts"]
+
+
+# --- a part with no ratings row is not_judged by name, never a quiet pass ----
+
+ROWLESS = {"mpn": "ROWLESS1", "pinout": [
+    {"pin": "1", "name": "VCC", "type": "power_in"},
+    {"pin": "2", "name": "GND", "type": "ground"},
+    {"pin": "3", "name": "IN", "type": "input"}]}
+
+
+def _rowless_nj(p, ref="U1"):
+    return [n for n in p.get("not_judged") or []
+            if n.startswith(f"{ref} ") and "no ratings row" in n]
+
+
+@pytest.mark.parametrize("ext,why", [
+    (ROWLESS, "has no pin_ratings or abs_max voltage row, so its 2"),
+    ({**ROWLESS, "abs_max": [{"param": "ESD (HBM)", "value": "2",
+                              "unit": "kV"}]},
+     "row it can read, so its 2"),
+])
+def test_an_extraction_with_no_ratings_row_is_not_judged_by_part(
+        tmp_path, ext, why):
+    # +24V on a pin nothing rates: not a pass, the part is named with its reason
+    fps = [("U1", "C1", {"1": "+3V3", "2": "GND", "3": "+24V"})]
+    p = _run(_ws(tmp_path, fps, {"C1": ext}))
+    assert _errors(p) == []
+    [nj] = _rowless_nj(p)
+    assert "U1 (C1, ROWLESS1)" in nj and why in nj
+    # the twin with a row on IN fires, and is no longer listed
+    rated = {**ext, "pin_ratings": [{"pins": ["IN"], "kind": "voltage",
+                                     "level": "abs_max", "min": -0.3,
+                                     "max": 6, "source": "test"}]}
+    p = _run(_ws(tmp_path / "b", fps, {"C1": rated}))
+    assert [v["pin"] for v in _errors(p)] == ["U1.3"]
+    assert _rowless_nj(p) == []
+
+
+def test_an_ic_with_no_extraction_and_no_rating_field_is_not_judged(tmp_path):
+    bom = [{"lcsc": "C7", "mpn": "BAREIC", "attributes": []}]
+    fps = [("U1", "C7", {"1": "+3V3", "2": "GND", "3": "+24V"})]
+    p = _run(_ws(tmp_path, fps, {}, bom))
+    [nj] = _rowless_nj(p)
+    assert "U1 (C7)" in nj and "no datasheet extraction" in nj
+    # its twin with an extraction carrying a row is judged, not listed
+    rated = {**ROWLESS, "mpn": "BAREIC", "abs_max": [
+        {"param": "Input voltage IN", "value": "-0.3 to 6", "unit": "V"}]}
+    p = _run(_ws(tmp_path / "b", fps, {"C7": rated}, bom))
+    assert [v["pin"] for v in _errors(p)] == ["U1.3"]
+    assert _rowless_nj(p) == []
+
+
+def test_a_two_terminal_part_with_no_voltage_field_is_not_judged(tmp_path):
+    bom = [{"lcsc": "C8", "mpn": "CAPX", "attributes": [
+        {"name": "Capacitance", "value": "100nF"}]}]
+    fps = [("C1", "C8", {"1": "+24V", "2": "GND"})]
+    [nj] = _rowless_nj(_run(_ws(tmp_path, fps, {}, bom)), "C1")
+    assert "C1 (C8)" in nj and "two-terminal" in nj
+    # with its voltage field it is judged, and fails, and is not listed
+    bom[0]["attributes"].append({"name": "Voltage Rated", "value": "16V"})
+    p = _run(_ws(tmp_path / "b", fps, {}, bom))
+    assert [v["refs"] for v in _errors(p)] == [["C1"]]
+    assert _rowless_nj(p, "C1") == []
+
+
+def test_a_trusted_part_with_no_row_is_not_listed(tmp_path):
+    fps = [("U1", "C1", {"1": "+3V3", "2": "GND", "3": "+24V"})]
+    ws = _ws(tmp_path, fps, {"C1": ROWLESS})
+    out, facts = cr.run_check(ws / "kicad" / "board.kicad_pcb", ws / "parts",
+                              None, None, trusted={"U1"})
+    assert not any("U1 " in n for n in facts["not_judged"])
+
+
+# --- k2271: rules the new library rows needed ------------------------------
+
+def _mlcc(vmax):
+    """A 2-terminal part rated across its terminals from pin 1, as the
+    library's capacitor rows are: the ref names the other pin by number."""
+    return {"mpn": f"MLCC-{vmax}V", "pinout": [
+        {"pin": "1", "name": "1", "type": "passive"},
+        {"pin": "2", "name": "2", "type": "passive"}], "pin_ratings": [
+        {"pins": ["1"], "kind": "voltage", "level": "abs_max",
+         "min": -vmax, "max": vmax, "ref": "2", "source": "test p.1"}]}
+
+
+@pytest.mark.parametrize("pads", [{"1": "+56V", "2": "GND"},
+                                  {"1": "GND", "2": "+56V"}])
+def test_a_row_from_a_numbered_pin_is_read_either_way_on_a_clamped_rail(
+        tmp_path, pads):
+    # pin 1 on the rail reads its row against pin "2" (a name the alias
+    # index drops); pin 2 on the rail reads pin 1's row backwards
+    fps = [("C1", "C11", pads),
+           ("D1", "C10", {"1": "+56V", "2": "GND"}, "Diode_SMD:D_SMC")]
+    bom = [{"lcsc": "C10", "mpn": "SMCJ58A", "attributes": []}]
+    p = _run(_ws(tmp_path, fps, {"C11": _mlcc(63)}, bom))
+    pin = "C1.1" if pads["1"] == "+56V" else "C1.2"
+    assert _clamp_hits(p) == [("C1", pin, "breakdown", 71.2, 63.0)]
+    # its quiet twin, rated past the clamp, holds
+    p = _run(_ws(tmp_path / "b", fps, {"C11": _mlcc(100)}, bom))
+    assert _clamp_hits(p) == []
+    assert p["clamped_rails"]["+56V"]["judged"] == [pin]
+
+
+def test_an_inverting_converters_divider_is_not_judged(tmp_path):
+    # the +5V wrong-rail divider blocks with the buck's ground pad on GND;
+    # with that pad on its own local ground (an inverting buck-boost) the
+    # divider sets the output against it, so it is unjudged, with why
+    pads = {**_buck_pads("FB_DIV"), "4": "/LOCALGND"}
+    fps = [("U4", "C9", pads),
+           ("R1", "C1", {"1": "+5V", "2": "FB_DIV"}, "R_0402", "100k"),
+           ("R2", "C2", {"1": "FB_DIV", "2": "GND"}, "R_0402", "32k")]
+    p = _run(_ws(tmp_path, fps, {"C9": _fixed_buck("AP63200WU-7", **ADJ)}))
+    assert _out_errs(p) == []
+    [u] = _unjudged(p)
+    assert "ground pad sits on /LOCALGND" in u["msg"]
+    assert _out_errs(_run(_adj_ws(tmp_path / "b", "+5V")))
+    assert all(cr.GND_PAD_RE.match(n) for n in ("GND", "PGND", "AGND2", "VSS"))
+    assert not any(cr.GND_PAD_RE.match(n) for n in ("FB", "GNDSENSE", "SW"))
+
+
+SDO_DRV = {"mpn": "TESTSDO", "pinout": [
+    {"pin": "1", "name": "VM", "type": "power_in"},
+    {"pin": "2", "name": "GND", "type": "ground"},
+    {"pin": "3", "name": "SDO", "type": "output"},
+    {"pin": "4", "name": "VSDO", "type": "power_in"}]}
+
+
+@pytest.mark.parametrize("supply,hit", [(None, [0.0, 12.0]), ("VSDO", None)])
+def test_an_output_with_a_named_supply_swings_to_that_rail(tmp_path, supply,
+                                                            hit):
+    ext = json.loads(json.dumps(SDO_DRV))
+    if supply:
+        ext["pinout"][2]["supply"] = supply
+    fps = [("U1", "C40", {"1": "+12V", "2": "GND", "3": "/D", "4": "+3V3"}),
+           ("U9", "C30", {"1": "/D", "2": "GND"}),
+           ("J1", "C31", {"1": "+12V", "2": "+3V3", "3": "GND"})]
+    got = _over(_run(_ws(tmp_path, fps, {"C40": ext, "C30": _sink(6)})))
+    assert (got[0]["bound_v"] if got else None) == hit
+
+
+def test_a_pptc_with_no_vmax_field_is_rated_from_its_extraction(tmp_path):
+    # the BOM row has a hold current and no Vmax: a library row (pin 1
+    # against "2", +-16 V) rates it rail-to-ground, so 20 V fails, cited
+    bom = [{**PPTC_BOM[0], "attributes": [
+        a for a in PPTC_BOM[0]["attributes"] if a["name"] != "Voltage - Max"]}]
+    fps = [("F1", "C70069", {"1": "/VIN_RAW", "2": "/VIN"})]
+
+    def run(sub, rail, ext):
+        d = tmp_path / sub
+        d.mkdir()
+        c = _cons(d, voltages=[{"net": "/VIN_RAW", "voltage": rail},
+                               {"net": "/VIN", "voltage": rail}])
+        return _run(_ws(d, fps, ext, bom), c)
+    p = run("a", 20, {"C70069": _mlcc(16)})
+    (e,) = _errors(p)
+    assert (e["kind"], e["limit_v"], e["rating"]) == \
+        ("rating_over_voltage", 16, "datasheet")
+    assert _rowless_nj(p, "F1") == []
+    # its quiet twin on 12 V holds, and is not listed as row-less
+    p = run("b", 12, {"C70069": _mlcc(16)})
+    assert _errors(p) == [] and _rowless_nj(p, "F1") == []
+    # with no extraction the hold current alone still judges it (no Vmax)
+    assert _errors(run("c", 20, {})) == []

@@ -1,0 +1,49 @@
+{
+  "mpn": "PESD5V0L2UU,115",
+  "lcsc": "C78769",
+  "package": "SOT-323 (SC-70)",
+  "description": "Nexperia PESD5V0L2UU low capacitance unidirectional double ESD protection diode, 5 V, common anode, SOT-323",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K1",
+      "type": "passive",
+      "notes": "cathode diode 1"
+    },
+    {
+      "pin": "2",
+      "name": "K2",
+      "type": "passive",
+      "notes": "cathode diode 2"
+    },
+    {
+      "pin": "3",
+      "name": "A",
+      "type": "ground",
+      "notes": "common anode, to ground"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K1"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 5.0,
+      "ref": "A",
+      "source": "Nexperia PESD5V0L2UU; PESD6V0L2UU Product data sheet Rev. 01 (11 March 2009) p.5 Table 9 Characteristics: 'VRWM reverse standoff voltage PESD5V0L2UU - - 5.0 V' (no pin abs-max voltage is given; each cathode against the common anode)"
+    },
+    {
+      "pins": [
+        "K2"
+      ],
+      "kind": "voltage",
+      "level": "recommended",
+      "max": 5.0,
+      "ref": "A",
+      "source": "Nexperia PESD5V0L2UU; PESD6V0L2UU Product data sheet Rev. 01 (11 March 2009) p.5 Table 9 Characteristics: 'VRWM reverse standoff voltage PESD5V0L2UU - - 5.0 V' (no pin abs-max voltage is given; each cathode against the common anode)"
+    }
+  ],
+  "source_pdf": "Nexperia PESD5V0L2UU; PESD6V0L2UU Low capacitance unidirectional double ESD protection diodes, Product data sheet Rev. 01 (11 March 2009), 13 pages, pin map p.2 Table 3 Pinning (1 cathode diode 1, 2 cathode diode 2, 3 common anode); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2407241045_Nexperia-PESD5V0L2UU-115_C78769.pdf sha256 3492cf7f1e75e56108deb2b331cd023e673a5883da347c32372eeebef38b19e7"
+}

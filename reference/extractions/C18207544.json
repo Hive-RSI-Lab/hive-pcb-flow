@@ -1,0 +1,49 @@
+{
+  "mpn": "BAT54AW",
+  "lcsc": "C18207544",
+  "package": "SOT-323",
+  "description": "UMW BAT54AW dual Schottky barrier diode, common anode, 30 V, SOT-323",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "K1",
+      "type": "passive",
+      "notes": "cathode diode 1"
+    },
+    {
+      "pin": "2",
+      "name": "K2",
+      "type": "passive",
+      "notes": "cathode diode 2"
+    },
+    {
+      "pin": "3",
+      "name": "A",
+      "type": "passive",
+      "notes": "common anode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K1"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 30,
+      "ref": "A",
+      "source": "UMW BAT54xW Jun.2025 p.1 3.Absolute Maximum Ratings: 'Peak Repetitive Reverse Voltage' value '30 200 600' (text columns split; table image read as VRRM / VRWM / VR 30 V; each cathode against the common anode)"
+    },
+    {
+      "pins": [
+        "K2"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 30,
+      "ref": "A",
+      "source": "UMW BAT54xW Jun.2025 p.1 3.Absolute Maximum Ratings: 'Peak Repetitive Reverse Voltage' value '30 200 600' (text columns split; table image read as VRRM / VRWM / VR 30 V; each cathode against the common anode)"
+    }
+  ],
+  "source_pdf": "UMW (UTD Semiconductor) BAT54xW (BAT54W BAT54AW BAT54CW BAT54SW) datasheet, Jun.2025, 6 pages, pin map p.1 2.Pinning Information BAT54AW drawing (cathodes at 1 and 2, common anode at 3); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2405221625_UMW-Youtai-Semiconductor-Co---Ltd--BAT54AW-UMW_C18207544.pdf sha256 16d6b38f9f06715e5053a647d420245a39c782c18ebfea15f13eec85f078efcc"
+}

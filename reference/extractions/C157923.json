@@ -1,0 +1,50 @@
+{
+  "mpn": "S5B-PH-K-S(LF)(SN)",
+  "lcsc": "C157923",
+  "package": "Push-Pull,P=2mm",
+  "description": "JST PH 5-pin 2.0mm side-entry (horizontal) THT header",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "P1",
+      "type": "passive"
+    },
+    {
+      "pin": "2",
+      "name": "P2",
+      "type": "passive"
+    },
+    {
+      "pin": "3",
+      "name": "P3",
+      "type": "passive"
+    },
+    {
+      "pin": "4",
+      "name": "P4",
+      "type": "passive"
+    },
+    {
+      "pin": "5",
+      "name": "P5",
+      "type": "passive"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -100,
+      "max": 100,
+      "source": "JST PH CONNECTOR catalog (2.0mm pitch disconnectable crimp style), no revision printed p.1 Specifications: 'Voltage rating:  100V AC, DC' (contact rating, applied to every contact pin)"
+    }
+  ],
+  "source_pdf": "JST PH CONNECTOR catalog (2.0mm pitch disconnectable crimp style), no revision printed, 3 PDF pages, pin map: S5B-PH-K-S listed p.2; circuit No.1 marked on p.1 drawing; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_JST-S5B-PH-K-S-LF-SN_C157923.pdf sha256 4e41351f09263b950a29282923e6f6ef7c5bc95b538fe8db9d1d1e4a8c082918"
+}

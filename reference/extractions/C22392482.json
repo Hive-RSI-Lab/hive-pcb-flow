@@ -1,0 +1,49 @@
+{
+  "mpn": "BAT54CW",
+  "lcsc": "C22392482",
+  "package": "SOT-323",
+  "description": "hongjiacheng (Zhuhai Hongjiacheng) BAT54CW dual Schottky barrier diode, common cathode, 30 V, SOT-323",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "A1",
+      "type": "passive",
+      "notes": "anode diode 1"
+    },
+    {
+      "pin": "2",
+      "name": "A2",
+      "type": "passive",
+      "notes": "anode diode 2"
+    },
+    {
+      "pin": "3",
+      "name": "K",
+      "type": "passive",
+      "notes": "common cathode"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 30,
+      "ref": "A1",
+      "source": "Zhuhai Hongjiacheng BAT54W THRU BAT54SW Rev:1.0 (footer Rev:2.0) p.1 Maximum Ratings: 'Maximum repetitive peak reverse voltage VRRM V 30' (the common cathode against each anode)"
+    },
+    {
+      "pins": [
+        "K"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 30,
+      "ref": "A2",
+      "source": "Zhuhai Hongjiacheng BAT54W THRU BAT54SW Rev:1.0 (footer Rev:2.0) p.1 Maximum Ratings: 'Maximum repetitive peak reverse voltage VRRM V 30' (the common cathode against each anode)"
+    }
+  ],
+  "source_pdf": "Zhuhai Hongjiacheng Technology BAT54W THRU BAT54SW Surface Mount Schottky Barrier Rectifier, Rev:1.0 in header and Rev:2.0 in footer, 3 pages, pin map p.1 Function Diagram BAT54CW (anodes at 1 and 2, common cathode at 3); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2405071138_hongjiacheng-BAT54CW_C22392482.pdf sha256 c5d0487d1fe5ded99fc6c920f0c8e1e9202e4ec44cfb462e5a7b712d04fe0035"
+}

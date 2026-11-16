@@ -1,0 +1,352 @@
+{
+ "mpn": "M12L2561616A-6TG2T",
+ "lcsc": "C492195",
+ "package": "TSOP-II-54 400 mil",
+ "description": "ESMT M12L2561616A 256Mbit (4M x 16 x 4 banks) 3.3V SDRAM, 166 MHz speed grade, TSOP-II-54",
+ "pinout": [
+  {
+   "pin": "1",
+   "name": "VDD",
+   "type": "power_in"
+  },
+  {
+   "pin": "2",
+   "name": "DQ0",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "3",
+   "name": "VDDQ",
+   "type": "power_in"
+  },
+  {
+   "pin": "4",
+   "name": "DQ1",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "5",
+   "name": "DQ2",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "6",
+   "name": "VSSQ",
+   "type": "ground"
+  },
+  {
+   "pin": "7",
+   "name": "DQ3",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "8",
+   "name": "DQ4",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "9",
+   "name": "VDDQ",
+   "type": "power_in"
+  },
+  {
+   "pin": "10",
+   "name": "DQ5",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "11",
+   "name": "DQ6",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "12",
+   "name": "VSSQ",
+   "type": "ground"
+  },
+  {
+   "pin": "13",
+   "name": "DQ7",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "14",
+   "name": "VDD",
+   "type": "power_in"
+  },
+  {
+   "pin": "15",
+   "name": "LDQM",
+   "type": "input"
+  },
+  {
+   "pin": "16",
+   "name": "WE",
+   "type": "input"
+  },
+  {
+   "pin": "17",
+   "name": "CAS",
+   "type": "input"
+  },
+  {
+   "pin": "18",
+   "name": "RAS",
+   "type": "input"
+  },
+  {
+   "pin": "19",
+   "name": "CS",
+   "type": "input"
+  },
+  {
+   "pin": "20",
+   "name": "BA0",
+   "type": "input"
+  },
+  {
+   "pin": "21",
+   "name": "BA1",
+   "type": "input"
+  },
+  {
+   "pin": "22",
+   "name": "A10/AP",
+   "type": "input"
+  },
+  {
+   "pin": "23",
+   "name": "A0",
+   "type": "input"
+  },
+  {
+   "pin": "24",
+   "name": "A1",
+   "type": "input"
+  },
+  {
+   "pin": "25",
+   "name": "A2",
+   "type": "input"
+  },
+  {
+   "pin": "26",
+   "name": "A3",
+   "type": "input"
+  },
+  {
+   "pin": "27",
+   "name": "VDD",
+   "type": "power_in"
+  },
+  {
+   "pin": "28",
+   "name": "VSS",
+   "type": "ground"
+  },
+  {
+   "pin": "29",
+   "name": "A4",
+   "type": "input"
+  },
+  {
+   "pin": "30",
+   "name": "A5",
+   "type": "input"
+  },
+  {
+   "pin": "31",
+   "name": "A6",
+   "type": "input"
+  },
+  {
+   "pin": "32",
+   "name": "A7",
+   "type": "input"
+  },
+  {
+   "pin": "33",
+   "name": "A8",
+   "type": "input"
+  },
+  {
+   "pin": "34",
+   "name": "A9",
+   "type": "input"
+  },
+  {
+   "pin": "35",
+   "name": "A11",
+   "type": "input"
+  },
+  {
+   "pin": "36",
+   "name": "A12",
+   "type": "input"
+  },
+  {
+   "pin": "37",
+   "name": "CKE",
+   "type": "input"
+  },
+  {
+   "pin": "38",
+   "name": "CLK",
+   "type": "clock"
+  },
+  {
+   "pin": "39",
+   "name": "UDQM",
+   "type": "input"
+  },
+  {
+   "pin": "40",
+   "name": "NC",
+   "type": "nc"
+  },
+  {
+   "pin": "41",
+   "name": "VSS",
+   "type": "ground"
+  },
+  {
+   "pin": "42",
+   "name": "DQ8",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "43",
+   "name": "VDDQ",
+   "type": "power_in"
+  },
+  {
+   "pin": "44",
+   "name": "DQ9",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "45",
+   "name": "DQ10",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "46",
+   "name": "VSSQ",
+   "type": "ground"
+  },
+  {
+   "pin": "47",
+   "name": "DQ11",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "48",
+   "name": "DQ12",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "49",
+   "name": "VDDQ",
+   "type": "power_in"
+  },
+  {
+   "pin": "50",
+   "name": "DQ13",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "51",
+   "name": "DQ14",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "52",
+   "name": "VSSQ",
+   "type": "ground"
+  },
+  {
+   "pin": "53",
+   "name": "DQ15",
+   "type": "bidirectional"
+  },
+  {
+   "pin": "54",
+   "name": "VSS",
+   "type": "ground"
+  }
+ ],
+ "abs_max": [
+  {
+   "param": "VIN, VOUT voltage on any pin relative to VSS",
+   "value": "-1.0~4.0",
+   "unit": "V"
+  },
+  {
+   "param": "VDD, VDDQ voltage on VDD supply relative to VSS",
+   "value": "-1.0~4.0",
+   "unit": "V"
+  }
+ ],
+ "pin_ratings": [
+  {
+   "pins": [
+    "VDD",
+    "VDDQ"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -1.0,
+   "max": 4.0,
+   "source": "ESMT M12L2561616A (2S) datasheet Revision 1.4 (Feb. 2015) p.3 ABSOLUTE MAXIMUM RATINGS: 'Voltage on V DD supply relative to VSS V DD, VDDQ -1.0 ~ 4.0 V'"
+  },
+  {
+   "pins": [
+    "DQ0",
+    "DQ1",
+    "DQ2",
+    "DQ3",
+    "DQ4",
+    "DQ5",
+    "DQ6",
+    "DQ7",
+    "LDQM",
+    "WE",
+    "CAS",
+    "RAS",
+    "CS",
+    "BA0",
+    "BA1",
+    "A10/AP",
+    "A0",
+    "A1",
+    "A2",
+    "A3",
+    "A4",
+    "A5",
+    "A6",
+    "A7",
+    "A8",
+    "A9",
+    "A11",
+    "A12",
+    "CKE",
+    "CLK",
+    "UDQM",
+    "DQ8",
+    "DQ9",
+    "DQ10",
+    "DQ11",
+    "DQ12",
+    "DQ13",
+    "DQ14",
+    "DQ15"
+   ],
+   "kind": "voltage",
+   "level": "abs_max",
+   "min": -1.0,
+   "max": 4.0,
+   "source": "ESMT M12L2561616A (2S) datasheet Revision 1.4 (Feb. 2015) p.3 ABSOLUTE MAXIMUM RATINGS: 'Voltage on any pin relative to V SS V IN, VOUT -1.0 ~ 4.0 V'"
+  }
+ ],
+ "source_pdf": "ESMT M12L2561616A (2S) SDRAM 4M x 16 Bit x 4 Banks Synchronous DRAM, Revision 1.4, Publication Date Feb. 2015, 45 pages, pin map p.1 'PIN CONFIGURATION (TOP VIEW) (TSOPII 54L, 400milX875mil Body, 0.8mm Pin Pitch)'; ordering table p.1 lists M12L2561616A-6TG2S (the listing MPN is -6TG2T); https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2003051132_ESMT-Elite-Semicon-Memory-Tech-M12L2561616A-6TG2T_C492195.pdf sha256 0d10ce83708e554acb75f8b59d40111d96fbb92721c3f3f447a13d132765856c"
+}

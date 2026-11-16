@@ -1,0 +1,42 @@
+{
+  "mpn": "SI5351A-B-GM1",
+  "lcsc": "C3609352",
+  "package": "QFN-16 3x3 mm with ground pad",
+  "description": "Skyworks (Silicon Labs) Si5351A I2C-programmable any-frequency CMOS clock generator, XTAL input, 4 outputs, 16-QFN 3x3 mm",
+  "pinout": [
+    {"pin": "1", "name": "XA", "type": "analog", "notes": "crystal input"},
+    {"pin": "2", "name": "XB", "type": "analog", "notes": "crystal input"},
+    {"pin": "3", "name": "A0", "type": "input", "notes": "I2C address bit; not internally pulled up"},
+    {"pin": "4", "name": "SCL", "type": "input", "notes": "I2C clock; pull up to VDD core"},
+    {"pin": "5", "name": "SDA", "type": "bidirectional", "notes": "I2C data; pull up to VDD core"},
+    {"pin": "6", "name": "OEB", "type": "input", "notes": "output enable, low = enabled"},
+    {"pin": "7", "name": "CLK1", "type": "output", "notes": "output clock 1 (VDDOB)"},
+    {"pin": "8", "name": "VDDOB", "type": "power_in", "notes": "output supply for CLK1"},
+    {"pin": "9", "name": "VDDOA", "type": "power_in", "notes": "output supply for CLK0"},
+    {"pin": "10", "name": "CLK0", "type": "output", "notes": "output clock 0 (VDDOA)"},
+    {"pin": "11", "name": "VDDOD", "type": "power_in", "notes": "output supply for CLK3"},
+    {"pin": "12", "name": "CLK3", "type": "output", "notes": "output clock 3 (VDDOD)"},
+    {"pin": "13", "name": "CLK2", "type": "output", "notes": "output clock 2 (VDDOC)"},
+    {"pin": "14", "name": "VDDOC", "type": "power_in", "notes": "output supply for CLK2"},
+    {"pin": "15", "name": "GND", "type": "ground"},
+    {"pin": "16", "name": "VDD", "type": "power_in", "notes": "core supply"}
+  ],
+  "exposed_pad": {"present": true, "connect_to": "GND"},
+  "abs_max": [
+    {"param": "VDD_max DC supply voltage", "value": "-0.5~3.8", "unit": "V"},
+    {"param": "VIN_CLKIN input voltage, CLKIN, SCL, SDA", "value": "-0.5~3.8", "unit": "V"},
+    {"param": "VIN_VC input voltage, VC", "value": "-0.5~VDD+0.3", "unit": "V"},
+    {"param": "VIN_XA/B input voltage, pins XA, XB", "value": "-0.5~1.3", "unit": "V"}
+  ],
+  "pin_ratings": [
+    {"pins": ["VDD"], "kind": "voltage", "level": "abs_max", "min": -0.5, "max": 3.8,
+     "source": "Skyworks Si5351A/B/C-B datasheet Rev. 1.3 (Aug 27, 2021) p.13 Table 13. Absolute Maximum Ratings: 'DC Supply Voltage VDD_max -0.5 to 3.8 V'"},
+    {"pins": ["SCL", "SDA"], "kind": "voltage", "level": "abs_max", "min": -0.5, "max": 3.8,
+     "source": "Skyworks Si5351A/B/C-B datasheet Rev. 1.3 (Aug 27, 2021) p.13 Table 13. Absolute Maximum Ratings, Input Voltage: 'VIN_CLKIN CLKIN, SCL, SDA -0.5 to 3.8 V'"},
+    {"pins": ["XA", "XB"], "kind": "voltage", "level": "abs_max", "min": -0.5, "max": 1.3,
+     "source": "Skyworks Si5351A/B/C-B datasheet Rev. 1.3 (Aug 27, 2021) p.13 Table 13. Absolute Maximum Ratings, Input Voltage: 'VIN_XA/B Pins XA, XB -0.5 to 1.3 V V'"},
+    {"pins": ["VDDOA", "VDDOB", "VDDOC", "VDDOD"], "kind": "voltage", "level": "recommended", "min": 1.71, "max": 3.6,
+     "source": "Skyworks Si5351A/B/C-B datasheet Rev. 1.3 (Aug 27, 2021) p.8 Table 3. Recommended Operating Conditions (no VDDOx abs max printed; bands 1.71-1.89, 2.25-2.75, 3.0-3.60 V): 'Output Buffer Voltage VDDOx', '1.71 1.8 1.89 V', '3.0 3.3 3.60 V'"}
+  ],
+  "source_pdf": "Skyworks Solutions Si5351A/B/C-B I2C-Programmable Any-Frequency CMOS Clock Generator + VCXO, Rev. 1.3, August 27, 2021, 48 pages, pin map p.30 '10.4. Si5351A 16-Pin QFN' Table 17, ordering code Si5351A-B-GM1 p.4 Table 1; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2212081830_Skyworks-Solutions-SI5351A-B-GM1_C3609352.pdf sha256 f3bc5285fccafa3fcd06e9a7fa6abb67fb43e8c23f6147b14caecc9a4851101f"
+}

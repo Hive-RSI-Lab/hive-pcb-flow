@@ -1,0 +1,57 @@
+{
+  "mpn": "XC6206P332MR-G",
+  "lcsc": "C5446",
+  "package": "SOT-23",
+  "description": "Torex XC6206 200mA positive voltage regulator, fixed 3.3V, SOT-23",
+  "pinout": [
+    {
+      "pin": "1",
+      "name": "VSS",
+      "type": "ground"
+    },
+    {
+      "pin": "2",
+      "name": "VOUT",
+      "type": "power_out"
+    },
+    {
+      "pin": "3",
+      "name": "VIN",
+      "type": "power_in"
+    }
+  ],
+  "abs_max": [
+    {
+      "param": "Input Voltage VIN",
+      "value": "7.0",
+      "unit": "V"
+    },
+    {
+      "param": "Output Voltage VOUT",
+      "value": "VSS-0.3~VIN+0.3",
+      "unit": "V"
+    }
+  ],
+  "pin_ratings": [
+    {
+      "pins": [
+        "VIN"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "max": 7.0,
+      "source": "Torex XC6206 datasheet (ETR0305_004b) p.3 Absolute Maximum Ratings: 'Input Voltage V IN 7.0 V'"
+    },
+    {
+      "pins": [
+        "VOUT"
+      ],
+      "kind": "voltage",
+      "level": "abs_max",
+      "min": -0.3,
+      "max": "VIN+0.3",
+      "source": "Torex XC6206 datasheet (ETR0305_004b) p.3 Absolute Maximum Ratings: 'Output Voltage V OUT V SS – 0.3 ~ VIN + 0.3 V'"
+    }
+  ],
+  "source_pdf": "Torex XC6206 series positive voltage regulators, ETR0305_004b, 17 pages, pin map p.2 SOT-23 'VSS 1, VOUT 2, VIN 3'; https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/2304140030_Torex-Semicon-XC6206P332MR-G_C5446.pdf sha256 8fda1e40ea3e7c17178353aceba9c9a9794e56a1960d02b105c576429ce418ed"
+}
