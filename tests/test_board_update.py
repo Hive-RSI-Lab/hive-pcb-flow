@@ -913,6 +913,122 @@ def test_noop_apply_short_circuits(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# the symbol's Description / Datasheet win over the library footprint's
+# (#1357: KiCad 10.0.6 parity compares both, an empty one included)
+# ---------------------------------------------------------------------------
+
+LIB_NATIVES = ('\n\t(property "Description" "Murata GRM03 library text")'
+               '\n\t(property "Datasheet" "https://lib.example/ds.pdf")')
+
+
+def _fp_props(pcb: Path, ref: str) -> dict[str, str]:
+    """{property name: value} of REF's footprint in the board file."""
+    tree = sexpdata.loads(pcb.read_text(encoding="utf-8"))
+    for fp in tree[1:]:
+        if _head(fp) != "footprint":
+            continue
+        props = {k[1]: k[2] for k in fp[1:]
+                 if _head(k) == "property" and len(k) > 2}
+        if props.get("Reference") == ref:
+            return props
+    raise AssertionError(f"{ref} not on the board")
+
+
+def _set_natives(tree, ref: str, desc: str | None,
+                 ds: str | None) -> None:
+    """REF's Description/Datasheet as KiCad writes them: a valueless
+    `(field (name "Description"))` when None."""
+    for c in _comps_sec(tree)[1:]:
+        if _head(c) == "comp" and _kidval(c, "ref") == ref:
+            for k in c[1:]:
+                if _head(k) == "fields":
+                    k[:] = [x for x in k if not (
+                        _head(x) == "field" and _kidval(x, "name")
+                        in ("Description", "Datasheet"))]
+                    for name, val in (("Datasheet", ds),
+                                      ("Description", desc)):
+                        f = [S("field"), [S("name"), name]]
+                        if val is not None:
+                            f.append(val)
+                        k.append(f)
+                    return
+    raise AssertionError(f"{ref} not in netlist")
+
+
+def test_parse_netlist_natives_reach_the_plan():
+    """The plan's add entry carries the symbol's Description/Datasheet,
+    an empty one as "" (no toolchain)."""
+    tree = _load_net(PD_NET)
+    _add_comp(tree, "C99", "100nF", "aiee:C0603", {"1": "VBUS", "2": "GND"})
+    _set_natives(tree, "C99", None, "https://sym.example/ds.pdf")
+    import board_init
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory() as d:
+        comps, _ = board_init.parse_netlist(
+            _dump_net(tree, Path(d) / "m.net"))
+    c99 = {c["ref"]: c for c in comps}["C99"]
+    assert c99["natives"] == {"Description": "",
+                              "Datasheet": "https://sym.example/ds.pdf"}
+    assert "Description" not in c99["fields"]
+
+
+@pytest.mark.smoke
+def test_add_takes_the_symbol_description_not_the_library_one(tmp_path):
+    """Planted: C98's library footprint has a Description and Datasheet,
+    its symbol has neither; the board must carry "" for both, or parity
+    warns footprint_symbol_field_mismatch. Quiet twin in the same run:
+    C99's symbol sets both, and the board keeps the symbol's."""
+    lib = _variant_lib(tmp_path, "C0603_D", "C0603", LIB_NATIVES)
+    pcb = _stage(tmp_path, PD_PCB)
+    tree = _load_net(PD_NET)
+    for ref in ("C98", "C99"):
+        _add_comp(tree, ref, "100nF", "aiee:C0603_D",
+                  {"1": "VBUS", "2": "GND"})
+    _set_natives(tree, "C98", None, None)
+    _set_natives(tree, "C99", "100nF 0201 cap", "https://sym.example/c.pdf")
+    pl = tmp_path / "p.json"
+    pl.write_text(json.dumps({"C98": {"region": [40.0, 40.0, 50.0, 50.0]},
+                              "C99": {"region": [40.0, 40.0, 50.0, 50.0]}}))
+    payload = _run(pcb, _dump_net(tree, tmp_path / "m.net"),
+                   "--placements", str(pl), "--lib", str(lib))
+    assert payload["status"] == "pass"
+    c98, c99 = _fp_props(pcb, "C98"), _fp_props(pcb, "C99")
+    assert c98.get("Description", "") == ""
+    assert c98.get("Datasheet", "") == ""
+    assert c99["Description"] == "100nF 0201 cap"
+    assert c99["Datasheet"] == "https://sym.example/c.pdf"
+    assert c98["LCSC"] == "C14663"  # custom fields as before
+
+
+@pytest.mark.smoke
+def test_swap_new_fp_takes_the_symbol_description(tmp_path):
+    """Planted: C5 swapped onto a library footprint with its own
+    Description; the symbol's empty one wins. A netlist without the
+    fields (hand-written) leaves the library's alone: the quiet twin."""
+    lib = _variant_lib(tmp_path, "C0603_D", "C0603", LIB_NATIVES)
+    tree = _load_net(PD_NET)
+    _set_footprint(tree, "C5", "aiee:C0603_D")
+    _set_natives(tree, "C5", None, None)
+    pcb = _stage(tmp_path, PD_PCB)
+    assert _run(pcb, _dump_net(tree, tmp_path / "m.net"),
+                "--lib", str(lib))["status"] == "pass"
+    assert _fp_props(pcb, "C5").get("Description", "") == ""
+    assert _fp_props(pcb, "C5").get("Datasheet", "") == ""
+
+    tree = _load_net(PD_NET)
+    _set_footprint(tree, "C5", "aiee:C0603_D")
+    _remove_field(tree, "C5", "Description")
+    _remove_field(tree, "C5", "Datasheet")
+    pcb2 = tmp_path / "b2" / PD_PCB.name
+    pcb2.parent.mkdir()
+    pcb2 = _stage(pcb2.parent, PD_PCB)
+    assert _run(pcb2, _dump_net(tree, tmp_path / "m2.net"),
+                "--lib", str(lib))["status"] == "pass"
+    assert _fp_props(pcb2, "C5")["Description"] \
+        == "Murata GRM03 library text"
+
+
+# ---------------------------------------------------------------------------
 # copper-keeping footprint swap (U-ECO: swap_fp.py + rip_ep.py on PR #68)
 # ---------------------------------------------------------------------------
 
