@@ -15,6 +15,7 @@ so an offline run of check.cmd does not hard-fail on a third-party API.
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import sys
 from pathlib import Path
@@ -375,6 +376,50 @@ def test_fp_verify_sit1602_right_numbering_passes_turned(tmp_path, capsys):
         assert code == 0, payload["violations"]
         f = payload["pad_numbering"]
         assert f["fit"] is True and f["turn_deg"] in ((90, 270) if turn else (0,))
+
+
+# #1409: a round can's drawing turned off a quarter turn (KiCad's TO-46-3,
+# its own pads turned 45 degrees: the issue's repro)
+TO46 = {"1": (0.0, 0.0), "2": (1.27, 1.27), "3": (2.54, 0.0)}
+
+
+def _to46_ds(tmp_path, deg=45.0, scale=1.0):
+    a = math.radians(deg)
+    return write_ds(tmp_path, {"mpn": "probe", "land_pattern": {
+        "pad_count": 3, "pin1": "1", "pads": [
+            {"number": k, "at_mm": [round(scale * (x * math.cos(a) + y * math.sin(a)), 4),
+                                    round(scale * (-x * math.sin(a) + y * math.cos(a)), 4)]}
+            for k, (x, y) in TO46.items()]}})
+
+
+def _to46_fp(tmp_path, swap=False):
+    pos = dict(TO46)
+    if swap:
+        pos["1"], pos["2"] = pos["2"], pos["1"]
+    return _numbered_fp(tmp_path, "TO46", [(k, x, y, 0.8, 0.8)
+                                           for k, (x, y) in pos.items()])
+
+
+def test_fp_verify_can_drawn_off_a_quarter_turn(tmp_path, capsys):
+    for deg in (10, 30, 45):
+        code, payload = _fpv(tmp_path, capsys, _to46_fp(tmp_path),
+                             _to46_ds(tmp_path, deg))
+        assert code == 0, (deg, payload["violations"])
+        f = payload["pad_numbering"]
+        assert f["fit"] is True and f["turn_deg"] == pytest.approx(deg)
+    # misnumbered (pads 1 and 2 swapped): still an error at the same angle
+    code, payload = _fpv(tmp_path, capsys, _to46_fp(tmp_path, swap=True),
+                         _to46_ds(tmp_path, 45))
+    assert code == 1
+    v, = [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    assert {"pad": "1", "drawing_pin": "2"} in v["misplaced"]
+    # a drawing a third the size: no pad within 0.4 x the pin spacing (or
+    # half a pad) of a pin, so not_judged, not a misplaced-pad error
+    code, payload = _fpv(tmp_path, capsys, _to46_fp(tmp_path, swap=True),
+                         _to46_ds(tmp_path, 45, scale=0.3))
+    assert not [v for v in payload["violations"] if v["kind"] == "pad_numbering"]
+    nj, = [n for n in payload["not_judged"] if n["check"] == "pad_numbering"]
+    assert "0.4 x" in nj["why"]
 
 
 T5848_RIGHT = {"7": (-1.364, -0.9), "6": (-0.544, -0.9), "2": (-0.544, 0.9),
