@@ -539,6 +539,25 @@ def test_fp_verify_svg_stays_out_of_the_library(tmp_path, capsys):
     assert [p.name for p in fp.parent.iterdir()] == ["microSD.kicad_mod"]
 
 
+def test_fp_verify_makes_the_report_folder_for_its_svg(tmp_path, capsys):
+    # The overlay is written before the report: an --out (or --svg) folder
+    # that doesn't exist yet ended in exit 2 with no report at all
+    fp = _microsd(tmp_path)
+    ds = _microsd_ds(tmp_path)
+    out = tmp_path / "new" / "reports" / "fp_verify_J1.json"
+    assert fp_verify.main(["--footprint", str(fp), "--datasheet-json",
+                           str(ds), "--out", str(out)]) == 0
+    capsys.readouterr()
+    svg = out.with_suffix(".overlay.svg")
+    assert svg.read_text(encoding="utf-8").startswith("<svg")
+    assert json.loads(out.read_text(encoding="utf-8"))["svg"] == str(svg)
+    svg = tmp_path / "other" / "o.svg"
+    assert fp_verify.main(["--footprint", str(fp), "--datasheet-json",
+                           str(ds), "--svg", str(svg)]) == 0
+    assert json.loads(capsys.readouterr().out)["svg"] == str(svg)
+    assert svg.read_text(encoding="utf-8").startswith("<svg")
+
+
 def test_datasheet_validate_pitches_mm(tmp_path, capsys):
     ds = {"mpn": "X", "pinout": [], "land_pattern": {"pad_count": 9, "pitches_mm": [
         {"pads": "1-8", "pitch_mm": 1.1}, {"pads": ["CD", "SW"], "pitch_mm": 0.9}]}}
