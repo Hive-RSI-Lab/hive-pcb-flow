@@ -806,6 +806,84 @@ def _lost_preexisting(pre: dict, bg) -> list[dict]:
     return lost
 
 
+def _item_block(text: str, uuid: str) -> str | None:
+    """The whole `(segment|arc|via ...)` block of the board item with this
+    uuid, as the file has it."""
+    i = text.find(f'(uuid "{uuid}")')
+    j = i
+    while i > 0 and j > 0:
+        j = text.rfind("(", 0, j)
+        if j < 0:
+            return None
+        head = text[j + 1:j + 12].split(None, 1)[0] if text[j + 1:j + 12] \
+            else ""
+        if head not in ("segment", "arc", "via"):
+            continue
+        try:
+            end = routelib._sexp_end(text, j)
+        except CheckError:
+            return None
+        return text[j:end] if end > i else None
+    return None
+
+
+def _restore_fixed(pristine: Path, trial: Path, fixed: dict) -> list[dict]:
+    """Put back the copper Freerouting was told to keep that the SES import
+    took (#664): a locked track or via, or an unlocked one KiCad's export
+    folded into a locked chain's `(type fix)` wire. KiCad's import deletes
+    every unlocked track and Freerouting sends no fix wire back, so that
+    one is gone. Each goes back as it was drawn (its own block from the
+    board before the import, uuid and lock as they were). Returns them by
+    net and position."""
+    import route_finish
+    before = geom.BoardGeom.from_file(pristine)
+    segs = {(ly, tuple(round(c, 3) for c in a), tuple(round(c, 3) for c in b))
+            for ly, a, b in fixed.get("segs", ())}
+    vias = [tuple(round(c, 3) for c in at) for at in fixed.get("vias", ())]
+
+    def on_fix(t) -> bool:
+        if t.locked:
+            return True
+        a, b = (tuple(round(c, 3) for c in t.shape.coords[i]) for i in (0, -1))
+        return (t.layer, a, b) in segs or (t.layer, b, a) in segs
+
+    def via_fix(v) -> bool:
+        return v.locked or any(abs(v.at[0] - x) <= PRE_TOL
+                               and abs(v.at[1] - y) <= PRE_TOL
+                               for x, y in vias)
+    keep = [t for t in before.tracks_of() if t.uuid and on_fix(t)] + \
+        [v for v in before.vias_of() if v.uuid and via_fix(v)]
+    if not keep:
+        return []
+    after = geom.BoardGeom.from_file(trial)
+    have = {x.uuid for x in list(after.tracks_of()) + list(after.vias_of())}
+    lost_at = _lost_preexisting(_preexisting(before), after)
+    gone = {(d["net"], tuple(d["at"])) for d in lost_at if d["kind"] == "via"}
+    gone |= {(d["net"], d["layer"], tuple(d["start"]), tuple(d["end"]))
+             for d in lost_at if d["kind"] == "track"}
+    old = pristine.read_text(encoding="utf-8")
+    back, blocks = [], []
+    for x in keep:
+        if isinstance(x, geom.Via):
+            key = (x.net, (round(x.at[0], 4), round(x.at[1], 4)))
+        else:
+            (x1, y1), (x2, y2) = x.shape.coords[0], x.shape.coords[-1]
+            key = (x.net, x.layer, (round(x1, 4), round(y1, 4)),
+                   (round(x2, 4), round(y2, 4)))
+        if key not in gone or x.uuid in have:
+            continue
+        blk = _item_block(old, x.uuid)
+        if blk:
+            blocks.append(blk)
+            back.append(x.uuid)
+    if not blocks:
+        return []
+    text = trial.read_text(encoding="utf-8").rstrip()
+    trial.write_text(text[:-1].rstrip() + "\n\t" + "\n\t".join(blocks)
+                     + "\n)\n", encoding="utf-8")
+    return route_finish.describe_copper(before, back)
+
+
 def _all_timed_out(rungs: list[dict]) -> bool:
     """Every rung that ran was killed at the time limit (hard or stall)
     before Freerouting wrote its session."""
@@ -1111,6 +1189,7 @@ def run(argv: list[str] | None = None):
     hole_rules = _dsn_hole_rules(staged, dsn, bg)
     grown = hole_rules.pop("grown")
     dsn_wires_merged = _dsn_merge_wires(dsn)
+    fixed = routelib.dsn_fixed_copper(dsn.read_text(encoding="utf-8"))
     dsn_barriers = _dsn_barriers(staged, dsn)
 
     # 3. Freerouting escalation ladder
@@ -1247,7 +1326,9 @@ def run(argv: list[str] | None = None):
         dd = routelib.run_worker(bp, {
             "verb": "dedup_copper", "board": str(trial),
             "out": str(trial)}, work, timeout=300)
-        # 4c. Freerouting's pin neckdowns a hair under a neck rule (#998)
+        # 4c. what Freerouting was told to keep and the import took (#664)
+        dd["fix_restored"] = _restore_fixed(pristine, trial, fixed)
+        # 4d. Freerouting's pin neckdowns a hair under a neck rule (#998)
         dd["neckdowns_snapped"] = len(_snap_neckdowns(trial, uuids_before))
         if args.tries <= 1:
             imported, dedup_facts = imp, dd
@@ -1461,6 +1542,7 @@ def run(argv: list[str] | None = None):
             "teardrop_necks": td_necks,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),
             "neckdowns_snapped": dedup_facts.get("neckdowns_snapped", 0),
+            "fix_restored": dedup_facts.get("fix_restored", []),
             "work_dir": str(work),
         },
     }

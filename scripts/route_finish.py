@@ -353,6 +353,7 @@ class Item:
     smd: bool = False      # an SMD pad: no via of its own net inside it
     ref: str = ""          # a pad's footprint ref
     number: str = ""       # and its number
+    locked: bool = False   # (locked yes) board copper: a wall, never ripped
 
 
 class Obstacles:
@@ -379,12 +380,12 @@ class Obstacles:
         items: list[Item] = []
         for t in bg.tracks_of():
             items.append(Item(t.net or "", frozenset({t.layer}), t.shape,
-                              t.width / 2, uuid=t.uuid))
+                              t.width / 2, uuid=t.uuid, locked=t.locked))
         for v in bg.vias_of():
             items.append(Item(v.net or "", frozenset(v.layers) or cu,
                               Point(v.at), v.diameter / 2,
                               Point(v.at).buffer(v.drill / 2, quad_segs=4),
-                              uuid=v.uuid))
+                              uuid=v.uuid, locked=v.locked))
         for p in bg.pads_of():
             dp = p.drill_poly if p.drill else None
             items.append(Item(p.net or "", frozenset(p.layers) & cu, p.poly,
@@ -1028,7 +1029,8 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
     soft = obs.soft_board
     for it in obs.near(win):
         other = it.net != net and net not in it.tied
-        if other and soft is not None and it.uuid and it.net not in soft:
+        if other and soft is not None and it.uuid and it.net not in soft \
+                and not it.locked:
             # crossing it means ripping it: passable, at a price
             on = [k for k, layer in enumerate(layers) if layer in it.layers]
             m = _mask(it.shape, it.half + w / 2 + rules.clr(net, it.net),
@@ -2070,7 +2072,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
             if path:
                 mine = ops_items(path_to_ops(gr, path, job["net"], w, rules),
                                  n, bg.copper_layers)
-                rip, nets = [], set()
+                rip, nets, locked = [], set(), []
                 win = shapely.union_all([m.shape for m in mine]).buffer(1.0)
                 for it in obs.near(win) + obs.added:
                     if it.net == job["net"]:
@@ -2082,7 +2084,10 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                             and it.hole.distance(m.hole)
                             < rules.hole_to_hole + rules.margin)
                             for m in mine):
-                        if it.uuid:
+                        if it.locked:
+                            # a person fixed it in place (#664): no rip
+                            locked.append(it.uuid)
+                        elif it.uuid:
                             rip.append(it.uuid)
                             nets.add(it.net)
                         elif it.conn >= 0:
@@ -2090,7 +2095,10 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                 own = {u[1] for u in rip if isinstance(u, tuple)}
                 board_rip = [u for u in rip if not isinstance(u, tuple)]
                 fixed = sorted(nt for nt in nets if nt in keep_nets)
-                if fixed or len(nets) > rip_board_nets:
+                if locked:
+                    job["rip_refused"] = sorted(nets)
+                    job["locked_kept"] = sorted(set(locked))
+                elif fixed or len(nets) > rip_board_nets:
                     job["rip_refused"] = fixed or sorted(nets)
                     if not fixed:
                         # only the count stopped it: a wider budget may
@@ -2369,7 +2377,13 @@ def finish_staged(cli: Path, staged: Path, drc: dict, *, nets=None,
         if ripped or kept_uuids:
             bg0 = geom.BoardGeom.from_file(staged)
             facts["ripped_items"] = describe_copper(bg0, ripped)
-            facts["protected_kept"] = describe_copper(bg0, kept_uuids)
+            lk = locked_uuids(bg0)
+            facts["protected_kept"] = describe_copper(
+                bg0, [u for u in kept_uuids if u not in lk])
+            if lk & set(kept_uuids):
+                # DRC named locked copper (#664): it stays, the error too
+                facts["locked_kept"] = describe_copper(
+                    bg0, [u for u in kept_uuids if u in lk])
         rip_nets = {v.get("net") for v in drc["violations"]
                     if v.get("check") in RIP_CHECKS and v.get("net")}
         if ripped:
@@ -2547,6 +2561,12 @@ def _sweep_dangling(cli, staged, nets, cur, *, parity, refill, facts):
 
     segs = [x for x in segs if x.net in nets]
     vias = [x for x in vias if x.net in nets]
+    # #664: a locked stub stays; with no uuid it is an anchor only
+    keep_locked = locked_uuids(bg)
+    segs = [dataclasses.replace(x, uuid=None) if x.uuid in keep_locked
+            else x for x in segs]
+    vias = [dataclasses.replace(x, uuid=None) if x.uuid in keep_locked
+            else x for x in vias]
     gone_s, gone_v = route_cleanup.find_dangling(segs, vias, pads, fillfn)
     if not gone_s and not gone_v:
         return cur
@@ -2579,6 +2599,12 @@ RIP_CHECKS = {"shorting_items", "clearance", "tracks_crossing",
               "hole_clearance", "hole_to_hole", "track_width"}
 
 
+def locked_uuids(bg) -> set[str]:
+    """uuids of the board's (locked yes) tracks and vias (#664)."""
+    return {x.uuid for x in list(bg.tracks_of()) + list(bg.vias_of())
+            if x.locked and x.uuid}
+
+
 def _error_copper(staged: Path, drc: dict, protect=None,
                   kept: list | None = None) -> list[str]:
     """uuids of the tracks and vias DRC names in a copper error. A uuid in
@@ -2586,7 +2612,8 @@ def _error_copper(staged: Path, drc: dict, protect=None,
     taken: it goes to `kept` instead, and the error stays for the report."""
     bg = geom.BoardGeom.from_file(staged)
     mine = {t.uuid for t in bg.tracks_of()} | {v.uuid for v in bg.vias_of()}
-    protect = set(protect or ())
+    # locked copper (#664) is kept the same way as protected copper
+    protect = set(protect or ()) | locked_uuids(bg)
     out: list[str] = []
     for v in drc["violations"]:
         if v.get("severity") != "error" or v.get("check") not in RIP_CHECKS:
