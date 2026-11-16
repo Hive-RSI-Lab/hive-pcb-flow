@@ -450,6 +450,46 @@ def test_check_si_sim_off(tmp_path):
     assert got["crosstalk_sim"] == {"not_run": "off"}
 
 
+@need_ngspice
+@need_fields
+def test_check_si_retries_a_timed_out_deck(tmp_path, monkeypatch):
+    """#1377: a deck that runs past the base limit on a loaded machine gets one
+    retry at DECK_RETRY_S, and the simulated finding survives."""
+    real, seen = sim_si._peaks, []
+
+    def slow_first(deck, ends, mode, engine, timeout=sim_si.DECK_TIMEOUT_S):
+        seen.append(timeout)
+        if timeout < sim_si.DECK_RETRY_S:
+            raise solvers.SolverTimeout(f"{engine} ran past {timeout:.0f} s")
+        return real(deck, ends, mode, engine, timeout)
+
+    monkeypatch.setattr(sim_si, "_peaks", slow_first)
+    got = check(tmp_path, two_lines(), {"nets": {"/CLK_A": {"class": "clock", "driver": "U1"}}})
+    pair, = got["crosstalk_sim"]["pairs"]
+    assert "ran past" in pair["retried"] and pair["noise_mv"] > 0
+    assert seen[0] == sim_si.DECK_TIMEOUT_S and sim_si.DECK_RETRY_S in seen
+    assert [v for v in got["violations"] if v["kind"] == "si_crosstalk_sim"]
+    assert not [n for n in got.get("not_judged", []) if "crosstalk not simulated" in n]
+
+
+@need_fields
+def test_check_si_names_a_pair_it_could_not_simulate(tmp_path, monkeypatch):
+    """#1377, the quiet twin: a deck that runs past the retry too is no
+    finding, and the report says so in not_judged instead of dropping it."""
+    monkeypatch.setattr(sim_si, "available", lambda *a, **k: None)
+
+    def always_slow(deck, ends, mode, engine, timeout=sim_si.DECK_TIMEOUT_S):
+        raise solvers.SolverTimeout(f"{engine} ran past {timeout:.0f} s")
+
+    monkeypatch.setattr(sim_si, "_peaks", always_slow)
+    got = check(tmp_path, two_lines(), {"nets": {"/CLK_A": {"class": "clock", "driver": "U1"}}})
+    pair, = got["crosstalk_sim"]["pairs"]
+    assert "ran past 120 s" in pair["not_simulated"] and "ran past 30 s" in pair["retried"]
+    assert not [v for v in got["violations"] if v["kind"] == "si_crosstalk_sim"]
+    nj, = [n for n in got["not_judged"] if "crosstalk not simulated" in n]
+    assert nj.startswith("/CLK_A -> /V:") and "ran past 120 s" in nj
+
+
 # ------------------------------------------------------------ planted, pinned
 
 PINNED = REPO / "pinned" / "lite-main" / "kicad" / "lite-main.kicad_pcb"

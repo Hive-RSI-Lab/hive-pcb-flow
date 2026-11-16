@@ -718,7 +718,8 @@ def run(argv=None):
 
     # 8. the worst estimates, simulated
     top = args.xtalk_sim if args.xtalk_sim is not None else si.get("xtalk_sim_top", XTALK_SIM_TOP)
-    sim_out = simulate_worst(bg, lm, estimates, int(top), specs, si, power_nets, violations)
+    sim_out = simulate_worst(bg, lm, estimates, int(top), specs, si, power_nets, violations,
+                             not_judged)
 
     payload = checklib.report(SCRIPT, args.pcb, violations, nets=nets_out,
                               groups=group_out, stackup_assumed=bool(bg.stackup.assumed),
@@ -729,8 +730,12 @@ def run(argv=None):
     return payload, args.out
 
 
-def simulate_worst(bg, lm, estimates, top, specs, si, power_nets, violations) -> dict:
-    """Module doc item 8: estimate vs simulated for the top pairs."""
+def simulate_worst(bg, lm, estimates, top, specs, si, power_nets, violations,
+                   not_judged=None) -> dict:
+    """Module doc item 8: estimate vs simulated for the top pairs. A deck that
+    runs past its limit (a loaded machine) gets one retry at sim_si's longer
+    limit; a pair the simulator still couldn't run goes in not_judged, so a
+    lost simulation is never silent (#1377)."""
     if top <= 0:
         return {"not_run": "off"}
     worst = sorted((e for e in estimates
@@ -751,10 +756,20 @@ def simulate_worst(bg, lm, estimates, top, specs, si, power_nets, violations) ->
                "estimate_mv": checklib.rnd(1000 * e["swing"] * e["noise"], 1),
                "estimate_next_mv": checklib.rnd(1000 * e["swing"] * e["next"], 1),
                "estimate_fext_mv": checklib.rnd(1000 * e["swing"] * e["fext"], 1)}
+        failed = None
         try:
-            r = sim_si.simulate_pair(bg, lm, a, v, specs, si, power_nets)
+            try:
+                r = sim_si.simulate_pair(bg, lm, a, v, specs, si, power_nets)
+            except solvers.SolverTimeout as ex:
+                rec["retried"] = str(ex)[:200]
+                r = sim_si.simulate_pair(bg, lm, a, v, specs, si, power_nets,
+                                         timeout=sim_si.DECK_RETRY_S)
         except (CheckError, solvers.SolverError, ValueError, FloatingPointError) as ex:
-            r = {"not_simulated": str(ex)[:300]}
+            failed = str(ex)[:300]
+            r = {"not_simulated": failed}
+        if failed is not None and not_judged is not None:
+            not_judged.append(f"{a} -> {v}: crosstalk not simulated ({failed}); "
+                              f"only the estimate judged it")
         rec.update(r)
         if "noise_v" in r:
             rec.pop("noise_v")
