@@ -251,3 +251,244 @@ def test_late_necks_lay_a_narrowed_route_of_the_run_again():
         == [("F.Cu", 0.2, [1])]
     assert pr.neck_lengths(necks, kept, set())[0]["length"] \
         == pytest.approx(AT)
+
+
+# ------------------------------------------- #1320 points 3-5: graze, grow
+
+@pytest.mark.parametrize("size,floor,p,want", [
+    (0.254, 0.25, {}, 0.28),       # 0.9 x 0.28 = 0.252 > 0.25; 0.27 is not
+    (0.254, 0.3, {}, 0.34),
+    (0.254, 0.35, {}, None),       # wants 0.39: over 1.5 x 0.254
+    (0.254, 0.3, {"max_width_mm": 0.3}, None),   # max_width forbids it
+    (0.6, 0.3, {}, 0.61),          # a step over the size it has
+])
+def test_grow_size_is_the_smallest_step_the_floor_takes_a_drop_on(
+        size, floor, p, want):
+    p = dict(tdl.ITEM_PARAMS, **p)
+    got = tdl.grow_size(size, p, floor)
+    assert got == (pytest.approx(want) if want else None)
+    if got:
+        assert tdl.takes_drop(floor, got, p)
+        assert not tdl.takes_drop(floor, round(got - tdl.GROW_STEP, 4), p) \
+            or round(got - tdl.GROW_STEP, 4) <= size
+
+
+def test_neck_ops_neck_a_narrow_track_that_grazes_the_via():
+    """Planted (#1320 point 4): a 0.2 mm track narrow enough for the drop
+    ends 0.08 mm off the centre of a 0.254 mm via, so its line crosses a
+    0.192 mm chord: a graze, KiCad makes no drop. It necks to the widest
+    width under its own that clears the chord (0.15). Quiet twins: the
+    same track through the centre (a 0.249 mm chord, a drop) and a graze
+    with no narrower width to go to stay as they are."""
+    assert tdl.grazes_on(0.2, tdl.chord_of((0, 0.08), (1, 0.08), (0, 0),
+                                           0.254))
+    ops = [_tr((0, 0.08), (1, 0.08), w=0.2)]
+    necks = tdl.neck_ops(ops, [_via(uuid="v1")], lambda v, p: [0.2, 0.15])
+    assert [(n["width"], n["was"]) for n in necks] == [(0.15, 0.2)]
+    assert ops[0]["width"] == 0.15 and ops[1]["width"] == 0.2
+    assert ops[0]["start"] == [0, 0.08] and ops[1]["end"] == [1, 0.08]
+    assert ops[0]["end"] == ops[1]["start"]
+    assert 0.25 < ops[0]["end"][0] < 0.35
+
+    centred = [_tr((0, 0), (1, 0), w=0.2)]
+    assert tdl.neck_ops(centred, [_via(uuid="v1")],
+                        lambda v, p: [0.2, 0.15]) == []
+    assert centred == [_tr((0, 0), (1, 0), w=0.2)]
+    stuck = [_tr((0, 0.08), (1, 0.08), w=0.2)]
+    assert tdl.neck_ops(stuck, [_via(uuid="v1")], lambda v, p: [0.2]) == []
+    assert stuck == [_tr((0, 0.08), (1, 0.08), w=0.2)]
+
+
+def _floor_widths(floor):
+    """width_of for a net whose floor is floor: what neck_widths gives the
+    via at the size it has now."""
+    def width_of(i, p, kept):
+        return tdl.neck_widths(float(kept[i]["size"]), p, [], floor, floor)
+    return width_of
+
+
+def test_neck_tracks_grow_a_via_whose_floor_forbids_every_drop_width():
+    """Planted (#1320 point 5): a 0.3 mm net floor on a 0.254 mm via, whose
+    drop takes only under 0.229 mm: no width is left, so the via grows to
+    what grow gives (0.34), the 0.3 mm track takes its drop there as it is
+    and the entry names the growth (neck_lengths keeps it, no ops). Quiet
+    twin: grow says no room (None): the via keeps its size, no entry."""
+    def run(grow_to):
+        kept = [_via(), _tr((0, 0), (1, 0))]
+        asked = []
+
+        def grow(i, p):
+            asked.append(i)
+            return grow_to
+        wo = _floor_widths(0.3)
+        necks = tdl.neck_tracks(kept, ["td", None], set(),
+                                lambda i, p: wo(i, p, kept), None, grow)
+        return kept, necks, asked
+
+    kept, necks, asked = run(0.34)
+    assert asked == [0]
+    assert kept[0]["size"] == 0.34 and kept[1] == _tr((0, 0), (1, 0))
+    assert necks == [{"via": [0.0, 0.0], "net": "A", "layer": "F.Cu",
+                      "width": 0.3, "was": 0.3, "length": 0.0, "ops": [],
+                      "grown": [0.254, 0.34]}]
+    assert tdl.neck_lengths(necks, kept, set())[0]["grown"] == [0.254, 0.34]
+
+    kept, necks, asked = run(None)
+    assert asked == [0] and necks == []
+    assert kept == [_via(), _tr((0, 0), (1, 0))]
+
+
+def test_a_grown_via_that_still_gets_no_drop_keeps_its_size():
+    """The via grows, but its only track ends 0.1 mm off the centre: at
+    0.34 mm it grazes (a 0.275 mm chord under 0.3) and no width under its
+    own is over the floor, so no drop comes of it: the via goes back to
+    its size and there is no entry."""
+    kept = [_via(), _tr((0, 0.1), (1, 0.1))]
+    wo = _floor_widths(0.3)
+    necks = tdl.neck_tracks(kept, ["td", None], set(),
+                            lambda i, p: wo(i, p, kept), None,
+                            lambda i, p: 0.34)
+    assert necks == [] and kept == [_via(), _tr((0, 0.1), (1, 0.1))]
+
+
+def test_a_via_grows_once_and_then_necks_its_other_tracks():
+    """Two tracks on the via: the first (0.3, the floor) takes its drop
+    once the via grows to 0.34; the second (0.4) then necks to 0.3 at the
+    grown size. Both entries carry the growth."""
+    kept = [_via(), _tr((0, 0), (1, 0)), _tr((0, 0), (0, 1), w=0.4)]
+    calls = []
+
+    def grow(i, p):
+        calls.append(i)
+        return 0.34
+    wo = _floor_widths(0.3)
+    necks = tdl.neck_tracks(kept, ["td", None, None], set(),
+                            lambda i, p: wo(i, p, kept), None, grow)
+    assert calls == [0] and kept[0]["size"] == 0.34
+    assert sorted((n["width"], n["was"], n["grown"]) for n in necks) == [
+        (0.3, 0.3, [0.254, 0.34]), (0.3, 0.4, [0.254, 0.34])]
+    assert kept[2]["width"] == 0.3 and kept[3]["width"] == 0.4
+
+
+def _room_rules():
+    return rf.Rules(clearance=0.1, hole_clearance=0.25, hole_to_hole=0.5,
+                    edge_clearance=0.3, min_width=0.2, via_size=0.6,
+                    via_drill=0.3, margin=0.02)
+
+
+def _room_board(tracks=(), outline=None):
+    return SimpleNamespace(
+        copper_layers=["F.Cu", "B.Cu"], outline=outline,
+        tracks_of=lambda: list(tracks), vias_of=lambda: [],
+        pads_of=lambda: [])
+
+
+def _btrack(net, y, uuid="t", layer="F.Cu", w=0.2):
+    s = LineString([(-1, y), (1, y)])
+    return SimpleNamespace(net=net, layer=layer, uuid=uuid, width=w,
+                           poly=s.buffer(w / 2))
+
+
+def test_via_room_planted_other_net_copper_and_quiet_twins():
+    """A via at 0 growing from 0.254 to 0.34 mm needs 0.17 + 0.12 mm to an
+    other net's copper edge. Planted: a B track whose edge is 0.27 mm off
+    (fine at 0.254, not at 0.34), on the board or as an add of the run,
+    and the board edge 0.4 mm off. Quiet: the same track of the via's own
+    net, one the run takes off (going) or on no layer of a blind via."""
+    rules, v = _room_rules(), _via()
+    # 0.27 mm from the centre to the track's edge, which is 0.1 mm wide
+    near = _btrack("B", 0.37)
+    assert pr._via_room(v, 0.254, rules, _room_board([near]), [v], 0,
+                        set(), {})
+    assert not pr._via_room(v, 0.34, rules, _room_board([near]), [v], 0,
+                            set(), {})
+    assert pr._via_room(v, 0.34, rules, _room_board([_btrack("A", 0.37)]),
+                        [v], 0, set(), {})
+    assert pr._via_room(v, 0.34, rules, _room_board([near]), [v], 0,
+                        {"t"}, {})
+    blind = dict(v, top="B.Cu", bot="B.Cu")
+    assert pr._via_room(blind, 0.34, rules, _room_board([near]), [blind],
+                        0, set(), {})
+    add = _tr((-1, 0.37), (1, 0.37), w=0.2, net="B")
+    assert not pr._via_room(v, 0.34, rules, _room_board(), [v, add], 0,
+                            set(), {})
+    assert pr._via_room(v, 0.34, rules, _room_board(), [v, dict(
+        add, net="A")], 0, set(), {})
+    from shapely.geometry import box
+    assert not pr._via_room(v, 0.34, rules, _room_board(
+        outline=box(-5, -0.4, 5, 5)), [v], 0, set(), {})
+    assert pr._via_room(v, 0.34, rules, _room_board(
+        outline=box(-5, -5, 5, 5)), [v], 0, set(), {})
+
+
+def _live_board(tmp_path, groups):
+    """A board with one 0.6 mm via (teardrops on) per group at (5 + 8k, 5)
+    and the group's add_track ops (relative to the via) on F.Cu."""
+    nets = "".join(f' (net {k + 1} "N{k}")' for k in range(len(groups)))
+    body = ""
+    for k, ops in enumerate(groups):
+        ox = 5 + 8 * k
+        body += (f'  (via (at {ox} 5) (size 0.6) (drill 0.3)'
+                 f' (layers "F.Cu" "B.Cu") (net "N{k}") (uuid "v{k}")'
+                 f'{TD_ON})\n')
+        for j, o in enumerate(ops):
+            (ax, ay), (bx, by) = o["start"], o["end"]
+            body += (f'  (segment (start {ox + ax:.4f} {5 + ay:.4f})'
+                     f' (end {ox + bx:.4f} {5 + by:.4f}) (width {o["width"]})'
+                     f' (layer "F.Cu") (net "N{k}") (uuid "t{k}_{j}"))\n')
+    p = tmp_path / "live.kicad_pcb"
+    p.write_text(HDR.replace('(net 1 "GND") (net 2 "+3V3")', nets)
+                 + body + ")\n", encoding="utf-8")
+    return p
+
+
+def test_live_a_neck_short_of_the_drop_keeps_it_and_a_branch_necks_alone(
+        tmp_path):
+    """#1320 point 3, pinned on KiCad 10.0.6 (a 0.6 mm via, drops under
+    0.54 mm). A neck that stops short of where the drop ends, at a branch
+    or before a wider track, keeps the drop (KiCad lays it on over the
+    wider copper): one drop each, and neck_ops leaves them be. A narrow
+    stub wholly inside the via that branches into wide tracks (planted)
+    gets no drop; neck_ops necks each branch as a join of its own, and
+    then KiCad makes the two drops. The same board with the branches
+    left wide (quiet twin) still has none."""
+    import env
+    import kc
+    if env.find_kicad_cli() is None:
+        pytest.skip("kicad-cli not found")
+    via = dict(_via(uuid="v"), size=0.6, drill=0.3)
+    short_branch = [_tr((0, 0), (0.35, 0), w=0.2),
+                    _tr((0.35, 0), (2, 1), w=0.6),
+                    _tr((0.35, 0), (2, -1), w=0.6)]
+    short_wide = [_tr((0, 0), (0.35, 0), w=0.2),
+                  _tr((0.35, 0), (3, 0), w=0.6)]
+    inside = [_tr((0, 0), (0.1, 0), w=0.2), _tr((0.1, 0), (2, 1), w=0.6),
+              _tr((0.1, 0), (2, -1), w=0.6)]
+    groups = [[dict(o) for o in g] for g in (short_branch, short_wide,
+                                              inside, inside)]
+    assert tdl.neck_ops(groups[0], [via], lambda v, p: [0.2]) == []
+    assert tdl.neck_ops(groups[1], [via], lambda v, p: [0.2]) == []
+    necks = tdl.neck_ops(groups[2], [via], lambda v, p: [0.2])
+    assert [(n["width"], n["was"]) for n in necks] == [(0.2, 0.6)]
+    assert [o["width"] for o in groups[2]] == [0.2, 0.2, 0.2, 0.6, 0.6]
+    pcb = _live_board(tmp_path, groups)
+    kc.run_drc(env.find_kicad_cli(), pcb, refill=True, save_board=True)
+    drops = {it.net: sum(it.drops.values())
+             for it in tdl.read(pcb).items if it.kind == "via"}
+    assert drops == {"N0": 1, "N1": 1, "N2": 2, "N3": 0}
+
+
+def test_report_names_a_grown_via_on_its_neck_line_only():
+    """REPORT.md's Necks line says the via grew, old size to new, only on
+    an entry that carries grown; a plain neck line says nothing of it."""
+    neck = {"net": "A", "layer": "F.Cu", "via": (1.0, 2.0), "was": 0.3,
+            "width": 0.2, "length": 0.4}
+    p = {"status": "ok", "board": "b.kicad_pcb", "refs": ["U1"], "ops": 1,
+         "applied": True,
+         "necks": [dict(neck, grown=[0.45, 0.5]), dict(neck, net="B")]}
+    md = pr.report_md(p)
+    assert "- A on F.Cu at (1.000, 2.000): 0.300 mm to 0.200 mm for" \
+        " 0.400 mm (via grown 0.450 to 0.500 mm)" in md
+    assert "- B on F.Cu at (1.000, 2.000): 0.300 mm to 0.200 mm for" \
+        " 0.400 mm\n" in md
+    assert md.count("via grown") == 1
