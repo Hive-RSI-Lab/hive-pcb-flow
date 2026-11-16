@@ -1335,6 +1335,52 @@ def test_staircase_branching_to_a_cap_keeps_budget(tmp_path_factory):
     assert {v["current_a"] for v in _kinds(vs, "undersized_track")} == {2.0}
 
 
+# #1336 (lumina-carrier +12V feedback divider): a T-tap off a wide trunk
+# from J1 to U3 and U4 runs 0.25 mm, then steps up to 0.62 mm through a
+# 0.07 mm step to the far part. The step is a bridge in netconn's graph, but
+# the wide track's end cap reaches across it, so taking it out doesn't split
+# the raw copper (track_sides None), and with the far part unbounded and J1
+# feeding the near side block_sides can't bound it either.
+_STEP = """  (segment (start 1 5) (end 6 5) (width 1.5) (layer "F.Cu") (net "PWR"))
+  (segment (start 6 5) (end 12 5) (width 1.5) (layer "F.Cu") (net "PWR"))
+  (segment (start 6 5) (end 6 7) (width 0.25) (layer "F.Cu") (net "PWR"))
+  (segment (start 6 7) (end 6.05 7.05) (width 0.62) (layer "F.Cu") (net "PWR"))
+  (segment (start 6.05 7.05) (end 6.05 9.6) (width 0.62) (layer "F.Cu") (net "PWR"))
+"""
+_STEP_POS = [6.025, 7.025]
+
+
+def _step_board(tmp_path_factory, name, far):
+    body = (_STEP + _part("J1", 1, 5) + _part("U3", 12, 5) + _part("U4", 9, 5)
+            + _part(far, 6.05, 10))
+    return _board(tmp_path_factory, name, body)
+
+
+def test_short_wide_bridge_step_is_unjudged(tmp_path_factory):
+    """#1336: the step lies in series between two bridges with only track
+    ends between, so it takes their sides: a branch to C1, unjudged like
+    the tracks either side of it, not a failure at 2 A."""
+    bg = _step_board(tmp_path_factory, "step", "C1")
+    vs, facts = check_current.check_net(bg, dict(ENTRY_PWR, source="J1"))
+    assert _kinds(vs, "undersized_track") == []
+    taps = _unjudged(facts, "undersized_track")
+    assert _STEP_POS in [u["pos"] for u in taps]
+    assert all(u["refs"] == ["C1"] for u in taps)
+
+
+def test_short_wide_bridge_step_on_the_trunk_keeps_budget(tmp_path_factory):
+    """Quiet twin: the same step to U2, with U3 and U4 dropped so it is the
+    rail's only load, is the trunk: the sides it borrows don't hide it, it
+    stays at 2 A."""
+    body = (_STEP.replace("(width 1.5)", "(width 3)") + _part("J1", 1, 5)
+            + _part("U2", 6.05, 10))
+    bg = _board(tmp_path_factory, "steptrunk", body)
+    vs, _ = check_current.check_net(bg, dict(ENTRY_PWR, source="J1"))
+    hits = _kinds(vs, "undersized_track")
+    assert _STEP_POS in [v["pos"] for v in hits]
+    assert {v["current_a"] for v in hits} == {2.0}
+
+
 def test_declared_sense_pad_bounds_its_part(tmp_path_factory):
     """#1042: R1's pad 1 is no SENSE pin by name, but the entry declares it
     a sense pad: R1 draws at most SENSE_BOUND_A."""
@@ -3243,3 +3289,69 @@ def test_copper_without_matches_the_whole_union(tmp_path_factory):
                 assert len(parts(fast)) == len(parts(slow))
                 seen += 1
         assert seen
+
+
+# ---- pour_neckdown is reported at the neck (#1338) --------------------------
+# The position used to be representative_point() of the first eroded piece:
+# a point in wide copper, which moved when unrelated copper (another net's
+# via cut-out) changed the piece's widest scan line.
+
+_NECK_VIAS = "".join(
+    f'  (via (at {x} {y}) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") '
+    f'(net "PWR"))\n' for x, y in ((2, 2), (2, 8), (18, 2), (18, 8)))
+
+
+def _necked_plane(neck_w: float, hole: bool):
+    """Two 9 x 10 mm blocks joined at y=5 by a 1 mm long strip `neck_w`
+    wide (x 9..10); `hole` cuts a 1.2 mm round hole far from it, at (4, 5)."""
+    from shapely.geometry import Polygon, box
+    h = neck_w / 2.0
+    plane = box(0, 0, 9, 10).union(box(9, 5 - h, 10.0, 5 + h)) \
+        .union(box(10, 0, 19, 10))
+    if hole:
+        plane = plane.difference(Point(4, 5).buffer(0.6))
+    assert isinstance(plane, Polygon)
+    return plane
+
+
+@pytest.fixture(scope="module")
+def neck_bg(tmp_path_factory):
+    return _board(tmp_path_factory, "neckpos", _NECK_VIAS)
+
+
+@pytest.mark.parametrize("hole", [True, False])
+def test_pour_neck_position_at_the_neck(neck_bg, hole):
+    """Planted fault: a 0.5 mm neck between two via groups is reported
+    within 0.3 mm of the neck, with or without a far hole."""
+    width, pos = check_current.pour_neck(
+        neck_bg, "PWR", "F.Cu", _necked_plane(0.5, hole), 1.0)
+    assert width == pytest.approx(0.5, abs=0.02)
+    assert Point(pos).distance(Point(9.5, 5)) <= 0.3, pos
+
+
+def test_pour_neck_position_ignores_far_copper(neck_bg):
+    """The far hole changes the wide copper, not the neck: same position."""
+    _, a = check_current.pour_neck(neck_bg, "PWR", "F.Cu",
+                                   _necked_plane(0.5, True), 1.0)
+    _, b = check_current.pour_neck(neck_bg, "PWR", "F.Cu",
+                                   _necked_plane(0.5, False), 1.0)
+    assert Point(a).distance(Point(b)) <= 0.01, (a, b)
+
+
+def test_pour_neck_quiet_when_strip_is_wide(neck_bg):
+    """Quiet twin: the same plane with a 1.5 mm strip carries 1.0 mm."""
+    assert check_current.pour_neck(
+        neck_bg, "PWR", "F.Cu", _necked_plane(1.5, True), 1.0) is None
+
+
+def test_pour_neck_position_at_a_cut_off_via(tmp_path_factory):
+    """A via on a 0.3 mm finger is cut off before any two pieces split:
+    the neck is reported at that via, not in the wide copper."""
+    from shapely.geometry import box
+    bg = _board(tmp_path_factory, "neckfinger", "".join(
+        f'  (via (at {x} {y}) (size 0.3) (drill 0.15) (layers "F.Cu" "B.Cu") '
+        f'(net "PWR"))\n' for x, y in ((2, 5), (12, 5))))
+    plane = box(0, 0, 9, 10).union(box(9, 4.85, 12.15, 5.15))
+    width, pos = check_current.pour_neck(bg, "PWR", "F.Cu", plane, 1.0)
+    assert width < 0.35
+    assert pos[0] > 9.0, pos

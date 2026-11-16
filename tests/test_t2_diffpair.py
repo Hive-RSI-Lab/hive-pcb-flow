@@ -461,3 +461,49 @@ def test_diffpair_stripline_sits_on_the_core():
     on_core = impedance.field_stripline(0.127, 0.10, 1.20, 0.0175, 3.66, 3.23, 0.24)["zdiff"]
     on_thick = impedance.field_stripline(0.127, 1.20, 0.10, 0.0175, 3.23, 3.66, 0.24)["zdiff"]
     assert z == pytest.approx(on_core) and abs(z - on_thick) > 3
+
+
+# ============================================ netconn: T-tap on a short trunk
+# #1336: a tap end on a short trunk's body is within cap reach of BOTH trunk
+# ends; rule b joined it to each, a loop beside the trunk that isn't in the
+# copper, so the trunk lost its bridge and check_current judged it at the
+# rail budget. The issue's numbers: 0.6 mm trunk 1.12 mm long, 0.56 mm tap
+# from its centreline 0.52 mm from one end (reach 0.63 mm to both).
+
+def _t_tap(tap_y: float) -> str:
+    return (seg(39.0, 47.7, 39.0, 46.58, layer="B.Cu", w=0.6)
+            + seg(39.0, tap_y, 39.7, tap_y, layer="B.Cu", w=0.56)
+            + seg(39.0, 47.7, 39.0, 49.0, layer="B.Cu", w=0.6)
+            + seg(39.0, 46.58, 39.0, 45.0, layer="B.Cu", w=0.6))
+
+
+def test_netconn_t_tap_on_short_trunk_keeps_bridge(tmp_path_factory):
+    """Planted fault: the tap reaches both trunk caps; the trunk (edge 0)
+    must still be a bridge, and the tap joins the nearer end only."""
+    bg = _board(tmp_path_factory, "ttap", _t_tap(47.18),
+                outline=(30, 40, 50, 55))
+    g = netconn.build(bg, "N")
+    assert 0 in netconn.bridge_tracks(g)
+    assert netconn.shortest_path_len(g, pt(39.7, 47.18), pt(39.0, 47.7)) \
+        == pytest.approx(0.7 + 0.52, abs=0.01)
+
+
+def test_netconn_t_tap_reaching_one_cap_unchanged(tmp_path_factory):
+    """Quiet twin: a tap in reach of one trunk cap only joins it, as before,
+    and the trunk is a bridge either way."""
+    bg = _board(tmp_path_factory, "ttap1", _t_tap(47.4),
+                outline=(30, 40, 50, 55))
+    g = netconn.build(bg, "N")
+    assert 0 in netconn.bridge_tracks(g)
+    assert netconn.shortest_path_len(g, pt(39.7, 47.4), pt(39.0, 45.0)) \
+        == pytest.approx(0.7 + 0.3 + 1.12 + 1.58, abs=0.01)
+
+
+def test_netconn_end_on_a_short_tracks_end_skips_its_far_end(tmp_path_factory):
+    """An end coinciding with one end of a short track (rule a) is not also
+    joined to its far end through cap reach: the short track stays a bridge."""
+    body = (seg(1, 5, 5, 5, w=0.6) + seg(5, 5, 5.5, 5, w=0.6)
+            + seg(5.5, 5, 9, 5, w=0.6))
+    bg = _board(tmp_path_factory, "shortend", body)
+    g = netconn.build(bg, "N")
+    assert netconn.bridge_tracks(g) == {0, 1, 2}
