@@ -530,6 +530,36 @@ def test_partner_sides_from_nearest_off_part_pad(tmp_path):
     assert re_.partner_sides(bg2, b2, set(b2.nets.values())) == {}
 
 
+def test_side_depths_count_rows_to_each_side():
+    b = bgalib.Bga(ref="U1", layer="F.Cu", pitch=0.8, rows=6, cols=6,
+                   pad_d=0.4, bbox=(18.0, 13.0, 22.0, 17.0), balls=36)
+    assert re_.side_depths(b, 18.8, 16.2) == {
+        "left": 1, "right": 4, "up": 4, "down": 1}
+
+
+def test_partner_sides_near_steers_only_a_shallow_side(tmp_path):
+    # J1 sits below U1 (6x6): all mode opens down for every ball; near
+    # leaves a top-row ball 5 rows from the bottom on KRT's nearer edge
+    # (the planted fault: on main there is no near, every pair is forced
+    # across or none is), and a ball in the bottom three rows still goes
+    # down
+    bg = geom.BoardGeom.from_file(board(tmp_path))
+    (b,) = bgalib.find_bgas(bg)
+    nets = set(b.nets.values())
+    every = re_.partner_sides(bg, b, nets)
+    near = re_.partner_sides(bg, b, nets, re_.NEAR_SLACK)
+    assert len(every) == 36 and len(near) == 26
+    by = {p.net: p for p in bg.pads_of(ref="U1")}
+    for net, sides in near.items():
+        d = re_.side_depths(b, *by[net].center)
+        assert min(d[s] for s in sides) <= min(d.values()) + 2
+    assert "/S0_4" not in near and "/S1_1" not in near
+    assert all("down" in near[f"/S{r}_{c}"] for r in (3, 4, 5)
+               for c in range(6))
+    # quiet twin: no slack is the old all-nets steering
+    assert re_.partner_sides(bg, b, nets, None) == every
+
+
 def test_fanout_nets_hold_wide_nets_and_keep_plane_balls_out():
     b = bgalib.Bga(ref="U1", layer="F.Cu", pitch=0.8, rows=3, cols=3,
                    pad_d=0.32, bbox=(0, 0, 1.6, 1.6), balls=9,
@@ -822,6 +852,31 @@ def test_live_escape_kept_when_a_far_thermal_starves(tmp_path, monkeypatch):
     # the plane fixer gives the spokes back, not a human review
     assert cluster_violations.cluster([v], 5.0)[0]["fixer"] == "plane"
     assert geom.BoardGeom.from_file(pcb).vias_of()
+
+
+def test_live_escape_near_partner_is_the_default(tmp_path):
+    """#547: with a constraints.json, a bare run steers the nets whose
+    partner side is near (26 of 36 on this field) and off steers none."""
+    if env.find_kicad_cli() is None or env.find_krt() is None:
+        pytest.skip("needs kicad-cli and KiCadRoutingTools")
+    facts = {}
+    for mode in ("near", "off"):
+        d = tmp_path / mode
+        d.mkdir()
+        pcb = board(d)
+        (d / "constraints.json").write_text(json.dumps(
+            {"length_groups": [{"name": "all", "nets": ["S*"]}]}),
+            encoding="utf-8")
+        out = d / "r.json"
+        argv = ["--pcb", str(pcb), "--out-report", str(out)]
+        rc = re_.main(argv + (["--toward-partner", "off"] if mode == "off"
+                              else []))
+        rep = json.loads(out.read_text())
+        assert rc in (0, 1), rep
+        (facts[mode],) = rep["facts"]["bgas"]
+        assert rep["facts"]["drc_delta"]["new"] == {}
+    assert sum(facts["near"]["toward_partner"].values()) == 26
+    assert "toward_partner" not in facts["off"]
 
 
 def test_live_escape_toward_partner(tmp_path):
