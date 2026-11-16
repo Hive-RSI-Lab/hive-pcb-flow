@@ -402,6 +402,21 @@ def _safe_name(key: str) -> bool:
     return bool(key) and not re.search(r"[/\\]|^\.", key)
 
 
+def value_mpn(b: dict) -> str:
+    """The footprint's Value when it reads as a part number (#815): one
+    word of at least four characters with a letter and a digit
+    (TPS62086, AMS1117-3.3, 74LVC1G3157), not a component value like
+    3.3V or 100nF. Many boards carry an IC's number only there. Else ''."""
+    v = str(b.get("value") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+_#-]{3,}", v):
+        return ""
+    if not (re.search(r"[A-Za-z]", v) and re.search(r"\d", v)):
+        return ""
+    if re.fullmatch(r"\d+(?:\.\d+)?[A-Za-z]{0,3}", v):
+        return ""
+    return v
+
+
 def key_by_mpn(board: list[dict], bom: list[dict], parts_dir: Path,
                bom_by_lcsc: dict,
                extractions: Path | None = None) -> dict[str, str]:
@@ -409,7 +424,9 @@ def key_by_mpn(board: list[dict], bom: list[dict], parts_dir: Path,
     when a record is found under it - parts/<MPN>.json (or the library's),
     or a parts.json line with that mpn and no lcsc, which then joins
     bom_by_lcsc under the MPN. The MPN is the footprint's MPN property,
-    else the mpn of the parts.json line that lists its ref. {ref: mpn}."""
+    else the mpn of the parts.json line that lists its ref, else (#815)
+    its Value when that reads as a part number and a record is on disk
+    under it (a parts.json line alone doesn't key a Value). {ref: mpn}."""
     from mpn_decode import norm
     by_ref = {r: p for p in bom for r in (p.get("refs") or [])
               if isinstance(r, str)}
@@ -421,9 +438,11 @@ def key_by_mpn(board: list[dict], bom: list[dict], parts_dir: Path,
             continue
         mpn = b.get("mpn") or str((by_ref.get(b["ref"]) or {}).get("mpn")
                                   or "").strip()
+        from_value = not mpn
+        mpn = mpn or value_mpn(b)
         if not mpn:
             continue
-        line = by_mpn.get(norm(mpn))
+        line = None if from_value else by_mpn.get(norm(mpn))
         # the record's file name: the MPN as written, knowledgelib's safe
         # name ('#' and '/' made '-'), or that with '.' made '-' too, as
         # hand-made records are named (ABM8G-24.000MHZ-18-D2Y-T is stored
