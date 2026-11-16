@@ -763,8 +763,12 @@ Consumers per key (script -> phase):
 
   // check_esd (run by hand). connectors: the refs a strike reaches (default
   // J*, P*, CN*, X*, USB*, not TP*); internal drops board-to-board ones
-  // nobody touches; exempt_nets drops nets; clamps adds clamp parts the name
-  // match misses. level_kv: the IEC 61000-4-2 contact level (8).
+  // nobody touches (pin header / socket and JST ZH, SH, PH footprints are
+  // internal already); external keeps such a ref judged; barriers: refs
+  // whose lines sit behind their own isolation transformer (an RJ45 magjack
+  // is found by name), recorded and not judged; exempt_nets drops nets;
+  // clamps adds clamp parts the name match misses. level_kv: the IEC
+  // 61000-4-2 contact level (8).
   // corridor_mm: how far a neighbour counts as in the strike's corridor
   // (else the gap where a full-length neighbour picks up corridor_v, 3.6 V,
   // at most 10 mm). victim_abs_max_v: a number or {net glob: V} (else the
@@ -779,8 +783,8 @@ Consumers per key (script -> phase):
   // when the peak passes its forward drop, a two-way one when its VRWM is
   // below the peak (no line is taken as bipolar by name). Clamp ratings come
   // from reference/esd_clamps.yaml; a clamp with no row is not judged.
-  "esd": {"connectors": ["J1"], "internal": ["J4"], "exempt_nets": ["GND"],
-          "clamps": ["D1"], "level_kv": 8, "victim_abs_max_v": {"/USB*": 6},
+  "esd": {"connectors": ["J1"], "internal": ["J4"], "external": ["J5"],
+          "barriers": ["J6"], "exempt_nets": ["GND"], "clamps": ["D1"], "level_kv": 8, "victim_abs_max_v": {"/USB*": 6},
           "interfaces": {"/USB_D*": "usb_hs"}, "line_v": {"/RS485*": 12},
           "bipolar_v": {"/E1_*": 3.3}},
 

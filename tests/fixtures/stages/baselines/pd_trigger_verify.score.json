@@ -5,7 +5,7 @@
  "board": "pd-trigger",
  "metrics": {
   "errors": 53,
-  "warnings": 54,
+  "warnings": 53,
   "by_check": {
    "check_return_path": 0,
    "check_current": 41,
@@ -28,7 +28,7 @@
    "check_courtyard": 28,
    "check_ddr_timing": 0,
    "check_ep_paste": 6,
-   "check_esd": 4,
+   "check_esd": 3,
    "check_fp_attr": 1,
    "check_fp_geometry": 0,
    "check_fp_package": 0,
@@ -64,7 +64,6 @@
    "body_unjudged": 1,
    "courtyard_pads": 28,
    "ep_paste_high": 2,
-   "esd_behind_series": 1,
    "esd_clamp_far": 1,
    "esd_unclamped": 2,
    "fp_attr_mismatch": 1,
@@ -88,11 +87,11 @@
  "metrics_live": null,
  "penalties": {
   "errors": 53.0,
-  "warnings": 54.0,
+  "warnings": 53.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 68.1,
+ "composite": 68.2,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",

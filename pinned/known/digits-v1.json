@@ -2844,7 +2844,7 @@
    ],
    "kind": "esd_unclamped",
    "verdict": "false",
-   "reason": "12 V rail with 680 uF bulk at the input"
+   "reason": "12 V rail with 680 uF bulk at the input. Left by #1496: the LM2596 VIN pin is 5.4 mm from the jack along the track and the 680 uF bulk 37 mm, beyond it, so the strike meets the regulator first and the shunt rule (a >=1 uF cap reached before any IC pin) does not credit the bulk."
   },
   {
    "gate": "verify",

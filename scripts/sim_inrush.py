@@ -347,11 +347,14 @@ def deck(model, b, entry, sc, corner: tuple[str, float] | None = None,
 # ------------------------------------------------------------- hot-plug
 
 def pin_abs_max(board: dict, parts: dict, parts_dir: Path | None,
-                nets: set[str]) -> tuple[list[dict], list[dict]]:
+                nets: set[str], library: bool = False
+                ) -> tuple[list[dict], list[dict]]:
     """IC pins on `nets` with their abs max to ground: the part's datasheet
-    extraction (<parts>/<LCSC>.json) first, then the abs_max_v of its
-    reference/pin_ratings.yaml row. -> (rated [{ref, pin, fn, net, max_v,
-    source}], unrated [{ref, pin, fn, net}])."""
+    extraction (<parts>/<LCSC>.json; with library=True, else hwde's own
+    reference/extractions/<LCSC>.json, check_ratings.load_extraction) first,
+    then the abs_max_v of its reference/pin_ratings.yaml row. Only a
+    part-wide row (no reference pin) counts. -> (rated [{ref, pin, fn, net,
+    max_v, source}], unrated [{ref, pin, fn, net}])."""
     import check_ratings
     table = [r for r in sim_board.load_pin_ratings() if r.get("abs_max_v")]
     raw: dict[str, dict] = {}
@@ -374,6 +377,10 @@ def pin_abs_max(board: dict, parts: dict, parts_dir: Path | None,
         if ext and ext.is_file():
             ext_r = check_ratings.part_ratings(
                 checklib.load_json(ext, "extraction"))
+        elif library and lcsc and (
+                lib := check_ratings.LIBRARY_DIR / f"{lcsc}.json").is_file():
+            ext_r = check_ratings.part_ratings(
+                checklib.load_json(lib, "extraction"))
         names = [x for x in ((parts.get(ref) or {}).get("mpn"), c["value"])
                  if x]
         for pin, p in sorted(pins.items()):

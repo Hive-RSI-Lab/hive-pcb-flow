@@ -17,15 +17,26 @@ bar formula, reproduced in reference/ingest/emc-thermal/verify.py) and a
 
 Which connectors: refs J*, P*, CN*, X*, USB* (not TP*), or constraints.json
 {"esd": {"connectors": [...]}}; {"esd": {"internal": [...]}} drops board-to-
-board ones nobody touches. Which nets: every pad's net but ground-like
-(GND, AGND, SHIELD, CHASSIS, EARTH...) and unconnected ones; {"esd":
-{"exempt_nets": [...]}} drops more. Which parts clamp: Value / footprint /
-MPN matching CLAMP_RE, or {"esd": {"clamps": [...]}}.
+board ones nobody touches, and so do FFC / FPC / board-to-board Values and
+(#1496) pin header, pin socket and JST ZH / SH / PH footprints, the
+programming, board-to-board and in-housing harness families; {"esd":
+{"external": [...]}} keeps a ref judged all the same. Which nets: every
+pad's net but ground-like (GND, AGND, SHIELD, CHASSIS, EARTH...) and
+unconnected ones; {"esd": {"exempt_nets": [...]}} drops more. Which parts
+clamp: Value / footprint / MPN matching CLAMP_RE, or {"esd": {"clamps":
+[...]}}. A connector with its own isolation transformer (an RJ45 magjack,
+BARRIER_RE, or {"esd": {"barriers": [...]}}) has its lines recorded behind
+the barrier and not judged.
 
 Per connector line, the clamp is the clamp pad on the connector's net, or one
-two-pin series part (resistor, bead, inductor) away. Distances are along the
-routed tracks (Dijkstra over the net's segments, vias and pads); a net with
-no routed path falls back to the straight line and says so.
+two-pin series part (resistor, bead, inductor, fuse) away. A rail's TVS
+behind its input fuse / PPTC (an F ref) is the usual order and passes. With
+no clamp, a capacitor of at least 1 uF from the line to ground that the
+strike reaches before any IC pin is the charge sink (the IEC source's 150 pF
+x 8 kV is 1.2 uC, 1.2 V on 1 uF; shunt_c records the estimate). Distances
+are along the routed tracks (Dijkstra over the net's segments, vias and
+pads); a net with no routed path falls back to the straight line and says
+so.
 
 Findings:
   esd_unclamped        error: a signal line with no clamp (power lines:
@@ -159,6 +170,30 @@ SERIES_REF_RE = re.compile(r"^(R|FB|L|F)\d", re.I)
 # carries lines between two of the product's own boards, which no finger
 # touches once it is built (constraints esd.connectors brings one back)
 INTERNAL_RE = re.compile(r"\bFFC\b|\bFPC\b|B2B|BOARD.TO.BOARD", re.I)
+# internal by footprint (#1496): pin headers and sockets (KiCad
+# PinHeader_/PinSocket_, the aiee/EasyEDA HDR- family) and JST's small
+# wire-to-board families ZH (1.5 mm), SH (1.0 mm) and PH (2.0 mm) carry
+# programming, board-to-board and in-housing harness lines; a cable that
+# leaves the product ends in a jack, a USB or RJ receptacle, a terminal
+# block or a power-rated housing (JST VH/XH are left judged: they carry
+# field wiring as often as a harness). A judgement: constraints
+# esd.external lists a ref that is user-facing all the same.
+INTERNAL_FP_RE = re.compile(
+    r"PinHeader_|PinSocket_|:HDR-|JST_(?:ZH|SH|PH)_", re.I)
+# a connector whose lines sit behind its own isolation transformer: an RJ45
+# with integrated magnetics (HanRun HR911105A, "magjack"); the cable side is
+# the transformer's, the board side never sees the strike's common mode.
+# constraints esd.barriers adds more
+BARRIER_RE = re.compile(r"HR911105|MAG.?JACK|INTEGRATED.MAGNETICS", re.I)
+FUSE_REF_RE = re.compile(r"^F\d", re.I)
+IC_REF_RE = re.compile(r"^(U|IC)\d", re.I)
+CAP_REF_RE = re.compile(r"^C(?!ONN)[A-Z]*\d", re.I)   # C3, Cin1, CX2
+# a shunt capacitor this large soaks the strike's charge: the IEC 61000-4-2
+# source is 150 pF at the level's volts (Figure 1), so 8 kV dumps 1.2 uC,
+# 1.2 V on 1 uF (a judgement on the threshold: the charge sum, not a
+# vendor number)
+SHUNT_MIN_F = 1e-6
+STRIKE_F = 150e-12
 
 # IEC 61000-4-2:2008 Table 3: 3.75 A per kV first peak, 0.8 ns 10-90 rise
 AMPS_PER_KV = 3.75
@@ -185,6 +220,44 @@ def is_ground(net: str | None) -> bool:
 
 def is_power(net: str) -> bool:
     return bool(POWER_RE.search(net))
+
+
+def fp_text(fp: dict) -> str:
+    """Value, library name and the part properties (not the free-text
+    description or datasheet link)."""
+    props = [str(v) for k, v in (fp.get("props") or {}).items()
+             if not re.search(r"descr|datasheet|^ki_", k, re.I)]
+    return " ".join([fp.get("value") or "", fp.get("lib") or ""] + props)
+
+
+def shunt_cap(bg, cp, on_net: list, best: dict) -> dict | None:
+    """The line's nearest capacitor of at least SHUNT_MIN_F to ground that
+    the strike reaches before any IC pin on the line (along the tracks, or
+    the straight line when unrouted): {ref, farads, mm, routed}."""
+    from check_decoupling import parse_farads
+
+    def reach(p):
+        n = _pad_node(p)
+        if n in best:
+            return best[n][0], True
+        return math.dist(cp.copper_center, p.copper_center), False
+    first_ic = min((reach(p)[0] for p in on_net if IC_REF_RE.match(p.ref)),
+                   default=math.inf)
+    out = None
+    for p in on_net:
+        if not CAP_REF_RE.match(p.ref):
+            continue
+        two = bg.pads_of(ref=p.ref)
+        if len(two) != 2 or not any(is_ground(q.net) for q in two
+                                    if q.number != p.number):
+            continue
+        f = parse_farads(bg.footprints.get(p.ref, {}).get("value"))
+        if f is None or not SHUNT_MIN_F <= f < 1.0:
+            continue
+        mm, routed = reach(p)
+        if mm < first_ic and (out is None or mm < out["mm"]):
+            out = {"ref": p.ref, "farads": f, "mm": mm, "routed": routed}
+    return out
 
 
 def is_clamp(fp: dict, extra: set, ref: str) -> bool:
@@ -411,7 +484,8 @@ def rated_pins(bg, parts_dir: Path | None, nets: set) -> dict:
         for row in checklib.load_json(pj, "parts.json").get("parts") or []:
             for r in row.get("refdes") or []:
                 parts[r] = row
-    rated, _ = sim_inrush.pin_abs_max({"comps": comps}, parts, parts_dir, nets)
+    rated, _ = sim_inrush.pin_abs_max({"comps": comps}, parts, parts_dir, nets,
+                                      library=True)
     out: dict = {}
     for r in rated:
         if r["net"] not in out or r["max_v"] < out[r["net"]][0]:
@@ -854,12 +928,13 @@ def check(pcb: Path, constraints: dict | None = None,
     didt = dI_dt(level_kv)
     explicit = set(cfg.get("connectors") or [])
     internal = set(cfg.get("internal") or [])
+    external = set(cfg.get("external") or [])
     exempt = set(cfg.get("exempt_nets") or [])
     extra_clamps = set(cfg.get("clamps") or [])
     bg = geom.load_board(pcb)
     fps = bg.footprints
     clamps = {r for r, fp in fps.items() if is_clamp(fp, extra_clamps, r)}
-    conns, skipped = [], []
+    conns, skipped, by_fp = [], [], []
     for r in sorted(fps):
         if r in clamps or r in internal:
             continue
@@ -869,10 +944,16 @@ def check(pcb: Path, constraints: dict | None = None,
             continue
         if not CONNECTOR_RE.match(r) or r.upper().startswith("TP"):
             continue
-        if INTERNAL_RE.search(fps[r].get("value") or ""):
-            skipped.append(r)
-            continue
+        if r not in external:
+            if INTERNAL_RE.search(fps[r].get("value") or ""):
+                skipped.append(r)
+                continue
+            if INTERNAL_FP_RE.search(fps[r].get("lib") or ""):
+                by_fp.append(r)
+                continue
         conns.append(r)
+    barriers = sorted(r for r in conns if r in set(cfg.get("barriers") or [])
+                      or BARRIER_RE.search(fp_text(fps[r])))
     graphs: dict = {}
     viols, lines = [], []
     pending = []
@@ -897,6 +978,9 @@ def check(pcb: Path, constraints: dict | None = None,
             fact = {"connector": ref, "pin": cp.number, "net": net,
                     "power": power}
             lines.append(fact)
+            if ref in barriers:
+                fact.update(clamp=None, barrier=ref)
+                continue
             g = graph(net)
             best = g.paths_from(_pad_node(cp))
             cpads = [p for p in on_net if p.ref in clamps]
@@ -918,6 +1002,16 @@ def check(pcb: Path, constraints: dict | None = None,
                         series, cpads = sp.ref, far
                         break
             if not cpads:
+                shunt = shunt_cap(bg, cp, on_net, best)
+                if shunt:
+                    fact.update(clamp=None, shunt_c={
+                        "ref": shunt["ref"],
+                        "uf": checklib.rnd(shunt["farads"] * 1e6, 3),
+                        "mm": checklib.rnd(shunt["mm"], 2),
+                        "routed": shunt["routed"],
+                        "est_v": checklib.rnd(STRIKE_F * level_kv * 1e3
+                                              / shunt["farads"], 3)})
+                    continue
                 sev = "warning" if power else "error"
                 viols.append(checklib.violation(
                     SCRIPT, sev, cp.copper_center, None, net, [ref],
@@ -932,6 +1026,15 @@ def check(pcb: Path, constraints: dict | None = None,
                 fact["series"] = series
                 sp = next(p for p in on_net if p.ref == series)
                 line = _line_to(bg, g, best, cp, sp)
+                fact.update(clamp=cpads[0].ref, mm=checklib.rnd(line["mm"], 2),
+                            routed=line["routed"])
+                if FUSE_REF_RE.match(series) and (
+                        power or is_power(_leaf(net))):
+                    # a rail's input fuse / PPTC ahead of its TVS is the
+                    # usual order (the TVS's fault current opens it); the
+                    # leaf name too, so a sheet's /12V_IN counts as a rail
+                    fact["series_fuse"] = True
+                    continue
                 viols.append(checklib.violation(
                     SCRIPT, "warning", cp.copper_center, None, net,
                     [ref, series, cpads[0].ref],
@@ -939,8 +1042,6 @@ def check(pcb: Path, constraints: dict | None = None,
                     f"{cpads[0].ref} sits behind series part {series}, so "
                     "the strike crosses it first: move the clamp to the "
                     "connector side", SOURCE, kind="esd_behind_series"))
-                fact.update(clamp=cpads[0].ref, mm=checklib.rnd(line["mm"], 2),
-                            routed=line["routed"])
                 continue
             routes = [(_line_to(bg, g, best, cp, p), p) for p in cpads]
             line, clamp = min(routes, key=lambda r: r[0]["mm"])
@@ -1050,6 +1151,7 @@ def check(pcb: Path, constraints: dict | None = None,
     viols += rate_clamps(bg, lines, cfg, constraints or {}, load_esd_clamps())
     return viols, {"level_kv": level_kv, "di_dt_a_per_s": didt,
                    "connectors": conns, "internal_by_value": skipped,
+                   "internal_by_footprint": by_fp, "barriers": barriers,
                    "clamps": sorted(clamps),
                    "lines": lines}
 

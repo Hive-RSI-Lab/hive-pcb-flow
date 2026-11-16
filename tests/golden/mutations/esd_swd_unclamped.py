@@ -2,8 +2,9 @@
 
 SIDECAR fault (copper is the golden's, copied unchanged): constraints.json no
 longer lists J2 (the SWD header) as an internal, bench-only connector, so it
-counts as a user-facing port. The board has no clamp on it, so /SWDIO and
-/SWCLK run from the header pins straight to the MCU. Must be caught by
+counts as a user-facing port, and lists it under esd.external (a pin header
+is internal by its footprint since #1496). The board has no clamp on it, so
+/SWDIO and /SWCLK run from the header pins straight to the MCU. Must be caught by
 check_esd (kind "esd_unclamped", net /SWDIO).
 """
 import sys
@@ -17,6 +18,7 @@ def surgery(text):
     cons = mutlib.golden_json("blinky2", "constraints.json")
     esd = cons["esd"]
     esd["internal"] = [ref for ref in esd["internal"] if ref != "J2"]
+    esd["external"] = ["J2"]
     return text, {"sidecars": {"constraints.json": mutlib.dump_json(cons)},
                   "group": "J2"}
 

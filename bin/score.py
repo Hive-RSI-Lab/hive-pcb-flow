@@ -61,10 +61,10 @@ OFFLINE = {"HWDE_EASYEDA_OFFLINE": "1", "HWDE_STOCK_OFFLINE": "1"}
 # pins:begin
 PINS = {
     "core": "88e1ed0d51fdadfd037b33f90f0aeb09789b5085fae77dc3c6a84392d22b8bd3",
-    "digits-v1": "bd9c872aa04772a82ca9e11579b629c39153c5655564b942c74ab00b01742109",
+    "digits-v1": "5dc437cdbbbe91a3fd64daeafc72273b63babde20fff771f8c8adec5f70b0c0c",
     "hwde-led-test": "f86624731147cb74f1a8158553009777dd8d11b227002f3a10e5cc712ab656ca",
     "lite-main": "e9dce58401a6893d606363fcab8e141fc03022b7e9b14235f9a4c1ac98e9da58",
-    "minuet-v3": "28fd94d5526f3d0c62015c3569e820a8ca2fc03ebcedf1f03bc40c5c29b420ad",
+    "minuet-v3": "01ccf4c167ac497a4752cfeac88e54d415755020a5924da5457c79d3119a03bd",
     "oasis-v0-2": "48498f74efd4f4d800509caf4f386da53fca2f02420744ec1f002e42ad144dc5",
     "ultra-front": "8f5bb5866c46663aa62900277541bbdc045b3295cbe4b45fd94cdc5001d45e88",
 }
