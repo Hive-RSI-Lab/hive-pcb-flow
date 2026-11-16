@@ -225,6 +225,128 @@ def test_a_suspect_datasheet_is_not_read(stand_ins, monkeypatch):
     assert rep["status"] == "datasheet suspect" and calls == []
 
 
+def test_a_pin_connections_page_is_sent():
+    """AMS1117's datasheet heads its pinout "PIN CONNECTIONS" (#815)."""
+    pages = [{"page": 0, "text": "PIN CONNECTIONS 1- Ground/Adjust 2- VOUT"},
+             {"page": 1, "text": "Absolute Maximum Ratings"}]
+    assert amb.pick_pages(pages)[0] == [0, 1]
+
+
+def _table(tmp_path, monkeypatch, url="https://www.ti.com/lit/ds/ldo.pdf"):
+    t = tmp_path / "datasheet_urls.yaml"
+    t.write_text("version: 1\nparts:\n"
+                 "  - mpns: [TESTLDO, TESTLDO-R]\n"
+                 "    brand: Maker Inc\n"
+                 "    package: SOT-23-5 (DBV)\n"
+                 f"    url: {url}\n")
+    monkeypatch.setattr(amb, "DATASHEET_URLS", t)
+
+
+def test_the_maker_table_supplies_a_datasheet_the_listing_lacks(
+        stand_ins, tmp_path, monkeypatch):
+    out, reader, calls = stand_ins
+    (amb.parts_enrich.cache_dir() / "C999.json").write_text(json.dumps({
+        "lcsc": "C999", "mpn": "testldo-r", "brand": "Acme",
+        "package": "SOT-23-5", "datasheet": ""}))
+    assert amb.read_part("C999", [BOARD], out, reader)["status"] == \
+        "no listing with a datasheet URL"
+    _table(tmp_path, monkeypatch)
+    rep = amb.read_part("C999", [BOARD], out, reader)
+    assert rep["status"] == "kept"
+    assert rep["datasheet_from"] == "reference/datasheet_urls.yaml"
+    assert "Maker Inc" in calls[0] and "SOT-23-5 (DBV)" in calls[0]
+    ext = json.loads((out / "ext" / "C999.json").read_text())
+    assert "https://www.ti.com/lit/ds/ldo.pdf" in ext["source_pdf"]
+
+
+def test_an_mpn_with_no_listing_is_read_from_the_maker_table(
+        stand_ins, tmp_path, monkeypatch):
+    out, reader, _ = stand_ins
+
+    def no_listing(key, out):
+        raise RuntimeError("JLC parts search unreachable")
+    monkeypatch.setattr(amb, "find_listing", no_listing)
+    board = _fp("U1", BOARD["pads"], mpn="TESTLDO")
+    assert amb.read_part("mpn:TESTLDO", [board], out, reader)["status"] \
+        == "no listing"
+    _table(tmp_path, monkeypatch)
+    rep = amb.read_part("mpn:TESTLDO", [board], out, reader)
+    assert rep["status"] == "kept" and rep["mpn"] == "TESTLDO"
+
+
+def test_a_datasheet_cached_from_another_url_is_fetched_again(
+        stand_ins, tmp_path, monkeypatch):
+    out, reader, _ = stand_ins
+    fetched = []
+
+    def fetch(url, dest, mpn=None):
+        fetched.append(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"%PDF-1.4 stand-in")
+        if "example.com" in url:        # a scan: kept on disk, not read
+            return {"url": url, "status": "suspect", "file": str(dest),
+                    "assessment": {"reasons": ["no text layer"]}}
+        return {"url": url, "status": "fetched", "file": str(dest)}
+    monkeypatch.setattr(datasheet_extract, "fetch_datasheet", fetch)
+    assert amb.read_part("C999", [BOARD], out, reader)["status"] == \
+        "datasheet suspect"
+    assert amb.read_part("C999", [BOARD], out, reader)["status"] == \
+        "datasheet suspect"
+    assert len(fetched) == 1            # the PDF on disk is cached
+    _table(tmp_path, monkeypatch)
+    assert amb.read_part("C999", [BOARD], out, reader)["status"] == "kept"
+    assert fetched[1] == "https://www.ti.com/lit/ds/ldo.pdf"
+
+
+def test_an_exposed_pad_is_the_boards_pad_after_the_last_pin(stand_ins):
+    out, _, _ = stand_ins
+    ep = {"pin": "EP", "name": "GND", "type": "ground", "page": 1}
+
+    def reader(prompt):
+        return {"package_found": True, "pinout": PINOUT + [ep],
+                "ratings": [_row()]}
+    board = _fp("U1", {**BOARD["pads"], "6": "GND"}, lcsc="C999")
+    rep = amb.read_part("C999", [board], out, reader)
+    assert rep["status"] == "kept"
+    ext = json.loads((out / "ext" / "C999.json").read_text())
+    assert [p["pin"] for p in ext["pinout"]] == ["1", "2", "3", "4", "5"]
+    assert ext["exposed_pad"] == {"present": True, "connect_to": "GND"}
+    assert cr.pinout_fact(board, ext)[0] == "verified"
+    # a seventh pad is still no pin of the part
+    bad = _fp("U1", {**board["pads"], "7": "X"}, lcsc="C999")
+    assert cr.pinout_fact(bad, ext)[0] == "failed"
+
+
+def test_a_row_naming_only_the_exposed_pad_goes_with_it():
+    pinout = [{"pin": "1", "name": "VIN", "type": "power_in"},
+              {"pin": "EP", "name": "PAD", "type": "passive"}]
+    rows = [{"pins": ["VIN"], "max": 6}, {"pins": ["PAD"], "max": 0.3},
+            {"pins": ["VIN"], "ref": "PAD", "max": 6}]
+    rest, kept, ep = amb.split_exposed_pad(pinout, rows)
+    assert [p["pin"] for p in rest] == ["1"] and kept == rows[:1]
+    assert ep == {"present": True, "connect_to": "PAD"}
+    assert amb.split_exposed_pad(rest, kept) == (rest, kept, None)
+
+
+def test_every_maker_table_entry_is_complete_and_fetchable():
+    import yaml
+    researchlib = datasheet_extract._lib("researchlib")
+    doc = yaml.safe_load(amb.DATASHEET_URLS.read_text())
+    seen = set()
+    for e in doc["parts"]:
+        assert set(e) <= {"mpns", "brand", "package", "url", "note"}, e
+        assert e["mpns"] and e["brand"] and e["package"], e
+        ck = researchlib.check_url(e["url"])
+        assert ck["ok"], (e["url"], ck["reason"])
+        for m in e["mpns"]:
+            assert amb.maker_datasheet(m) is e or \
+                amb.maker_datasheet(m)["url"] == e["url"]
+            assert m.upper() not in seen, f"{m} is in two entries"
+            seen.add(m.upper())
+    assert amb.maker_datasheet("") is None
+    assert amb.maker_datasheet("NOT-A-TABLE-PART") is None
+
+
 # ------------------------------------------------- what check_ratings reads
 
 def test_check_ratings_reads_the_extractions_folder(tmp_path):

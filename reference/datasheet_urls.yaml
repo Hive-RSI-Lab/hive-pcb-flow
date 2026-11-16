@@ -1,0 +1,50 @@
+# datasheet_urls.yaml - the maker's datasheet for parts whose LCSC listing
+# names none, or names one the fetcher refuses (#815).
+#
+# abs_max_batch.py reads a part's datasheet from this table when the part's
+# MPN (the board's, or its listing's) is one of an entry's `mpns`, matched
+# exactly with case and spaces aside; the listing's own URL is used only
+# when no entry names the part. The URL must pass the fetch allowlist
+# (reference/knowledge/domains.yaml) like any other.
+#
+# Rules for an entry:
+#  - `url` is the maker's own copy, or LCSC's copy of the maker's PDF when
+#    the maker's site refuses an automated fetch (say so in `note`). Never
+#    another maker's datasheet for a look-alike part.
+#  - `mpns` are part numbers as a board or a listing writes them; every one
+#    must be covered by the datasheet's ordering table.
+#  - `package` is the package the boards place, as the datasheet names it:
+#    the reader is asked for that package's pinout.
+#  - `brand` is the maker as the datasheet names it.
+version: 1
+
+parts:
+  - mpns: [TPS62086, TPS62086RLTR]
+    brand: Texas Instruments
+    package: VSON-7 (RLT)
+    url: https://www.ti.com/lit/ds/symlink/tps62086.pdf
+  - mpns: [DRV8662, DRV8662RGPR, DRV8662RGPT]
+    brand: Texas Instruments
+    package: VQFN-20 (RGP)
+    url: https://www.ti.com/lit/ds/symlink/drv8662.pdf
+  - mpns: [LM2596S-5, LM2596S-5.0, LM2596S-5.0/NOPB]
+    brand: Texas Instruments
+    package: TO-263-5 (KTT)
+    url: https://www.ti.com/lit/ds/symlink/lm2596.pdf
+  - mpns: [LM66100DCK, LM66100DCKR, LM66100DCKT]
+    brand: Texas Instruments
+    package: SC-70-6 (DCK)
+    url: https://www.ti.com/lit/ds/symlink/lm66100.pdf
+  - mpns: [INA233, INA233AIDGSR, INA233AIDGST]
+    brand: Texas Instruments
+    package: VSSOP-10 (DGS)
+    url: https://www.ti.com/lit/ds/symlink/ina233.pdf
+  - mpns: [AP2502]
+    brand: Diodes Incorporated
+    package: SOT-23-6
+    url: https://www.diodes.com/assets/Datasheets/AP2502.pdf
+  - mpns: [SY7200A, SY7200AABC]
+    brand: Silergy
+    package: SOT-23-6
+    url: https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/1810311211_Silergy-Corp-SY7200AABC_C107309.pdf
+    note: LCSC's copy of Silergy's PDF (C107309); silergy.com is not on the allowlist

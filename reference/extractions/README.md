@@ -45,4 +45,8 @@ cache (`<cache>/abs-max/<set>/ext/`), never here, and check_ratings reads
 them only when it is given `--extractions`: this library and a board's own
 `parts/` both win over them. They follow the rules above except that a pin
 the reader was not sure of is left unrated, and a supply row that names no
-pin rates the part's single power input.
+pin rates the part's single power input. A part whose listing names no
+datasheet, or one the fetcher refuses, is read from the maker's datasheet
+when `reference/datasheet_urls.yaml` names its MPN (rules for an entry are
+at the top of that file). An exposed pad goes in `exposed_pad`, not the
+pinout, so a board's pad one past the last pin is that pad.
