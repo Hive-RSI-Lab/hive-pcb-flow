@@ -122,7 +122,8 @@ def _stage_board(pcb: Path, work: Path) -> Path:
     return staged
 
 
-def _export_dsn(bp: Path, staged: Path, dsn: Path, power_layers, work: Path):
+def _export_dsn(bp: Path, staged: Path, dsn: Path, layer_types: dict,
+                work: Path):
     """Specctra export of the staged board, in an order that depends on the
     design alone: footprints by reference (route_swig sort_refs) and nets
     by name (routelib.dsn_sort_nets), pre-routed wiring by text
@@ -130,11 +131,12 @@ def _export_dsn(bp: Path, staged: Path, dsn: Path, power_layers, work: Path):
     UUID, and footprints written without one get a random UUID per load,
     so file order is arbitrary; Freerouting's result follows the DSN
     order, so without this the same board routed differently per save
-    (#1412). --tries still shuffles from this base."""
+    (#1412). --tries still shuffles from this base. layer_types comes from
+    _closed_layers: every copper layer, so none keeps a board type the
+    caller did not choose (#628)."""
     routelib.run_worker(bp, {
         "verb": "export_dsn", "board": str(staged), "dsn": str(dsn),
-        "layer_types": {ly: "power" for ly in power_layers},
-        "sort_refs": True}, work)
+        "layer_types": layer_types, "sort_refs": True}, work)
     text = dsn.read_text(encoding="utf-8")
     dsn.write_text(routelib.dsn_sort_wiring(routelib.dsn_sort_nets(text)),
                    encoding="utf-8")
@@ -290,6 +292,57 @@ def _auto_power_layers(bg: geom.BoardGeom) -> list[str]:
         if has_fill and not has_tracks:
             out.append(layer)
     return out
+
+
+_LAYER_TYPE_RE = re.compile(
+    r'\(\s*\d+\s+"([^"]+\.Cu)"\s+(signal|power|mixed|jumper)\b')
+
+
+def _board_layer_types(text: str) -> dict[str, str]:
+    """{copper layer: type} from the board file's (layers ...) section."""
+    return dict(_LAYER_TYPE_RE.findall(text))
+
+
+def _closed_layers(spec: str, bg: geom.BoardGeom, board_types: dict
+                   ) -> tuple[list[str], dict[str, str], list[str]]:
+    """--power-layers -> (layers closed to signals, the type each copper
+    layer exports with, warnings). The DSN marks a power layer "(type
+    power)" and Freerouting runs no signal on it; KRT and the maze finish
+    get the other layers.
+
+    An explicit list (or none) is the whole answer: a layer not named
+    exports as signal even when the board types it power. Before #628 the
+    list only added layers, so a board-typed power layer stayed closed
+    while KRT and the maze finish routed on it.
+
+    auto closes the inner layers with a fill and no tracks, and keeps the
+    board's own power layers closed too (planes_gen types a layer power
+    only when it is a plane, #925); a board-typed power layer that auto
+    would not pick is named in a warning, since it may be routing space
+    the board types wrong."""
+    copper = list(bg.copper_layers)
+    warns: list[str] = []
+    if spec == "auto":
+        picked = _auto_power_layers(bg)
+        typed = [ly for ly in copper if board_types.get(ly) == "power"]
+        odd = [ly for ly in typed if ly not in picked]
+        closed = [ly for ly in copper if ly in picked or ly in typed]
+        if odd:
+            warns.append(
+                f"{', '.join(odd)}: typed power on the board, so routing "
+                "keeps it closed to signals, but it is not a filled plane "
+                "without tracks; pass --power-layers with the plane layers "
+                "to open it (facts.board_layer_types)")
+    else:
+        names = ([] if spec in ("none", "") else
+                 [x.strip() for x in spec.split(",") if x.strip()])
+        bad = [ly for ly in names if ly not in copper]
+        if bad:
+            raise CheckError(f"--power-layers: {', '.join(bad)} is not a "
+                             f"copper layer of this board ({', '.join(copper)})")
+        closed = [ly for ly in copper if ly in names]
+    types = {ly: ("power" if ly in closed else "signal") for ly in copper}
+    return closed, types, warns
 
 
 def _routable_nets(bg: geom.BoardGeom) -> set[str]:
@@ -625,7 +678,9 @@ def route_probe(pcb: Path, *, passes: int = 4, timeout_s: int = 180,
         kc.run_drc(cli, staged, refill=True, save_board=True)
         bg = geom.BoardGeom.from_file(staged)  # power layers need fresh fills
     dsn, ses = work / "probe.dsn", work / "probe.ses"
-    _export_dsn(bp, staged, dsn, _auto_power_layers(bg), work)
+    _export_dsn(bp, staged, dsn, _closed_layers(
+        "auto", bg, _board_layer_types(staged.read_text(encoding="utf-8")))[1],
+        work)
     _dsn_net_rules(staged, dsn)
     _dsn_layer_widths(staged, dsn)
     _dsn_track_bans(staged, dsn, bg)
@@ -1107,7 +1162,11 @@ def run(argv: list[str] | None = None):
     ap.add_argument("--exclude-classes", default=None,
                     help="net classes Freerouting must not route (-inc)")
     ap.add_argument("--power-layers", default="auto",
-                    help='"auto" | none | comma list, e.g. "In1.Cu,In2.Cu"')
+                    help='"auto" | none | comma list, e.g. "In1.Cu,In2.Cu": the '
+                         'layers closed to signals. A list or none is the '
+                         'whole set (a board-typed power layer left out '
+                         'opens); auto takes filled inner layers without '
+                         'tracks plus the board\'s power layers')
     ap.add_argument("--max-rungs", type=int, default=len(routelib.DEFAULT_LADDER))
     ap.add_argument("--timeout-s", type=int, default=3600,
                     help="per-rung Freerouting HARD wall-clock cap")
@@ -1175,14 +1234,11 @@ def run(argv: list[str] | None = None):
     td_vias = _teardrop_vias(staged)
 
     # 2. DSN export (plane layers marked power)
-    if args.power_layers == "auto":
-        power_layers = _auto_power_layers(bg)
-    elif args.power_layers in ("none", ""):
-        power_layers = []
-    else:
-        power_layers = [s.strip() for s in args.power_layers.split(",") if s.strip()]
+    board_types = _board_layer_types(staged.read_text(encoding="utf-8"))
+    power_layers, layer_types, layer_warns = _closed_layers(
+        args.power_layers, bg, board_types)
     dsn = work / (pcb.stem + ".dsn")
-    _export_dsn(bp, staged, dsn, power_layers, work)
+    _export_dsn(bp, staged, dsn, layer_types, work)
     dsn_net_rules = _dsn_net_rules(staged, dsn)
     dsn_layer_widths = _dsn_layer_widths(staged, dsn)
     dsn_track_bans = _dsn_track_bans(staged, dsn, bg)
@@ -1528,6 +1584,7 @@ def run(argv: list[str] | None = None):
             "fr_completion": routelib.completion_fraction(best_facts)
             if fr_ok else None,
             "power_layers": power_layers,
+            "board_layer_types": board_types,
             "dsn_net_rules": dsn_net_rules,
             "dsn_layer_widths": dsn_layer_widths,
             "dsn_track_bans": dsn_track_bans,
@@ -1549,12 +1606,14 @@ def run(argv: list[str] | None = None):
     payload["facts"]["preexisting"] = {"vias": len(pre["vias"]),
                                        "tracks": len(pre["tracks"]),
                                        "lost": lost}
+    if layer_warns:
+        payload.setdefault("warnings", []).extend(layer_warns)
     if lost:
         nv = sum(it["kind"] == "via" for it in lost)
-        payload["warnings"] = [
+        payload.setdefault("warnings", []).extend([
             f"{nv} via(s) and {len(lost) - nv} track(s) placed before routing"
             " are gone from the routed board (facts.preexisting.lost); put "
-            "them back or confirm they were meant to go"]
+            "them back or confirm they were meant to go"])
     if adjust_request:
         payload["facts"]["placement_adjust_request"] = adjust_request
     return payload, args.out_report

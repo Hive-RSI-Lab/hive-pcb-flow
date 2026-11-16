@@ -73,7 +73,7 @@ def test_export_dsn_is_the_same_whatever_the_footprint_order(tmp_path):
         work = tmp_path / f"w-{name}"
         work.mkdir()
         dsn = tmp_path / f"{name}.dsn"
-        route_auto._export_dsn(bp, pcb, dsn, [], work)
+        route_auto._export_dsn(bp, pcb, dsn, {}, work)
         sorted_[name] = _body(dsn)
         plain = tmp_path / f"{name}-plain.dsn"
         routelib.run_worker(bp, {"verb": "export_dsn", "board": str(pcb),
