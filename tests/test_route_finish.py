@@ -874,3 +874,132 @@ def test_at_the_coarse_margin_the_ball_is_boxed_in(tmp_path, monkeypatch):
     monkeypatch.setattr(rf, "FINE_MARGIN_MM", 0.02)
     _, jobs = _bga_plan(tmp_path)
     assert jobs[0]["status"] != "routed"
+
+
+# ----------------------------------------------- #682: pair and courtyard rules
+
+HV_DRU = DRU + """(rule "aiee_hv_SIG"
+	(constraint clearance (min 0.5000mm))
+	(condition "A.NetName == 'SIG'")
+)
+"""
+
+HV_WAIVER = """(rule "aiee_hv_waived_SIG_GND"
+	(constraint clearance (min 0.1500mm))
+	(condition "A.NetName == 'SIG' && B.NetName == 'GND'")
+)
+"""
+
+HV_COURT = """(rule "aiee_pkg_rating_U1"
+	(constraint clearance (min 0.1200mm))
+	(condition "A.intersectsCourtyard('U1') && B.intersectsCourtyard('U1') && A.Type != 'Zone' && B.Type != 'Zone'")
+)
+"""
+
+
+def _hv_part(ref, x, y):
+    """_fine_pitch with the middle pad SIG: 0.25 mm from its GND
+    neighbours, inside SIG's 0.5 mm HV clearance."""
+    return _fine_pitch(ref, x, y).replace('"+3V3"', '"SIG"')
+
+
+def _hv_board(tmp_path, dru):
+    # a +3V3 pad beside the way out, which SIG's 0.5 mm still holds off
+    body = (_hv_part("U1", 10, 15) + _pad("U2", 10, 5, "SIG")
+            + _pad("U3", 11.6, 10, "+3V3"))
+    return _board(tmp_path, body, dru=dru)
+
+
+def _hv_pair():
+    return _pair("SIG", (10, 15), (10, 5), amsg="Pad 3 [SIG] of U1 on F.Cu",
+                 bmsg="Pad 1 [SIG] of U2 on F.Cu")
+
+
+def _gaps(job, bg, net):
+    """min gap of the job's tracks to each other net's pads."""
+    out: dict = {}
+    for op in _tracks(job):
+        seg = LineString([op["start"], op["end"]]).buffer(op["width"] / 2)
+        for p in rf.Obstacles(bg).items:
+            if p.kind != "pad" or p.net in (net, ""):
+                continue
+            d = seg.distance(p.shape) - p.half
+            out[p.net] = min(out.get(p.net, 9.0), d)
+    return out
+
+
+@pytest.mark.parametrize("extra", [HV_WAIVER, HV_COURT],
+                         ids=["waiver", "courtyard"])
+def test_a_pair_or_courtyard_rule_frees_an_hv_fine_pitch_escape(tmp_path,
+                                                                extra):
+    """The planted fault of #682: the HV value read net-wide walls the pad
+    in; the later waiver or package rule DRC reads lets it out, and the
+    route holds that rule's value, no less, and 0.5 mm to +3V3."""
+    pcb = _hv_board(tmp_path, HV_DRU + extra)
+    rules, jobs = _plan(pcb, [_hv_pair()], grid=0.05, margin=4)
+    job = jobs[0]
+    assert job["status"] == "routed", job
+    assert rules.net_clr("SIG", "GND") == 0.5 and rules.pair is not None
+    bg = geom.BoardGeom.from_file(pcb)
+    gaps = _gaps(job, bg, "SIG")
+    low = 0.15 if extra is HV_WAIVER else 0.12
+    assert gaps["GND"] >= low - 1e-6 and gaps["GND"] < 0.5
+    assert gaps.get("+3V3", 9.0) >= 0.5 - 1e-6
+    route_edit.validate_ops({"version": 1, "ops": job["ops"]})
+
+
+def test_an_hv_pad_with_no_waiver_is_walled_in(tmp_path):
+    """The quiet twin: no rule lowers SIG to GND, so the pad stays failed,
+    and the reason says it is walled in, by what, at what value."""
+    pcb = _hv_board(tmp_path, HV_DRU)
+    rules, jobs = _plan(pcb, [_hv_pair()], grid=0.05, margin=4)
+    assert rules.pair is None
+    job = jobs[0]
+    assert job["status"] == "failed" and job.get("walled"), job
+    assert job["reason"] == ("no path: U1 pad 3 walled in: SIG held 0.5 mm"
+                             " (rule aiee_hv_SIG) from GND"), job["reason"]
+    assert "via_in_pad" not in job and "rip_uuids" not in job
+
+
+def test_a_pad_boxed_in_by_tracks_is_not_walled_in(tmp_path):
+    """A pad held only by tracks that may move is no wall: the old reason."""
+    body = _pad("U1", 10, 15, "SIG", size=0.4) + _pad("U2", 10, 5, "SIG")
+    for y in (14.2, 15.8):
+        body += _seg(8, y, 12, y, 0.3, "F.Cu", "GND", uuid=f"g{y}")
+    for x in (9.2, 10.8):
+        body += _seg(x, 13, x, 17, 0.3, "F.Cu", "GND", uuid=f"h{x}")
+    one = HDR.replace('(2 "B.Cu" signal) ', "")
+    p = tmp_path / "t.kicad_pcb"
+    p.write_text(one + '  (gr_rect (start 0 0) (end 30 30) (stroke (width'
+                 ' 0.1)) (fill no) (layer "Edge.Cuts"))\n' + body + ")\n",
+                 encoding="utf-8")
+    p.with_suffix(".kicad_dru").write_text(DRU, encoding="utf-8")
+    rules, jobs = _plan(p, [_pair("SIG", (10, 15), (10, 5))], grid=0.1,
+                        margin=4)
+    job = jobs[0]
+    assert job["status"] != "routed"
+    assert not job.get("walled") and "walled" not in job["reason"]
+
+
+def test_pair_rules_resolve_the_last_rule_that_holds(tmp_path):
+    pcb = _hv_board(tmp_path, HV_DRU + HV_WAIVER + HV_COURT)
+    bg = geom.BoardGeom.from_file(pcb)
+    rules = rf.board_rules(pcb, bg)
+    pr = rules.pair
+    obs = rf.Obstacles(bg)
+    pads = {(it.ref, it.number): it for it in obs.items if it.kind == "pad"}
+    gnd, v33 = pads[("U1", "2")], pads[("U3", "1")]
+    out = rf.Probe("SIG", "track", (), {"F.Cu"})
+    inside = rf.Probe("SIG", "track", pr.courts_of(pads[("U1", "3")]),
+                      {"F.Cu"})
+    # the waiver: SIG to GND anywhere; the courtyard rule, last, wins inside
+    assert pr.value(out, gnd) == (0.15, "aiee_hv_waived_SIG_GND")
+    assert pr.value(inside, gnd) == (0.12, "aiee_pkg_rating_U1")
+    # the +3V3 pad is outside U1's courtyard: the package rule can't hold
+    assert pr.value(inside, v33) == (0.5, None)
+    # no rule for SIG to +3V3: the net-wide HV value
+    assert pr.value(out, v33) == (0.5, None)
+    assert rules.item_clr(out, v33) == pytest.approx(0.5 + rules.margin)
+    # a via is no track: the waiver names no type, so it holds for one too
+    via = rf.Probe("SIG", "via", (), {"F.Cu", "B.Cu"})
+    assert pr.value(via, gnd)[0] == 0.15

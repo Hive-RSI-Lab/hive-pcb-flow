@@ -7,6 +7,7 @@ $FAKE_WORLD): {conn id: kind}. Connections sort by id, like shortest first.
 Kinds:
   ok      routes
   fail    no path
+  walled  no path: walled in by fixed copper (route_finish's #682 note)
   die     the chunk is killed searching it (no report)
   poison  routes, but its pass is rejected as a group
   lose    routes, and takes the board's first track with it
@@ -102,6 +103,9 @@ def main():
         if kind == "cut":
             jobs.append({**job, "status": "skipped",
                          "reason": "cut by the deadline"})
+        elif kind == "walled":
+            jobs.append({**job, "status": "failed", "walled": True,
+                         "reason": "no path: U1 pad 3 walled in: " + cid})
         elif kind == "fail" or (kind == "riponly"
                                 and "--no-rip-board" in argv):
             jobs.append({**job, "status": "failed",
