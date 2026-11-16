@@ -443,8 +443,12 @@ def plan(fps: list[dict], sources: dict[str, dict]) -> tuple[list, dict,
         clash = None
         for kind, (val, src) in add.items():
             row = sources[src].get(ref, {})
-            theirs = {val} if kind == "mpn" else set(row.get("mpn") or ())
-            theirs |= set(row.get("label") or ())
+            if f"names_{kind}" in row:    # borrowed: that number's own row
+                theirs = set(row[f"names_{kind}"])
+            else:
+                theirs = ({val} if kind == "mpn"
+                          else set(row.get("mpn") or ()))
+                theirs |= set(row.get("label") or ())
             if disagree(board_names(fp), theirs):
                 clash = {"ref": ref, "source": src,
                          "board": sorted(board_names(fp)),
@@ -587,25 +591,25 @@ def from_other_revision(fps: list[dict], other_fps: list[dict],
                         other: dict) -> tuple[dict, int]:
     """{ref: {kind: {value}}} the other revision's own sources give the same
     ref, first source wins as in plan(), where the two footprints match; and
-    how many refs were not borrowed because they did not. Each row also
-    carries, as "label", the part names the source rows it came from give
-    (their MPN and Comment/Value), so plan() refuses a borrowed number whose
-    own row plainly disagrees with this board's Value, as it does for the
-    board's own BOM: a swap in the other revision's BOM is not passed on."""
+    how many refs were not borrowed because they did not. Each borrowed
+    number carries, as "names_code"/"names_mpn", the part names of the one
+    source row it came from (that row's MPN and Comment/Value), so plan()
+    refuses it where that row plainly disagrees with this board's Value, as
+    it does for the board's own BOM: a swap in the other revision's BOM is
+    not passed on, even where another source names the right part."""
     mine = {fp["ref"]: fp_key(fp) for fp in fps if fp["ref"]}
     theirs = {fp["ref"]: fp_key(fp) for fp in other_fps if fp["ref"]}
     out: dict[str, dict[str, set]] = {}
     unmatched = 0
     for ref in sorted(mine):
         got = {}
-        names: set[str] = set()
         for kind in ("code", "mpn"):
             for s in SOURCES[:3]:
                 row = other[s].get(ref, {})
                 vals = row.get(kind)
                 if vals:
                     got[kind] = set(vals)
-                    names |= set(row.get("mpn") or ()) | set(
+                    got[f"names_{kind}"] = set(row.get("mpn") or ()) | set(
                         row.get("label") or ())
                     break
         if not got:
@@ -613,8 +617,6 @@ def from_other_revision(fps: list[dict], other_fps: list[dict],
         if theirs.get(ref) != mine[ref]:
             unmatched += 1
             continue
-        if names:
-            got["label"] = names
         out[ref] = got
     return out, unmatched
 

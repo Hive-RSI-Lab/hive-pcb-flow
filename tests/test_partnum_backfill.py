@@ -284,7 +284,7 @@ def test_generic_values_are_not_judged():
     assert not pnb.disagree({"4k7"}, {"10K"})
 
 
-def _borrow(tmp: Path, rows: str) -> tuple[dict, Path]:
+def _borrow(tmp: Path, rows: str, parts: str = "") -> tuple[dict, Path]:
     """rev_a ships the BOM, rev_b (this board) borrows from it; both carry
     the amplifier as U1 and an LDO as U2 on matching footprints."""
     a, b = tmp / "rev_a", tmp / "rev_b"
@@ -296,6 +296,8 @@ def _borrow(tmp: Path, rows: str) -> tuple[dict, Path]:
                name="Package_TO_SOT_SMD:SOT-23-5"))
     pa, pb = _board(a, *fps), _board(b, *fps)
     (a / "bom.csv").write_text("Comment,Designator,LCSC\n" + rows)
+    if parts:
+        (a / "parts.json").write_text(parts)
     out, rep = tmp / "out.kicad_pcb", tmp / "r.json"
     assert pnb.main(["--pcb", str(pb), "--src-pcb", str(pb), "--repo",
                      str(b), "--other-pcb", str(pa), "--other-src-pcb",
@@ -327,3 +329,17 @@ def test_the_other_revisions_bom_in_order_is_borrowed(tmp_path):
     assert got["U1"]["LCSC"] == "C43216" and got["U2"]["LCSC"] == "C2862740"
     assert rep["counts"]["part_conflicts"] == 0
     assert rep["counts"]["added_from"]["other_revision"] == 2
+
+
+def test_a_borrowed_swap_is_refused_even_where_another_source_agrees(
+        tmp_path):
+    """The other revision's parts.json names the right MPNs while its BOM
+    swaps the LCSC codes: each code is judged by its own BOM row, so the
+    agreeing MPN does not let the swapped code through."""
+    parts = ('[{"refdes": ["U1"], "mpn": "AD8232ACPZ-R7"},'
+             ' {"refdes": ["U2"], "mpn": "TPS7A2033PDBVR"}]')
+    rep, out = _borrow(tmp_path, "TPS7A2028PDBVR,U1,C2862740\n"
+                                 "AD8232ACPZ-R7,U2,C43216\n", parts)
+    got = _props(out)
+    assert "LCSC" not in got["U1"] and "LCSC" not in got["U2"]
+    assert rep["counts"]["part_conflicts"] == 2
