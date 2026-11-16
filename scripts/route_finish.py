@@ -90,6 +90,7 @@ from shapely.geometry import LineString, Point, box  # noqa: E402
 from shapely.strtree import STRtree  # noqa: E402
 from scipy import ndimage  # noqa: E402
 
+import check_wicking  # noqa: E402
 import checklib  # noqa: E402
 import env  # noqa: E402
 import geom  # noqa: E402
@@ -108,8 +109,12 @@ SPOKES_MIN = 2                # KiCad's min_resolved_spokes default: fewer
 #                               is DRC's starved thermal (#1140)
 SPOKE_DEFAULTS = (0.5, 0.5, 0.25)   # KiCad's thermal gap, spoke width and zone
 #                                     min thickness when the board says none
-VIA_PAD_KEEP_MM = 0.1         # drill edge to an own-net SMD pad: past its
-#                               mask opening and registration (check_wicking)
+VIA_PAD_KEEP_MM = 0.1         # drill edge to an own-net SMD pad's mask
+#                               opening: past its registration (check_wicking)
+VIA_WEB_NEAR_MM = 0.25        # check_wicking NEAR_MM: an untented via this
+#                               close to a pad needs a full mask dam
+PAD_VIA_TRIES = 3             # parts tried one at a time to name the pads a
+#                               failed route needs a via in (#636)
 FINE_MARGIN_MM = 0.005        # #923 point 3, the fine rung's clearance margin:
 #                               0.5 mm-pitch balls leave ~0.25 mm, which a floor
 #                               track fits under 0.005 but not the default 0.02
@@ -144,6 +149,25 @@ class Rules:
     #                       track and via rules (#1140)
     sized_nets: frozenset = frozenset()   # nets a DRU width or gap rule
     #       sizes, whatever its bounds: never ripped (#1140)
+    mask: dict | None = None   # check_wicking.via_keep_model: pad mask
+    #       margins and untented sides, None when the board sets none (#636)
+    pad_vias: bool = False   # every own-net SMD pad takes a via: only the
+    #       search that names the pad a failed route needs (#636)
+
+    def pad_via_keep(self, ref: str, number: str, via_r: float,
+                     drill: float) -> float:
+        """How far a via's centre keeps off an own-net SMD pad's copper
+        (#636): its hole out of the pad's mask opening by VIA_PAD_KEEP_MM,
+        and an untented via's own opening a full dam from the pad's (or
+        VIA_WEB_NEAR_MM off its copper), as check_wicking measures them."""
+        m = self.mask or {}
+        side, margin = (m.get("pads") or {}).get((ref, number), (None, 0.0))
+        margin = max(margin, 0.0)
+        keep = drill / 2 + margin + VIA_PAD_KEEP_MM
+        if side and (m.get("open") or {}).get(side):
+            keep = max(keep, via_r + 0.01 + min(
+                VIA_WEB_NEAR_MM, m["via_margin"] + margin + m["dam"]))
+        return keep
 
     def net_layers(self, net: str, layers) -> list:
         """Of `layers`, those the board's DRU lets the net have a track on
@@ -252,6 +276,7 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
             list(bg.copper_layers), net_classes=classes,
             layer_names=getattr(bg, "layer_user_names", None)),
         sized_nets=frozenset(rc.dru_sized_nets(dru, bg.nets, classes)),
+        mask=check_wicking.via_keep_model(pcb),
         margin=margin, **hdi)
 
 
@@ -327,6 +352,7 @@ class Item:
     tied: frozenset = frozenset()  # nets this copper may touch (a net tie's)
     smd: bool = False      # an SMD pad: no via of its own net inside it
     ref: str = ""          # a pad's footprint ref
+    number: str = ""       # and its number
 
 
 class Obstacles:
@@ -363,7 +389,8 @@ class Obstacles:
             dp = p.drill_poly if p.drill else None
             items.append(Item(p.net or "", frozenset(p.layers) & cu, p.poly,
                               0.0, dp if dp is not None and not dp.is_empty
-                              else None, smd=p.kind == "smd", ref=p.ref))
+                              else None, smd=p.kind == "smd", ref=p.ref,
+                              number=p.number))
         # DRC sees this copper as netless, so a track through it is a short
         for c in bg.fp_copper:
             items.append(Item("", frozenset({c["layer"]}), c["shape"], 0.0,
@@ -1026,13 +1053,15 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
                     + rules.margin), *args)
                 if m:
                     vblk[m[0]] |= m[1]
-        if it.smd and not other and it.ref not in rules.via_in_pad_refs:
+        if it.smd and not other and not rules.pad_vias \
+                and it.ref not in rules.via_in_pad_refs:
             # no via in its own net's SMD pad: the open barrel wicks the
             # joint's solder (check_wicking wick_via_in_pad), and via-in-pad
             # is a paid fab option a route may not take on its own; only
             # --via-in-pad-refs parts take one (fill them after: route_edit
-            # fill_vias)
-            m = _mask(it.shape, via_drill / 2 + VIA_PAD_KEEP_MM, *args)
+            # fill_vias). The keep is from the pad's mask opening (#636).
+            m = _mask(it.shape, rules.pad_via_keep(it.ref, it.number, vr,
+                                                   via_drill), *args)
             if m:
                 vblk[m[0]] |= m[1]
         if it.hole is not None:
@@ -1839,14 +1868,15 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
     exits = stub_exits(bg) if rules.spans else {}
     inner_cost = {"inner_cost": 1.0} if rules.spans else {}
 
-    def search(job, hide=False, board=False):
+    def search(job, hide=False, board=False, base=None):
         """(path, grid, width) over the ladder: the window, a wider window,
         then a finer grid at the net's floor width for a pad boxed in by
         its neighbours, kept close to the ends: under a large --margin that
         grid is several GB. That rung's clearance margin is FINE_MARGIN_MM,
         so a floor track fits between 0.5 mm-pitch balls (#923). An HDI build's net with no rule on its copper takes
         the floor width from the start. hide: leave this pass's own routes
-        out."""
+        out. base: the rules to search under (default: the pass's)."""
+        rules_ = base or rules
         net = job["net"]
         if not rules.net_layers(net, layers):
             job["banned"] = sorted(layers)      # #1140: DRC would fail it
@@ -1864,12 +1894,12 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
         if board:
             obs.soft_board = keep_nets
         fine = dataclasses.replace(
-            rules, margin=min(rules.margin, FINE_MARGIN_MM))
+            rules_, margin=min(rules.margin, FINE_MARGIN_MM))
         guards = list(obs.guards)
         try:
             for m, g, (w, v), rr in (
-                    (margin, grid, start, rules),
-                    (margin * 2.5, grid, start, rules),
+                    (margin, grid, start, rules_),
+                    (margin * 2.5, grid, start, rules_),
                     (min(margin, 4.0), grid / 2, floor, fine)):
                 (ax, ay), (bx, by) = job["pa"], job["pb"]
                 win = (min(ax, bx) - m, min(ay, by) - m,
@@ -1935,6 +1965,54 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
 
     def expired():
         return deadline is not None and time.monotonic() >= deadline
+
+    def _in_pads(path, gr, w, net) -> list:
+        """(ref, pad) of the own-net SMD pads a path's vias sit in."""
+        out = []
+        for op in path_to_ops(gr, path, net, w, rules):
+            if op["op"] != "add_via":
+                continue
+            at = Point(op["at"])
+            vr, vd = op["size"] / 2, op["drill"]
+            for it in obs.near(at.buffer(vr + 1.0)):
+                if it.smd and it.net == net \
+                        and it.ref not in rules.via_in_pad_refs \
+                        and it.shape.distance(at) < rules.pad_via_keep(
+                            it.ref, it.number, vr, vd) - 1e-6 \
+                        and (it.ref, it.number) not in out:
+                    out.append((it.ref, it.number))
+        return sorted(out)
+
+    def _needs_pad_via(job) -> list:
+        """(ref, pad) of the own-net SMD pads a failed job's route would
+        put a via in: searched with every pad's via keep lifted, then, when
+        that takes more than one part, with one part's lifted at a time
+        (the fewest to name). [] when it fails that way too."""
+        net = job["net"]
+        # a search that ran out of nodes would only run out again
+        if expired() or job.get("gave_up") or not any(
+                it.smd and it.net == net
+                and it.ref not in rules.via_in_pad_refs for it in obs.items):
+            return []
+        held = {k: job[k] for k in ("gave_up", "pour_cut") if k in job}
+        try:
+            path, gr, w = search(job, base=dataclasses.replace(
+                rules, pad_vias=True))
+            found = _in_pads(path, gr, w, net) if path else []
+            refs = sorted({r for r, _ in found})
+            for r in refs[:PAD_VIA_TRIES] if len(refs) > 1 else ():
+                if expired():
+                    break
+                path, gr, w = search(job, base=dataclasses.replace(
+                    rules, via_in_pad_refs=rules.via_in_pad_refs | {r}))
+                if path:
+                    return [(r, n) for rr, n in _in_pads(path, gr, w, net)
+                            if rr == r] or found
+            return found
+        finally:
+            for k in ("gave_up", "pour_cut"):
+                job.pop(k, None)
+            job.update(held)
 
     queue = list(range(len(todo)))
     ripped_once: set[int] = set()
@@ -2037,6 +2115,18 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                     if job.get("banned") else
                     "search stopped at --max-nodes; a path may exist"
                     if job.get("gave_up") else "no path on the grid"))
+                if not job.get("banned"):
+                    in_pad = _needs_pad_via(job)
+                    if in_pad:
+                        # #636: no via in a pad unasked; say which pad
+                        # would take one, and how to allow it
+                        refs = sorted({r for r, _ in in_pad})
+                        job["via_in_pad"] = [f"{r} pad {n}" for r, n in in_pad]
+                        job["reason"] = (
+                            "routes only with a via in "
+                            + ", ".join(job["via_in_pad"])
+                            + "; to allow it (filled and capped), pass "
+                            f"--via-in-pad-refs {','.join(refs)}")
         if log:
             log(f"{steps} {job['net']}: {job['status']}")
     for j in jobs:

@@ -331,8 +331,37 @@ def read_pads(root, dflt: dict) -> dict[str, list[dict]]:
             out.setdefault(ref, []).append({
                 "ref": ref, "number": str(pad[1]), "kind": kind,
                 "cu_side": cu_side, "copper": copper, "mask": mask,
-                "center": c, "fp_side": side})
+                "center": c, "fp_side": side, "margin": mm})
     return out
+
+
+# what in a board's text can open a mask wider than its copper, or a via's
+_MASK_TOKENS = re.compile(r"\((?:solder_mask_margin|pad_to_mask_clearance)"
+                          r"\s+-?0*\.?0*[1-9]|\((?:tenting|viasonmask|filling|"
+                          r"capping|solder_mask_min_width)\b")
+
+
+def via_keep_model(pcb: Path, dam_mm: float = DAM_MM) -> dict | None:
+    """What a router needs to keep a new via clear of this check (#636):
+    {"pads": {(ref, number): (side, mask margin)} for its SMD pads with a
+    mask opening, "open": {side: True} where a new
+    via is untented and neither filled nor capped, "via_margin": the
+    board's mask margin round a via, "dam": the dam minimum}. None when
+    the board sets none of these (every pad's opening is its copper and
+    vias are tented), read without parsing the board."""
+    text = Path(pcb).read_text(encoding="utf-8")
+    if not _MASK_TOKENS.search(text):
+        return None
+    root = sexpdata.loads(text)
+    dflt = board_defaults(root)
+    pads = {(p["ref"], p["number"]): (p["cu_side"], float(p["margin"]))
+            for ps in read_pads(root, dflt).values() for p in ps
+            if p["kind"] == "smd" and p["cu_side"] in p["mask"]}
+    sealed = dflt["filling"] or dflt["capping"]
+    return {"pads": pads,
+            "open": {s: not dflt["tenting"][s] and not sealed for s in SIDES},
+            "via_margin": dflt["mask_margin"],
+            "dam": max(dam_mm, dflt["mask_min_width"])}
 
 
 def _gerber_dir(pcb: Path, explicit: str | None) -> Path | None:
