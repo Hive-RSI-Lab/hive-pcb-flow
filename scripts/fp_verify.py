@@ -179,6 +179,77 @@ PAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,7}$")
 BALL = re.compile(r"^([A-Z]{1,2})(\d{1,3})$")
 
 
+# A plain copper dot under this on its longest side is no land: neither a
+# pad to count nor a size (#1379). A custom pad is another matter: its size
+# is only the anchor under its primitives (EasyEDA draws an exposed pad as
+# a 0.005 mm anchor and a polygon: an esp32c3's 49, a DFN5x6's 5, a QFN's
+# 17), so it is a land to count but has no size to judge
+SLIVER_MM = 0.05
+
+def _sliver(p) -> bool:
+    return p.shape != "custom" and max(p.size) < SLIVER_MM
+
+
+def _sized(p) -> bool:
+    """A pad whose size is its land's: not a dot, not a custom anchor"""
+    return p.shape != "custom" and not _sliver(p)
+
+
+def _exposed_pads(copper: list) -> set[str]:
+    """Numbers of an exposed pad: every pad with the number sits strictly
+    inside the box of the other numbered pads' centres, and the number is on
+    more than one pad (an exposed pad split for paste) or on a pad of 2.5
+    times the leads' commonest area. A BGA's inner balls are inside the box
+    too, but one ball to a number and of the balls' size (#1379)"""
+    by: dict = {}
+    for q in copper:
+        if q.number and not _sliver(q):
+            by.setdefault(q.number, []).append(q)
+    areas = Counter(round(q.size[0] * q.size[1], 4)
+                    for qs in by.values() if len(qs) == 1 for q in qs
+                    if _sized(q))
+    common = areas.most_common(1)[0][0] if areas else 0.0
+    out = set()
+    for n, ps in by.items():
+        rest = [q for m, qs in by.items() if m != n for q in qs]
+        if len(rest) < 2:
+            continue
+        xs = [q.center[0] for q in rest]
+        ys = [q.center[1] for q in rest]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        inside = all(x0 + 0.01 < q.center[0] < x1 - 0.01
+                     and y0 + 0.01 < q.center[1] < y1 - 0.01 for q in ps)
+        big = common > 0 and any(_sized(q) and
+                                 q.size[0] * q.size[1] >= 2.5 * common
+                                 for q in ps)
+        if inside and (len(ps) > 1 or big):
+            out.add(n)
+    return out
+
+
+def _cover(copper: list, ep: set[str], land: dict, exp: float,
+           measured: list[float]) -> float | None:
+    """The share of the record's land, along the lead, that the board's
+    pads cover: rows at the measured spacing nearest `exp`, each as long as
+    the commonest long side of the lead pads, against the record's rows at
+    `exp`, each as long as pad_size_mm's long side. None without a record
+    pad size or a lead pad. check_fp_geometry calls a row spacing whose
+    cover reaches its COVER_FRAC info (#1378)"""
+    try:
+        lr = max(float(x) for x in land["pad_size_mm"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    sides = Counter(round(max(q.size), 3) for q in copper
+                    if q.number not in ep and _sized(q))
+    if not sides or not measured or lr <= 0:
+        return None
+    lb = sides.most_common(1)[0][0]
+    m = min(measured, key=lambda x: abs(x - exp))
+    lo = max((m - lb) / 2, (exp - lr) / 2)
+    hi = min((m + lb) / 2, (exp + lr) / 2)
+    return max(0.0, hi - lo) / lr
+
+
 def _median_step(lines: dict) -> tuple[float, float] | None:
     """Median per-index step along lines of (index, x, y); gaps divide out."""
     steps = []
@@ -1058,13 +1129,36 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         viol.append(checklib.violation(
             "fp_verify", sev, pos, "F.Cu", None, refs, msg, SOURCE, kind=kind, **extra))
 
-    # --- pad count
+    # --- pad count. A record counts pins: an exposed pad split for paste
+    # is one pin on many pads, a plain copper dot is none (a custom pad's
+    # tiny anchor is one: its land is its polygon), and many records leave
+    # the exposed pad out of the count. So the count matches on raw pads or
+    # on distinct numbers (with no gap in 1..max), a miss by just the
+    # exposed pad is info, and an error names the numbers skipped (#1379)
+    ep = _exposed_pads(copper)
     if "pad_count" in land:
         expected = int(land["pad_count"])
-        if len(copper) != expected:
+        lands = [p for p in copper if not _sliver(p)]
+        nums = {p.number for p in lands if p.number}
+        digits = sorted(int(n) for n in nums if n.isdigit())
+        skipped = ([n for n in range(1, digits[-1] + 1) if str(n) not in nums]
+                   if digits else [])
+        if expected == len(lands) or (expected == len(nums) and not skipped):
+            pass
+        elif ep and len(nums - ep) == expected and not skipped:
+            v("info", None,
+              f"{len(nums)} pad numbers against the record's {expected}: "
+              f"the record leaves out the exposed pad {', '.join(sorted(ep))}",
+              "pad_count_ep", expected=expected, measured=len(nums),
+              exposed=sorted(ep))
+        else:
+            gap = (f"; numbers skipped: {', '.join(map(str, skipped))}"
+                   if skipped else "")
             v("error", None,
-              f"copper pad count {len(copper)} != datasheet {expected}",
-              "pad_count", expected=expected, measured=len(copper))
+              f"copper pad count {len(lands)} ({len(nums)} numbers) != "
+              f"datasheet {expected}{gap}",
+              "pad_count", expected=expected, measured=len(lands),
+              numbers=len(nums), skipped=skipped)
 
     # --- pin 1 present. A record's pin1 that is a sentence names no pad,
     # and a depopulated A1 ball is absent by design (#1127): neither is a
@@ -1492,7 +1586,9 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               f"(tol {size_tol}, centre to centre): the rows may miss the "
               "lead feet",
               "row_spacing", expected_mm=exp,
-              measured_mm=[round(m, 4) for m in measured_rows])
+              measured_mm=[round(m, 4) for m in measured_rows],
+              cover=(None if (c := _cover(copper, ep, land, exp, measured_rows))
+                     is None else round(c, 3)))
 
     # --- pad size (warning): bound MIN and MAX, never the mode - a 10/10 tie
     # on an asymmetric SSOP-20 hid a column 0.25 mm over the datasheet max
@@ -1500,9 +1596,11 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
     # a pad turned a quarter: pads judged axis by axis above are left out,
     # and so are pads the drawing sizes one by one that couldn't be judged
     # there (split, custom or at an odd angle): pad_size_mm isn't their
-    # size, and a custom pad's size is only its anchor's
+    # size, and a custom pad's size is only its anchor's. The exposed pad
+    # and pads with no size of their own are left out too
     rest = [p for p in copper
-            if id(p) not in size_judged and id(p) not in size_unjudged]
+            if id(p) not in size_judged and id(p) not in size_unjudged
+            and p.number not in ep and _sized(p)]
     if land.get("pad_size_mm") and rest:
         exp = tuple(sorted(float(x) for x in land["pad_size_mm"]))
         distinct = sorted({tuple(round(v_, 3) for v_ in sorted(p.size))

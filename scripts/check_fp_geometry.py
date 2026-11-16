@@ -595,7 +595,7 @@ def lcsc_of(fp: FP) -> str | None:
 # courtyard (check_fp_package, check_annular_ring and place_metrics see
 # those on the board)
 RECORD_KINDS = {
-    "pad_count": "pad_count", "pin1_missing": "pin1",
+    "pad_count": "pad_count", "pad_count_ep": "pad_count", "pin1_missing": "pin1",
     "pin1_mark_off_corner": "pin1_mark", "pad_numbering": "pin_order",
     "pad_pitch": "pitch", "row_spacing": "row_spacing",
     "row_spacing_unmeasured": "row_spacing_unmeasured",
@@ -779,6 +779,10 @@ _SEV_RANK = {"error": 0, "warning": 1, "info": 2}
 # 220-finding board run were these (#1332); a two-terminal land's gap and
 # toe are judged instead (gap_severity, land_edges)
 INFO_BASES = ("nearest_pads", "sorted")
+# A row spacing off the record's whose pads still cover this share of the
+# maker's land along the lead (fp_verify's cover) differs by the choice of
+# land, not a misplaced row: info (#1378)
+COVER_FRAC = 0.9
 
 
 def gap_allowed(stated, tol: float = RECORD_SIZE_TOL_MM) -> tuple[float, float]:
@@ -841,6 +845,8 @@ def record_severity(v: dict) -> str:
     """The severity a record finding is reported at: info for one on a
     basis in INFO_BASES, gap_severity's for a land gap, else fp_verify's."""
     if v.get("basis") in INFO_BASES:
+        return "info"
+    if v.get("kind") == "row_spacing" and (v.get("cover") or 0) >= COVER_FRAC:
         return "info"
     if v.get("kind") == "land_gap" and v.get("measured_mm") is not None and v.get("expected_mm"):
         return gap_severity(v["measured_mm"], v.get("stated_mm") or v["expected_mm"],
@@ -1277,6 +1283,10 @@ def check(pcb: Path, live: bool = False, easyeda_cache: Path | None = None,
                     why = (gap_note(v["measured_mm"], v.get("stated_mm") or v["expected_mm"])
                            if kind == "fp_land_gap_vs_record" and v.get("measured_mm")
                            is not None and v.get("expected_mm") else "")
+                    if kind == "fp_row_spacing_vs_record" and (v.get("cover") or 0) >= COVER_FRAC:
+                        why = (f"its pads cover {v['cover']:.0%} of the maker's land along "
+                               "the lead, so the rows still catch the feet: the spacing "
+                               "differs by the choice of land")
                     why = f" ({why})" if why else ""
                     add(fp, record_severity(v), kind,
                         f"against its part record {rec.get('mpn') or rpath.stem} ({cite}): "

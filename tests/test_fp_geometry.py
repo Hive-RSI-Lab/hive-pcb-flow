@@ -861,6 +861,92 @@ def test_record_nearest_pad_pitch_is_info(tmp_path, stock):
     assert v[0]["basis"] == "nearest_pads"
 
 
+# an SO-8-EP's exposed pad, split in four for paste, all numbered 9
+EP4 = "".join(pad("9", x, y, w=1.0, h=1.4) for x in (-0.55, 0.55) for y in (-0.8, 0.8))
+
+
+def test_record_pad_count_reads_numbers_and_leaves_out_the_ep(tmp_path, stock):
+    """#1379 quiet twins: the record counts pins, so an exposed pad split for
+    paste is one pin (9 numbers, 12 pads), a 0.005 mm copper dot is no pad,
+    and a record of 8 that leaves the exposed pad out is info. The EP's own
+    size is no lead's pad_size"""
+    dot = pad("10", 0, 0, w=0.005, h=0.005)
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8EP", pads_of(SOIC) + EP4 + dot,
+                                    props=PART))
+    k, judged, _, _ = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=9)))
+    assert k == [] and judged == {"record": 1}
+    k, _, _, v = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=8)))
+    assert k == [("U1", "fp_pad_count_vs_record", "info")]
+    assert v[0]["exposed"] == ["9"] and "leaves out the exposed pad 9" in v[0]["msg"]
+
+
+# an exposed pad drawn the EasyEDA way: a 0.005 mm anchor under a polygon
+EP_CUSTOM = ('\t\t(pad "9" smd custom (at 0 0) (size 0.005 0.005) '
+             '(layers "F.Cu" "F.Paste" "F.Mask") (options (clearance outline) '
+             '(anchor rect)) (primitives (gr_poly (pts (xy -1.05 -1.5) '
+             '(xy 1.05 -1.5) (xy 1.05 1.5) (xy -1.05 1.5)) (width 0) '
+             '(fill yes))))\n')
+
+
+def test_record_custom_ep_anchor_is_a_pad_but_no_size(tmp_path, stock):
+    """#1379 quiet twin from the sweep: a custom exposed pad's 0.005 mm
+    anchor is a land (bldc's DFN5x6 pin 5, lipo's QFN pin 17), so a record
+    of 9 that counts it is quiet, and its anchor is no pad size. Planted
+    twin: the same footprint against a record of 10 is still an error"""
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8EP", pads_of(SOIC) + EP_CUSTOM,
+                                    props=PART))
+    k, judged, _, _ = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=9)))
+    assert k == [] and judged == {"record": 1}
+    k, _, _, v = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=10)))
+    assert ("U1", "fp_pad_count_vs_record", "error") in k
+    assert "fp_pad_size_vs_record" not in {x[1] for x in k}
+
+
+def test_record_pad_count_names_a_missing_pin_beside_a_split_ep(tmp_path, stock):
+    """#1379 planted: pin 3 gone from an SO-8-EP. Its 11 pads, 8 numbers
+    or 7 without the EP match no count, and the gap in 1..9 is named"""
+    so = {n: c for n, c in SOIC.items() if n != "3"}
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8EP", pads_of(so) + EP4, props=PART))
+    for want in (9, 8):
+        k, _, _, v = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=want)))
+        assert ("U1", "fp_pad_count_vs_record", "error") in k, want
+        hit = [x for x in v if x["kind"] == "fp_pad_count_vs_record"][0]
+        assert hit["skipped"] == [3] and "numbers skipped: 3" in hit["msg"]
+
+
+def test_record_ep_size_is_left_out_but_a_wrong_lead_is_not(tmp_path, stock):
+    """#1379: the split EP's 1.0 x 1.4 is not the leads' pad_size; a lead
+    pad off the record's size is still found beside it"""
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8EP", pads_of(SOIC) + EP4, props=PART))
+    k, _, _, _ = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=9)))
+    assert "fp_pad_size_vs_record" not in {x[1] for x in k}
+    leads = {n: c for n, c in SOIC.items() if n != "5"}
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8EP", pads_of(leads) + EP4
+                                    + pad("5", *SOIC["5"], w=1.95, h=1.0), props=PART))
+    k, _, _, v = rcheck(pcb, stock, record(tmp_path, soic_land(pad_count=9)))
+    assert ("U1", "fp_pad_size_vs_record", "info") in k  # basis "sorted"
+    hit = [x for x in v if x["kind"] == "fp_pad_size_vs_record"][0]
+    assert [1.0, 1.95] in hit["measured_mm"] and [1.0, 1.4] not in hit["measured_mm"]
+
+
+def test_record_row_spacing_that_still_covers_the_land_is_info(tmp_path, stock):
+    """#1378: rows 4.95 mm apart with 1.95 mm pads against a record of 4.75
+    with 1.95 mm pads: the board's pads cover 95% of the maker's land along
+    the lead, a choice of land, so info. Planted twin: against 4.0 they
+    cover 76%, and the rows may miss the feet: an error"""
+    pcb = board(tmp_path, footprint("U1", "Mine:SO8", pads_of(SOIC), props=PART))
+    k, _, _, v = rcheck(pcb, stock, record(tmp_path, soic_land(row_spacing_mm=4.75)))
+    assert ("U1", "fp_row_spacing_vs_record", "info") in k
+    hit = [x for x in v if x["kind"] == "fp_row_spacing_vs_record"][0]
+    assert hit["cover"] == pytest.approx(0.949, abs=1e-3)
+    assert "the spacing differs by the choice of land" in hit["msg"]
+    k, _, _, v = rcheck(pcb, stock, record(tmp_path, soic_land(row_spacing_mm=4.0)))
+    assert ("U1", "fp_row_spacing_vs_record", "error") in k
+    hit = [x for x in v if x["kind"] == "fp_row_spacing_vs_record"][0]
+    assert hit["cover"] == pytest.approx(0.756, abs=1e-3)
+    assert "choice of land" not in hit["msg"]
+
+
 def test_record_with_nothing_to_judge_still_counts_pads(tmp_path, stock):
     parts = record(tmp_path, {"pad_count": 3, "pin1": "1"})
     pcb = board(tmp_path, footprint("C1", "Mine:CHIP", chip(0.75), props=PART))
