@@ -470,13 +470,19 @@ def bga_rules(bg, cap: dict, stackup: dict | None = None
         fv = None if hdi else bgalib.fine_via(b, len(bg.copper_layers),
                                               cap, free)
         ep = bgalib.escape_params(b, {**floors, **fv} if fv else floors)
+        pv = None
+        if not fv and not hdi:      # route_escape's shrunk in-pad vias (#552)
+            pv = bgalib.pad_via(b, len(bg.copper_layers), cap, free,
+                                ep["via_size"])
+            if pv and not bgalib.holds_pad_vias(bg, b, pv):
+                pv = None
         name = bgalib.rule_name(b.ref)
         clr = float(caps["min_clearance_mm"]) if hdi else ep["clearance"]
         rules.append(Rule(name, "clearance", clr,
                           condition=bgalib.rule_condition(b.ref)))
-        if fv:      # route_escape's fine via (#1252): the same rule text
+        if fv or pv:    # route_escape's fine via (#1252): the same text
             rules.append(TextRule(bgalib.fine_rule_name(b.ref),
-                                  bgalib.fine_rule(b.ref, fv)))
+                                  bgalib.fine_rule(b.ref, fv or pv)))
         if hdi:
             add_hdi(hdilib.field_rules(b.ref, float(caps["min_trace_width_mm"]),
                                        clr, bgalib.rule_condition(b.ref)))
@@ -486,7 +492,9 @@ def bga_rules(bg, cap: dict, stackup: dict | None = None
                       "method": "underpad" if fv else ep["method"],
                       "rule": name,
                       **({"fine_via_rule": bgalib.fine_rule_name(b.ref)}
-                         if fv else {})})
+                         if fv or pv else {}),
+                      **({"pad_via_mm": [pv["via_diameter"],
+                                         pv["via_drill"]]} if pv else {})})
     return rules, facts
 
 

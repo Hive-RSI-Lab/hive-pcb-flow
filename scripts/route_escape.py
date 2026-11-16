@@ -66,7 +66,14 @@ falls back to via-in-pad, so with --allow-via-in-pad each field's NEW
 in-pad vias are checked (vip_conflicts) against every via (hole to hole,
 copper) and every foreign track (a floor-size 0.45 via bulges past a 0.32
 pad onto stubs KRT threaded past the pad); a clashing in-pad ball loses its
-escape and its neighbour keeps a clean one (DRC alone rips both). A ball
+escape and its neighbour keeps a clean one (DRC alone rips both). Where the
+stack fills vias for free (6+ layers) and the fab's smallest filled via fits
+inside the pad (lib/bgalib pad_via), each kept in-pad via wider than that is
+swapped for it at the same centre (shrink_pad_vias) before the clash check,
+and the courtyard gets its floors (aiee_bga_fine_via_<ref>, which rules_gen
+keeps while those vias are on the board): an 8x8 0.8 mm field on 6 layers
+keeps all 64 balls where the 0.45 vias lost three. The fact's pad_via.fab_cost
+names the price (JLC's 0.15 hole is a paid via tier; dfm_check flags it). A ball
 net with a .kicad_dru track-width rule wider than the escape track
 (VBUS_J1's 0.32 neck) is not given to KRT (held_wide); left for the
 routers. A net whose balls sit in its courtyard neck zone (rules_gen's
@@ -374,6 +381,38 @@ def field_necks(bg, bga: bgalib.Bga, necks: dict) -> dict[str, float]:
             continue
         out[pd.net] = max(out.get(pd.net, 0.0), min(ws))
     return out
+
+
+def pad_via_fact(bga: bgalib.Bga, pv: dict) -> dict:
+    """The plan/result fact for a field's #552 pad via."""
+    return {"via_mm": [pv["via_diameter"], pv["via_drill"]],
+            "rule": bgalib.fine_rule_name(bga.ref),
+            "hole_to_hole": pv["hole_to_hole"],
+            "fab_cost": (f"filled {pv['via_diameter']:g}/{pv['via_drill']:g}"
+                         " mm via in the pad: filling is free on this stack,"
+                         " the small hole is JLC's paid via option "
+                         "(dfm_check dfm_via_cost_tier)")}
+
+
+def shrink_pad_vias(staged: Path, bg, bga: bgalib.Bga, new_uuids: set[str],
+                    pv: dict) -> int:
+    """Swap each NEW through via-in-pad of the field (in_pad_vias) wider
+    than the pad via `pv` for one of pv's size at the same centre (#552).
+    A ball's own tracks join it at that centre, so they stay connected.
+    Returns how many were swapped."""
+    first, last = bg.copper_layers[0], bg.copper_layers[-1]
+    ops = []
+    for v in in_pad_vias(bg, bga, new_uuids):
+        if v.diameter <= pv["via_diameter"] + 1e-6 or \
+                not (v.spans(first) and v.spans(last)):
+            continue
+        ops += [{"op": "remove", "uuid": v.uuid},
+                {"op": "add_via", "at": list(v.at),
+                 "size": pv["via_diameter"], "drill": pv["via_drill"],
+                 "net": v.net}]
+    if ops:
+        rc.route_edit.apply_ops(staged, ops)
+    return len(ops) // 2
 
 
 def vip_conflicts(bg, bga: bgalib.Bga, new_uuids: set[str],
@@ -1151,6 +1190,11 @@ def run(argv: list[str] | None = None):
                            f" layers: filled {fv['via_diameter']:g}/"
                            f"{fv['via_drill']:g} mm via in the pad "
                            "(JLC's BGA guide; POFV free from 6 layers)"))
+        elif fine_cap:  # #552: kept in-pad vias that overhang the pad
+            pv = bgalib.pad_via(b, len(bg0.copper_layers), fine_cap,
+                                free_filled_via_layers(), ep["via_size"])
+            if pv:
+                ep["pad_via"] = pv
         if args.method:
             ep["method"] = args.method
         layers, planes = escape_layers(bg0, b, explicit_layers)
@@ -1168,6 +1212,8 @@ def run(argv: list[str] | None = None):
                              "hole_clearance": fv["hole_clearance"],
                              "rule_clearance": p["ep"]["rule_clearance"]}}
                if fv else {}),
+            **({"pad_via": pad_via_fact(p["bga"], p["ep"]["pad_via"])}
+               if p["ep"].get("pad_via") else {}),
             "plane_layers": p["planes"],
             **({"pairs": p["pairs"], "pair_gap_mm": p["pair_gap"]}
                if p["pairs"] else {}),
@@ -1196,7 +1242,8 @@ def run(argv: list[str] | None = None):
     dru_text, rules_changed = bgalib.ensure_rules(
         dru_text, [(p["bga"].ref,
                     p["ep"].get("rule_clearance", p["ep"]["clearance"]),
-                    p["ep"].get("fine_via")) for p in plans])
+                    p["ep"].get("fine_via") or p["ep"].get("pad_via"))
+                   for p in plans])
     if rules_changed:
         dru.write_text(dru_text, encoding="utf-8")
     pristine = {f.name: f.read_bytes() for f in work.iterdir()
@@ -1281,7 +1328,18 @@ def run(argv: list[str] | None = None):
             r["via_in_pad"]["items_removed"] = rc.rip_new_copper(
                 staged, old_uuids, set(vip))
         elif vip:
-            clash = vip_conflicts(bg, b, new, (ep.get("fine_via") or floors)
+            if ep.get("pad_via"):
+                # #552: KRT lays the in-pad fallback at the dog-bone's via;
+                # it shrinks to the filled pad via inside the pad
+                n = shrink_pad_vias(staged, bg, b, new, ep["pad_via"])
+                r["via_in_pad"]["shrunk"] = n
+                if n:
+                    bg = geom.BoardGeom.from_file(staged)
+                    new = {x.uuid for x in list(bg.tracks_of())
+                           + list(bg.vias_of())
+                           if x.uuid and x.uuid not in old_uuids}
+            clash = vip_conflicts(bg, b, new, (ep.get("fine_via")
+                                               or ep.get("pad_via") or floors)
                                   ["hole_to_hole"], ep["clearance"])
             if clash:
                 r["via_in_pad"]["clashing"] = sorted(clash)
