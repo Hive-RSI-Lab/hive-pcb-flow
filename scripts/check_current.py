@@ -3122,17 +3122,9 @@ def run(argv=None):
     _DEADLINE[0] = t0 + args.time_budget if args.time_budget > 0 else None
     timed_out: list[str] = []
 
-    def judged(net, fn):
-        """fn() for one net, or None when the budget ran out in it (the net
-        and every one after it go to timed_out, judged no further)."""
-        if timed_out:
-            timed_out.append(net)
-            return None
-        try:
-            return fn()
-        except OverBudget:
-            timed_out.append(net)
-            return None
+    # Each net is judged by a direct call (so the constraint-key scan sees
+    # its reads); OverBudget in it, or a budget already spent, puts the net
+    # and every one after it in timed_out, judged no further.
 
     cons = (checklib.load_json(args.constraints, "constraints")
             if args.constraints else {})
@@ -3155,8 +3147,13 @@ def run(argv=None):
     violations: list[dict] = []
     checked: list[dict] = []
     for entry in entries:
-        r = judged(entry.get("net"), partial(check_net, bg, entry, cons))
-        if r is None:
+        if timed_out:
+            timed_out.append(entry.get("net"))
+            continue
+        try:
+            r = check_net(bg, entry, cons)
+        except OverBudget:
+            timed_out.append(entry.get("net"))
             continue
         vs, facts = r
         violations.extend(vs)
@@ -3164,8 +3161,13 @@ def run(argv=None):
     inferred, unrated = inferred_switch_entries(entries, bg, switch_rows())
     no_load: list[dict] = []
     for entry in ([] if mismatch else inferred):
-        r = judged(entry["net"], partial(judge_switch_node, bg, entry, cons))
-        if r is None:
+        if timed_out:
+            timed_out.append(entry["net"])
+            continue
+        try:
+            r = judge_switch_node(bg, entry, cons)
+        except OverBudget:
+            timed_out.append(entry["net"])
             continue
         vs, facts, nl = r
         violations.extend(vs)
@@ -3173,8 +3175,14 @@ def run(argv=None):
         if nl:
             no_load.append(nl)
     ret_entry = derived_return_entry(entries, bg)
-    r = None if ret_entry is None else judged(
-        ret_entry["net"], partial(check_net, bg, ret_entry, cons))
+    r = None
+    if ret_entry is not None and timed_out:
+        timed_out.append(ret_entry["net"])
+    elif ret_entry is not None:
+        try:
+            r = check_net(bg, ret_entry, cons)
+        except OverBudget:
+            timed_out.append(ret_entry["net"])
     if r is not None:
         vs, facts = r
         violations.extend(vs)
