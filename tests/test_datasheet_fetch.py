@@ -730,3 +730,127 @@ def test_a_bracketed_packaging_code_is_cut_and_tried_again():
     assert m and m["cut"]
     m, _ = datasheet_extract.match_mpn("S10B-XH-SM4-TB(LF)(SN)", texts)
     assert m is None
+
+
+# ---- a line with no datasheet URL (#692) -----------------------------------
+#
+# fmcw-radar's parts.json named no datasheet for any of its 44 lines, so
+# --fetch got 0 of 44. A line with none takes its LCSC id's own listing's URL,
+# and a line whose URL is missing or brings another part's PDF goes to
+# dsresolve.resolve with the listing's brand.
+
+def _no_url_ws(tmp_path, line):
+    (tmp_path / "parts").mkdir()
+    (tmp_path / "parts/parts.json").write_text(json.dumps({"parts": [line]}))
+    return tmp_path
+
+
+def _never(*a, **k):
+    raise AssertionError("not to be called")
+
+
+def test_a_line_with_no_url_takes_its_lcsc_listings(tmp_path):
+    ws = _no_url_ws(tmp_path, {"lcsc": "C1", "mpn": MPN})
+    asked = []
+
+    def lookup(lcsc):
+        asked.append(lcsc)
+        return {"lcsc": "C1", "mpn": MPN, "brand": "Acme", "datasheet": WMSC}
+    out, code = datasheet_extract.do_fetch(
+        Namespace(fetch=str(ws), lcsc=None), transport=_serve(RIGHT),
+        lookup=lookup, resolve=_never)
+    r = out["datasheets"][0]
+    assert code == 0 and r["status"] == "fetched" and asked == ["C1"], out
+    assert r["via"] == "LCSC listing C1 (Acme)", r
+    idx = _index_of(ws)["C1"]
+    assert idx["url"] == WMSC and idx["via"] == r["via"] and idx["status"] == "ok"
+
+
+def test_a_line_with_its_own_url_is_not_looked_up():
+    with tempfile.TemporaryDirectory() as d:
+        ws = _no_url_ws(Path(d), {"lcsc": "C1", "mpn": MPN, "datasheet": WMSC})
+        out, code = datasheet_extract.do_fetch(
+            Namespace(fetch=str(ws), lcsc=None), transport=_serve(RIGHT),
+            lookup=_never, resolve=_never)
+        assert code == 0 and out["datasheets"][0]["via"] == "parts.json", out
+
+
+def test_no_url_anywhere_goes_to_the_resolver_with_the_listings_brand(tmp_path):
+    ws = _no_url_ws(tmp_path, {"lcsc": "C1", "mpn": MPN})
+    seen = []
+
+    def resolve(mpn, brand, dest):
+        seen.append((mpn, brand))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(RIGHT)
+        got = datasheet_extract.fetch_datasheet(WMSC, dest, mpn=mpn,
+                                                transport=_serve(RIGHT))
+        return {"url": WMSC, "got": got, "tried": [],
+                "via": "Acme URL pattern for TESTPART123"}
+    out, code = datasheet_extract.do_fetch(
+        Namespace(fetch=str(ws), lcsc=None), transport=_serve(RIGHT),
+        lookup=lambda lcsc: {"lcsc": "C1", "mpn": MPN, "brand": "Acme",
+                             "datasheet": ""},
+        resolve=resolve)
+    r = out["datasheets"][0]
+    assert code == 0 and r["status"] == "fetched", out
+    assert seen == [(MPN, "Acme")] and r["via"].startswith("Acme URL"), r
+    assert (ws / "parts/datasheets/C1.pdf").read_bytes() == RIGHT
+
+
+def test_another_parts_pdf_goes_to_the_resolver_and_a_miss_keeps_it_suspect(
+        tmp_path):
+    """The listing serves another part's sheet (the planted case): the
+    resolver is asked, finds none, and the file stays as suspect, with every
+    step named."""
+    ws = _no_url_ws(tmp_path, {"lcsc": "C1", "mpn": MPN})
+    out, code = datasheet_extract.do_fetch(
+        Namespace(fetch=str(ws), lcsc=None), transport=_serve(WRONG),
+        lookup=lambda lcsc: {"lcsc": "C1", "mpn": MPN, "brand": "Acme",
+                             "datasheet": WMSC},
+        resolve=lambda m, b, d: {"miss": "refused", "tried": [
+            {"url": "https://acme.example/x.pdf", "kind": "wrong"}]})
+    r = out["datasheets"][0]
+    assert code == 1 and r["status"] == "suspect" and r["miss"] == "refused", r
+    assert "no datasheet URL in parts.json" in r["error"], r
+    assert "LCSC listing C1 (Acme) URL: suspect" in r["error"], r
+    assert "resolver: refused" in r["error"] and r["tried"], r
+    assert _index_of(ws)["C1"]["status"] == "suspect"
+
+
+def test_a_resolved_pdf_replaces_another_parts(tmp_path):
+    ws = _no_url_ws(tmp_path, {"lcsc": "C1", "mpn": MPN, "datasheet": WMSC})
+
+    def resolve(mpn, brand, dest):
+        dest.write_bytes(RIGHT)
+        got = datasheet_extract.fetch_datasheet(WMSC, dest, mpn=mpn,
+                                                transport=_serve(RIGHT))
+        return {"url": WMSC, "got": got, "tried": [], "via": "maker pattern"}
+    out, code = datasheet_extract.do_fetch(
+        Namespace(fetch=str(ws), lcsc=None), transport=_serve(WRONG),
+        lookup=_never, resolve=resolve)
+    assert code == 0 and out["datasheets"][0]["via"] == "maker pattern", out
+    assert _index_of(ws)["C1"]["status"] == "ok"
+
+
+def test_offline_no_url_names_each_step_and_asks_no_one(tmp_path):
+    """conftest sets HWDE_EASYEDA_OFFLINE: the listing lookup and the LCSC
+    search refuse; a part whose maker the table does not know is a miss."""
+    ws = _no_url_ws(tmp_path, {"lcsc": "C1", "mpn": "QQZ9"})
+    out, code = datasheet_extract.do_fetch(
+        Namespace(fetch=str(ws), lcsc=None), transport=_serve(RIGHT))
+    r = out["datasheets"][0]
+    assert code == 1 and r["status"] == "missing", r
+    assert "offline (HWDE_EASYEDA_OFFLINE)" in r["error"], r
+    assert r["miss"] == "maker not known" and "resolver: maker not known" \
+        in r["error"], r
+    assert not (ws / "parts/datasheets").exists()
+
+
+def test_a_line_with_no_lcsc_id_is_named():
+    with tempfile.TemporaryDirectory() as d:
+        ws = _no_url_ws(Path(d), {"mpn": MPN})
+        out, code = datasheet_extract.do_fetch(
+            Namespace(fetch=str(ws), lcsc=None), transport=_serve(RIGHT),
+            lookup=_never, resolve=_never)
+        assert code == 1 and "no LCSC id" in out["datasheets"][0]["error"]

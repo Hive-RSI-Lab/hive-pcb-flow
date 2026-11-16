@@ -115,7 +115,7 @@ entry against its line here before you accept it.
 - A board library named `power` shadows KiCad's `power:` symbols, and the schematic build fails with "power:VCC not found". Give the board library another name.
 - A stock DFN footprint can carry its die pad on F.Cu only, with no paste or mask layer. Read the pad's layers before trusting that the pad is soldered.
 - A `lib_pull` interrupted part-way leaves symbols with `unspecified` pins (ERC floods with pin_to_pin) and footprints without their fixups (an absolute 3D path, a courtyard smaller than the pads). Rerun the pull, or run the fixes on their own.
-- `datasheet_extract --fetch` needs a `datasheet` URL in the part's row; without one there is nothing to fetch.
+- `datasheet_extract --fetch` takes a row with no `datasheet` URL from its LCSC id's own listing, then from the maker by MPN and brand (`via` in index.json says which). A brand missing from reference/datasheet_makers.yaml is named as "maker not known"; a row with no LCSC id is not fetched.
 - A footprint made in pcbnew code with `FootprintLoad` and no `SetFPID` has an empty library id. It reads as `footprint_symbol_mismatch`, and after a full route `ImportSpecctraSES` returned False with no message. Set the FPID on every footprint you create.
 
 ## Output contract (end your final message with exactly this block)
