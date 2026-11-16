@@ -1016,3 +1016,51 @@ def test_a_kicad_drawn_revision_is_read_as_it_is(tmp_path):
     repo = ec.repo_dir(tmp_path, b, "rev_a")
     _corpus_sheet(repo / "hw" / "top.kicad_sch", "bedlift")
     assert ec.typed_repo(tmp_path, b, "rev_a") == repo
+
+
+def test_the_five_board_checks_run_with_their_inputs(tmp_path):
+    # #1540: courtyard, body clash, model fit, antenna and converter
+    repo = tmp_path / "repo"
+    (repo / "hw" / "lib.3dshapes").mkdir(parents=True)
+    (repo / ".git" / "x.3dshapes").mkdir(parents=True)
+    (repo / "hw" / "b.kicad_pcb").write_text("(kicad_pcb (version 20240108))")
+    b = {"id": "x", "rev_a": {"pcb": "hw/b.kicad_pcb"}}
+    empty = tmp_path / "run" / "constraints.json"
+    empty.parent.mkdir()
+    pcb = str(repo / "hw" / "b.kicad_pcb")
+    argv = {s: ec.RUNNERS[s](b, "rev_a", repo, empty) for s in (
+        "check_courtyard", "check_body_clash", "check_model_fit",
+        "check_antenna", "check_converter")}
+    assert argv["check_courtyard"] == ["check_courtyard.py", "--pcb", pcb]
+    assert argv["check_body_clash"] == [
+        "check_body_clash.py", "--pcb", pcb, "--constraints", str(empty),
+        "--parts", str(tmp_path / "run" / "no-parts"),
+        "--model-dir", str(repo / "hw" / "lib.3dshapes")]
+    assert not (tmp_path / "run" / "no-parts").exists()
+    for s in ("check_model_fit", "check_antenna"):
+        assert argv[s] == [f"{s}.py", "--pcb", pcb, "--constraints", str(empty)]
+    assert argv["check_converter"][-2:] == [
+        "--table", str(ec.ROOT / "reference" / "converter_limits.yaml")]
+    assert (ec.ROOT / "reference" / "converter_limits.yaml").is_file()
+
+
+def test_model_checks_resolve_kiprjmod_at_the_revisions_board(tmp_path, monkeypatch):
+    # the board they read may be a copy in the run dir; ${KIPRJMOD} models
+    # must still resolve beside the revision's own board
+    (tmp_path / "hw").mkdir()
+    b = {"id": "h", "rev_a": {"pcb": "hw/b.kicad_pcb"}}
+    monkeypatch.setattr(ec, "repo_dir", lambda cache, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "typed_repo", lambda cache, b, rev: tmp_path)
+    monkeypatch.setattr(ec, "SCRIPTS", tmp_path)
+    (tmp_path / "env.py").write_text(
+        "import json, os, sys\n"
+        "out = sys.argv[sys.argv.index('--out') + 1]\n"
+        "json.dump({'violations': [{'kind': os.environ.get('KIPRJMOD', '-')}]},"
+        " open(out, 'w'))\n")
+    for s in ("check_model_fit", "check_courtyard"):
+        monkeypatch.setitem(ec.RUNNERS, s, lambda b, rev, d, c: ["env.py"])
+    monkeypatch.setenv("KIPRJMOD", "-")
+    assert ec.audit(tmp_path, b, "rev_a", "check_model_fit") == [
+        {"kind": str((tmp_path / "hw").resolve())}]
+    assert ec.audit(tmp_path, b, "rev_a", "check_courtyard") == [{"kind": "-"}]
+    assert ec.MODEL_CHECKS <= set(ec.RUNNERS)

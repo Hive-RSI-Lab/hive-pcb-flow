@@ -44,7 +44,12 @@ extractions), check_thermal on the board
 (the power ICs thermal_parts.yaml knows), and dfm's shipped-CPL check on the
 CPL a revision published (its `cpl:`, the file the designer sent the
 assembler), with that CPL's LCSC models fetched live into the cache beside a
-copy of it. A catch for another script is reported as not run. A board
+copy of it. check_courtyard, check_antenna and check_converter run on the
+board (check_converter with reference/converter_limits.yaml, rails from net
+names and feedback dividers), and check_body_clash and check_model_fit on
+the board with KIPRJMOD at the revision's own board folder, so
+${KIPRJMOD} models resolve as in KiCad (check_body_clash also gets the
+checkout's *.3dshapes folders as --model-dir and no parts/). A catch for another script is reported as not run. A board
 older than KiCad 8 (KiCad 5's `module` footprints, which geom doesn't read,
 or KiCad 6/7's `fp_text reference`, which placelib reads no reference from,
 #1123) is first brought to the current format by `kicad-cli pcb upgrade` on a copy in the run
@@ -627,6 +632,58 @@ def _dfm(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
             "--skip", "copper,drill,silk,castellation,zone_fill,netlist"]
 
 
+def _model_dirs(repo: Path) -> list[str]:
+    """--model-dir for each *.3dshapes folder in the checkout, where a model
+    whose path does not resolve (an absolute path from the designer's
+    machine) is looked up by name."""
+    return [a for d in sorted(repo.rglob("*.3dshapes"))
+            if d.is_dir() and ".git" not in d.relative_to(repo).parts
+            for a in ("--model-dir", str(d))]
+
+
+def _check_courtyard(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """Courtyard overlaps between placed footprints (#1540)."""
+    return ["check_courtyard.py", "--pcb", str(_pcb(b, rev, repo, empty))]
+
+
+def _check_body_clash(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """The 3D bodies against each other, the holes and the outline (#1540).
+    --parts names a folder that does not exist (no foreign parts/ is read);
+    the checkout's *.3dshapes folders are --model-dir, and audit() points
+    KIPRJMOD at the revision's own board folder (MODEL_CHECKS)."""
+    return ["check_body_clash.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--constraints", str(empty), "--parts", str(empty.parent / "no-parts"),
+            *_model_dirs(repo)]
+
+
+def _check_model_fit(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """Each footprint's 3D model on its own pads (#1540); KIPRJMOD as for
+    check_body_clash."""
+    return ["check_model_fit.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--constraints", str(empty)]
+
+
+def _check_antenna(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """A module's antenna keepout and edge placement (#1540)."""
+    return ["check_antenna.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--constraints", str(empty)]
+
+
+def _check_converter(b: dict, rev: str, repo: Path, empty: Path) -> list[str]:
+    """Switchers judged from the board alone (#1540): reference/
+    converter_limits.yaml and inductor_ratings.yaml, rails from net names and
+    feedback dividers, no load current stated."""
+    return ["check_converter.py", "--pcb", str(_pcb(b, rev, repo, empty)),
+            "--constraints", str(empty),
+            "--table", str(ROOT / "reference" / "converter_limits.yaml")]
+
+
+# checks that open 3D models: the board they read is a copy in the run dir,
+# so audit() sets KIPRJMOD to the revision's own board folder and
+# ${KIPRJMOD} model paths resolve as KiCad would resolve them there
+MODEL_CHECKS = {"check_body_clash", "check_model_fit"}
+
+
 # script -> its argv on one revision (empty constraints: what hwde reads
 # before anyone has written one)
 RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
@@ -641,7 +698,12 @@ RUNNERS = {"netlist_audit": _netlist_audit, "check_mate_pins": _check_mate_pins,
            "check_wicking": _check_wicking,
            "check_mounting": _check_mounting,
            "fp_verify": _fp_verify,
-           "dfm": _dfm}
+           "dfm": _dfm,
+           "check_courtyard": _check_courtyard,
+           "check_body_clash": _check_body_clash,
+           "check_model_fit": _check_model_fit,
+           "check_antenna": _check_antenna,
+           "check_converter": _check_converter}
 
 
 class CheckCrashed(SystemExit):
@@ -723,13 +785,17 @@ def audit(cache: Path, b: dict, rev: str, script: str,
     out.unlink(missing_ok=True)
     empty = out.parent / f"constraints{tag}.json"
     empty.write_text(json.dumps(constraints or {}), encoding="utf-8")
-    cmd, *args = RUNNERS[script](b, rev, typed_repo(cache, b, rev), empty)
+    repo = typed_repo(cache, b, rev)
+    cmd, *args = RUNNERS[script](b, rev, repo, empty)
+    env = {**os.environ, "HWDE_LEDGER_WRITE": "0"}
+    if script in MODEL_CHECKS:
+        env["KIPRJMOD"] = str((repo / b[rev]["pcb"]).parent.resolve())
     try:
         # nothing is written into the foreign tree (check_ratings' ledger)
         p = subprocess.run([sys.executable, str(SCRIPTS / cmd), *args,
                             "--out", str(out)],
                            capture_output=True, text=True, timeout=900,
-                           env={**os.environ, "HWDE_LEDGER_WRITE": "0"})
+                           env=env)
     except subprocess.TimeoutExpired as e:
         err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) \
             else e.stderr
