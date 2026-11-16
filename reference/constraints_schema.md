@@ -291,11 +291,16 @@ Consumers per key (script -> phase):
   // modules: a part drawn with another part's symbol, by what it really is
   // (an mcu_pins.yaml row's Value), so its pin functions are looked up
   // right. bus_unread: a named-bus member (Z80 MREQ/IORQ/RD/WR, JTAG, a
-  // data byte) the board's master leaves unread on purpose. why is required.
+  // data byte) the board's master leaves unread on purpose. swaps (rule
+  // 8b, #843): a part whose CC1/CC2 or left/right channel is crossed on
+  // purpose; pair (cc or lr) narrows it, and the swap is then not listed
+  // as info. why is required.
   "design_intent": {
     "modules": [{"ref": "U1", "is": "Arduino Nano RP2040 Connect",
                  "why": "README: the board takes a Nano RP2040 Connect"}],
-    "bus_unread": [{"net": "ZXIORQ", "why": "the board only watches memory cycles"}]},
+    "bus_unread": [{"net": "ZXIORQ", "why": "the board only watches memory cycles"}],
+    "swaps": [{"ref": "U7", "pair": "lr",
+               "why": "README: R channel drives the left speaker"}]},
 
   // check_surge (P8, #492): IEC 61000-4-5 surge / 61000-4-4 EFT on cable
   // ports. Only declared ports are judged. kind picks the assumed level from

@@ -310,6 +310,13 @@
         "net": "/ZXIORQ",
         "why": "a memory-only device"
       }
+    ],
+    "swaps": [
+      {
+        "ref": "U7",
+        "pair": "lr",
+        "why": "the R channel drives the left speaker"
+      }
     ]
   }
 }
