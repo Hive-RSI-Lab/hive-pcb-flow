@@ -33,6 +33,11 @@ could hide (docs/score.md, "The planted faults").
           absolute 0.15 mm (under min_* but over abs_min_* is only a warning,
           #554). A floor in jlc_capabilities.yaml lowered past them lets the
           fault through.
+          And tombstone-prone chips (TOMB_FAULTS, #328), planted in a copy
+          of hwde-led-test's board: a solid GND pour on one end of C1, a
+          via in D1's GND pad down to the B.Cu plane. check_tombstone must
+          raise dfm_tombstone as a warning on each, and none on the board
+          as it is; a ratio or band loosened past them lets them through.
 
 ERC and DRC themselves are KiCad's; their planted faults would need
 kicad-cli and are not here (the gate leg still holds what hwde decides
@@ -312,6 +317,52 @@ def inner_faults(src: Path, tmp: Path, found: dict | None = None
     return out
 
 
+# (name, ref, text added to hwde-led-test's board). C1 (0603, +5V on a
+# 0.4 mm track, GND on a 0.2 mm one) gets a solid F.Cu GND fill joining its
+# GND pad on three sides (connect_pads yes: a thermal one is the cure); D1 (0603 LED) a 0.3 mm GND via in its GND pad,
+# its barrel reaching the board's B.Cu GND fill.
+TOMB_BOARD = ROOT / "boards" / "hwde-led-test" / "kicad" / "hwde-led-test.kicad_pcb"
+TOMB_FAULTS = [
+    ("tombstone-solid-pour", "C1",
+     '\t(zone (net "GND") (layer "F.Cu") (hatch edge 0.5)\n'
+     '\t\t(connect_pads yes (clearance 0.2))\n'
+     '\t\t(polygon (pts (xy 11 20.5) (xy 15 20.5) (xy 15 23) (xy 11 23)))\n'
+     '\t\t(filled_polygon (layer "F.Cu") (pts (xy 11 20.5) (xy 15 20.5) '
+     '(xy 15 23) (xy 11 23))))\n'),
+    ("tombstone-via-in-pad", "D1",
+     '\t(via (at 18 20.55) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") '
+     '(net "GND"))\n'),
+]
+
+
+def tombstone_faults() -> list[tuple[str, str, bool]]:
+    """TOMB_FAULTS through check_tombstone, the code dfm's `tombstone`
+    family runs. Its finding is a warning, and the dfm gate fails on
+    errors only (FAILS_ON), so the gate leg can't hold it: this leg asks
+    for the warning itself, on the planted part, and for none on the board
+    as it is (the quiet twin - a check that flagged everything would pass
+    the plant alone)."""
+    import check_tombstone
+    import geom
+
+    def hits(pcb: Path) -> set[str]:
+        vs, _ = check_tombstone.check(geom.BoardGeom.from_file(pcb))
+        return {r for v in vs if v.get("kind") == check_tombstone.KIND
+                and v.get("severity") == "warning" for r in v["refs"]}
+    text = TOMB_BOARD.read_text(encoding="utf-8")
+    base = hits(TOMB_BOARD)
+    out = [("dfm", "dfm tombstone: quiet on hwde-led-test as it is",
+            not base)]
+    with tempfile.TemporaryDirectory(prefix="hwde-strength-") as tmp:
+        for name, ref, add in TOMB_FAULTS:
+            work = Path(tmp) / f"{name}.kicad_pcb"
+            cut = text.rstrip().rfind(")")
+            work.write_text(text[:cut] + add + text[cut:], encoding="utf-8")
+            out.append(("dfm", f"dfm {name} ({check_tombstone.KIND} on "
+                        f"{ref}, warning)", ref in hits(work) - base))
+    return out
+
+
 def dfm_faults(found: dict | None = None) -> list[tuple[str, str, bool]]:
     import benchlib
     import yaml
@@ -347,7 +398,7 @@ def dfm_faults(found: dict | None = None) -> list[tuple[str, str, bool]]:
                 found.setdefault("dfm", []).extend(new)
             out.append(("dfm", f"dfm {name} ({kind})", bool(new)))
         out += inner_faults(src, Path(tmp), found)
-    return out
+    return out + tombstone_faults()
 
 
 def faults() -> list[tuple[str, str, bool]]:

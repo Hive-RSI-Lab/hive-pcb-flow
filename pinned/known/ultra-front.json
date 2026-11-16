@@ -777,6 +777,27 @@
    "kind": "bom_lcsc_unsynced",
    "verdict": "real",
    "reason": "the board carries this part's LCSC number but its placed schematic symbol has none, so a schematic BOM or a schematic-to-board update loses the sourcing (#351, kicad-happy SS-001)"
+  },
+  {
+   "gate": "dfm",
+   "check": "dfm",
+   "net": "GND",
+   "refs": [
+    "C1",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "R11",
+    "R19"
+   ],
+   "pos": [
+    0.655,
+    30.1
+   ],
+   "kind": "dfm_tombstone",
+   "verdict": "real",
+   "reason": "the GND pour is set to join pads solid (connect_pads yes) and touches one end of each listed 0603-or-smaller part on F.Cu, while the other end leaves on a 0.2-0.9 mm track: the pour end lags at reflow, the tombstoning setup IPC-7351 cures with a thermal relief (#328)"
   }
  ]
 }
