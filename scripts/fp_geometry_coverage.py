@@ -1,6 +1,7 @@
 """fp_geometry_coverage.py - how much of a set of boards check_fp_geometry
 actually judges: footprints judged against each source (a land_patterns
-row, KiCad's stock footprint, the LCSC model, the footprint's own name),
+row, a part record in --parts, KiCad's stock footprint, the LCSC model, the
+footprint's own name),
 those not judged, by why, and the packages left unjudged most often (the
 land_patterns rows worth adding next).
 
@@ -14,9 +15,10 @@ included), paced, waiting out EasyEDA's per-IP rate limit between rounds,
 then counts again.
 
 CLI: fp_geometry_coverage.py BOARD.kicad_pcb ... | @LIST
-     [--live] [--easyeda-cache DIR] [--top N] [--boards N] [--json OUT]
+     [--live] [--easyeda-cache DIR] [--parts DIR] [--top N] [--boards N] [--json OUT]
      [--fill-cache [--pace S] [--wait-min M] [--budget-min B]]
      @LIST is a file of board paths, one per line (or space-separated on one).
+     --parts: a parts dir whose part records (by MPN) every board is read with.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ sys.path.insert(0, str(HERE / "lib"))
 sys.path.insert(0, str(HERE))
 import check_fp_geometry as g  # noqa: E402
 
-SOURCES = ("drawing", "stock", "model", "name")
+SOURCES = ("drawing", "record", "stock", "model", "name")
 UNCACHED = "its LCSC model is not cached"
 _PART = ("MPN", "Manufacturer Part Number", "MFR Part", "Part Number", "PartNumber")
 
@@ -54,7 +56,8 @@ def list_file(path: Path) -> list[Path]:
 
 
 def coverage(pcbs: list[Path], live: bool = False, easyeda_cache: Path | None = None,
-             stock: g.Stock | None = None, rows: list[dict] | None = None) -> dict:
+             stock: g.Stock | None = None, rows: list[dict] | None = None,
+             parts: Path | None = None) -> dict:
     stock = stock or g.Stock(g.kicad_footprint_dir())
     rows = g.load_land_patterns() if rows is None else rows
     any_src, first, why = Counter(), Counter(), Counter()
@@ -65,7 +68,7 @@ def coverage(pcbs: list[Path], live: bool = False, easyeda_cache: Path | None = 
         trace: list = []
         try:
             g.check(pcb, live=live, easyeda_cache=easyeda_cache, stock=stock,
-                    rows=rows, trace=trace)
+                    rows=rows, trace=trace, parts=parts)
         except Exception as e:  # noqa: BLE001 - one bad board doesn't stop the count
             errors[str(pcb)] = repr(e)[:200]
             continue
@@ -181,6 +184,7 @@ def main(argv=None) -> int:
     ap.add_argument("boards", nargs="+")
     ap.add_argument("--live", action="store_true")
     ap.add_argument("--easyeda-cache", type=Path)
+    ap.add_argument("--parts", type=Path, help="a parts dir of part records")
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--json", type=Path)
     ap.add_argument("--boards", type=int, default=0, help="list the N least-judged boards")
@@ -195,14 +199,16 @@ def main(argv=None) -> int:
         pcbs += (list_file(Path(b[1:])) if b.startswith("@") else [Path(b)])
     stock = g.Stock(g.kicad_footprint_dir())
     rows = g.load_land_patterns()
-    c = coverage(pcbs, live=a.live, easyeda_cache=a.easyeda_cache, stock=stock, rows=rows)
+    c = coverage(pcbs, live=a.live, easyeda_cache=a.easyeda_cache, stock=stock, rows=rows,
+                 parts=a.parts)
     if a.fill_cache and c["uncached_lcsc"]:
         print(table(c, a.top, a.boards))
         f = fill_cache(list(c["uncached_lcsc"]), a.pace, a.wait_min, a.budget_min,
                        a.easyeda_cache)
         print(f"fill-cache: {len(f['fetched'])} fetched, {len(f['none'])} with no "
               f"EasyEDA footprint, {len(f['left'])} left (rerun)\n---")
-        c = coverage(pcbs, easyeda_cache=a.easyeda_cache, stock=stock, rows=rows)
+        c = coverage(pcbs, easyeda_cache=a.easyeda_cache, stock=stock, rows=rows,
+                     parts=a.parts)
         c["fill_cache"] = f
     if a.json:
         a.json.write_text(json.dumps(c, indent=1))

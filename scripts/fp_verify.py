@@ -111,6 +111,11 @@ SOURCE = "check.fp_verify"
 # bar); a THT pad below it cannot fab reliably whatever the datasheet says.
 ANNULUS_FLOOR_MM = 0.15
 
+# Float slack on every tolerance test: a land exactly at the tolerance
+# passes. 0.55 - 0.50 is 0.0500000000000000444 in floats, so a bare
+# `> 0.05` called a pad 0.05 mm off a finding (#1332)
+EPS_MM = 1e-6
+
 
 # A pad or ball name: "1", "A1", "EP", "SH2". Anything with a space is prose
 # (an MGM240P record's "top-left in land pattern view (Fig 8.3); ...", #1127)
@@ -213,9 +218,10 @@ def _clusters(vals: list[float], tol: float = 0.02) -> list[list[float]]:
 def _row_spacings(centers: list[tuple[float, float]]) -> list[float]:
     """Centre-to-centre spacing of the two pad rows, one per axis that has
     them: an axis qualifies when exactly two coordinate groups hold the most
-    pads (a SOIC's columns; a QFP's left/right and top/bottom). An axis of
-    equal small groups (a SOIC's pitch axis) or a lone biggest group
-    (SOT-23) has no row pair."""
+    pads (a SOIC's columns; a QFP's left/right and top/bottom), or when the
+    axis has just two groups of two pads or more (a SOT-23-5's rows of 3
+    and 2, #1332). An axis of equal small groups (a SOIC's pitch axis) or a
+    lone biggest group beside a lone pad (SOT-23) has no row pair."""
     spacings = []
     for axis in (0, 1):
         groups = _clusters([c[axis] for c in centers])
@@ -224,7 +230,10 @@ def _row_spacings(centers: list[tuple[float, float]]) -> list[float]:
         top = max(len(g) for g in groups)
         rows = [g for g in groups if len(g) == top]
         if len(rows) != 2:
-            continue
+            if len(groups) == 2 and min(len(g) for g in groups) >= 2:
+                rows = groups
+            else:
+                continue
         a, b = (sum(g) / len(g) for g in rows)
         spacings.append(abs(b - a))
     return spacings
@@ -297,7 +306,7 @@ def _off_pitch(row: dict, pitch: float, tol: float) -> list[tuple]:
     bad = []
     for i, g in enumerate(row["gaps"]):
         k = max(1, round(g / pitch))
-        if abs(g - k * pitch) > tol and g <= 1.5 * pitch:
+        if abs(g - k * pitch) > tol + EPS_MM and g <= 1.5 * pitch:
             bad.append((row["pads"][i], row["pads"][i + 1], g))
     return bad
 
@@ -459,7 +468,7 @@ def _span(val, tol: float) -> tuple[float, float, str]:
 
 
 def _within(x: float, span: tuple) -> bool:
-    return span[0] - 1e-6 <= x <= span[1] + 1e-6
+    return span[0] - EPS_MM <= x <= span[1] + EPS_MM
 
 
 def _along(p: fplib.Pad, angle: float) -> tuple[float, float] | None:
@@ -522,7 +531,8 @@ def coverage_report(pairs: list[tuple[str, str]], pitch_tol: float,
         for c, st in facts["coverage"].items():
             count[c][st] += 1
         for n in facts["not_judged"]:
-            why[n["check"]][n["why"][:90]] += 1
+            if n["check"] in why:   # a drill of another kind is no COVERED check
+                why[n["check"]][n["why"][:90]] += 1
         errors += [{"footprint": fp_path, "record": rec, "kind": v.get("kind") or v["check"],
                     "message": v["msg"]}
                    for v in viol if v["severity"] == "error"]
@@ -781,6 +791,10 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
                       f"inner edge to inner edge; the record's land has a "
                       f"{g[2]} mm gap, so {risk}",
                       "land_gap", expected_mm=[round(g[0], 4), round(g[1], 4)],
+                      stated_mm=[round(x, 4) for x in (
+                          sorted(map(float, land["gap_mm"]))
+                          if isinstance(land["gap_mm"], (list, tuple))
+                          else [float(land["gap_mm"])] * 2)],
                       measured_mm=round(gap, 4))
             ln, wd = lw.get("pad_length_mm"), lw.get("pad_width_mm")
             want = " and ".join(t for t in (ln and f"{ln[2]} mm long",
@@ -829,7 +843,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         bad = _off_pitch(row, exp, pitch_tol)
         pitch_facts.append({"pads": _row_name(row), "pitch_mm": row["pitch"],
                             "expected_mm": exp, "ok": not bad})
-        if abs(row["pitch"] - exp) > pitch_tol:
+        if abs(row["pitch"] - exp) > pitch_tol + EPS_MM:
             v("error", row["pads"][0].center,
               f"pad row {_row_name(row)} pitch {row['pitch']:.3f} mm != "
               f"datasheet {exp:.3f} mm{why} (tol {pitch_tol})",
@@ -862,14 +876,18 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         rest = [r for r in rows
                 if not claimed & {p.number for p in r["pads"]}]
         if not rows and measured_pitch is not None and not stated:
-            if abs(measured_pitch - exp) > pitch_tol:
+            # basis: the two closest pads, which on a part with no row of
+            # three may be no pitch at all (a USB-A's shield beside a pin),
+            # so a caller may weigh it lower than a row's pitch (#1332)
+            if abs(measured_pitch - exp) > pitch_tol + EPS_MM:
                 v("error", centers[0] if centers else None,
                   f"nearest-pad pitch {measured_pitch:.3f} mm != datasheet "
                   f"{exp:.3f} mm (tol {pitch_tol})",
                   "pad_pitch", expected_mm=exp,
-                  measured_mm=round(measured_pitch, 4))
+                  measured_mm=round(measured_pitch, 4), basis="nearest_pads")
         elif rest:
-            near = [r for r in rest if abs(r["pitch"] - exp) <= pitch_tol]
+            near = [r for r in rest
+                    if abs(r["pitch"] - exp) <= pitch_tol + EPS_MM]
             for row in near or rest[:1]:
                 judge_row(row, exp, "")
             if near:
@@ -892,7 +910,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               f"datasheet row spacing {exp:g} mm, but the footprint has no "
               "two pad rows to measure it on: check it by hand",
               "row_spacing_unmeasured", expected_mm=exp)
-        elif all(abs(m - exp) > size_tol for m in measured_rows):
+        elif all(abs(m - exp) > size_tol + EPS_MM for m in measured_rows):
             got = ", ".join(f"{m:.3f}" for m in measured_rows)
             v("error", None,
               f"pad row spacing {got} mm != datasheet {exp:g} mm "
@@ -912,18 +930,43 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
                            for p in rest})
         extremes = [distinct[0]] if len(distinct) == 1 else [distinct[0], distinct[-1]]
         offending = [list(s) for s in extremes
-                     if any(abs(m - e) > size_tol for m, e in zip(s, exp))]
+                     if any(abs(m - e) > size_tol + EPS_MM
+                            for m, e in zip(s, exp))]
         if offending:
+            # basis: sides sorted small to large, blind to which way a pad
+            # lies, so a caller may weigh it lower than an axis-by-axis
+            # finding (#1332)
             v("warning", None,
               f"pad size(s) {offending} mm != datasheet {list(exp)} mm "
               f"(tol {size_tol}; min/max of {len(distinct)} distinct sizes)",
-              "pad_size", expected_mm=list(exp), measured_mm=offending)
+              "pad_size", expected_mm=list(exp), measured_mm=offending,
+              basis="sorted")
 
     # --- THT annulus (error): drill-aware; a wrong annulus passed silently
-    # before fplib parsed (drill ...) at all (ladder rows 111/115)
-    for p in copper:
-        if p.ptype != "thru_hole" or p.drill is None:
-            continue
+    # before fplib parsed (drill ...) at all (ladder rows 111/115).
+    # drill_mm is one number, and a part may have holes of two kinds (a
+    # USB-A's 0.92 mm pins beside its 2.3 mm shield legs): the group of
+    # like drills nearest drill_mm is always judged, and a hole off it by
+    # more than half of drill_mm in another group is a hole of another
+    # kind, listed in not_judged, not a drill_mismatch (#1332)
+    holes = [p for p in copper if p.ptype == "thru_hole" and p.drill is not None]
+    other_kind: set[int] = set()
+    if land.get("drill_mm") is not None and holes:
+        want_d = float(land["drill_mm"])
+        groups = _clusters([p.drill for p in holes])
+        nearest = min(groups, key=lambda g: abs(sum(g) / len(g) - want_d))
+        other_kind = {id(p) for p in holes
+                      if not any(abs(p.drill - d) <= 1e-9 for d in nearest)
+                      and abs(p.drill - want_d) > want_d / 2}
+        if other_kind:
+            odd = [p for p in holes if id(p) in other_kind]
+            not_judged.append({"check": "drill", "why": (
+                f"pads {', '.join(sorted({p.number for p in odd}))}: drills "
+                f"of {', '.join(sorted({f'{p.drill:g}' for p in odd}))} mm "
+                f"are another kind of hole than the record's one drill_mm "
+                f"{want_d:g} mm (a shield or mounting leg); list them in "
+                "the record's mechanical block to judge them")})
+    for p in holes:
         # per axis: an oval drill in an oval pad (C165948 shell: 1.2x2.0 pad,
         # 0.8x1.5 drill) is 0.20 mm all round, not min(size) - long axis
         dx, dy = p.drill_xy or (p.drill, p.drill)
@@ -934,15 +977,17 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
               f"JLC floor (pad {p.size[0]:g}x{p.size[1]:g} mm on {dx:g}x{dy:g} mm drill)",
               "annulus_floor", measured_mm=round(ann, 4),
               floor_mm=ANNULUS_FLOOR_MM, drill_mm=p.drill)
+        if id(p) in other_kind:
+            continue    # the annulus floor above holds; drill_mm is not its
         if land.get("drill_mm") is not None and \
-                abs(p.drill - float(land["drill_mm"])) > size_tol:
+                abs(p.drill - float(land["drill_mm"])) > size_tol + EPS_MM:
             v("error", p.center,
               f"pad {p.number}: drill {p.drill:g} mm != datasheet "
               f"{float(land['drill_mm']):g} mm (tol {size_tol})",
               "drill_mismatch", expected_mm=float(land["drill_mm"]),
               measured_mm=p.drill)
         if land.get("annulus_mm") is not None and \
-                abs(ann - float(land["annulus_mm"])) > size_tol:
+                abs(ann - float(land["annulus_mm"])) > size_tol + EPS_MM:
             v("error", p.center,
               f"pad {p.number}: annulus {ann:.3f} mm != datasheet "
               f"{float(land['annulus_mm']):g} mm (tol {size_tol})",

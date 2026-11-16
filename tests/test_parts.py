@@ -1832,3 +1832,80 @@ def test_datasheet_schema_land_ranges(tmp_path, capsys):
                              tmp_path, capsys)
     assert code == 1 and "gap_mm" in " ".join(e["msg"] + str(e.get("path", ""))
                                               for e in payload["errors"])
+
+
+# #1332: a land exactly at the tolerance passes (float slack), a SOT-23-5's
+# rows of three and two are a row pair, a hole of another kind than the
+# record's one drill_mm is listed rather than failed, and a land_gap finding
+# carries the maker's own gap beside the bound it was judged on.
+def _row_of(tmp_path, xs, name="ROW"):
+    return _numbered_fp(tmp_path, name, [(str(i), x, 0, 0.3, 1.0)
+                                         for i, x in enumerate(xs, 1)])
+
+
+def test_fp_verify_pitch_exactly_at_tolerance_passes(tmp_path, capsys):
+    """0.55 - 0.50 is 0.0500000000000000444 in floats: a bare `> 0.05`
+    called a row exactly 0.05 mm off its pitch a finding."""
+    ds = write_ds(tmp_path, {"mpn": "ROW", "pinout": [], "land_pattern": {
+        "pad_count": 3, "pitch_mm": 0.5, "pin1": "1"}})
+    code, payload = _fpv(tmp_path, capsys, _row_of(tmp_path, [0, 0.55, 1.1]), ds)
+    assert code == 0 and "pad_pitch" not in _kinds(payload), payload["violations"]
+    code, payload = _fpv(tmp_path, capsys, _row_of(tmp_path, [0, 0.56, 1.12]), ds)
+    assert code == 1 and "pad_pitch" in _kinds(payload)
+
+
+SOT23_5 = [(-1.1, -0.95), (-1.1, 0), (-1.1, 0.95), (1.1, 0.95), (1.1, -0.95)]
+
+
+def test_fp_verify_sot23_5_rows_of_three_and_two(tmp_path, capsys):
+    assert sorted(fp_verify._row_spacings(SOT23_5)) == pytest.approx([1.9, 2.2])
+    # a SOT-23's lone pad 3 is no row
+    assert fp_verify._row_spacings([(-1, -0.95), (-1, 0.95), (1.2, 0)]) == []
+    fp = _numbered_fp(tmp_path, "SOT5", [(str(i), x, y, 1.06, 0.65)
+                                         for i, (x, y) in enumerate(SOT23_5, 1)])
+    ds = write_ds(tmp_path, {"mpn": "SOT5", "pinout": [], "land_pattern": {
+        "pad_count": 5, "pin1": "1", "row_spacing_mm": 2.2}})
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0, payload["violations"]
+    assert not [k for k in _kinds(payload) if k.startswith("row_spacing")]
+    assert sorted(payload["measured_row_spacing_mm"]) == pytest.approx([1.9, 2.2])
+
+
+def _usb_a(tmp_path, pin_drills=(0.92,) * 4):
+    """Four 0.92 mm pins and two 2.3 mm shield legs, a USB-A's two kinds."""
+    pads = [f'  (pad {i} thru_hole circle (at {x:g} 0) (size 1.7 1.7) '
+            f'(drill {d:g}) (layers *.Cu *.Mask))'
+            for i, (x, d) in enumerate(zip((-3.5, -1, 1, 3.5), pin_drills), 1)]
+    pads += [f'  (pad {n} thru_hole circle (at {x:g} 2.7) (size 3 3) '
+             '(drill 2.3) (layers *.Cu *.Mask))' for n, x in ((5, -6.57), (6, 6.57))]
+    return _mk_fp(tmp_path, pads, name="USBA")
+
+
+def test_fp_verify_hole_of_another_kind_is_listed_not_failed(tmp_path, capsys):
+    ds = write_ds(tmp_path, {"mpn": "USBA", "pinout": [], "land_pattern": {
+        "pad_count": 6, "pin1": "1", "drill_mm": 0.92}})
+    fp = _usb_a(tmp_path)
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and "drill_mismatch" not in _kinds(payload), payload["violations"]
+    nj, = [n for n in payload["not_judged"] if n["check"] == "drill"]
+    assert "pads 5, 6" in nj["why"] and "2.3 mm" in nj["why"]
+    # the coverage report keeps the pair: "drill" is no COVERED check
+    rep = fp_verify.coverage_report([(str(fp), str(ds))], 0.05, 0.1)
+    assert rep["pairs"] == 1 and rep["unreadable"] == [] and rep["errors"] == []
+    # a pin drilled 1.2 mm is the same kind of hole, and wrong
+    code, payload = _fpv(tmp_path, capsys,
+                         _usb_a(tmp_path, (0.92, 1.2, 0.92, 0.92)), ds)
+    assert code == 1
+    bad, = [v for v in payload["violations"] if v["kind"] == "drill_mismatch"]
+    assert bad["measured_mm"] == pytest.approx(1.2)
+
+
+def test_fp_verify_land_gap_carries_the_stated_gap(tmp_path, capsys):
+    fp = _chip_fp(tmp_path, 0.3, 0.5, 0.3)          # a 0.3 mm gap
+    code, payload = _fpv(tmp_path, capsys, fp, _chip_ds(tmp_path, gap_mm=0.8))
+    gap, = [v for v in payload["violations"] if v["kind"] == "land_gap"]
+    assert gap["stated_mm"] == [0.8, 0.8]
+    assert gap["measured_mm"] == pytest.approx(0.3)
+    code, payload = _fpv(tmp_path, capsys, fp, _chip_ds(tmp_path, gap_mm=[0.8, 0.6]))
+    gap, = [v for v in payload["violations"] if v["kind"] == "land_gap"]
+    assert gap["stated_mm"] == [0.6, 0.8]
