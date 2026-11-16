@@ -209,6 +209,44 @@ regulators:
       7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f.
       Re-read 2026-11-15.
     verified: true
+  - match: '^TLV61070A'
+    vref: 0.5
+    tol: 0.03
+    source: >-
+      TI SLVSGK6B (revised July 2026), p.5, Electrical Characteristics: 'VREF
+      Reference voltage at the FB pin PWM mode 485 500 515 mV'. URL
+      https://www.ti.com/lit/ds/symlink/tlv61070a.pdf sha256
+      1486d1a8c394245eafe18e3259cd24477949f8ef4f3c91d669f66322da5555b2.
+      Re-read 2026-11-16.
+    verified: true
+  - match: '^SY7208(?!B)'       # SY7208 and SY7208C; SY7208B is 1 V
+    vref: 0.6
+    tol: 0.02
+    source: >-
+      Silergy AN_SY7208C Rev. 0.9, p.3, Electrical Characteristics: 'Feedback
+      Reference VREF 0.588 0.6 0.612 V' (sha256
+      d05f52f8e1d2b83a0557a1f8eacad02e972d17f00c5783ee4cbb3e8f3cd40cbc, the
+      copy LCSC serves for C178234); SY7208/B Rev. 0.6, p.3: 'Feedback
+      Reference Voltage VREF SY7208 0.588 0.6 0.612 V', 'SY7208B 0.98 1 1.02
+      V'. URL https://monitor.espec.ws/download.php?id=203603 sha256
+      f87ea1c20b177074eb751a8e8597243518fd13856d2c27fd460a65c8228a4f42.
+      Re-read 2026-11-16.
+    verified: true
+  - match: '^SY8301'
+    vref: 0.8
+    tol: 0.01
+    source: >-
+      Silergy AN_SY8301 Rev. 0.9A, p.4, Electrical Characteristics: 'Feedback
+      Reference Voltage VREF 0.792 0.8 0.808 V'. URL
+      https://static.chipdip.ru/lib/164/DOC045164014.pdf sha256
+      d2a1acae6a41e7e6e62ad498280c74a0fe549e62d20f5176c8367640b77a1621 (the
+      copy LCSC serves for C2927130). Re-read 2026-11-16.
+    verified: true
+# No row: SY7200A. AN_SY7200A Rev. 0.1 p.3 gives 'Feedback Reference Voltage
+# 196 200 204 mV', but it is an LED driver: FB senses the string's current
+# through R1 to GND, so Vref x (1 + Rtop/Rbottom) is no rail's voltage.
+# No row: DRV8662. TI SLOS709C gives VFB = 1.32 V only in Equation 1, with
+# no min or max in its Electrical Characteristics.
   - match: '^MP1584'
     vref: 0.8
     tol: 0.03

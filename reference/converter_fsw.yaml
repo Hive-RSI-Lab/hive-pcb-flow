@@ -6,6 +6,10 @@
 # (case-insensitive). fsw_hz: the datasheet's typical. source: where it was read.
 # verified: true means the datasheet was re-read for this row. Add a row only
 # from a datasheet in hand, never from memory.
+# rt: instead of fsw_hz, a part whose frequency one resistor sets, from the
+# IC's `pin` to ground: fsw = k / (R + offset_ohm), the datasheet's equation,
+# used only inside its range_hz (check_current.row_fsw). A part synchronised
+# to an outside clock runs at that clock instead, which no row knows.
 regulators:
   - match: '^SCT2A25'
     fsw_hz: 300000
@@ -56,4 +60,14 @@ regulators:
   - match: '^SY7200A'
     fsw_hz: 1000000
     source: Silergy SY7200A Rev. 1.0 p. 3, "Oscillator Frequency FOSC IOUT=100mA 0.8 1.0 1.2 MHz" (LCSC C107309)
+    verified: true
+  - match: '^LM5158'          # LM5158 and LM51581
+    rt: {pin: RT, k: 2.21e+10, offset_ohm: 955, range_hz: [100000, 2200000]}
+    source: >-
+      TI SNVSBZ7 (October 2021) p. 18, 9.3.4 Equation 5, "RT = 2.21 x 10^10 /
+      fRT(TYPICAL) - 955", an RT resistor "between the RT and the AGND pins";
+      p. 6, fSW 100 to 2200 kHz; p. 7, "fsw1 Switching frequency RT = 220 kOhm
+      85 100 115 kHz" (and 440 kHz at 49.3 kOhm, 2200 kHz at 9.09 kOhm). URL
+      https://www.ti.com/lit/ds/symlink/lm5158.pdf sha256
+      7b9f95c93b3552ce2319676102e94d5f83863107dde2ae57eb91d2b86847c39f
     verified: true
