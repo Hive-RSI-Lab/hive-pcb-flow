@@ -73,6 +73,7 @@ route_probe() is the importable form.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -200,6 +201,54 @@ def _dsn_track_bans(staged: Path, dsn: Path, bg: geom.BoardGeom) -> list[dict]:
     if done:
         dsn.write_text(text, encoding="utf-8")
     return done
+
+
+_COURTYARD_COND_RE = re.compile(
+    r"^\s*A\.intersectsCourtyard\('([^']+)'\)\s*\|\|\s*"
+    r"B\.intersectsCourtyard\('\1'\)\s*$")
+
+
+def _dsn_courtyards(staged: Path, dsn: Path) -> dict:
+    """Carry each part's courtyard clearance rule (bgalib's
+    aiee_bga_escape_<ref>: `A.intersectsCourtyard('U1') ||
+    B.intersectsCourtyard('U1')`), which KiCad's DSN export drops, into the
+    DSN: the part's pads are pulled in by the class clearance less the
+    rule's (5 um kept), so Freerouting's class clearance from the smaller
+    pad is the rule's from the real one (routelib.dsn_shrink_part_pads,
+    #1512). Without it a 0.2 mm track never fits a 0.45 mm BGA street at
+    the 0.125 mm class clearance. A pad on a net held wider than the class
+    (its own class, a barrier) keeps its size. Returns {ref: facts}."""
+    import route_critical as rc
+    dru = staged.with_suffix(".kicad_dru")
+    if not dru.is_file():
+        return {}
+    dru_text = dru.read_text(encoding="utf-8")
+    want: dict[str, float] = {}
+    for r in rc.parse_dru_rules(dru_text):
+        m = _COURTYARD_COND_RE.match(r.get("condition") or "")
+        if r["constraint"] == "clearance" and m and not r.get("layer"):
+            want[m.group(1)] = r["min_mm"] * 1000.0
+    if not want:
+        return {}
+    text = dsn.read_text(encoding="utf-8")
+    clrs = routelib.dsn_class_clearances(text)
+    if not clrs:
+        return {}
+    base = min(clrs)
+    shrink = {ref: round(base - um - 5.0, 1) for ref, um in want.items()
+              if base - um - 5.0 > 0}
+    if not shrink:
+        return {}
+    net_clr = routelib.dsn_net_class_clearances(text)
+    keep = {n for n, c in net_clr.items() if c > base}
+    globs = [p.lower() for b in routelib.dru_barriers(dru_text)
+             for side in ("a", "b") for p in b[side]]
+    keep |= {n for n in net_clr
+             if any(fnmatch.fnmatchcase(n.lower(), g) for g in globs)}
+    text, facts = routelib.dsn_shrink_part_pads(text, shrink, keep)
+    if facts:
+        dsn.write_text(text, encoding="utf-8")
+    return facts
 
 
 def _dsn_merge_wires(dsn: Path) -> int:
@@ -684,6 +733,7 @@ def route_probe(pcb: Path, *, passes: int = 4, timeout_s: int = 180,
     _dsn_net_rules(staged, dsn)
     _dsn_layer_widths(staged, dsn)
     _dsn_track_bans(staged, dsn, bg)
+    _dsn_courtyards(staged, dsn)
     _dsn_hole_rules(staged, dsn, bg)
     merged = _dsn_merge_wires(dsn)
     _dsn_barriers(staged, dsn)
@@ -1242,6 +1292,7 @@ def run(argv: list[str] | None = None):
     dsn_net_rules = _dsn_net_rules(staged, dsn)
     dsn_layer_widths = _dsn_layer_widths(staged, dsn)
     dsn_track_bans = _dsn_track_bans(staged, dsn, bg)
+    dsn_courtyards = _dsn_courtyards(staged, dsn)
     hole_rules = _dsn_hole_rules(staged, dsn, bg)
     grown = hole_rules.pop("grown")
     dsn_wires_merged = _dsn_merge_wires(dsn)
@@ -1586,6 +1637,7 @@ def run(argv: list[str] | None = None):
             "power_layers": power_layers,
             "board_layer_types": board_types,
             "dsn_net_rules": dsn_net_rules,
+            "dsn_courtyards": dsn_courtyards,
             "dsn_layer_widths": dsn_layer_widths,
             "dsn_track_bans": dsn_track_bans,
             "dsn_barriers": dsn_barriers,
