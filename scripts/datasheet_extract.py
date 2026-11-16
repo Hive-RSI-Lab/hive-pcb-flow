@@ -32,7 +32,8 @@ reads the PDF pages); this script owns the deterministic half:
                     the file is cut off or nothing ties it to the MPN (#706,
                     #755: see assess_pdf); not_judged = it has no text layer
                     (a scan) or prints no part number on pages 1-2, so there
-                    is nothing to judge it by. Either PDF
+                    is nothing to judge it by, or it is a host's
+                    placeholder (#413). Either PDF
                     is kept but check_ratings and the ledger never count what
                     was read from it verified.
                     exit 0 = every datasheet fetched, 1 = some suspect,
@@ -809,9 +810,10 @@ def stub_notice(data: bytes) -> str | None:
     for needle in _STUB_TEXT:
         if needle in low:
             return f"host notice text {needle!r}"
-    if len(data) <= _STUB_MAX_BYTES and npages == 1 and len(text.strip()) < 400 \
-            and "unavailable" in low:
-        return f"{len(data)}-byte single-page PDF saying 'unavailable'"
+    if len(data) <= _STUB_MAX_BYTES and npages == 1 and len(text.strip()) < 400:
+        for word in ("unavailable", "not available"):
+            if word in low:
+                return f"{len(data)}-byte single-page PDF saying {word!r}"
     return None
 
 
@@ -1092,7 +1094,10 @@ _ASSESSED = ("status", "reasons", "pages", "chars_per_page", "text_chars",
 # 3: a bracketed packaging code at the end of the MPN is cut and tried again.
 # 4: a whole PDF with no text layer, or no part number on pages 1-2, is
 # not_judged, not suspect.
-ASSESS_VERSION = 4
+# 5: a host's placeholder (LCSC's "datasheet temporarily unavailable" sheet,
+# 7438 bytes for Analog Devices parts, #413) is not_judged: it is no
+# datasheet at all, so there is nothing to judge, not a wrong part's.
+ASSESS_VERSION = 5
 _VERDICTS: dict = {}    # this process's verdicts, for a tree it cannot write
 
 
@@ -1135,8 +1140,9 @@ def _judge(data: bytes, sha: str, mpn: str | None) -> dict:
         a = assess_pdf(data, mpn)
         why = stub_notice(data)
         if why:
-            a.update(status="suspect", reasons=[
-                f"host placeholder, not a datasheet ({why})"])
+            a.update(status="not_judged", reasons=[
+                f"host placeholder, not a datasheet ({why}): fetch the "
+                "maker's PDF from another source"])
         elif a["status"] == "ok" and not mpn:
             a.update(status="unassessed", reasons=[
                 "no MPN in index.json or parts.json to check this PDF against"])

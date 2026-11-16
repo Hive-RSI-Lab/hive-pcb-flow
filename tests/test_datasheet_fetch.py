@@ -175,6 +175,11 @@ def test_fetch_workspace_reports_stub_as_missing():
         assert not (ws / "parts/datasheets/index.json").exists()
 
 
+def test_notice_saying_not_available_hits_size_backstop_too():
+    # #413: LCSC's sheet for Analog Devices parts is 7438 bytes, one page
+    assert datasheet_extract.stub_notice(_pdf(["Datasheet not available for this part."]))
+
+
 def test_pdf_mode_refuses_a_stub_on_disk():
     with tempfile.TemporaryDirectory() as d:
         f = Path(d) / "C1.pdf"
@@ -545,6 +550,24 @@ def test_assess_writes_a_status_into_old_entries_and_keeps_the_rest():
         assert idx["C2"]["status"] == "suspect" and idx["C2"]["reasons"]
         # no PDF to read: stays unassessed, never ok
         assert idx["C3"]["status"] == "unassessed" and idx["C3"]["reasons"]
+
+
+def test_a_placeholder_on_disk_is_not_judged_and_still_held_back():
+    # #413: a host's placeholder is no datasheet, so nothing to judge; it is
+    # still warned of as suspect (check_ratings) and held back (the ledger)
+    old = {"file": "x", "url": "u", "sha256": "s", "mpn": MPN}
+    with tempfile.TemporaryDirectory() as d:
+        ws = _assess_ws(d, {"C1": old}, {"C1": NOTICE})
+        out, code = datasheet_extract.do_assess(Namespace(assess=str(ws),
+                                                          lcsc=None))
+        assert code == 1 and out["not_judged"] == 1 and out["suspect"] == 0, out
+        idx = json.loads((ws / "parts/datasheets/index.json").read_text())
+        assert idx["C1"]["status"] == "not_judged", idx
+        assert "host placeholder" in idx["C1"]["reasons"][0], idx
+        for statuses in (("suspect",), ("suspect", "not_judged")):
+            held = datasheet_extract.suspect_datasheets(
+                ws / "parts", {"C1"}, statuses=statuses)
+            assert "host placeholder" in held["C1"], held
 
 
 def test_assess_counts_a_scan_as_not_judged_and_its_verdict_outlives_the_pdf():
