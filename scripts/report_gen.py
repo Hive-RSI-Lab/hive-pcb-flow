@@ -2015,7 +2015,9 @@ def attach_fab(exe: str, number: str, fab: list[tuple[Path, str]],
 
 
 FILED_STAMP = ".filed.json"
-_GENERATED_RE = re.compile(r"generated \d{4}-\d\d-\d\d \d\d:\d\d:\d\d")
+# the title block's build time (sec_title: minutes, no seconds), so two
+# builds a minute apart hash the same (#1255)
+_GENERATED_RE = re.compile(r"generated \d{4}-\d\d-\d\d \d\d:\d\d(?::\d\d)?")
 _GRAPHICS_RE = re.compile(r"\\include(?:graphics|pdf)(?:\[[^\]]*\])?\{([^}]*)\}")
 
 
