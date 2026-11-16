@@ -4,11 +4,9 @@
  "fixture": "mutant_gndchoke_verify",
  "board": "pd-trigger",
  "metrics": {
-  "errors": 51,
-  "warnings": 53,
+  "errors": 53,
+  "warnings": 55,
   "by_check": {
-   "check_ldo_esr": 0,
-   "check_converter": 0,
    "check_return_path": 0,
    "check_current": 44,
    "check_decoupling": 0,
@@ -26,14 +24,17 @@
    "check_bom_sync": 0,
    "check_cap_load": 0,
    "check_connector_fit": 0,
+   "check_converter": 0,
    "check_courtyard": 28,
    "check_ddr_timing": 0,
    "check_ep_paste": 6,
+   "check_esd": 4,
    "check_fp_attr": 1,
    "check_fp_geometry": 0,
    "check_fp_package": 0,
    "check_isolation": 0,
    "check_kelvin": 0,
+   "check_ldo_esr": 0,
    "check_length_groups": 0,
    "check_mate_pins": 0,
    "check_model_fit": 0,
@@ -63,6 +64,9 @@
    "body_unjudged": 1,
    "courtyard_pads": 28,
    "ep_paste_high": 2,
+   "esd_behind_series": 1,
+   "esd_clamp_far": 1,
+   "esd_unclamped": 2,
    "fp_attr_mismatch": 1,
    "insufficient_transition_vias": 13,
    "model_path_absolute": 16,
@@ -83,12 +87,12 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 51.0,
-  "warnings": 53.0,
+  "errors": 53.0,
+  "warnings": 55.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 69.2,
+ "composite": 68.0,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",
@@ -98,7 +102,7 @@
  },
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-14",
+  "created": "2026-11-16",
   "kicad_version": null
  }
 }

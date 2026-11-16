@@ -5,10 +5,8 @@
  "board": "usbbuck4",
  "metrics": {
   "errors": 1,
-  "warnings": 5,
+  "warnings": 6,
   "by_check": {
-   "check_ldo_esr": 0,
-   "check_converter": 0,
    "check_return_path": 1,
    "check_current": 0,
    "check_decoupling": 0,
@@ -26,14 +24,17 @@
    "check_bom_sync": 0,
    "check_cap_load": 0,
    "check_connector_fit": 2,
+   "check_converter": 0,
    "check_courtyard": 0,
    "check_ddr_timing": 0,
    "check_ep_paste": 0,
+   "check_esd": 1,
    "check_fp_attr": 0,
    "check_fp_geometry": 0,
    "check_fp_package": 0,
    "check_isolation": 0,
    "check_kelvin": 0,
+   "check_ldo_esr": 0,
    "check_length_groups": 0,
    "check_mate_pins": 0,
    "check_model_fit": 0,
@@ -61,6 +62,7 @@
   },
   "by_kind": {
    "body_unjudged": 1,
+   "esd_unclamped": 1,
    "missing_return_via": 1,
    "no_netlist": 1,
    "tht_hole_ipc2222": 2,
@@ -77,11 +79,11 @@
  "metrics_live": null,
  "penalties": {
   "errors": 1.0,
-  "warnings": 5.0,
+  "warnings": 6.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 99.0,
+ "composite": 98.9,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",
@@ -91,7 +93,7 @@
  },
  "e2e": null,
  "_baseline": {
-  "created": "2026-11-14",
+  "created": "2026-11-16",
   "kicad_version": null
  }
 }

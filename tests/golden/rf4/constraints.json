@@ -12,5 +12,10 @@
     "edges": [
       {"ref": "J1", "edge": "right"}
     ]
+  },
+  "esd": {
+    "_comment": "check_esd (#312): J2 is the SPI header to the host board (board-to-board), so it is not judged. /RF_FEED (the SMA) has no clamp; the pi-match's 8.2 pF and 5.6 pF shunts do not stop a strike, so the finding is real. It is exempt here because the golden is a never-built fixture whose verify run must stay clean, and tests/test_check_esd.py pins it as a true finding.",
+    "internal": ["J2"],
+    "exempt_nets": ["/RF_FEED"]
   }
 }

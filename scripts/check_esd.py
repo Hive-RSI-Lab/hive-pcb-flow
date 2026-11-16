@@ -118,8 +118,7 @@ times the strike's dI/dt at the level asked ({"esd": {"level_kv": 8}}). It
 is an order-of-magnitude screen, not a sign-off: a trace over a solid plane
 has less loop inductance than its partial self-inductance, so it errs high.
 
-Not registered in scripts/checks.d yet: its findings on the pinned boards
-need judging in their ledgers first (docs/score.md), so it runs by hand:
+Runs in the verify suite (scripts/checks.d/check_esd.yaml); by hand:
     bin/hwde check_esd --pcb board.kicad_pcb [--constraints c.json] [--parts D]
 CLI exit 0 pass / 1 violations / 2 error, per SPEC section 6.
 """

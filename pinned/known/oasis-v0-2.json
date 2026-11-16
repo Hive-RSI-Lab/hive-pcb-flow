@@ -4046,6 +4046,141 @@
    "kind": "dfm_net_short",
    "verdict": "false",
    "reason": "the 'nets' are one net under IPC-D-356's truncated and upper-cased names (MISTER1-PIN_1) vs Net-(mister1-Pin_1)); dfm reads the name change as a short"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/usb_dminus",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    83.656,
+    162.864
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "micro-USB data at the receptacle with no ESD array"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "/usb_dplus",
+   "refs": [
+    "J2"
+   ],
+   "pos": [
+    84.287,
+    163.021
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "real",
+   "reason": "micro-USB data at the receptacle with no ESD array"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "Net-(J3-Pin_3)",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    52.329,
+    146.596
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J3 is the ESP32-C3 UART0 programming header: bench use only"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "Net-(J3-Pin_4)",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    54.156,
+    148.36
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J3 is the ESP32-C3 UART0 programming header: bench use only"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "Net-(J3-Pin_5)",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    55.983,
+    150.125
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J3 is the ESP32-C3 UART0 programming header: bench use only"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "Net-(J3-Pin_6)",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    57.811,
+    151.889
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J3 is the ESP32-C3 UART0 programming header: bench use only"
+  },
+  {
+   "gate": "verify",
+   "check": "check_fp_package",
+   "net": null,
+   "refs": [
+    "Rfbb1"
+   ],
+   "pos": [
+    158.15,
+    119.0
+   ],
+   "kind": "footprint_package_mismatch",
+   "verdict": "?",
+   "reason": ""
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+18V",
+   "refs": [
+    "J1"
+   ],
+   "pos": [
+    133.115,
+    52.177
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "18 V input with 3 uF at the connector and the converter's bulk"
+  },
+  {
+   "gate": "verify",
+   "check": "check_esd",
+   "net": "+3.3V",
+   "refs": [
+    "J3"
+   ],
+   "pos": [
+    50.502,
+    144.831
+   ],
+   "kind": "esd_unclamped",
+   "verdict": "false",
+   "reason": "J3 is the ESP32-C3 UART0 programming header: bench use only"
   }
  ]
 }

@@ -627,10 +627,11 @@ GOLDEN_WARNINGS = {
 # The checks blinky2 gives nothing to judge: it has none of what they read.
 # check_mounting says so since #1295 (blinky2 has no mounting holes), and
 # and check_backfeed since #394 (one power tree, no two rails apart),
-# and check_converter since #355 (an LDO only, no switching converter).
+# and check_converter since #355 (an LDO only, no switching converter),
+# and check_esd since #312 (its constraints list both headers as internal).
 GOLDEN_NOTHING_TO_JUDGE = {
     "check_antenna", "check_backfeed", "check_cap_load", "check_converter", "check_creepage", "check_ddr_timing",
-    "check_diffpair", "check_isolation", "check_kelvin", "check_length_groups", "check_mate_pins",
+    "check_diffpair", "check_esd", "check_isolation", "check_kelvin", "check_length_groups", "check_mate_pins",
     "check_mounting", "check_net_tie", "check_pinouts", "check_rail_budget", "check_rf_match", "check_stackup", "check_surge", "check_thermal",
     "check_transformer", "check_usb_phy", "check_via_stubs",
 }

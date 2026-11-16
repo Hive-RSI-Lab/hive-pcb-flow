@@ -195,7 +195,7 @@ fixtures:
         sha256: 08386dbb29ae3da044d5f13010bc8e105c5e550ac24d43559f070ad10300af5e
       constraints:
         path: tests/golden/blinky2/constraints.json
-        sha256: 0dbe43889997a249e90850fc8010d65069c97f95af278625a84c454a479fb33e
+        sha256: b59b25066b86f421b76e5bdf5c34f6663bac6da219dff0d4463f4e9e898dfff5
       decoupling:
         path: tests/golden/blinky2/decoupling.json
         sha256: 930ee0e4a20cc5c62bd99800da194dee67398e740fa443306558a3466f74f3c9
@@ -269,6 +269,14 @@ fixtures:
       # over their GND vias (the hifi-receiver-2 review's DFM-9 fault)
       - check: check_ep_paste
         kind: paste_on_via
+      # #312: the USB-C receptacle's CC1/CC2 run straight to the CH224K
+      # (pins 7/6) with no clamp; only VBUS has one (D1, TVS2200)
+      - check: check_esd
+        kind: esd_unclamped
+        net: /CC1
+      - check: check_esd
+        kind: esd_unclamped
+        net: /CC2
   carrier_verify:
     stage: P8
     board: lumina-carrier
@@ -362,7 +370,7 @@ fixtures:
         sha256: 3ac7ed8d3c261be03403a2d24f1e36a4d5bcfbc9860b06cfafdd415fa83316e8
       constraints:
         path: tests/golden/rf4/constraints.json
-        sha256: 34960e4e90b85fd466bf0aa5cdb86e70411d2556b0cdfdb5f2c572d1164a3d64
+        sha256: 2cb36e0035dfd1b7b4b6ad82878d16500e93696e404f8e6dfef44797721c2287
       decoupling:
         path: tests/golden/rf4/decoupling.json
         sha256: 36ff8f8b71d898c27917a5dc4456600ce0d2aa278d2e0bb98bb3f74a777faa8b
@@ -385,7 +393,7 @@ fixtures:
         sha256: 60d3bbee96811efa0d4e8ae1a41bd8e1c81187724c8adf1fafacc704c6e72532
       constraints:
         path: tests/golden/usbbuck4/constraints.json
-        sha256: 1e8964cdf86f81cea512b82f3b199a33264abfa93671bb37a7955cecc79eacd2
+        sha256: 4b3971be42a2ca1eda5bbedc75ed1e1b9e4fde52326abeb44b06e89627a03c59
       decoupling:
         path: tests/golden/usbbuck4/decoupling.json
         sha256: f824f8231eae404995bb8ff06747ea2510a6e8aa82b529eee6d006dce5a5232a

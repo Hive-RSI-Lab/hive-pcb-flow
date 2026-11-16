@@ -591,6 +591,7 @@ def test_real_gerbers_inner_ring_is_read(tmp_path):
     ("check_vias", [], "no vias"),
     ("check_isolation", [], "isolation"),
     ("check_surge", [], "surge"),
+    ("check_esd", [], "no external connector"),
     ("check_rf_match", [], "rf_match"),
     ("check_ddr_timing", [], "ddr"),
     ("check_length_groups", [], "length_groups"),
