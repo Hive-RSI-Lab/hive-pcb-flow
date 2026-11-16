@@ -75,6 +75,7 @@ _BOARD = "runs a whole fixture board's checks or bench stage"
 _INTAKE = "materializes a whole KiCad project through intake"
 SLOW = {
     "tests/test_check_esd.py::test_pinned_boards_keep_every_real_esd_hit": _BOARD,
+    "tests/test_place_spots.py::test_spots_on_a_copy_of_core_pass_drc": _TOOLS,
     "tests/test_dsn_order.py::test_export_dsn_is_the_same_whatever_the_footprint_order": _TOOLS,
     "tests/test_power_layers.py::test_live_dsn_export_types_in2_as_the_list_says": _TOOLS,
     "tests/test_zone_patch.py::test_live_drop_and_rebuild_the_patches_on_a_copy_of_core": _TOOLS,

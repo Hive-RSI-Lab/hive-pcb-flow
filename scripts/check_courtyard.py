@@ -27,7 +27,7 @@ check's (stock mounting holes and logos have none).
 The repair belongs in the footprint, not the board: fpfix rule E (run by
 lib_pull) rebuilds a pulled courtyard that misses its pads as the pad field
 plus 0.25 mm, rule H one that misses the body as the body circle plus 0.25; a board made before then gets its footprints re-pulled or
-fixed with `fpfix.py --lib` and updated from the library.
+fixed with `pcb-flow fpfix --lib` and updated from the library.
 
 CLI: --pcb board.kicad_pcb [--out report.json]
      exit 0 pass / 1 violations / 2 error, per SPEC section 6.

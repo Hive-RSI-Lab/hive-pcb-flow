@@ -656,6 +656,10 @@ Consumers per key (script -> phase):
     //        false keeps every decoupling cap on its IC's side (place_seed)
     "keepouts": [{"rect": [x1, y1, x2, y2], "side": "front",
                   "reason": "antenna"}],   // or "poly": [[x,y], ...]
+    "edge_band_mm": 0.5, "edge_band_layers": ["F.Cu", "B.Cu"],
+    //        keepout_gen: a copper keep-out band this wide along the board
+    //        edge, following the outline (no tracks, no vias; pours, pads
+    //        and footprints allowed); layers default to every copper layer
     "fixed": ["H1", "H2"],
     "separation": [{"a": ["U3"], "b": ["U5"], "min_mm": 10}],
     "corridors": [{"a": "J1", "b": "U1", "width_mm": 5.5, "net": "VBUS"}],

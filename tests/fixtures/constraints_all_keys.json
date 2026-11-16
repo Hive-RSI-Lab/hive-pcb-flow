@@ -154,6 +154,8 @@
     "fixed": ["J1"],
     "backside_decoupling": true,
     "pad_margin_mm": 0.25,
+    "edge_band_mm": 0.5,
+    "edge_band_layers": ["F.Cu", "B.Cu"],
     "edges": [{"ref": "J1", "edge": "left", "pos": 10, "rot": 90}],
     "groups": [{"name": "osc", "anchor": "U1", "members": ["Y1", "C3"],
                 "template": "crystal"}],
