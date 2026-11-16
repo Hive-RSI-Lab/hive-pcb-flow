@@ -42,6 +42,12 @@ schematic-level structural problems BEFORE board work starts:
    ground net - a local label where the ground symbol belonged.
  - pin_net_swap (error): a net plainly named SDA/SCL, D+/D-, CANH/CANL on a
    pin whose name is its partner - the pair crossed at one part.
+ - symmetric_swap (info): a USB-C CC1/CC2 net or an audio left/right
+   channel net on a part's pin of the other name (#843). These are often
+   swapped on purpose: a sink's CC lines are symmetric, and a channel swap
+   only changes which speaker plays which side. Listed so the swap is seen,
+   not a fault; a part named in constraints design_intent.swaps with a why
+   is not listed, and goes in the facts as swaps_as_stated.
  - sot23_pinout (warning): a stock Package_TO_SOT_SMD SOT-23 transistor
    whose symbol pins 1-2-3 are not G-S-D (FET) or B-E-C (BJT), the order
    nearly every SOT-23 part has; the datasheet is the last word.
@@ -552,6 +558,72 @@ def _bus_token(name: str) -> str | None:
         if cand in _BUS_PARTNER:
             return cand
     return None
+
+
+# rule 8b (#843): pairs whose crossing is usually a choice, not a fault
+_CC_PARTNER = {"CC1": "CC2", "CC2": "CC1"}
+_AUDIO_WORDS = {"SPK", "SPEAKER", "HP", "HEADPHONE", "AUDIO", "OUT", "IN",
+                "LINE", "CH", "DAC", "ADC", "AMP", "AOUT", "AIN"}
+# OUTPL, OUTNL, INPR, HPL, SPKR, AOUTL, DACR (a left/right last letter)
+_CH_SUFFIX_RE = re.compile(
+    r"^(?:A|V)?(?:OUT|IN|SPK|HP|LINE|DAC|ADC)(?:P|N|M)?([LR])$")
+# LOUT, ROUT, LINP, RINN, LHP (a left/right first letter); bare LIN is the
+# LIN bus, not left in
+_CH_PREFIX_RE = re.compile(
+    r"^([LR])(?:OUT|HP|SPK|LINE|DAC|ADC)(?:P|N|M)?$|^([LR])IN(?:P|N|M)$")
+
+
+def _cc_token(name: str) -> str | None:
+    """CC1/CC2 when a net or pin name is plainly a Type-C CC line: the
+    whole name or its last /._- separated part (USB_CC1, /USB/CC2)."""
+    if not name:
+        return None
+    tail = re.split(r"[/.]", name.upper())[-1]
+    for cand in (tail, re.split(r"[_-]", tail)[-1]):
+        if cand in _CC_PARTNER:
+            return cand
+    return None
+
+
+def _channel(name: str) -> str | None:
+    """L or R when a net or pin name plainly names an audio channel: a
+    LEFT/RIGHT word, a pin form like OUTPL or LOUT, or an L/R part beside
+    an audio word (SPK_L+, OUT_R, HP-L). Anything else (a bare R, a LIN
+    bus) is None."""
+    if not name:
+        return None
+    tail = re.split(r"[/.]", name.upper())[-1]
+    parts = [t for t in re.split(r"[_\-+ ]", tail) if t]
+    found = set()
+    for t in parts:
+        if t in ("LEFT", "RIGHT"):
+            found.add(t[0])
+            continue
+        m = _CH_SUFFIX_RE.match(t) or _CH_PREFIX_RE.match(t)
+        if m:
+            found.add(next(g for g in m.groups() if g))
+        elif t in ("L", "R") and _AUDIO_WORDS & set(parts):
+            found.add(t)
+    return found.pop() if len(found) == 1 else None
+
+
+def _symmetric_swaps(nets: dict) -> dict[tuple[str, str], list[dict]]:
+    """{(ref, "cc"|"lr"): [{net, pin, function}]}: each net named for one
+    side of a CC or left/right pair that lands on a pin named for the
+    other side."""
+    out: dict[tuple[str, str], list[dict]] = {}
+    for name in sorted(nets):
+        for pair, read in (("cc", _cc_token), ("lr", _channel)):
+            side = read(name)
+            if not side:
+                continue
+            for m in nets[name]:
+                func = m.get("pinfunction") or ""
+                other = read(func)
+                if other and other != side:
+                    out.setdefault((m["ref"], pair), []).append(
+                        {"net": name, "pin": m["pin"], "function": func})
+    return out
 
 
 _STOCK_SOT23_RE = re.compile(r"^Package_TO_SOT_SMD:SOT-23(-3)?(_|$)")
@@ -4781,6 +4853,36 @@ def audit(parsed: dict, constraints: dict,
                   f"named '{m['pinfunction']}': {token} and {partner} are "
                   f"crossed at {m['ref']}", pin=m["pin"])
 
+    # 8b. a CC1/CC2 or left/right net on the other side's pin (#843):
+    # hifi-receiver's CH224 takes CC1 on CC2, and its TPA3118's R channel
+    # drives the L speaker, both on purpose. Info, or nothing when
+    # design_intent.swaps says so.
+    swaps_stated = {}
+    for e in (constraints.get("design_intent") or {}).get("swaps") or []:
+        if isinstance(e, dict) and e.get("ref") and e.get("why"):
+            swaps_stated[(e["ref"], e.get("pair"))] = e["why"]
+    swaps_as_stated = []
+    sym_why = {"cc": "a USB-C sink's CC lines are symmetric (the plug fits "
+                     "either way up, so CC1 and CC2 swap with it), so this "
+                     "is usually a layout choice",
+               "lr": "a channel swap only changes which speaker plays "
+                     "which side, so it is often deliberate"}
+    sym_name = {"cc": "CC1 and CC2", "lr": "left and right"}
+    for (ref, pair), hits in sorted(_symmetric_swaps(nets).items()):
+        why = swaps_stated.get((ref, pair)) or swaps_stated.get((ref, None))
+        if why:
+            swaps_as_stated.append(f"{ref} {pair}: {why}")
+            continue
+        said = "; ".join(f"'{h['net']}' on pin {h['pin']} ({h['function']})"
+                         for h in hits)
+        v("info", "symmetric_swap", hits[0]["net"], [ref],
+          f"{ref} ({comps.get(ref, {}).get('value')}) has {sym_name[pair]} "
+          f"crossed: {said}. {sym_why[pair][0].upper()}{sym_why[pair][1:]}; "
+          f"if it is meant, say so in constraints design_intent.swaps "
+          f"[{{ref: {ref}, why: ...}}]",
+          pair=pair, pins=[h["pin"] for h in hits],
+          nets=[h["net"] for h in hits])
+
     # 9. a stock SOT-23 transistor whose symbol pin order isn't the
     # package's: nearly every SOT-23 MOSFET is 1=G 2=S 3=D and every BJT
     # 1=B 2=E 3=C (errata corpus: oasis v0.2, Q_NMOS_GDS on SOT-23-3 put
@@ -5856,6 +5958,8 @@ def audit(parsed: dict, constraints: dict,
         "transceivers_checked": xcvr_checked,
         "connector_pairs_checked": pairs_checked,
     }
+    if swaps_as_stated:
+        facts["swaps_as_stated"] = swaps_as_stated
     if not_judged:
         facts["not_judged"] = not_judged
     return violations, facts

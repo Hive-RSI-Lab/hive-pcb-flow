@@ -734,7 +734,8 @@ class _FileLint:
             elif key == "design_intent":
                 # netlist_audit rules 34-35 (#1137): what no design file
                 # says - a module drawn with another's symbol, a bus member
-                # left unread on purpose
+                # left unread on purpose; rule 8b (#843): a CC or left/right
+                # pair crossed at a part on purpose
                 def _rows(name, field):
                     rows = val.get(name, []) if isinstance(val, dict) \
                         else None
@@ -745,15 +746,20 @@ class _FileLint:
                         and e["why"].strip()
                         and (name != "modules" or (
                             isinstance(e.get("is"), str) and e["is"]))
+                        and (name != "swaps"
+                             or e.get("pair", "cc") in ("cc", "lr"))
                         for e in rows)
                 if not isinstance(val, dict) or set(val) - {
-                        "modules", "bus_unread"} or not (
+                        "modules", "bus_unread", "swaps"} or not (
                         _rows("modules", "ref")
-                        and _rows("bus_unread", "net")):
+                        and _rows("bus_unread", "net")
+                        and _rows("swaps", "ref")):
                     self.add("error", "bad_type",
                              f"{path}: design_intent must be {{modules: "
                              "[{ref: U1, is: <part>, why: text}], "
-                             "bus_unread: [{net: N, why: text}]}", path)
+                             "bus_unread: [{net: N, why: text}], "
+                             "swaps: [{ref: U1, pair?: cc|lr, why: text}]}",
+                             path)
             elif key == "connector_pinouts":
                 # netlist_audit rule 37 (#1217): a connector's own pin
                 # names where its symbol's are bare numbers - the pair's
