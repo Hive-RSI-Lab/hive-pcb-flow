@@ -835,7 +835,7 @@ def test_golden_clean_pdn(board):
 
 
 GOLDEN_KNOWN_WARNINGS = {
-    "blinky2": {"check_connector_fit": 2},
+    "blinky2": {"check_connector_fit": 2, "check_ldo_esr": 1},
     "rf4": {"check_silk": 1, "check_wicking": 3, "check_connector_fit": 1},
     "usbbuck4": {"check_wicking": 1, "check_connector_fit": 2,
                  "check_body_clash": 1},
@@ -854,7 +854,8 @@ def test_verify_all_goldens_clean(tmp_path):
         # edge-SMA ground pads (top and bottom) and U1 pad 1, usbbuck4's
         # Y1 pad 4; KiCad's stock 1.0 mm header drill under IPC-2222 (#474:
         # tht_hole_ipc2222, one per header: blinky2 J1 J2, rf4 J2,
-        # usbbuck4 J2 J3)
+        # usbbuck4 J2 J3); blinky2's AMS1117 with only ceramics on its
+        # output (#356: ldo_esr_low, a warning, recorded real in triage.yaml)
         known = GOLDEN_KNOWN_WARNINGS.get(board, {})
         by_check = {k: v for k, v in summary["counts"]["by_check"].items()
                     if v}
