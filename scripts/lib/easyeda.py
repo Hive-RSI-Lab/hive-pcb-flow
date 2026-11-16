@@ -41,8 +41,6 @@ UNIT_MM = 0.254
 # The top copper layer, and EasyEDA's multi-layer (through-hole) pads.
 PAD_LAYERS = {"1", "11"}
 TOP_SILK = "3"
-DEFAULT_CACHE = Path(os.environ.get("HWDE_EASYEDA_CACHE")
-                     or Path.home() / ".cache" / "hwde" / "easyeda")
 
 
 @dataclass
@@ -233,21 +231,31 @@ def get(lcsc: str, cache_dir: Path | None = None, fetch: bool = True,
     lcsc = (lcsc or "").strip().upper()
     if not lcsc:
         return None
-    path = cache_path(lcsc, cache_dir or DEFAULT_CACHE)
+    # the shared cache as it is now, not when this module was imported: a
+    # test suite that imported it during collection read the tower's cache
+    # while CI read none (#1254)
+    shared_dir = shared_cache()
+    path = cache_path(lcsc, cache_dir or shared_dir)
     if path.is_file():
         return parse(json.loads(path.read_text(encoding="utf-8")))
-    shared = cache_path(lcsc, shared_cache())
+    shared = cache_path(lcsc, shared_dir)
     if shared != path and shared.is_file():
         cached = json.loads(shared.read_text(encoding="utf-8"))
         _keep(path, cached)  # into the board's cache, to be committed
         return parse(cached)
+    pins = pinned_caches()
+    for pin in pins:
+        if cache_path(lcsc, pin).is_file():
+            return parse(json.loads(cache_path(lcsc, pin).read_text(
+                encoding="utf-8")))
     if not fetch:
         # offline: a part EasyEDA was asked about and had nothing for is a
         # known "no model"; one never asked about is a miss the caller
         # passing `errors` must not read as "no model" (a cold cache)
         # (read, never written: an offline run adds nothing to the dir it
         # checks, so a test or score leaves a pinned fixture as it was)
-        if none_known(lcsc, path.parent) or none_known(lcsc, shared.parent):
+        if none_known(lcsc, path.parent) or none_known(lcsc, shared.parent) \
+                or any(none_known(lcsc, pin) for pin in pins):
             return None
         if errors is not None:
             errors[lcsc] = (f"offline (HWDE_EASYEDA_OFFLINE): {lcsc}'s model "
@@ -316,6 +324,15 @@ def shared_cache() -> Path:
     cache lacks a part, and filled beside it on every fetch."""
     import env
     return env.easyeda_cache()
+
+
+def pinned_caches() -> list[Path]:
+    """Read-only model dirs, read after the board's and the shared cache and
+    never written: $HWDE_EASYEDA_PINNED (os.pathsep-separated). The test
+    suite pins tests/fixtures/easyeda_pinned here, so CI and a host with a
+    full shared cache judge the same footprints (#1254)."""
+    return [Path(d).expanduser() for d in
+            os.environ.get("HWDE_EASYEDA_PINNED", "").split(os.pathsep) if d]
 
 
 def _keep(path: Path, cached: dict) -> None:

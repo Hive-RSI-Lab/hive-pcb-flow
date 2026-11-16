@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import shutil
 import sys
 from dataclasses import replace
@@ -547,6 +548,43 @@ def test_cache_order_env_then_board_dir_then_shared(tmp_path, monkeypatch):
     monkeypatch.setenv("HWDE_EASYEDA_CACHE", str(tmp_path / "env"))
     assert cv.default_cache(parts) == tmp_path / "env"
     assert cv.default_cache(None) == tmp_path / "env"
+
+
+def test_the_shared_cache_is_read_where_the_env_points_now(tmp_path, monkeypatch):
+    """#1254: the cache was fixed when easyeda was imported, so a suite that
+    imported it during collection read the host's cache, not the test's."""
+    full, empty = tmp_path / "full", tmp_path / "empty"
+    full.mkdir()
+    shutil.copy(FIX / "C106245.json", full)
+    monkeypatch.delenv("HWDE_EASYEDA_PINNED", raising=False)
+    monkeypatch.setenv("HWDE_EASYEDA_CACHE", str(full))
+    assert easyeda.get("C106245", fetch=False) is not None
+    monkeypatch.setenv("HWDE_EASYEDA_CACHE", str(empty))
+    assert easyeda.get("C106245", fetch=False) is None
+
+
+def test_pinned_models_are_read_after_the_caches_and_never_written(
+        tmp_path, monkeypatch):
+    pin, board, shared = tmp_path / "pin", tmp_path / "board", tmp_path / "shared"
+    pin.mkdir()
+    shutil.copy(FIX / "C106245.json", pin)
+    (pin / "C844983.none").write_text('{"lcsc": "C844983", "none": "x"}\n')
+    monkeypatch.setenv("HWDE_EASYEDA_CACHE", str(shared))
+    # the quiet twin: no pin, a cold cache, an offline miss named as such
+    monkeypatch.delenv("HWDE_EASYEDA_PINNED", raising=False)
+    errors = {}
+    assert easyeda.get("C106245", board, fetch=False, errors=errors) is None
+    assert easyeda.get("C844983", board, fetch=False, errors=errors) is None
+    assert sorted(errors) == ["C106245", "C844983"]
+    # pinned: the model is read, EasyEDA's "no model" answer is known
+    monkeypatch.setenv("HWDE_EASYEDA_PINNED", f"{tmp_path / 'nowhere'}{os.pathsep}{pin}")
+    errors = {}
+    assert easyeda.get("C106245", board, fetch=False, errors=errors) is not None
+    assert easyeda.get("C844983", board, fetch=False, errors=errors) is None
+    assert errors == {}
+    # read-only: nothing copied into the board's cache or the shared one
+    assert not board.exists() and not shared.exists()
+    assert sorted(p.name for p in pin.iterdir()) == ["C106245.json", "C844983.none"]
 
 
 def test_failed_fetch_is_fetch_failed_not_no_model(ws, tmp_path, monkeypatch):
