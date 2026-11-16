@@ -25,7 +25,9 @@ add up and the narrowest cross-section anywhere on the way is found:
                   another track's body (a T-junction), a via in a pad or
                   fill, a via on a track's body (its centre in the
                   track's copper, or the track's centreline through its
-                  pad), a pad in a fill, two track ends overlapping
+                  pad), a track passing through a pad (its centreline
+                  through the pad, or the pad's centre in its copper),
+                  a pad in a fill, two track ends overlapping
 
 The min cut is reported as the bottleneck: the tracks (width, layer) and
 via barrels that together carry the whole path's capacity. A path is
@@ -240,6 +242,9 @@ def build_graph(bg: geom.BoardGeom, net: str, dt_c: float,
     # end's or the via's foot
     on_track = {}  # via index -> the track nodes at its feet
     via_pts = [Point(v.at) for v in vias]
+    pad_tree = STRtree([p.poly for p in pads]) if pads else None
+    pad_mid = [p.poly.centroid for p in pads]
+    pad_feet = []  # (track node, pad): a track passing through a pad
     for i, t in enumerate(tracks):
         cuts = {0.0, t.length}
         for node, xy, layer, _hw in ends:
@@ -263,6 +268,23 @@ def build_graph(bg: geom.BoardGeom, net: str, dt_c: float,
                 if TOL < d < t.length - TOL:
                     cuts.add(d)
                 feet.append((vi, d))
+        # a pad the track passes through, neither end in it (#785): its
+        # centreline crosses the pad, or the pad's centre is in its copper
+        through = []
+        if pad_tree is not None:
+            hw = t.width / 2 + TOL
+            a, b = Point(t.shape.coords[0]), Point(t.shape.coords[-1])
+            for pi in pad_tree.query(t.shape.buffer(hw)):
+                pd = pads[pi]
+                if t.layer not in pd.layers or pd.poly.distance(a) <= TOL \
+                        or pd.poly.distance(b) <= TOL:
+                    continue  # an end in the pad is joined below
+                if t.shape.distance(pd.poly) <= TOL or \
+                        t.shape.distance(pad_mid[pi]) <= hw:
+                    d = t.shape.project(pad_mid[pi])
+                    if TOL < d < t.length - TOL:
+                        cuts.add(d)
+                    through.append((pd, d))
         cap = amps_for_width(t.width, cu.get(t.layer, check_current.OZ1_MM),
                              dt_c)
         pts = sorted(cuts)
@@ -273,6 +295,9 @@ def build_graph(bg: geom.BoardGeom, net: str, dt_c: float,
         for vi, d in feet:
             k = min(range(len(pts)), key=lambda k: abs(pts[k] - d))
             on_track.setdefault(vi, []).append(nodes[k])
+        for pd, d in through:
+            k = min(range(len(pts)), key=lambda k: abs(pts[k] - d))
+            pad_feet.append((nodes[k], pd))
         for d, n in zip(pts[1:-1], nodes[1:-1]):
             ends.append((n, t.shape.interpolate(d).coords[0], t.layer,
                          t.width / 2))
@@ -282,7 +307,6 @@ def build_graph(bg: geom.BoardGeom, net: str, dt_c: float,
             if la == lb and na != nb and \
                     math.dist(pa, pb) <= ha + hb + TOL:
                 g.edge(na, nb, INF)
-    pad_tree = STRtree([p.poly for p in pads]) if pads else None
     fill_tree = STRtree([f for _l, f in fills]) if fills else None
 
     def pads_at(geom_, layer):
@@ -305,6 +329,8 @@ def build_graph(bg: geom.BoardGeom, net: str, dt_c: float,
             g.edge(node, ("pad", p.ref, p.number), INF)
         for j in fills_at(pt, layer):
             g.edge(node, ("fill", j), INF)
+    for node, pd in pad_feet:
+        g.edge(node, ("pad", pd.ref, pd.number), INF)
     for vi, v in enumerate(vias):
         cap = via_a if via_a else via_amps(v.drill, plating, dt_c)
         disc = v.poly

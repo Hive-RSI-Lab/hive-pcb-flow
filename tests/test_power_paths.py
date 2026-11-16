@@ -315,6 +315,37 @@ def test_power_path_via_on_a_tracks_body_joins_it(tmp_path):
     assert r["amps"] == 0.0
 
 
+def test_power_path_track_through_a_pad_joins_it(tmp_path):
+    """#785, hc-power: +5V_AUX L1 -> D2 read as open, the F.Cu track running
+    through D2's pad 2 with both ends outside it."""
+    # J1 -> F.Cu dogleg -> a track through C1's pad (14.5..15.5, 7.5..8.5),
+    # neither of its ends in the pad
+    lead = '  (segment (start 2 5) (end 10 {y}) (width 0.5) (layer "F.Cu") (net "VBUS"))\n'
+    run = '  (segment (start 10 {y}) (end 20 {y}) (width 0.5) (layer "F.Cu") (net "VBUS"))\n'
+    through = (lead + run).format(y=8)
+    bg = geom.BoardGeom.from_file(_board(tmp_path, through))
+    r = check_power_path.path_flow(bg, "VBUS", "J1", "C1", 10, None, 0.02)
+    assert r["amps"] == pytest.approx(
+        check_power_path.amps_for_width(0.5, 0.035, 10), rel=1e-6)
+    rc, rep = _cli("check_power_path.py", "--pcb", str(_board(tmp_path, through)),
+                   "--path", "VBUS:J1:C1:0.5")
+    assert rc == 0, rep
+    assert not [v for v in rep["violations"] if v["kind"] == "path_open"]
+    # the quiet twin: the same track run beside the pad, its copper clear
+    # of it, is still open
+    beside = (lead + run).format(y=9.2)
+    rc, rep = _cli("check_power_path.py", "--pcb", str(_board(tmp_path, beside)),
+                   "--path", "VBUS:J1:C1:0.5")
+    assert rc == 1
+    assert [v["kind"] for v in rep["violations"]] == ["path_open"]
+    # and one whose copper only grazes the pad's edge is not joined either,
+    # as for a via
+    grazing = (lead + run).format(y=8.6)
+    bg = geom.BoardGeom.from_file(_board(tmp_path, grazing))
+    r = check_power_path.path_flow(bg, "VBUS", "J1", "C1", 10, None, 0.02)
+    assert r["amps"] == 0.0
+
+
 def test_power_path_vias_and_overlapping_pours(tmp_path):
     # J1 -> F.Cu pour -> 1 via -> two overlapping B.Cu pours -> via -> Q1
     body = """  (zone (net "VBUS") (layer "F.Cu")
