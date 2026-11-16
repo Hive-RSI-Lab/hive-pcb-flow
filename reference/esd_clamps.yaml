@@ -1,0 +1,87 @@
+# ESD clamps' line ratings for check_esd (#310): the capacitance a clamp
+# hangs on the line it guards, and the working voltage it stands off. Every
+# row is read from the maker's datasheet (source names it; verified: true =
+# re-read for this table). A clamp with no row is not judged: no guessing
+# from the part family.
+#
+# match: regex on the part's value / MPN (case-insensitive). lcsc: the row
+# holds only for that LCSC code (a second source sold under the same name:
+# its own sheet, its own numbers); a row with no lcsc is the original
+# maker's and matches by name. check_esd takes an LCSC row first, then a
+# maker row.
+# cap_pf_typ / cap_pf_max: one I/O line to ground (an array's line-to-line
+# figure is cap_io_io_pf_*, a fact only). check_esd judges max when the
+# sheet gives it, else typ, and says which.
+# vrwm: the reverse working (stand-off) voltage. vrwm_kind: vrwm (the
+# sheet's VRWM), vdc (a polymer clamp's rated DC voltage) or abs_max (the
+# sheet gives only an absolute maximum input voltage; the stand-off is
+# taken as that, an upper bound).
+parts:
+  - match: 'ESD441'
+    maker: TI
+    cap_pf_typ: 1.0
+    vrwm: 5.5
+    vrwm_kind: vrwm
+    source: TI ESD441 datasheet SLVSH26C, CL 1 pF typ (IO to GND), VRWM 5.5 V, ti.com/lit/ds/symlink/esd441.pdf
+    verified: true
+  - match: 'ESD321'
+    maker: TI
+    cap_pf_typ: 0.9
+    cap_pf_max: 1.1
+    vrwm: 3.6
+    vrwm_kind: vrwm
+    source: TI ESD321 datasheet SLVSEN8C, CL 0.9 pF typ / 1.1 pF max, VRWM 3.6 V, ti.com/lit/ds/symlink/esd321.pdf
+    verified: true
+  - match: 'ESD5Z5\.0'
+    maker: onsemi
+    cap_pf_typ: 80
+    vrwm: 5.0
+    vrwm_kind: vrwm
+    source: onsemi ESD5Z2.5T1/D Rev 16, ESD5Z5.0 C 80 pF typ (0 V bias, 1 MHz), VRWM 5.0 V, onsemi.com/download/data-sheet/pdf/esd5z2.5t1-d.pdf
+    verified: true
+  # TI's own part only: TPD1E04U04DPLR-TP (the -TP suffix) is MCC's second
+  # source, with its own sheet
+  - match: 'TPD1E04U04(?![\w-]*-TP\b)'
+    maker: TI
+    cap_pf_typ: 0.5
+    cap_pf_max: 0.65
+    vrwm: 3.6
+    vrwm_kind: vrwm
+    source: TI TPD1E04U04 datasheet, CIO 0.5 pF typ / 0.65 pF max, VRWM 3.6 V, ti.com/lit/ds/symlink/tpd1e04u04.pdf
+    verified: true
+  - match: 'IP4220CZ6'
+    maker: NXP
+    cap_pf_typ: 1.0
+    vrwm: 5.5
+    vrwm_kind: abs_max
+    source: NXP IP4220CZ6 product data sheet Rev 5 (2011), C(I/O-GND) 1.0 pF typ; VI 5.5 V max (no VRWM row), datasheet.chipsmall.com/IP4220CZ6-125/530008.pdf
+    verified: true
+  - match: 'PESD0402-140'
+    maker: Littelfuse
+    cap_pf_typ: 0.25
+    vrwm: 14
+    vrwm_kind: vdc
+    source: Littelfuse PESD0402-140 datasheet, capacitance 0.25 pF typ, 14 VDC max, farnell.com/datasheets/3672977.pdf
+    verified: true
+  - match: 'SRV05-4'
+    lcsc: C85364
+    maker: ProTek
+    cap_pf_typ: 3.5
+    cap_pf_max: 5.0
+    cap_io_io_pf_typ: 2.5
+    cap_io_io_pf_max: 4.0
+    vrwm: 5.0
+    vrwm_kind: vrwm
+    source: ProTek SRV05-4 datasheet 05150.R16 (LCSC C85364), I/O-GND 3.5 pF typ / 5.0 pF max, I/O-I/O 2.5 / 4.0 pF, VWM 5.0 V, datasheet.lcsc.com/datasheet/pdf/0b2cf2fdd2f14e66be3175076b23ed3e.pdf
+    verified: true
+  - match: 'USBLC6-2'
+    lcsc: C2827654
+    maker: Msksemi
+    cap_pf_typ: 0.8
+    cap_pf_max: 1.0
+    cap_io_io_pf_typ: 0.4
+    cap_io_io_pf_max: 0.5
+    vrwm: 5.0
+    vrwm_kind: vrwm
+    source: LCSC C2827654 (listed as TECH PUBLIC; the sheet it links is Msksemi USBLC6-2SC6-MS), I/O-GND 0.8 pF typ / 1.0 pF max, I/O-I/O 0.4 / 0.5 pF, VRWM 5.0 V, datasheet.lcsc.com/datasheet/pdf/fc4eb899b8e4021ee1843f8c3ea5a928.pdf
+    verified: true

@@ -81,6 +81,8 @@ job JSON: {"verb": ..., "result": out.json, ...} with verbs:
          name and layer (and net, when given; "" names an unnamed zone)
       whose bounding box lies inside the box (0.05 mm slack) - after every
       addition, just before the save (zone_patch.py's replace / remove).
+      An entry with a "uuid" drops that one zone and nothing else
+      (planes_gen's replaced pours, #583).
 """
 import json
 import sys
@@ -493,6 +495,12 @@ def verb_add_zones(job):
         slack = iu(0.05)
         for zone in board.Zones():
             u = zone.m_Uuid.AsString()
+            if r.get("uuid"):
+                # an exact zone (planes_gen #583): uuid alone picks it
+                if u == r["uuid"] and u not in fresh and u not in gone_ids:
+                    gone.append(zone)
+                    gone_ids.add(u)
+                continue
             if u in fresh or u in gone_ids \
                     or zone.GetZoneName() != r["name"] \
                     or (r.get("net") is not None

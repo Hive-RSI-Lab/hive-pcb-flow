@@ -62,6 +62,18 @@ are removed (at any fill coverage: a board that grew a lot is the same
 case, #923 point 2) and the planned one added in their place (status "regrown").
 That is what lets "re-run planes_gen" after a resize reach the new edge.
 
+A plane whose REGION changed (#583): planes_gen names every zone it adds
+PLANE_<net>. On a re-run, a PLANE_<net> zone on a planned layer whose
+outline matches no planned region of that (net, layer) is its earlier pour
+of a region that moved, shrank or grew; it is removed (by uuid) and the
+planned zone added in its place (status "replaced"), so neither the old
+copper nor a duplicate stays. A zone already drawn to the planned outline
+(named or not) is the current pour and is not re-added. An UNNAMED zone
+(a board poured before the names, or hand copper) is replaced only by the
+grown rule above or when at least half of it lies inside a region whose
+fill falls short of 80% (the region moved); one that reaches past a
+covered region is kept and named in the notes.
+
 Thermal vias honour constraints.json["thermal"][*].min_vias per ref: 0
 skips that part's grid (a live tab such as an LDO's VOUT must not be
 drilled into the GND plane), and a grid short of a positive floor is noted
@@ -376,11 +388,23 @@ def build_plan(bg: geom.BoardGeom, constraints: dict | None,
         z["_rect"] = _region_rect(z, bg, inset, i)
     plan, merge_notes = merge_same_net(plan)
     notes += merge_notes
+    _match_planes(bg, plan, notes)
     for z in plan:
+        if z.get("_current"):
+            # planes_gen's own pour of this region is on the board already
+            # (named PLANE_<net>, or an unnamed one drawn to this outline)
+            cov = _existing_cover(bg, z["net"], z["layer"], _shape(z))
+            z["_existing"] = round(cov, 3) or True
+            notes.append(f"existing {z['net']} pour on {z['layer']} has the "
+                         "planned outline; zone not re-added (re-run)")
+            continue
+        gone = {r["uuid"] for o in plan
+                if (o["net"], o["layer"]) == (z["net"], z["layer"])
+                for r in o.get("_replace") or []}
         # stale outlines first, at ANY coverage (#923 point 2): a board that
         # grew by more than 1 - EXISTING_COVER left the old zone in place
         # beside the new one, and DRC called the pair zones_intersect
-        stale = _stale_outlines(bg, z)
+        stale = _stale_outlines(bg, z, skip=gone)
         if stale:
             z["_regrow"] = stale
             notes.append(f"existing {z['net']} zone on {z['layer']} "
@@ -388,53 +412,187 @@ def build_plan(bg: geom.BoardGeom, constraints: dict | None,
                          "grew); its outline is replaced by the planned "
                          "one")
             continue
-        cov = _existing_cover(bg, z["net"], z["layer"], _shape(z))
+        if z.get("_replace"):
+            continue                    # its old pour goes, this one is added
+        cov = _existing_cover(bg, z["net"], z["layer"], _shape(z), skip=gone)
         if cov >= EXISTING_COVER:
             z["_existing"] = round(cov, 3)
             notes.append(f"existing {z['net']} fill covers "
                          f"{cov:.0%} of the {z['layer']} region; zone not "
                          "re-added (re-run / pre-poured board)")
+            past = _past_region(bg, z, skip=gone)
+            if past:
+                notes.append(f"kept {past}: an unnamed {z['net']} zone on "
+                             f"{z['layer']} reaches past the planned region, "
+                             "and planes_gen only replaces the pours it "
+                             f"named {plane_name(z['net'])}; remove it by "
+                             "hand if the region shrank")
+            continue
+        moved = _moved_outlines(bg, z, skip=gone)
+        if moved:
+            z["_replace"] = moved
+            notes.append(f"existing unnamed {z['net']} zone on {z['layer']} "
+                         "lies mostly inside the planned region but not on "
+                         "it (the region moved); it is replaced by the "
+                         "planned one")
     assign_priorities(plan)
     return plan, {"source": source, "added_for_reference": added,
                   "notes": notes}
 
 
-def _stale_outlines(bg: geom.BoardGeom, z: dict) -> list[dict]:
+def plane_name(net: str) -> str:
+    """The name planes_gen gives its zones (zone_patch's PATCH_<net>
+    convention): a re-run knows its own pour by it (#583)."""
+    return f"PLANE_{net}"
+
+
+def _pours(bg: geom.BoardGeom, net: str, layer: str,
+           skip=frozenset()) -> list[tuple]:
+    """(zone, outline polygon) for `net`'s plain pours on `layer`: one
+    layer only, no teardrops, none whose uuid is in `skip`."""
+    out = []
+    for q in bg.zones_of(net, layer):
+        if q.teardrop or len(q.outline) < 3 or tuple(q.layers) != (layer,) \
+                or (q.uuid and q.uuid in skip):
+            continue
+        out.append((q, Polygon(q.outline).buffer(0)))
+    return out
+
+
+def _outline_tol(shape) -> float:
+    return max(REGROW_TOL_MM2, 0.01 * shape.area)
+
+
+def _remove_entry(q, pg, layer: str) -> dict:
+    r = {"name": q.name, "net": q.net, "layer": layer,
+         "inside": [round(v, 4) for v in pg.bounds]}
+    if q.uuid:
+        r["uuid"] = q.uuid
+    return r
+
+
+def _match_planes(bg: geom.BoardGeom, plan: list[dict],
+                  notes: list[str]) -> None:
+    """#583: per planned (net, layer), pair each entry with the pour already
+    drawn to its outline (`_current`: planes_gen's PLANE_<net> zone, or an
+    unnamed one, which is what planes_gen wrote before it named them). A
+    PLANE_<net> zone on the layer that matches no entry is planes_gen's
+    earlier pour of a region that changed (moved, shrank, grew): it goes in
+    `_replace` on the group's first unmatched entry, and the planned zone
+    is added in its place, so a re-run neither keeps the old copper nor
+    adds a duplicate. Unnamed zones that match nothing are left to the
+    grown / moved rules (they may be hand copper)."""
+    groups: dict[tuple, list[dict]] = {}
+    for z in plan:
+        groups.setdefault((z["net"], z["layer"]), []).append(z)
+    for (net, layer), entries in groups.items():
+        pours = _pours(bg, net, layer)
+        if not pours:
+            continue
+        used: set[int] = set()
+        for z in entries:
+            shape = _shape(z)
+            for i, (q, pg) in enumerate(pours):
+                if i not in used and q.name in ("", plane_name(net)) \
+                        and pg.symmetric_difference(shape).area \
+                        <= _outline_tol(shape):
+                    used.add(i)
+                    z["_current"] = True
+                    break
+        stale = [(q, pg) for i, (q, pg) in enumerate(pours)
+                 if i not in used and q.name == plane_name(net)]
+        if not stale:
+            continue
+        open_ = [z for z in entries if not z.get("_current")]
+        if not open_:
+            # every entry has its pour; the rest are earlier copies
+            notes.append(f"{len(stale)} earlier {plane_name(net)} zone(s) on "
+                         f"{layer} match no planned region; removed")
+            open_ = entries
+        open_[0]["_replace"] = [_remove_entry(q, pg, layer)
+                                for q, pg in stale]
+        if open_[0].get("_current"):
+            continue
+        notes.append(f"the planned {net} region on {layer} changed: "
+                     f"planes_gen's earlier {plane_name(net)} zone(s) "
+                     f"{[r['inside'] for r in open_[0]['_replace']]} are "
+                     "replaced by the planned one")
+
+
+def _target(bg: geom.BoardGeom, z: dict):
+    region = _shape(z)
+    if not hasattr(region, "area"):
+        region = box(*region)
+    target = region.intersection(bg.outline) if not bg.outline.is_empty \
+        else region
+    return region, target
+
+
+def _stale_outlines(bg: geom.BoardGeom, z: dict,
+                    skip=frozenset()) -> list[dict]:
     """add_zones "remove" entries for the same-net zones on z's layer whose
     OUTLINES no longer reach the planned region - a board that grew after
     the pour (board_edit) leaves the plane's polygon at the old edge, and
     "existing fill covers it" would otherwise keep it there for good.
     Empty when the outlines already cover the region (to REGROW_TOL), or
     when a stale zone is not wholly inside the region (then it is not a
-    smaller copy of this plane, and replacing it could lose copper)."""
-    region = _shape(z)
-    if not hasattr(region, "area"):
-        region = box(*region)
-    target = region.intersection(bg.outline) if not bg.outline.is_empty \
-        else region
-    zones = [q for q in bg.zones_of(z["net"], z["layer"])
-             if not q.teardrop and len(q.outline) >= 3
-             and tuple(q.layers) == (z["layer"],)]
-    if not zones or target.is_empty:
+    smaller copy of this plane, and replacing it could lose copper).
+    Zones whose uuid is in `skip` are already on their way out."""
+    region, target = _target(bg, z)
+    pours = _pours(bg, z["net"], z["layer"], skip)
+    if not pours or target.is_empty:
         return []
-    polys = [Polygon(q.outline).buffer(0) for q in zones]
-    missing = target.difference(unary_union(polys)).area
-    if missing <= max(REGROW_TOL_MM2, 0.01 * target.area):
+    missing = target.difference(unary_union([pg for _, pg in pours])).area
+    if missing <= _outline_tol(target):
         return []
     # inside the UNCLIPPED region: a rounded board corner clips the target
     # but not the (rectangular) zone outline drawn from the same region
     grown = region.buffer(0.05)
-    stale = [(q, pg) for q, pg in zip(zones, polys) if grown.covers(pg)]
-    if not stale:
-        return []
-    return [{"name": q.name, "net": q.net, "layer": z["layer"],
-             "inside": [round(v, 4) for v in pg.bounds]} for q, pg in stale]
+    return [_remove_entry(q, pg, z["layer"]) for q, pg in pours
+            if grown.covers(pg)]
 
 
-def _existing_cover(bg: geom.BoardGeom, net: str, layer: str, region) -> float:
+MOVED_INSIDE = 0.5   # share of an unnamed zone inside a moved plane's region
+
+
+def _moved_outlines(bg: geom.BoardGeom, z: dict,
+                    skip=frozenset()) -> list[dict]:
+    """#583, a board poured before planes_gen named its zones: an unnamed
+    same-net zone on the layer with at least MOVED_INSIDE of its outline
+    inside the planned region, where the existing fill falls short of
+    EXISTING_COVER (so the planned zone is going to be added). That is the
+    old pour of a region that moved; left in place it overlaps the new
+    zone (zones_intersect). Called only after the covered and grown rules
+    said no."""
+    region, _ = _target(bg, z)
+    grown = region.buffer(0.05)
+    return [_remove_entry(q, pg, z["layer"])
+            for q, pg in _pours(bg, z["net"], z["layer"], skip)
+            if not q.name and pg.area > 0
+            and pg.intersection(grown).area >= MOVED_INSIDE * pg.area]
+
+
+def _past_region(bg: geom.BoardGeom, z: dict, skip=frozenset()) -> list:
+    """Bounds of the unnamed same-net zones on the layer that overlap the
+    planned region and reach past it by more than the outline tolerance
+    (what a shrunk region leaves on a board poured before planes_gen named
+    its zones; planes_gen keeps them and says so)."""
+    region, _ = _target(bg, z)
+    grown = region.buffer(0.05)
+    return [[round(v, 2) for v in pg.bounds]
+            for q, pg in _pours(bg, z["net"], z["layer"], skip)
+            if not q.name and pg.intersects(region)
+            and pg.difference(grown).area > _outline_tol(region)]
+
+
+def _existing_cover(bg: geom.BoardGeom, net: str, layer: str, region,
+                    skip=frozenset()) -> float:
     """Fraction of the (region ^ outline) already covered by `net`'s fill;
-    region is a shapely polygon or an [x1, y1, x2, y2] rect."""
-    fill = bg.zone_fill(net, layer)
+    region is a shapely polygon or an [x1, y1, x2, y2] rect. Zones whose
+    uuid is in `skip` (being removed) do not count."""
+    fill = bg.zone_fill(net, layer) if not skip else unary_union(
+        [q.fill_on(layer) for q in bg.zones_of(net, layer)
+         if not (q.uuid and q.uuid in skip)])
     if fill.is_empty:
         return 0.0
     if not hasattr(region, "area"):
@@ -454,6 +612,7 @@ def worker_zones(plan: list[dict]) -> list[dict]:
     791: thermal spokes would starve a 5 A pad), which router.md's
     never-hand-edit rule used to contradict."""
     return [{"net": z["net"], "layer": z["layer"],
+             "name": plane_name(z["net"]),
              **({"poly": [[round(x, 4), round(y, 4)] for x, y in
                           list(z["_geom"].exterior.coords)[:-1]]}
                 if z.get("_geom") is not None else {"rect": list(z["_rect"])}),
@@ -631,16 +790,22 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
     min_vias (ref -> constraints.thermal[*].min_vias): 0 means the part
     wants no thermal vias (a live tab, an LDO's VOUT) and its grid is
     skipped; a grid that fits fewer than a positive floor says so in the
-    pad's note (check_thermal holds the floor as an error)."""
+    pad's note (check_thermal holds the floor as an error). A big pad that
+    is not an exposed pad (#636) gets no grid unless a positive floor
+    asks for one."""
     min_vias = min_vias or {}
     ops: list[dict] = []
     pads: list[dict] = []
     keepouts = via_keepouts(bg)
     for ep in ep_pads(bg, plane_nets, ep_min_mm2):
-        if not _is_exposed_pad(bg, ep):
+        tab = not _is_exposed_pad(bg, ep)
+        if tab and not min_vias.get(ep.ref):
             # #636: a big pad that is not a belly (an inductor's, a
             # DPAK tab's) is a solder joint; a via in its opening drains
-            # it, and check_wicking judges it so
+            # it, and check_wicking judges it so. A positive
+            # constraints.thermal min_vias asks for the grid anyway (a
+            # TO-263 or SOT-223 tab sinking heat), and check_thermal holds
+            # that floor, so the ask wins and the note says what it costs.
             pads.append({"ref": ep.ref, "pad": ep.number, "net": ep.net,
                          "vias": 0,
                          "note": "not an exposed pad (check_paste rule); a "
@@ -693,9 +858,17 @@ def thermal_via_ops(bg: geom.BoardGeom, plane_nets: set[str], *,
         fact = {"ref": ep.ref, "pad": ep.number, "net": ep.net,
                 "vias": len(pts)}
         want = min_vias.get(ep.ref)
+        notes = []
+        if tab:
+            notes.append(f"not an exposed pad, gridded because "
+                         f"constraints.thermal min_vias is {want}: open vias "
+                         "here wick the joint (check_wicking); order them "
+                         "filled and capped or tented")
         if want and len(pts) < want:
-            fact["note"] = (f"grid fits {len(pts)} vias, under "
-                            f"constraints.thermal min_vias {want}")
+            notes.append(f"grid fits {len(pts)} vias, under "
+                         f"constraints.thermal min_vias {want}")
+        if notes:
+            fact["note"] = "; ".join(notes)
         pads.append(fact)
     return ops, pads
 
@@ -771,6 +944,7 @@ def verify_zones(after: geom.BoardGeom, plan: list[dict],
                            "region": list(z["_rect"]),
                            "priority": z["priority"],
                            "status": "existing" if z.get("_existing")
+                           else "replaced" if z.get("_replace")
                            else "regrown" if z.get("_regrow") else "added",
                            "area_mm2": round(area, 3), "islands": islands})
         if area < FILL_EPS_MM2:
@@ -831,7 +1005,8 @@ def run(argv: list[str] | None = None):
     layer_types, type_notes = plane_layer_types(plan, bg)
     meta["notes"] += type_notes
     plane_nets = {z["net"] for z in plan}
-    removes = [r for z in plan for r in z.get("_regrow") or []]
+    removes = [r for z in plan
+               for r in (z.get("_regrow") or []) + (z.get("_replace") or [])]
     pre_counts = {(n, l): len(bg.zones_of(net=n, layer=l))
                   - sum(1 for r in removes
                         if (r["net"], r["layer"]) == (n, l))

@@ -1170,6 +1170,51 @@ def _fsw_row(bg: geom.BoardGeom, ref: str, rows: list[dict]) -> dict | None:
                 None)
 
 
+# the datasheet's own end points sit a hair outside its equation (LM5158:
+# 9.09 kOhm gives 2.2001 MHz against a 2.2 MHz top)
+RT_SLACK = 0.01
+
+
+def row_fsw(bg: geom.BoardGeom, ref: str, row: dict):
+    """(fsw, source) a converter_fsw.yaml row gives `ref`, or a string saying
+    why it can't. A fixed row gives fsw_hz. An `rt` row's frequency is set by
+    one fitted resistor from the IC's rt.pin to ground: fsw = k / (R +
+    offset_ohm), the datasheet's equation, and only inside its range_hz."""
+    rt = row.get("rt")
+    if not rt:
+        return float(row["fsw_hz"]), row["source"]
+    import check_ratings                 # it imports nothing of ours
+    pin = str(rt["pin"]).upper()
+    nets = {p.net for p in bg.pads_of(ref=ref) if p.net and pin_name(p) == pin}
+    if len(nets) != 1:
+        return (f"{ref}'s switching frequency is set by the resistor on its "
+                f"{pin} pin, and {len(nets)} nets carry that pin")
+    net, = nets
+    res = sorted({p.ref for p in bg.pads_of(net=net) if p.ref != ref})
+    to_gnd = []
+    for r in res:
+        fp = bg.footprints.get(r) or {}
+        other = {p.net for p in bg.pads_of(ref=r)} - {net}
+        if (re.fullmatch(r"R\d+", r) and "dnp" not in (fp.get("attrs") or ())
+                and len(other) == 1
+                and check_ratings.is_ground(next(iter(other)))):
+            to_gnd.append((r, engcalc.parse_value(fp.get("value"))))
+    if len(to_gnd) != 1 or not to_gnd[0][1] or len(res) != len(to_gnd):
+        return (f"{ref}'s switching frequency is set by the resistor on its "
+                f"{pin} pin ({net}), and it isn't one fitted resistor to "
+                f"ground (parts on it: {', '.join(res) or 'none'})")
+    (r, ohms), = to_gnd
+    fsw = float(rt["k"]) / (ohms + float(rt.get("offset_ohm", 0)))
+    lo, hi = rt["range_hz"]
+    if not lo * (1 - RT_SLACK) <= fsw <= hi * (1 + RT_SLACK):
+        return (f"{ref}'s {pin} resistor {r} {ohms:g} ohm gives "
+                f"{fsw / 1e3:.4g} kHz, outside the datasheet's "
+                f"{lo / 1e3:g}-{hi / 1e3:g} kHz, so its frequency isn't known")
+    return fsw, (f"{r} {ohms:g} ohm on {ref}'s {pin} pin: fsw = "
+                 f"{float(rt['k']):g} / (R + {float(rt.get('offset_ohm', 0)):g})"
+                 f" ({row['source']})")
+
+
 def fsw_rows(path: Path = CONVERTER_FSW_YAML) -> list[dict]:
     rows = yaml.safe_load(path.read_text(encoding="utf-8"))["regulators"]
     return [dict(r, rx=re.compile(r["match"], re.I)) for r in rows]
@@ -1210,8 +1255,11 @@ def _buck_output(bg, net: str, ind: str, node: str, volts: dict, blocks: list):
     if not henries:
         return f"{ind} has no readable inductance"
     row = _fsw_row(bg, ic, fsw_rows())
-    if row:
-        fsw, where = float(row["fsw_hz"]), row["source"]
+    got = row_fsw(bg, ic, row) if row else None
+    if isinstance(got, str):
+        return got
+    if got:
+        fsw, where = got
     else:
         found = [b["operating_point"]["fsw_khz"] for b in blocks
                  if b.get("topology") == "buck"
@@ -1261,7 +1309,8 @@ def _boost_inputs(bg, ind: str, node: str, vin: float, vout: float,
         return f"{ind} has no readable inductance"
     row = _fsw_row(bg, ic, fsw_rows())
     if row:
-        return ic, henries, float(row["fsw_hz"]), row["source"]
+        got = row_fsw(bg, ic, row)
+        return got if isinstance(got, str) else (ic, henries, *got)
     found = [b["operating_point"]["fsw_khz"] for b in blocks
              if "boost" in str(b.get("topology", ""))
              and (b.get("operating_point") or {}).get("vout_v") == vout

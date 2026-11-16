@@ -549,7 +549,13 @@ couples in (M·dI/dt, Grover's partial mutual, by images over a ground plane)
 against the victim pins' abs max (`--parts`, `esd.victim_abs_max_v`). The
 corridor's width is a judgement derived from those volts (`esd.corridor_mm`,
 `esd.corridor_v`). `constraints.json` `esd.internal`, `esd.exempt_nets`,
-`esd.clamps` and `esd.level_kv` tune the rest. The rules behind
+`esd.clamps` and `esd.level_kv` tune the rest. Each clamp is also rated
+from its datasheet row in `reference/esd_clamps.yaml`: its capacitance
+against the interface's per-line budget (USB full and high speed,
+SuperSpeed, CC; `esd.interfaces`), its stand-off voltage against the line's
+working voltage (`esd.line_v`), and the two clamps of a USB D+/D- pair
+matched. A clamp with no row, and an interface with no cited limit (HDMI,
+Ethernet, RF), is not judged. The rules behind
 it, and which EMC, ESD and thermal rules of thumb are verified, disputed or
 folklore, are in [`reference/ingest/emc-thermal.md`](../reference/ingest/emc-thermal.md),
 with the scripts that reproduce them.

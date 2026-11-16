@@ -4,8 +4,11 @@ IC's current limits and minimum on-time (P8 verify suite; #355).
 Each inductor with one end on a switch node that one switcher IC drives is a
 converter. check_current's ripple readers (#798, #816) give its input and
 output voltages, L and fsw, from the rail voltages below, the inductor's
-Value, and reference/converter_fsw.yaml or a block's fsw_khz. The load is
-the output rail's power entry current_a.
+Value, and reference/converter_fsw.yaml or a block's fsw_khz. A part whose
+frequency one resistor sets has an `rt` row: fsw = k / (R + offset) from its
+datasheet, R the one fitted resistor from the IC's RT pin to ground, inside
+the datasheet's range only, else not judged (#1458). The load is the output
+rail's power entry current_a.
 
 Rail voltages (#1433), strongest first; each record's vin_source and
 vout_source say which, and vin_inferred / vout_inferred say how:
@@ -20,8 +23,11 @@ vout_source say which, and vin_inferred / vout_inferred say how:
             so an error that rests on it is a warning and says so.
 A net whose name disagrees with its divider (outside the window and more
 than 5 % off the nominal) gets no voltage, and a converter on it is not
-judged, with both readings. A converter whose input has none of the three is
-not judged and names the input pin's net. Then:
+judged, with both readings. An IC whose ground pins (GND, AGND, PGND) are all
+on a net that isn't board ground is an inverter: its FB is referred to its
+negative output, so its divider sets no rail voltage and its nets get none
+(#1458). A converter whose input has none of the three is not judged and
+names the input pin's net. Then:
 
   buck   dI = (Vin - Vout) * Vout / (Vin * fsw * L)        TI SLVA477C eq. 1, 2
          Ipeak = Iout + dI / 2                             SLVA477C eq. 4
@@ -149,6 +155,19 @@ def _fb_names(part: dict) -> dict:
     return out
 
 
+def _floating_ground(part: dict) -> str | None:
+    """The net of a part's ground pins (GND, AGND, PGND) when none of them is
+    on board ground: an inverting converter whose ground is its negative
+    output. None when one is on board ground, or the part names no ground
+    pin."""
+    nets = sorted({part["pads"][pad] for pad, name in _fb_names(part).items()
+                   if pad in part.get("pads", {}) and part["pads"][pad]
+                   and cr.GROUND_RE.match(name.upper())})
+    if not nets or any(cr.is_ground(n) for n in nets):
+        return None
+    return ", ".join(nets)
+
+
 def _tied_nets(board: list[dict]) -> dict[str, list[str]]:
     """net -> every net joined to it by net ties and fitted 0 ohm parts, as
     check_ratings._fb_network merges them: a divider on one sets them all."""
@@ -224,6 +243,21 @@ def rail_volts(bg: geom.BoardGeom, cons: dict):
                     or div.get("pots") or vr is None:
                 continue
             vref, vtol, src, verified = vr
+            floating = _floating_ground(b)
+            if floating:
+                # an inverter's FB is referred to its own ground, the
+                # negative rail: the divider gives no voltage to board ground
+                why = (f"{ic}'s ground pin is on {floating}, not board "
+                       f"ground, so its divider {div['how']} sets no rail "
+                       f"voltage (an inverting converter)")
+                for net in dict.fromkeys(n for n in (
+                        div["out"], div.get("rail"),
+                        *same.get(div["out"], ())) if n):
+                    if not (net in basis and basis[net]["source"] == DECLARED):
+                        conflicts.setdefault(net, why)
+                        volts.pop(net, None)
+                        basis.pop(net, None)
+                continue
             nom = vref * div["ratio_nom"]
             lo = vref * (1 - vtol) * div["ratio_lo"]
             hi = vref * (1 + vtol) * div["ratio_hi"]
@@ -272,8 +306,14 @@ VIN_PIN = re.compile(r"[PA]?V?IN\d?", re.I)
 
 
 def _pin(pad) -> str:
-    """A pad's pin name with KiCad overbars dropped ('~{VIN}' -> 'VIN')."""
-    return re.sub(r"~\{([^}]*)\}", r"\1", str(pad.pinfunction or "")).strip()
+    """A pad's pin name as VIN_PIN reads it: KiCad overbars and subscripts
+    dropped and a trailing _<pad number> cut ('~{VIN}', 'VIN_3' on pad 3 and
+    'V_{IN}_6' on pad 6 -> 'VIN')."""
+    name = str(pad.pinfunction or "").strip()
+    if name.endswith(f"_{pad.number}"):
+        name = name[: -len(pad.number) - 1]
+    name = re.sub(r"~\{([^}]*)\}", r"\1", name)
+    return re.sub(r"_\{([^}]*)\}", r"\1", name)
 
 
 def _no_volts(net: str, conflicts: dict) -> str:

@@ -247,6 +247,11 @@ def test_norm_fn():
     assert sim_board.norm_fn("EN_3", "3") == ["EN"]
     assert sim_board.norm_fn("~{RESET}", "1") == ["RESET"]
     assert sim_board.norm_fn("CFG2/SCL_2", "2") == ["CFG2", "SCL"]
+    # STM32 port pin named with its alternate (#465)
+    assert sim_board.norm_fn("PC14-OSC32_IN", "3") == ["PC14", "OSC32_IN"]
+    assert sim_board.norm_fn("PB8-BOOT0", "60") == ["PB8", "BOOT0"]
+    assert sim_board.norm_fn("USB_D-", "4") == ["USB_D-"]
+    assert sim_board.norm_fn("IN-", "2") == ["IN-"]
 
 
 def test_vref_table_entries_are_well_formed():
@@ -627,8 +632,9 @@ def test_pin_rating():
 
 # Shunt inputs ride the bus, not VS (#521): each pin form KiCad's own
 # symbols and boards use (Vin+ on INA226/233, bare + on INA240, per-channel
-# IN+2 on INA3221, SENSE1+ on PAC193x/195x, +IN on NCS21x) reads its own
-# rating; a control pin of the same part, or PAC194x (no row yet), does not.
+# IN+2 on INA3221, SENSE1+ on PAC19xx, +IN on NCS21x and AD82xx, Vin+ on
+# AD8211, -INS on LTC6102, RS+ on MAX4080/471, SENSE+ on LTC4151) reads its
+# own rating; a control or supply pin of the same part does not.
 @pytest.mark.parametrize("value,fn,lim", [
     ("INA3221AIRGVR", "IN+2", 26), ("INA3221", "IN3-", 26),
     ("INA3221AIRGVR", "VPU", 26), ("INA3221AIRGVR", "SCL", None),
@@ -640,9 +646,22 @@ def test_pin_rating():
     ("PAC1934T-I/JQ", "SENSE4-", 32), ("PAC1934T-I/JQ", "VDD", None),
     ("INA200AIDR", "V_{IN+", 80), ("INA225AIDGSR", "IN+", 36),
     ("INA253A1IPW", "IS-", 80), ("INA233AIDGSR", "SDA", None),
-    ("PAC1954T-E/4MX", "SENSE3+", 32), ("PAC1944T-E/4MX", "SENSE1+", None),
+    ("PAC1954T-E/4MX", "SENSE3+", 32), ("PAC1944T-E/4MX", "SENSE1+", 9),
     ("NCS210RSQT2G", "+IN", 26), ("NCV214RMUTAG", "-IN", 26),
     ("NCS210RSQT2G", "REF", None),
+    ("AD8202YRZ", "+IN", 28), ("AD8203YRZ", "-IN", 30),
+    ("AD8205YRZ", "+IN", 65), ("AD8208WBRZ", "-IN", 45),
+    ("AD8210YRZ", "+IN", 65), ("AD8211YRJZ", "VIN+", 65),
+    ("AD8213YRMZ", "+IN1", 65), ("AD8212YRMZ", "VSNS", 65),
+    ("AD8216WYRZ", "-IN", 65), ("AD8217BRMZ", "+IN", 80),
+    ("AD8218BRMZ", "-IN", 80), ("AD8219WBRMZ", "+IN", 80),
+    ("AD8218BRMZ", "VS", None), ("LTC6102CMS8", "-INS", 60),
+    ("LTC6102HVCMS8", "+IN", 100), ("LTC6102CMS8", "V-", None),
+    ("LTC4151CMS", "SENSE+", 80), ("LTC4151CMS", "ADIN", None),
+    ("MAX4080SASA+", "RS-", 76), ("MAX4081TAUA+", "RS+", 76),
+    ("MAX471CSA", "RS+", 36), ("MAX472ESA", "SENSE-", 36),
+    ("MAX472ESA", "VCC", None), ("PAC1942T-E/J6CX", "SENSE2-", 9),
+    ("PAC1941T-E/J6CX", "VDD", None),
 ])
 def test_current_sense_pin_ratings(value, fn, lim):
     table = sim_board.load_pin_ratings()
@@ -842,9 +861,10 @@ def test_i2c_strap_pins_sharing_the_name(tmp_path):
     opts = {"i2c_cb_pf": None, "i2c_khz": 400}
     vios, facts = [], {}
     sim_board.i2c_findings(b, rails, model, opts, vios, [], facts)
-    # one IC and no connector: a port with no peer, not judged (#1063)
+    # pulled down with no pull-up: straps, not judged (#511; before it, one
+    # IC and no connector made them ports with no peer, #1063)
     assert vios == [] and facts["i2c"] == []
-    assert sorted(n for x in facts["i2c_no_peer"] for n in x["nets"]) == \
+    assert sorted(n for x in facts["i2c_straps"] for n in x["nets"]) == \
         ["/HUB_CFG_SEL0", "/HUB_NON_REM1"]
     vios = []
     sim_board.i2c_findings(b, rails, model, {**opts, "pin_modes":
@@ -1006,6 +1026,61 @@ def test_i2c_off_board_bus_judged_with_capacitance_unknown(tmp_path):
     assert all(r["off_board"] == ["J5"] for r in facts["i2c"])
     assert any(u["what"] == "I2C bus capacitance off the board"
                and "J5" in u["why"] for u in unknowns)
+
+
+
+# --- #511: an SDA/SCL pin held low by a pull-down is a strap, not a bus ---
+
+def _hub_strap(tmp_path, extra, down="100k"):
+    """USB2514B-style: U5's SCL/SMBCLK/CFG_SEL0 on /HUB_CFG_SEL0, pulled to
+    GND through R5, plus whatever extra puts on the net."""
+    hub = ("U5", "USB2514B", "QFN-36", {
+        "1": ("+3V3", "VDD33"), "2": ("GND", "GND"),
+        "24": ("/HUB_CFG_SEL0", "SCL/SMBCLK/CFG_SEL0")})
+    rows = [hub]
+    if down:
+        rows.append(("R5", down, "R_0402_1005Metric",
+                     {"1": ("/HUB_CFG_SEL0", ""), "2": ("GND", "")}))
+    return _i2c_board(tmp_path, rows + extra)
+
+
+GPIO = ("U6", "MCU", "QFN-24", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                                "7": ("/HUB_CFG_SEL0", "PA5")})
+TP = ("TP5", "TestPoint", "TestPoint_Pad_D1.0mm",
+      {"1": ("/HUB_CFG_SEL0", "1")})
+
+
+@pytest.mark.parametrize("extra", [[GPIO], [TP], [GPIO, TP]],
+                         ids=["gpio", "testpoint", "both"])
+def test_i2c_strap_with_a_second_ic_or_test_point_is_quiet(tmp_path, extra):
+    # quiet twin: on main the GPIO (or test point) made this a "bus" and it
+    # fired i2c_pullup_missing on the hub's strap
+    vios, unknowns, facts = _hub_strap(tmp_path, extra)
+    assert [v for v in vios if v["net"] == "/HUB_CFG_SEL0"] == []
+    (x,) = facts["i2c_straps"]
+    assert x["nets"] == ["/HUB_CFG_SEL0"] and x["pulldowns"] == ["R5"]
+    (u,) = [u for u in unknowns if u["what"] == "I2C pin used as a strap"]
+    assert "R5" in u["why"] and "not judged" in u["why"]
+
+
+def test_i2c_two_sda_scl_pins_with_no_pull_up_still_fire(tmp_path):
+    # planted fault kept: a pull-down does not make a real bus a strap when
+    # two SDA/SCL pins share it and nothing pulls it up
+    peer = ("U7", "SENSOR", "DFN-8", {"1": ("+3V3", "VDD"), "2": ("GND", "GND"),
+                                      "3": ("/HUB_CFG_SEL0", "SCL")})
+    vios, _, facts = _hub_strap(tmp_path, [peer])
+    assert [v["kind"] for v in vios if v["net"] == "/HUB_CFG_SEL0"] == \
+        ["i2c_pullup_missing"]
+    assert facts["i2c_straps"] == []
+
+
+def test_i2c_no_pull_down_and_a_gpio_still_fires(tmp_path):
+    # fault kept: with no pull-down nothing says strap, and a hub SCL shared
+    # with a GPIO and no pull-up is still judged as before
+    vios, _, facts = _hub_strap(tmp_path, [GPIO], down=None)
+    assert [v["kind"] for v in vios if v["net"] == "/HUB_CFG_SEL0"] == \
+        ["i2c_pullup_missing"]
+    assert facts["i2c_straps"] == []
 
 
 # --- #1232: cap_dc_bias warns on a rail's stated floor, not a flat 50 % ---
@@ -1233,3 +1308,49 @@ def test_load_parts_matches_an_mpn_row_and_a_refdes_row_wins(tmp_path):
     assert [m["mpn"] for m in missed] == ["NOPE123"]
     # without the board, only refdes rows are known (old callers)
     assert set(sim_board.load_parts(parts)) == {"C3"}
+
+
+# An STM32 whose LED hangs off PC14-OSC32_IN, the way its KiCad symbol
+# names the pin (#465). Through 10 R the pin is asked for ~140 mA; through
+# 1k (the quiet twin) it lights the LED inside the pin's limit. PG10-NRST
+# is the reset pin: an LED there is not driven as a GPIO.
+def _stm32_alt(r_led):
+    return [
+        ("U9", "STM32G031K8T6", "LQFP-32", {
+            "4": ("+3V3", "VDD"), "5": ("GND", "VSS"),
+            "2": ("/LED", "PC14-OSC32_IN"), "6": ("/NRST", "PG10-NRST")}),
+        ("R40", r_led, "R_0402_1005Metric", {"1": ("/LED", ""),
+                                             "2": ("/LED_A", "")}),
+        ("D40", "red", "LED_0603_1608Metric", {"1": ("GND", "K"),
+                                               "2": ("/LED_A", "A")}),
+        ("R41", "1k", "R_0402_1005Metric", {"1": ("/NRST", ""),
+                                            "2": ("/RST_A", "")}),
+        ("D41", "red", "LED_0603_1608Metric", {"1": ("GND", "K"),
+                                               "2": ("/RST_A", "A")}),
+    ]
+
+
+def _run_sim(tmp_path, board):
+    (tmp_path / "kicad").mkdir()
+    write_net(tmp_path / "kicad" / "s.net", board)
+    out = tmp_path / "sim.json"
+    subprocess.run([sys.executable, str(SCRIPTS / "sim_board.py"),
+                    "--workspace", str(tmp_path), "--out", str(out)],
+                   capture_output=True, text=True, timeout=300)
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_stm32_alt_suffix_pin_driven_planted(tmp_path, need_engine):
+    rep = _run_sim(tmp_path, _stm32_alt("10"))
+    assert any(v["net"] == "/LED" for v in _kinds(rep, "gpio_overcurrent"))
+    assert not any(v["net"] == "/NRST"
+                   for v in _kinds(rep, "gpio_overcurrent"))
+
+
+def test_stm32_alt_suffix_pin_quiet_twin(tmp_path, need_engine):
+    rep = _run_sim(tmp_path, _stm32_alt("1k"))
+    assert _kinds(rep, "gpio_overcurrent") == []
+    led = next(x for x in rep["leds"] if x["ref"] == "D40")
+    assert led["current_a"]["io_high"] > 5e-4
+    rst = [x for x in rep["leds"] if x["ref"] == "D41"]
+    assert all(x["current_a"]["io_high"] < 1e-6 for x in rst)

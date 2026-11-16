@@ -156,6 +156,132 @@ parts:
       common-mode input voltage -0.3 to 26 V; maximum ratings common-mode
       GND - 0.3 to +30 V
     verified: true
+  # Analog Devices / Linear / Maxim / Microchip parts left in #521, re-read
+  # 2026-11-16 from the PDFs named in each source. Pin forms in KiCad's
+  # symbols: +IN/-IN (AD82xx, +IN1 on AD8213), Vin+ (AD8211), Vsns (AD8212),
+  # +IN/-INF/-INS (LTC6102), SENSE+ (LTC4151, MAX472), RS+ (MAX4080/1, MAX471).
+  # AD8212, AD8217, LTC6102, LTC4151, MAX471 and MAX472 draw their supply from
+  # the bus they sense, so their inputs cannot sit above it; the rows hold the
+  # rating for when a board names a lower rail as the part's supply.
+  - match: '^AD8202'
+    pins: '^([+-]IN\d?|V?IN[+-]\d?)$'
+    max_v: 28
+    abs_max_v: 35
+    source: >-
+      ADI AD8202 data sheet rev. H, operating common-mode -6 to +28 V;
+      absolute maximum common-mode 35 V continuous (44 V transient, 400 ms)
+    verified: true
+  - match: '^AD8203'
+    pins: '^([+-]IN\d?|V?IN[+-]\d?)$'
+    max_v: 30
+    abs_max_v: 35
+    source: >-
+      ADI AD8203 data sheet rev. D, operating common-mode -6 to +30 V;
+      absolute maximum common-mode 35 V continuous
+    verified: true
+  - match: '^AD820[56]'
+    pins: '^([+-]IN\d?|V?IN[+-]\d?)$'
+    max_v: 65
+    abs_max_v: 75
+    source: >-
+      ADI AD8205 rev. D and AD8206 rev. C data sheets, operating common-mode
+      -2 to +65 V; absolute maximum common-mode -25 to +75 V
+    verified: true
+  - match: '^AD820[89]'
+    pins: '^([+-]IN\d?|V?IN[+-]\d?)$'
+    max_v: 45
+    abs_max_v: 80
+    source: >-
+      ADI AD8208 rev. C and AD8209 rev. C data sheets, operating common-mode
+      -2 to +45 V; absolute maximum common-mode -24 to +80 V
+    verified: true
+  - match: '^AD821[0135]'
+    pins: '^([+-]IN\d?|V?IN[+-]\d?)$'
+    max_v: 65
+    abs_max_v: 68
+    source: >-
+      ADI AD8210 rev. F, AD8211 rev. C, AD8213 rev. D and AD8215 rev. B data
+      sheets, operating common-mode -2 to +65 V; absolute maximum
+      common-mode 68 V (-5 V AD8210, -3 V the others)
+    verified: true
+  - match: '^AD8212'
+    pins: '^VSNS$'
+    max_v: 65
+    abs_max_v: 68
+    source: >-
+      ADI AD8212 data sheet rev. C, V+ (the bus) 7 to 65 V with Vsns within
+      500 mV of V+; absolute maximum continuous input 68 V
+    verified: true
+  - match: '^AD8216'
+    pins: '^([+-]IN\d?|V?IN[+-]\d?)$'
+    max_v: 65
+    abs_max_v: 80
+    source: >-
+      ADI AD8216 data sheet rev. C, operating common-mode -4 to +65 V;
+      absolute maximum common-mode -40 to +80 V
+    verified: true
+  - match: '^AD821[789]'
+    pins: '^([+-]IN\d?|V?IN[+-]\d?)$'
+    max_v: 80
+    abs_max_v: 85
+    source: >-
+      ADI AD8217 rev. A (+IN powers it, 4.5 to 80 V; survival 0 to 85 V),
+      AD8218 rev. B and AD8219 rev. A (common-mode 4 to 80 V; absolute
+      maximum -0.3 to +85 V)
+    verified: true
+  - match: '^LTC6102HV'
+    pins: '^[+-]IN[FS]?$'
+    max_v: 100
+    abs_max_v: 105
+    source: >-
+      ADI/Linear LTC6102 data sheet rev. E (6102fe), LTC6102HV supply 5 to
+      100 V with +IN, -INS, -INF riding V+ (V+ - 20 V to V+ + 1 V); absolute
+      maximum total supply 105 V
+    verified: true
+  - match: '^LTC6102(?!HV)'
+    pins: '^[+-]IN[FS]?$'
+    max_v: 60
+    abs_max_v: 70
+    source: >-
+      ADI/Linear LTC6102 data sheet rev. E (6102fe), V+ supply range 4 to
+      60 V with +IN, -INS, -INF riding V+ (V+ - 20 V to V+ + 1 V); absolute
+      maximum total supply 70 V
+    verified: true
+  - match: '^LTC4151'
+    pins: '^SENSE[+-]$'
+    max_v: 80
+    abs_max_v: 90
+    source: >-
+      ADI/Linear LTC4151 data sheet rev. F (4151ff), operating VIN 7 to 80 V
+      with SENSE+, SENSE- at VIN - 10 V to VIN + 0.3 V; absolute maximum VIN
+      -0.3 to 90 V
+    verified: true
+  - match: '^MAX408[01]'
+    pins: '^RS[+-]$'
+    max_v: 76
+    abs_max_v: 80
+    source: >-
+      Maxim 19-2562 rev. 6 (MAX4080/MAX4081), common-mode range 4.5 to 76 V;
+      absolute maximum RS+, RS- to GND -0.3 to +80 V
+    verified: true
+  - match: '^MAX47[12]'
+    pins: '^(RS[+-]|SENSE[+-]|RG[12])$'
+    max_v: 36
+    abs_max_v: 40
+    source: >-
+      Maxim 19-0335 rev. 2 (MAX471/MAX472), supply 3 to 36 V (RS+ powers the
+      MAX471; the MAX472's VCC ties to the sense resistor); absolute maximum
+      RS+, RS-, VCC to GND -0.3 to +40 V, MAX472 pins to VCC + 0.3 V
+    verified: true
+  - match: '^PAC194[1-4]'
+    pins: '(?i)^SENSE ?[1-4]?[+-]$'
+    max_v: 9
+    abs_max_v: 40
+    source: >-
+      Microchip DS20006543A (PAC1941/2/3/4), bus voltage range (common-mode on
+      SENSE+, SENSE-) -0.2 to 9 V; absolute maximum SENSE+ and SENSE- -0.3 to
+      40 V
+    verified: true
   - match: '^BQ7695[02]|^BQ76942'
     pins: '^(BAT|PACK|LD|CHG|DSG|PCHG|PDSG|VC\d+)$'
     max_v: 85

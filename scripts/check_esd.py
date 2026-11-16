@@ -53,6 +53,27 @@ Findings:
                        emc-thermal ESD-9). V = M dI/dt, M summed over every
                        parallel piece.
 
+  esd_clamp_cap        error: the clamp's capacitance (datasheet max) is
+                       over the line's interface budget (CAP_BUDGET_PF);
+                       warning when the sheet gives only a typical figure
+  esd_clamp_vrwm       error: the clamp's stand-off voltage (VRWM) is below
+                       the line's working voltage, so it conducts in normal
+                       use
+  esd_pair_mismatch    warning: the two clamps on a USB D+/D- pair differ in
+                       capacitance by more than PAIR_TOL (USB 2.0 7.1.6.1)
+
+Clamp ratings (#310) come only from reference/esd_clamps.yaml, rows read from
+each maker's datasheet (an LCSC row for a second source's own sheet first,
+else the maker's row by name). A clamp with no row is not judged, and says
+so. The interface: constraints esd.interfaces {net glob: usb_fs | usb_hs |
+usb_ss5 | usb_ss10 | usb_cc | none}, else the net's name (USB D+/D- is taken
+as full speed; the high-speed budget is reported as a fact, hs_cap). HDMI,
+Ethernet, RF and the rest have no cited per-line limit: not judged. The
+working voltage: constraints esd.line_v (a number or {net glob: V}), else
+USB 2.0 VOH max on D+/D-, VBUS (or pd_source.contract_v), or the volts in a
+power rail's name; CC and other signals are not judged. Every clamped line
+carries fact["rating"].
+
 The corridor (ESD-9): every segment of the routed connector-to-clamp path is
 the aggressor. A victim piece is another net's track segment on the same or
 an adjacent copper layer, within the corridor, at most 30 degrees off the
@@ -475,6 +496,260 @@ def corridor(bg, cfg: dict, net: str, stretch: list, didt: float,
     return fact, out
 
 
+# ------------------------------------------------- the clamps' ratings (#310)
+
+# A clamp's capacitance against its interface's per-line budget (pF):
+#   usb_fs   50: NXP AN11392 2.6, reference/interfaces/usb-fs.json
+#   usb_hs   4: TI SLVAF82 (emc-thermal ESD-10), "< 4 pF"
+#   usb_ss5  0.5, usb_ss10 0.3: TI SLVAF82
+#   usb_cc   600: USB PD 5.8.6 cReceiver max, via onsemi AN-5086
+#            (reference/interfaces/usbc-pd-sink.md)
+# HDMI, Ethernet, RF and the rest: no cited per-line limit, not judged.
+CAP_BUDGET_PF = {"usb_fs": 50.0, "usb_hs": 4.0, "usb_ss5": 0.5,
+                 "usb_ss10": 0.3, "usb_cc": 600.0}
+CAP_SOURCE = {"usb_fs": "NXP AN11392 2.6", "usb_hs": "TI SLVAF82",
+              "usb_ss5": "TI SLVAF82", "usb_ss10": "TI SLVAF82",
+              "usb_cc": "USB PD 5.8.6 cReceiver"}
+INTERFACES = set(CAP_BUDGET_PF) | {"none"}
+USB_DATA_V = 3.6     # USB 2.0 Table 7-7: VOH max 3.6 V on D+/D-
+VBUS_V = 5.0         # USB default VBUS; a PD contract: pd_source.contract_v
+PAIR_TOL = 0.10      # USB 2.0 7.1.6.1: D+/D- capacitance matched within 10 %
+ESD_CLAMPS_YAML = HERE.parent / "reference" / "esd_clamps.yaml"
+# the line's leaf name (after the last '/'), fullmatch; group pol = the
+# polarity mark a D+/D- pair differs by
+_USB_D_RES = [re.compile(p, re.I) for p in (
+    r"D(?P<pol>[+-])", r"D_?(?P<pol>[PN])", r"D(?P<pol>M)",
+    r"(?:\w*[_-])?USB\w*?[_-]?D(?P<pol>[+-])(?:_[IO])?",
+    r"(?:\w*[_-])?USB\w*?[_-]?D_?(?P<pol>[PNM])(?:_[IO])?",
+    r"(?:\w*[_-])?USB\d?[_-]?(?P<pol>[PN])",
+    r"D_?USB\d?_?(?P<pol>[PN])")]
+_CC_RE = re.compile(r"(?:\w*[_-])?CC[12]", re.I)
+_SS_RE = re.compile(r"\w*SS_?(?:TX|RX)\w*", re.I)
+_RAIL_V_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)V(\d+)?(?!\d)", re.I)
+_LCSC_RE = re.compile(r"C\d{2,}")
+
+
+def load_esd_clamps(path: Path = ESD_CLAMPS_YAML) -> list[dict]:
+    import yaml
+    rows = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get(
+        "parts") or []
+    return [{**r, "_m": re.compile(r["match"], re.I)} for r in rows]
+
+
+def _leaf(net: str) -> str:
+    return net.rsplit("/", 1)[-1]
+
+
+def usb_data_pol(net: str) -> tuple[str, str] | None:
+    """(pair key, polarity) for a USB D+/D- line by its name, else None."""
+    leaf = _leaf(net)
+    for rx in _USB_D_RES:
+        m = rx.fullmatch(leaf)
+        if m:
+            g = "pol"
+            s, e = m.span(g)
+            pol = m.group(g).upper()
+            return (net[:len(net) - len(leaf)] + leaf[:s] + "*" + leaf[e:],
+                    "P" if pol in "+P" else "N")
+    return None
+
+
+def line_interface(net: str, power: bool, cfg: dict) -> tuple[str | None, str]:
+    """(interface, where it came from): constraints esd.interfaces
+    {glob: kind} first, else the net's name. None: no budget known."""
+    for glob, kind in (cfg.get("interfaces") or {}).items():
+        if fnmatch.fnmatchcase(net, glob) or fnmatch.fnmatchcase(_leaf(net), glob):
+            if kind not in INTERFACES:
+                return None, (f"esd.interfaces {glob}: {kind!r} is not one of "
+                              f"{', '.join(sorted(INTERFACES))}")
+            return (None if kind == "none" else kind), f"esd.interfaces {glob}"
+    if power:
+        return None, "power rail"
+    if usb_data_pol(net):
+        return "usb_fs", "name (USB D+/D-; full speed assumed, esd.interfaces sets usb_hs)"
+    if _CC_RE.fullmatch(_leaf(net)):
+        return "usb_cc", "name (USB-C CC)"
+    if _SS_RE.fullmatch(_leaf(net)):
+        return "usb_ss5", "name (USB SuperSpeed, 5 Gbps assumed)"
+    return None, "no interface known by name (esd.interfaces sets one)"
+
+
+def working_v(net: str, power: bool, iface: str | None, cfg: dict,
+              constraints: dict) -> tuple[float | None, str]:
+    lv = cfg.get("line_v")
+    if isinstance(lv, (int, float)) and not isinstance(lv, bool):
+        return float(lv), "esd.line_v"
+    if isinstance(lv, dict):
+        for glob, v in lv.items():
+            if fnmatch.fnmatchcase(net, glob) or fnmatch.fnmatchcase(_leaf(net), glob):
+                return float(v), f"esd.line_v {glob}"
+    if iface in ("usb_fs", "usb_hs"):
+        return USB_DATA_V, "USB 2.0 Table 7-7 VOH max"
+    if not power:
+        return None, "not a power rail or a USB 2.0 data line (esd.line_v sets one)"
+    if re.search(r"VBUS", net, re.I):
+        pd = (constraints.get("pd_source") or {}).get("contract_v")
+        if pd:
+            return float(pd), "pd_source.contract_v"
+        return VBUS_V, "USB default VBUS (a PD contract: pd_source.contract_v)"
+    m = _RAIL_V_RE.search(_leaf(net))
+    if m:
+        v = float(m.group(1)) + (float("0." + m.group(2)) if m.group(2) else 0.0)
+        return v, "the rail's name"
+    return None, "no voltage in the rail's name (esd.line_v sets one)"
+
+
+def clamp_row(fp: dict, rows: list[dict]) -> dict | None:
+    """An LCSC row for the part's LCSC code first, else a maker row (no
+    lcsc) matching its value or MPN."""
+    props = fp.get("props") or {}
+    lcsc = next((str(v).strip() for k, v in props.items()
+                 if re.search(r"lcsc|jlc", k, re.I)
+                 and _LCSC_RE.fullmatch(str(v).strip())), None)
+    text = " ".join([fp.get("value") or ""] + [
+        str(v) for k, v in props.items() if not k.startswith("ki_")])
+    for r in rows:
+        if r.get("lcsc") and lcsc and str(r["lcsc"]) == lcsc and r["_m"].search(text):
+            return r
+    for r in rows:
+        if not r.get("lcsc") and r["_m"].search(text):
+            return r
+    return None
+
+
+def rate_clamps(bg, lines: list, cfg: dict, constraints: dict,
+                rows: list[dict]) -> list:
+    """Capacitance against the interface's budget, VRWM against the line's
+    working voltage, and D+/D- clamps matched; a fact on every line."""
+    fps = bg.footprints
+    viols = []
+
+    def at(fact):
+        cp = next((p for p in bg.pads_of(ref=fact["connector"])
+                   if p.number == fact["pin"]), None)
+        return cp.copper_center if cp else (0.0, 0.0)
+
+    pairs: dict = {}
+    for fact in lines:
+        ref = fact.get("clamp")
+        if not ref:
+            continue
+        fp = fps.get(ref, {})
+        row = clamp_row(fp, rows)
+        net, power = fact["net"], fact["power"]
+        iface, ifrom = line_interface(net, power, cfg)
+        wv, wfrom = working_v(net, power, iface, cfg, constraints)
+        r = {"part": (fp.get("value") or ""), "row": row["source"] if row else None,
+             "interface": iface, "interface_from": ifrom, "budget_pf": None,
+             "cap_pf": None, "cap_kind": None, "vrwm": None, "vrwm_from": None,
+             "working_v": wv, "working_v_from": wfrom, "why_not": []}
+        fact["rating"] = r
+        vrwm, vfrom = (row.get("vrwm"), f"esd_clamps.yaml ({row.get('vrwm_kind', 'vrwm')})") \
+            if row and row.get("vrwm") is not None else (None, None)
+        if vrwm is None and power:
+            from surgelib import family_clamp
+            text = " ".join([fp.get("value") or ""] + [
+                str(v) for v in (fp.get("props") or {}).values()])
+            fam = family_clamp(text)
+            if fam and fam.get("vrwm"):
+                vrwm, vfrom = fam["vrwm"], "the TVS family name (stand-off in the part number)"
+        r["vrwm"], r["vrwm_from"] = vrwm, vfrom
+        if not row:
+            r["why_not"].append("no row in reference/esd_clamps.yaml for this part")
+        # capacitance
+        cap, kind = None, None
+        if row:
+            if row.get("cap_pf_max") is not None:
+                cap, kind = float(row["cap_pf_max"]), "max"
+            elif row.get("cap_pf_typ") is not None:
+                cap, kind = float(row["cap_pf_typ"]), "typ"
+        r["cap_pf"], r["cap_kind"] = cap, kind
+        if iface is None:
+            r["cap"] = "not_judged"
+            r["why_not"].append(f"capacitance: {ifrom}")
+        elif cap is None:
+            r["cap"] = "not_judged"
+        else:
+            budget = CAP_BUDGET_PF[iface]
+            r["budget_pf"] = budget
+            r["cap"] = "fail" if cap > budget else "pass"
+            if iface == "usb_fs" and not ifrom.startswith("esd.interfaces"):
+                r["hs_budget_pf"] = CAP_BUDGET_PF["usb_hs"]
+                r["hs_cap"] = "fail" if cap > CAP_BUDGET_PF["usb_hs"] else "pass"
+            if cap > budget:
+                sev = "error" if kind == "max" else "warning"
+                viols.append(checklib.violation(
+                    SCRIPT, sev, at(fact), None, net,
+                    [fact["connector"], ref],
+                    f"{fact['connector']} pin {fact['pin']} ({net}): the clamp "
+                    f"{ref} ({r['part']}) hangs {cap:g} pF ({kind}, its "
+                    f"datasheet) on a {iface} line whose budget is "
+                    f"{budget:g} pF ({CAP_SOURCE[iface]}): use a lower-"
+                    "capacitance clamp", SOURCE, kind="esd_clamp_cap",
+                    cap_pf=cap, cap_kind=kind, budget_pf=budget,
+                    interface=iface, interface_from=ifrom))
+        # working voltage
+        if wv is None:
+            r["vrwm_check"] = "not_judged"
+            r["why_not"].append(f"working voltage: {wfrom}")
+        elif vrwm is None:
+            r["vrwm_check"] = "not_judged"
+            if row:
+                r["why_not"].append("the row gives no stand-off voltage")
+        else:
+            r["vrwm_check"] = "fail" if vrwm < wv else "pass"
+            if vrwm < wv:
+                viols.append(checklib.violation(
+                    SCRIPT, "error", at(fact), None, net,
+                    [fact["connector"], ref],
+                    f"{fact['connector']} pin {fact['pin']} ({net}): the clamp "
+                    f"{ref} ({r['part']}) stands off {vrwm:g} V ({vfrom}) on "
+                    f"a line that works at {wv:g} V ({wfrom}): it conducts "
+                    "in normal use; use a clamp whose VRWM is at least the "
+                    "line's voltage", SOURCE, kind="esd_clamp_vrwm",
+                    vrwm=vrwm, working_v=wv, working_v_from=wfrom))
+        pol = usb_data_pol(net) if iface in ("usb_fs", "usb_hs") else None
+        if pol:
+            pairs.setdefault(pol[0], {})[pol[1]] = fact
+    for key, pn in sorted(pairs.items()):
+        if set(pn) != {"P", "N"}:
+            continue
+        fp_, fn_ = pn["P"], pn["N"]
+        rp, rn = fp_["rating"], fn_["rating"]
+        same = fp_["clamp"] == fn_["clamp"] or (
+            rp["part"] and rp["part"] == rn["part"] and rp["row"] == rn["row"])
+        verdict, why = "pass", None
+        if same:
+            why = "one part, or the same part on both lines"
+        elif not (rp["row"] and rn["row"]):
+            verdict, why = "not_judged", "a clamp of the pair has no row"
+        else:
+            rowp = clamp_row(bg.footprints.get(fp_["clamp"], {}), rows)
+            rown = clamp_row(bg.footprints.get(fn_["clamp"], {}), rows)
+            k = "cap_pf_typ" if rowp.get("cap_pf_typ") is not None and \
+                rown.get("cap_pf_typ") is not None else "cap_pf_max"
+            cp_, cn_ = rowp.get(k), rown.get(k)
+            if cp_ is None or cn_ is None:
+                verdict, why = "not_judged", "no like-for-like capacitance on both"
+            elif abs(cp_ - cn_) > PAIR_TOL * max(cp_, cn_):
+                verdict = "fail"
+                viols.append(checklib.violation(
+                    SCRIPT, "warning", at(fp_), None, fp_["net"],
+                    [fp_["clamp"], fn_["clamp"]],
+                    f"{fp_['net']} / {fn_['net']}: the clamps differ, "
+                    f"{fp_['clamp']} {cp_:g} pF vs {fn_['clamp']} {cn_:g} pF "
+                    f"({k[7:]}), more than {PAIR_TOL:.0%} apart (USB 2.0 "
+                    "7.1.6.1 wants D+ and D- matched): use the same clamp on "
+                    "both lines", SOURCE, kind="esd_pair_mismatch",
+                    cap_p_pf=cp_, cap_n_pf=cn_))
+        for f in (fp_, fn_):
+            f["rating"]["pair"] = verdict
+            f["rating"]["pair_with"] = (fn_ if f is fp_ else fp_)["net"]
+            if why:
+                f["rating"]["pair_why"] = why
+    return viols
+
+
 # --------------------------------------------------------------- the check
 
 def check(pcb: Path, constraints: dict | None = None,
@@ -677,6 +952,7 @@ def check(pcb: Path, constraints: dict | None = None,
                     corridor_mm=cf["corridor_mm"]))
         cf["neighbours"] = neigh
         fact["corridor"] = cf
+    viols += rate_clamps(bg, lines, cfg, constraints or {}, load_esd_clamps())
     return viols, {"level_kv": level_kv, "di_dt_a_per_s": didt,
                    "connectors": conns, "internal_by_value": skipped,
                    "clamps": sorted(clamps),
