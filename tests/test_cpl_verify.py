@@ -1876,6 +1876,44 @@ def test_a_sot23_transistor_with_a_dot_by_pin_3_is_wrong(tmp_path):
     assert row["silk_mark"] == "wrong" and rep["silk_mark_wrong"] == ["Q1"]
 
 
+# EasyEDA's LED0603-RD, as on the pd_trigger bench board: an outline with its
+# corners cut at the K end, the right end's stroke across longer than the
+# cut left one's, and a triangle (no bar) pointing at the K pad.
+EASY_LED = [("1", -0.75, 0), ("2", 0.75, 0)]                 # pad 1 is K
+EASY_LED_SILK = [(-1.49, -0.45, -1.19, -0.75), (-1.49, -0.45, -1.49, 0.45),
+                 (-1.49, 0.45, -1.19, 0.75), (-0.14, -0.75, -1.19, -0.75),
+                 (-0.14, 0.75, -1.19, 0.75), (0.24, -0.76, 1.39, -0.76),
+                 (0.24, 0.74, 1.39, 0.74), (1.39, -0.76, 1.39, 0.72),
+                 (0.22, -0.36, 0.22, 0.32), (0.22, -0.35, -0.12, -0.01),
+                 (0.21, 0.32, -0.12, -0.01)]
+
+
+def _easy_led(tmp_path, sx=1, extra=""):
+    return _part_board(tmp_path, "D5", "aiee:LED0603-RD", EASY_LED,
+                       _lines(EASY_LED_SILK, sx=sx) + extra, size=(0.8, 0.8))
+
+
+def test_an_led_outline_cut_at_its_cathode_passes(tmp_path):
+    """Known answer: pd_trigger's D3, D5 and D6 are marked right; the cut
+    corners decide over the longer uncut end and the triangle's base."""
+    row, rep = _mark_row(_easy_led(tmp_path), "D5")
+    assert row["silk_mark"] == "ok" and rep["silk_mark_wrong"] == []
+
+
+def test_an_led_outline_cut_at_its_anode_is_wrong(tmp_path):
+    row, rep = _mark_row(_easy_led(tmp_path, sx=-1), "D5")
+    assert row["silk_mark"] == "wrong" and rep["silk_mark_wrong"] == ["D5"]
+    assert "cut corners are at pad 2" in row["silk_why"]
+
+
+def test_a_dot_is_not_read_as_cut_corners(tmp_path):
+    """A small circle by one pad is drawn in many slanted strokes."""
+    dot = '(fp_circle (center 1.2 0) (end 1.4 0) (layer "F.SilkS"))'
+    row, _ = _mark_row(_part_board(tmp_path, "D5", "aiee:LED0603-RD", EASY_LED,
+                                   _lines(SOD123_BOX) + dot), "D5")
+    assert row["silk_mark"] != "wrong" or "cut corners" not in row["silk_why"]
+
+
 def test_a_battery_holder_is_not_read_as_a_polar_two_pad(tmp_path):
     pcb = _part_board(tmp_path, "BT1", "Battery:BatteryHolder_CR2032", SOD123,
                       _lines(SOD123_SILK))

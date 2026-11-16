@@ -217,6 +217,8 @@ _TRANSISTOR_REF = re.compile(r"^Q\d")
 # CP_Radial's minus side and chamfers CP_Elec's plus side, so where the silk
 # sits says nothing.
 POLAR_MARK_SHARE = 0.15
+# cut outline corners count only out by the pad ends, past the body's middle
+CHAMFER_SHARE = 0.6
 PLUS_MIN_MM, PLUS_MAX_MM = 0.3, 2.5
 _ELEC_FP = re.compile(r"^(CP_Radial|CP_Elec|C_Elec)|Elec|CAP-TH", re.I)
 
@@ -977,6 +979,24 @@ def polarity_mark(fp: Footprint) -> dict:
         return {"state": None}
     segs = [(a, b) for s in fp.own_silk for a, b in zip(s, s[1:])
             if math.dist(a, b) > 0]
+    # an outline's cut corners (EasyEDA's LEDs and diodes) are at the K end,
+    # and outweigh its strokes across: the cut end's side is the shorter one.
+    # A circle or arc (a dot, a round body) is drawn in many points: not a cut.
+    cut = [(a, b) for s in fp.own_silk if len(s) <= 8
+           for a, b in zip(s, s[1:]) if math.dist(a, b) > 0
+           and 0.3 <= abs((b[0] - a[0]) * ux + (b[1] - a[1]) * uy)
+           / math.dist(a, b) <= 0.95
+           and abs(share((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)) >= CHAMFER_SHARE]
+    ends = {share((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) > 0 for a, b in cut}
+    if len(cut) >= 2 and len(ends) == 1:
+        if ends == {True}:
+            return {**row, "state": "ok", "off": []}
+        where = [(round(sum(a[0] + b[0] for a, b in cut) / (2 * len(cut)), 3),
+                  round(sum(a[1] + b[1] for a, b in cut) / (2 * len(cut)), 3))]
+        return {**row, "state": "wrong", "off": where,
+                "why": (f"its outline's cut corners are at pad {other}, the "
+                        f"board's {roles[other]} pad, not pad {mark} (centre "
+                        f"{_pts(where)})")}
     across = [(a, b) for a, b in segs
               if abs((b[0] - a[0]) * ux + (b[1] - a[1]) * uy) / math.dist(a, b) < 0.3]
     shares, where = [], None
