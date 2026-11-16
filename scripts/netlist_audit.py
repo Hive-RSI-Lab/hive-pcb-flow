@@ -294,7 +294,9 @@ schematic-level structural problems BEFORE board work starts:
    not_judged. Class 14; fact latch_enables_checked.
  - latch_enable_polarity (error; warning when only the line's name says
    its level): a latch's level-sensitive enable or load pin (74x573 LE
-   high, 74x259 ~LE low, 74x165 ~PL low, 4094 STR high...; _LATCH_ASSERT)
+   high, 74x259 ~LE low, 74x165 ~PL low, 4094 STR high...; _LATCH_ASSERT,
+   which takes the names stock symbols use too: 573 Load, 75/375 E01,
+   137/237 ~LE low, 4543 LD high, 4511 ~EL low, 4514 EL, 4508 ST)
    driven by a line that asserts at the other level with no inverter
    between: an active-low ~{CS} or ~{WR} into an active-high LE. The
    line's level is its driving pin's (an active-low marker; a plain
