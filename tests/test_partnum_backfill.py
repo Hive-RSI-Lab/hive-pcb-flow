@@ -13,12 +13,13 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 import partnum_backfill as pnb  # noqa: E402
 
 
-def _fp(ref: str, *props: tuple[str, str]) -> str:
+def _fp(ref: str, *props: tuple[str, str], value: str = "10k",
+        name: str = "R_0603") -> str:
     extra = "".join(f'\n    (property "{k}" "{v}" (at 0 0 0) (layer "F.Fab"))'
                     for k, v in props)
-    return (f'  (footprint "R_0603" (layer "F.Cu") (at 1 1)\n'
+    return (f'  (footprint "{name}" (layer "F.Cu") (at 1 1)\n'
             f'    (property "Reference" "{ref}" (at 0 0 0) (layer "F.SilkS"))\n'
-            f'    (property "Value" "10k" (at 0 0 0) (layer "F.Fab")){extra}\n'
+            f'    (property "Value" "{value}" (at 0 0 0) (layer "F.Fab")){extra}\n'
             f'    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))\n'
             f'  )\n')
 
@@ -45,7 +46,8 @@ def _props(pcb: Path) -> dict:
 
 
 def test_bom_fills_only_footprints_without_a_part_number(tmp_path):
-    pcb = _board(tmp_path, _fp("R1"), _fp("R2", ("LCSC", "C9999")), _fp("C1"))
+    pcb = _board(tmp_path, _fp("R1"), _fp("R2", ("LCSC", "C9999")),
+                 _fp("C1", value="100n"))
     (tmp_path / "board-bom.csv").write_text(
         "Designator,Comment,LCSC\nR1 R2,10k,C25804\nC1,100n,C14663\n")
     before = {p: p.read_bytes() for p in tmp_path.iterdir()}
@@ -220,3 +222,63 @@ def test_own_sources_win_over_the_other_revision(tmp_path):
     assert _props(out)["R1"]["LCSC"] == "C21190"
     assert json.loads(rep.read_text())["counts"]["added_from"] == {
         "schematic": 0, "bom": 1, "parts_json": 0, "other_revision": 0}
+
+
+def _ics(tmp: Path) -> Path:
+    return _board(
+        tmp,
+        _fp("U1", ("MPN", "AD8232ACPZ-R7"), value="AD8232ACPZ-R7",
+            name="Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm"),
+        _fp("U2", value="TPS7A2033PDBVR", name="Package_TO_SOT_SMD:SOT-23-5"),
+        _fp("U3", value="TPS7A2033PDBVR", name="Package_TO_SOT_SMD:SOT-23-5"),
+        _fp("R1"), _fp("C1", value="100n", name="C_0603"))
+
+
+def test_a_bom_swapping_two_parts_fills_neither(tmp_path):
+    """Planted swap: the BOM puts the LDO's row on the amplifier and the
+    amplifier's on an LDO (and a capacitor's on a resistor). Each part it
+    names plainly disagrees with the footprint's Value: nothing is filled
+    there, and each is counted and listed."""
+    pcb = _ics(tmp_path)
+    (tmp_path / "board-bom.csv").write_text(
+        "Comment,Designator,LCSC,MPN\n"
+        "TPS7A2028PDBVR,U1 U3,C2862740,TPS7A2028PDBVR\n"
+        "AD8232ACPZ-R7,U2,C43216,AD8232ACPZ-R7\n"
+        "100n,R1,C14663,\nGRM188R71H104KA93D,C1,C14663,\n")
+    rep, out = _run(tmp_path, pcb)
+    got = _props(out) if out.exists() else _props(pcb)
+    assert "LCSC" not in got["U1"] and "LCSC" not in got["U2"]
+    assert "LCSC" not in got["R1"]
+    assert got["U3"]["LCSC"] == "C2862740"     # one family: filled
+    assert got["C1"]["LCSC"] == "C14663"       # an MPN against 100n: not judged
+    assert rep["counts"]["part_conflicts"] == 3
+    assert sorted(c["ref"] for c in rep["part_conflicts"]) == ["R1", "U1", "U2"]
+
+
+def test_the_same_bom_in_order_fills_every_part(tmp_path):
+    """Quiet twin: the same rows on the right refs fill every footprint and
+    count no conflict."""
+    pcb = _ics(tmp_path)
+    (tmp_path / "board-bom.csv").write_text(
+        "Comment,Designator,LCSC,MPN\n"
+        "TPS7A2028PDBVR,U2 U3,C2862740,TPS7A2028PDBVR\n"
+        "AD8232ACPZ-R7,U1,C43216,AD8232ACPZ-R7\n"
+        "10k,R1,C25804,\nGRM188R71H104KA93D,C1,C14663,\n")
+    rep, out = _run(tmp_path, pcb)
+    got = _props(out)
+    assert got["U1"]["LCSC"] == "C43216"
+    assert got["U2"]["LCSC"] == got["U3"]["LCSC"] == "C2862740"
+    assert got["R1"]["LCSC"] == "C25804" and got["C1"]["LCSC"] == "C14663"
+    assert rep["counts"]["part_conflicts"] == 0 and rep["part_conflicts"] == []
+
+
+def test_generic_values_are_not_judged():
+    """Only values it can place are compared: a symbol name, a bare number
+    or a frequency is never called a disagreement."""
+    for board, bom in (("Conn_01x04", "B4B-PH-K-S"), ("LED", "XL-1608UBC"),
+                       ("16MHz", "X322516MLB4SI"), ("100", "AD8232")):
+        assert not pnb.disagree({board}, {bom}), (board, bom)
+    assert pnb.disagree({"AD8232ACPZ-R7"}, {"TPS7A2028PDBVR"})
+    assert not pnb.disagree({"AMS1117-3.3"}, {"LM1117MPX-3.3"})
+    assert pnb.disagree({"10k"}, {"100nF"})
+    assert not pnb.disagree({"4k7"}, {"10K"})

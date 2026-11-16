@@ -27,6 +27,18 @@ board's own sources, by reference, first found wins:
      BOM and one not, are given part numbers from the same sources, and a
      finding does not look gone or new only because one of them has a BOM.
 
+A BOM's part that plainly disagrees with the footprint fills nothing on
+that footprint: when the footprint's Value (or its own MPN) and the part
+the source names for the ref (the number to add, and the BOM row's own
+Comment/Value) can be compared, and none of the pairs agree, the ref is
+counted in `part_conflicts`, listed in the report, and left as it was. Two
+part numbers agree when they are of one family (a common 4-character
+start, or the same run of 3+ digits: TPS7A2028/TPS7A2033, AMS1117/LM1117);
+two passive values when they are one kind (capacitance, resistance,
+inductance). A part number against a passive value is not judged (a BOM
+may name a capacitor by its MPN where the board says 100n). So a BOM
+that swaps two parts' rows does not pass the swap on to the checks.
+
 A field counts as a code when check_fp_package would read it as an LCSC or
 JLC one, as an MPN when it would read it as an MPN field. A source naming
 two different values for one ref (two BOMs that disagree) gives none.
@@ -71,6 +83,7 @@ BLANK = {"", "~", "-", "--", "n/a", "na", "none", "dnp", "dnf", "nc", "tbd",
 REF_COLS = {"designator", "designators", "reference", "references", "ref",
             "refs", "refdes", "ref des", "reference designator",
             "reference designators", "part reference"}
+LABEL_COLS = {"comment", "value", "val", "part", "part name", "component"}
 TOK = re.compile(r'\(|\)|"(?:[^"\\]|\\.)*"|[^\s()"]+')
 
 
@@ -290,13 +303,16 @@ def read_bom(path: Path) -> tuple[dict[str, dict[str, set]] | None, str]:
         cols = [(j, kind_of(c)) for j, c in enumerate(row) if kind_of(c)]
         if not cols:
             return None, "no part-number column"
+        cols += [(j, "label") for j, n in enumerate(names)
+                 if n in LABEL_COLS and not kind_of(row[j])]
         out: dict[str, dict[str, set]] = {}
         for r in rows[i + 1:]:
             if len(r) <= rcol:
                 continue
             refs = split_refs(r[rcol])
             for j, kind in cols:
-                val = clean(kind, r[j]) if j < len(r) else None
+                val = (clean("mpn" if kind == "label" else kind, r[j])
+                       if j < len(r) else None)
                 if val:
                     for ref in refs:
                         out.setdefault(ref, {}).setdefault(kind, set()).add(val)
@@ -350,12 +366,13 @@ def from_boms(paths: list[Path], board_refs: set[str],
         if data is None:
             skipped.append([name, why])
             continue
-        if not data:
+        pn = [r for r, k in data.items() if "code" in k or "mpn" in k]
+        if not pn:
             skipped.append([name, "no part numbers"])
             continue
-        on = [r for r in data if r in board_refs or r.lower() in lower]
-        if len(on) < MIN_BOM_ON_BOARD * len(data):
-            skipped.append([name, f"{len(on)} of {len(data)} refs on this board"])
+        on = [r for r in pn if r in board_refs or r.lower() in lower]
+        if len(on) < MIN_BOM_ON_BOARD * len(pn):
+            skipped.append([name, f"{len(on)} of {len(pn)} refs on this board"])
             continue
         used.append(name)
         for r, kinds in data.items():
@@ -380,8 +397,9 @@ def from_parts_json(src_pcb: Path | None) -> dict[str, dict[str, set]]:
     for r in rows if isinstance(rows, list) else []:
         if not isinstance(r, dict):
             continue
-        for kind, key in (("code", "lcsc"), ("mpn", "mpn")):
-            val = clean(kind, r.get(key))
+        for kind, key in (("code", "lcsc"), ("mpn", "mpn"),
+                          ("label", "value"), ("label", "comment")):
+            val = clean("mpn" if kind == "label" else kind, r.get(key))
             if val:
                 for ref in r.get("refdes") or []:
                     out.setdefault(str(ref), {}).setdefault(kind, set()).add(val)
@@ -390,14 +408,16 @@ def from_parts_json(src_pcb: Path | None) -> dict[str, dict[str, set]]:
 
 # ----------------------------------------------------------------- the plan
 
-def plan(fps: list[dict], sources: dict[str, dict]) -> tuple[list, dict]:
+def plan(fps: list[dict], sources: dict[str, dict]) -> tuple[list, dict,
+                                                            list]:
     n = {"footprints": len(fps), "with_code": 0, "with_mpn": 0,
          "with_part_number": 0, "given_part_number": 0,
          "codes_added": 0, "mpns_added": 0, "conflicting": 0,
          "sources_disagree": 0, "without_part_number": 0,
-         "other_revision_unmatched": 0,
+         "other_revision_unmatched": 0, "part_conflicts": 0,
          "added_from": {s: 0 for s in SOURCES}}
     edits = []
+    n_conf: list[dict] = []
     for fp in fps:
         ref = fp["ref"]
         had = {k: has(fp, k) for k in ("code", "mpn")}
@@ -420,6 +440,20 @@ def plan(fps: list[dict], sources: dict[str, dict]) -> tuple[list, dict]:
             if any(val not in v for _, v in seen[1:]):
                 n["sources_disagree"] += 1
             add[kind] = (val, src)
+        clash = None
+        for kind, (val, src) in add.items():
+            row = sources[src].get(ref, {})
+            theirs = {val} if kind == "mpn" else set(row.get("mpn") or ())
+            theirs |= set(row.get("label") or ())
+            if disagree(board_names(fp), theirs):
+                clash = {"ref": ref, "source": src,
+                         "board": sorted(board_names(fp)),
+                         "source_names": sorted(theirs)}
+                break
+        if clash:
+            n["part_conflicts"] += 1
+            n_conf.append(clash)
+            add = {}
         if add:
             edits.append((fp, add))
             n["codes_added"] += "code" in add
@@ -430,7 +464,80 @@ def plan(fps: list[dict], sources: dict[str, dict]) -> tuple[list, dict]:
                 n["added_from"][src] += 1
         elif not (had["code"] or had["mpn"]):
             n["without_part_number"] += 1
-    return edits, n
+    return edits, n, n_conf
+
+
+# ------------------------------------------------- does the part plainly fit
+
+_CAP = re.compile(r"^\d+(?:[.,]\d+)?\s*(?:[pnuµ]f?|[pnuµ]\d+|f)$", re.I)
+_RES = re.compile(r"^\d+(?:[.,]\d+)?\s*(?:[rkmΩ]\d*|ohms?|kohms?|mohms?)$"
+                  r"|^\d+[rkm]\d+$", re.I)
+_IND = re.compile(r"^\d+(?:[.,]\d+)?\s*[pnuµm]?h$", re.I)
+_UNIT = re.compile(r"^\d+(?:[.,]\d+)?\s*[a-zµΩ%]*$", re.I)
+
+
+def ident(name: str) -> tuple[str, str] | None:
+    """("pn", normalised) for a part number, ("cap"|"res"|"ind", "") for a
+    passive value, None for anything it cannot place (a generic symbol
+    name, a bare number, a frequency or voltage)."""
+    tok = (name or "").strip().split()
+    if not tok:
+        return None
+    t = tok[0]
+    for kind, rx in (("cap", _CAP), ("res", _RES), ("ind", _IND)):
+        if rx.match(t):
+            return kind, ""
+    if _UNIT.match(t) or "_" in t:
+        return None
+    u = t.upper()
+    if not cfp._PARTNO.match(u):
+        return None
+    return "pn", re.sub(r"[^A-Z0-9]+", "-", u).strip("-")
+
+
+def same_family(pa: str, pb: str) -> bool:
+    """Two part numbers (as ident gives them, separators kept as "-") of one
+    family: one is the other's stem, they share their first four signs, or
+    they share a run of three or more digits (AMS1117-3.3, LM1117MPX)."""
+    a, b = pa.replace("-", ""), pb.replace("-", "")
+    if a.startswith(b) or b.startswith(a):
+        return True
+    k = 0
+    while k < min(len(a), len(b)) and a[k] == b[k]:
+        k += 1
+    if k >= 4:
+        return True
+    runs = lambda s: {r for r in re.findall(r"\d{3,}", s)}  # noqa: E731
+    return bool(runs(pa) & runs(pb))
+
+
+def board_names(fp: dict) -> set[str]:
+    out = {fp["props"]["Value"][0]} if "Value" in fp["props"] else set()
+    out |= {v[0] for k, v in fp["props"].items()
+            if kind_of(k) == "mpn" and clean("mpn", v[0])}
+    return out
+
+
+def disagree(board: set[str], theirs: set[str]) -> bool:
+    """True when some pair can be compared and none of those agree."""
+    judged = False
+    for a in board:
+        ia = ident(a)
+        for b in theirs:
+            ib = ident(b)
+            if not ia or not ib or (ia[0] == "pn") != (ib[0] == "pn"):
+                continue
+            judged = True
+            if ia[0] == ib[0] and (ia[0] != "pn" or same_family(ia[1], ib[1])):
+                return False
+    return judged
+
+
+def named(sources: dict[str, dict]) -> dict[str, int]:
+    """Refs each source gives a part number for (a Comment alone is not
+    one)."""
+    return {s: sum(1 for k in v.values() if "code" in k or "mpn" in k)
+            for s, v in sources.items()}
 
 
 def apply(text: str, edits) -> str:
@@ -535,12 +642,12 @@ def run(argv=None) -> tuple[dict, int, str | None]:
         sources["other_revision"], unmatched = from_other_revision(
             fps, ofps, other)
         other_rep = {"boms_read": oused,
-                     "refs_named": {s: len(v) for s, v in other.items()}}
-    edits, n = plan(fps, sources)
+                     "refs_named": named(other)}
+    edits, n, conflicts = plan(fps, sources)
     n["other_revision_unmatched"] = unmatched
     rep = {"script": SCRIPT, "counts": n, "boms_read": used,
-           "boms_skipped": skipped,
-           "refs_named": {s: len(v) for s, v in sources.items()}}
+           "boms_skipped": skipped, "part_conflicts": conflicts,
+           "refs_named": named(sources)}
     if other_rep is not None:
         rep["other_revision"] = other_rep
     if edits:
