@@ -8,6 +8,10 @@ knowledge, each with a quiet twin that differs only in the fault:
   directly, through a 0 ohm rename and through a TXB0104 channel;
 - a regulator's power-good into a shutdown input that asserts high;
 - a reset input asserting low with only a pull-down on it;
+- a 74HC573's LE (transparent while high, TI SCLS147) tied to ground, a
+  74HC595's RCLK (storage clock, TI SCLS041) tied to a rail or held by a
+  pull, a 74HC165's ~PL tied low; a latch pin on an unlisted part is
+  not_judged;
 - a 5 V 74HC595 output into an RP2040 GPIO (IOVDD + 0.5 V abs max, RP2040
   datasheet 5.5.1, pin_abs_max.yaml);
 - a 3.3 V RP2040 output into a 5 V 74HC input (VIH 3.15 V at 4.5 V, TI
@@ -28,7 +32,8 @@ sys.path.insert(0, str(REPO / "scripts" / "lib"))
 import netlist_audit  # noqa: E402
 import signal_domains  # noqa: E402
 
-KINDS = ("polarity_", "idle_pull_asserted", "io_domain_")
+KINDS = ("polarity_", "idle_pull_asserted", "io_domain_",
+         "latch_enable_held")
 
 HC_ROW = {"mpn": "SN74HC245", "match": r"^(SN)?74HC\d", "pintypes": "input",
           "vin_max_vdd": 0.0, "vih": 3.15, "vih_vdd": 4.5,
@@ -283,6 +288,83 @@ def test_open_drain_reset_line_with_only_a_pull_down():
     assert [h["kind"] for h in hits] == ["idle_pull_asserted"]
     assert "open-drain" in hits[0]["msg"]
 
+
+# ------------------------------------------------------- latch_enable_held
+
+def _latch(value, func, to, pin_type="input"):
+    """U1 (VALUE) with its latch pin FUNC on net LATCH; TO is a rail to
+    tie it to, 'pull+3V3'/'pullGND' for a lone pull, or 'mcu' for a
+    controller output driving it."""
+    comps = {"U1": value, "U2": "RP2040", "R1": "10k"}
+    nets = _rails(("U1", "16", "+3V3", "VCC"), ("U1", "8", "GND", "GND"),
+                  ("U2", "1", "+3V3", "IOVDD"))
+    pin = _m("U1", "11", func, pin_type)
+    if to in nets:
+        nets[to].append(pin)
+    else:
+        nets["LATCH"] = [pin]
+        if to.startswith("pull"):
+            nets["LATCH"].append(_m("R1", "1"))
+            nets[to[4:]].append(_m("R1", "2"))
+        else:
+            nets["LATCH"].append(_m("U2", "5", "GPIO5", "bidirectional"))
+    return comps, nets
+
+
+def _kinds(hits):
+    return [(h["kind"], h["severity"], h["refs"]) for h in hits]
+
+
+def test_a_transparent_high_latch_enable_tied_low_never_updates():
+    hits, facts = _audit(*_latch("74HC573", "LE", "GND"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    assert "never update" in hits[0]["msg"]
+    assert facts["latch_enables_checked"] == 1
+
+
+def test_the_same_latch_enable_driven_or_held_transparent_is_quiet():
+    assert _audit(*_latch("74HC573", "LE", "mcu"))[0] == []
+    # held high, a 573 is a transparent buffer
+    assert _audit(*_latch("74HC573", "LE", "+3V3"))[0] == []
+
+
+def test_a_storage_clock_held_either_way_never_updates():
+    for to in ("+3V3", "GND", "pullGND", "pull+3V3"):
+        hits, _ = _audit(*_latch("SN74HC595DR", "RCLK", to))
+        assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])], to
+    assert "only pull" in _audit(*_latch("74HC595", "RCLK", "pullGND"))[
+        0][0]["msg"]
+    assert _audit(*_latch("74HC595", "RCLK", "mcu"))[0] == []
+
+
+def test_an_active_low_load_pin_is_read_through_its_bar():
+    hits, _ = _audit(*_latch("74HC165", "~{PL}", "GND"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    hits, _ = _audit(*_latch("74HC165", "SH/~{LD}", "+3V3"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    assert _audit(*_latch("74HC165", "~{PL}", "mcu"))[0] == []
+
+
+def test_an_active_low_latch_enable_held_high_never_updates():
+    hits, _ = _audit(*_latch("74HC259", "~{LE}", "+3V3"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    assert _audit(*_latch("74HC259", "~{LE}", "GND"))[0] == []
+
+
+def test_a_strobe_on_an_unlisted_part_is_not_judged():
+    hits, facts = _audit(*_latch("DISPLAY_X", "STB", "GND"))
+    assert hits == []
+    assert any(n.startswith("latch_enable_held") for n in facts["not_judged"])
+    # a latch-named pin someone drives is nothing to judge
+    hits, facts = _audit(*_latch("DISPLAY_X", "STB", "mcu"))
+    assert not any(n.startswith("latch_enable_held")
+                   for n in facts.get("not_judged", []))
+
+
+def test_other_pins_of_a_latch_are_not_its_enable():
+    # a 573's ~OE tied low is the usual always-driving strap
+    assert _audit(*_latch("74HC573", "~{OE}", "GND"))[0] == []
+    assert _audit(*_latch("74HC595", "SRCLK", "mcu"))[0] == []
 
 # ---------------------------------------------------------- io domain
 
