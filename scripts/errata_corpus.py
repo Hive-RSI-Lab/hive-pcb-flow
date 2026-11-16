@@ -715,7 +715,8 @@ EVIDENCE = {
     + _n(r.get("listing_comparison")) + _n(r.get("parts_rated_unextracted")),
     "check_pinouts": lambda r: _n(r.get("connectors")),
     "check_mate_pins": lambda r: sum(_n(r.get(k)) for k in
-                                     ("pairs", "stated_mates", "standard_headers")),
+                                     ("pairs", "stated_mates", "standard_headers",
+                                      "unkeyed_groups")),
     "check_connector_fit": lambda r: _n(r.get("edges")) + sum(
         1 for p in r.get("parts") or () if isinstance(p, dict) and p.get("pins")),
     "check_bom_sync": lambda r: sum(1 for v in (r.get("legs") or {}).values() if v),

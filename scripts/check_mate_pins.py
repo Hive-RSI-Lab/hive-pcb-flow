@@ -598,14 +598,16 @@ def unkeyed_violations(model, table: dict) -> list[dict]:
 CONNECTOR_REF_RE = re.compile(r"^(J|P|CN|CON|X)\d")
 
 
-def identical_connectors(model, table: dict) -> tuple[int, list[str]]:
+def identical_connectors(model, table: dict) -> tuple[list[str], list[str]]:
     """(identical unkeyed connector groups the rail-swap rule judges, the
-    same-footprint connectors it can't: no family says if they are keyed)."""
+    same-footprint connectors it can't: no family says if they are keyed).
+    The judged groups go in the report, so a run that judged only them
+    shows its evidence (#1285 follow-up: it read as "judged nothing")."""
     groups: dict[str, list] = {}
     for fp in sorted(model.footprints.values(), key=lambda f: f.ref):
         if CONNECTOR_REF_RE.match(fp.ref):
             groups.setdefault(fp.fpid, []).append(fp.ref)
-    judged, left = 0, []
+    judged, left = [], []
     for fpid, refs in groups.items():
         if len(refs) < 2:
             continue
@@ -615,7 +617,7 @@ def identical_connectors(model, table: dict) -> tuple[int, list[str]]:
                         "connector family knows this footprint, so a plug in "
                         "the wrong one was not judged")
         elif not fam.get("keyed", True):
-            judged += 1
+            judged.append(f"{', '.join(refs)} ({fpid.split(':')[-1]})")
     return judged, left
 
 
@@ -669,7 +671,7 @@ def run(argv=None):
         f["judged"] for f in stated_facts)
     return checklib.report(
         SCRIPT, str(pcb), violations, pairs=facts, stated_mates=stated_facts,
-        standard_headers=judged, not_judged=left,
+        standard_headers=judged, unkeyed_groups=groups, not_judged=left,
         nothing_to_judge=None if compared or groups or judged else
         "no mating_pairs compared, no identical unkeyed connectors and no "
         "standard header on B.Cu"), args.out
