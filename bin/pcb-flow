@@ -26,6 +26,11 @@
 #                         pcb-flow's planted faults (the score; docs/score.md)
 #   pcb-flow pin BOARD --from CLONE --commit SHA
 #                         refresh a pinned board (bin/pin.py)
+#   pcb-flow frozen CMD [args]  run `pcb-flow CMD` (test, check-all, score...)
+#                         on a copy of the checkout as it is now, edits and
+#                         untracked files included, so a run that waits in the
+#                         heavy queue judges the tree it was asked about
+#                         (bin/frozen.py); `frozen -- CMD` runs any command there
 #   pcb-flow publish <dir>    put a self-contained copy at <dir>/hwde (a warden
 #                         runs it into the Hive's tools folder, so a check
 #                         sandbox, which mounts only /work and /hive/tools,
@@ -82,6 +87,13 @@ finduv() {
 if [ "${1:-}" = pin ]; then
 	shift
 	exec python3 "$here/bin/pin.py" "$@"
+fi
+# frozen copies the checkout to $TMPDIR and runs the command there (stdlib
+# python, before the venv): the copy is taken now, not when the heavy queue
+# lets the run start.
+if [ "${1:-}" = frozen ]; then
+	shift
+	exec python3 "$here/bin/frozen.py" "$@"
 fi
 # tools fetches KiCad, freerouting and KiCadRoutingTools into $state/tools
 # (no root, no venv; stdlib python): for a Hive with no shared tools folder.
@@ -348,7 +360,7 @@ check)
 	x "$py" "$here/scripts/check_env.py" "$@"
 	;;
 "" | -h | --help)
-	sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
 	;;
 *)
 	s=${1%.py}
