@@ -54,8 +54,12 @@ Per net in constraints.json["high_speed"]:
     share 1 for a microstrip and the plane's capacitance share h_other /
     (h + h_other) for a stripline. The estimate is reported in facts
     ("hatch_impedance"); with a target (the entry's z0_ohm, else its
-    impedance_ohm; z0_tol_pct default 10) a miss warns as hatch_impedance, never an error, since it
-    is an estimate. Left as not_judged, with the reason: a cell wider than
+    impedance_ohm; z0_tol_pct default 10) a miss warns as hatch_impedance,
+    never an error, since it is an estimate. The miss is the hatch's only
+    when the line is on target over solid copper, or the hatch alone moves
+    Z0 by more than the tolerance; a line already off target over solid
+    copper (a width or stackup miss, check_si's to report) is left in
+    facts with its solid_plane_miss_pct. Left as not_judged, with the reason: a cell wider than
     the return corridor, 2 k x the trace width (the trace's whole return
     can sit over one open cell, so it runs over gaps, not a thinner
     plane), a pitch over
@@ -315,6 +319,12 @@ def hatch_impedance(bg: geom.BoardGeom, net: str, entry: dict, layer: str,
     miss = 100.0 * (z_est - float(target)) / float(target)
     out.update(target_ohm=float(target), miss_pct=checklib.rnd(miss, 1))
     if abs(miss) <= tol:
+        return out, None, None
+    solid_miss = 100.0 * (z_solid - float(target)) / float(target)
+    shift = 100.0 * (z_est - z_solid) / float(target)
+    if abs(solid_miss) > tol and shift <= tol:
+        # off target over solid copper too: the width's miss, not the hatch's
+        out.update(solid_plane_miss_pct=checklib.rnd(solid_miss, 1))
         return out, None, None
     pos = hatched[0]["hatch_at"]
     vio = violation(

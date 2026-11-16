@@ -155,6 +155,19 @@ def test_dense_hatch_meets_its_target(tmp_path):
     assert "not_judged" not in facts
 
 
+def test_line_off_target_over_solid_copper_is_not_the_hatchs_miss(tmp_path):
+    # a 0.4 mm line on a target sized for 0.2 mm: off target over solid
+    # copper as well; a dense hatch barely moves it, so no hatch_impedance
+    z = _target(tmp_path)
+    vs, facts = _check(tmp_path, hatched(0.3, 0.1), width=0.4, z0_ohm=z)
+    assert "hatch_impedance" not in _kinds(vs)
+    est = facts["hatch_impedance"][0]
+    assert est["solid_plane_miss_pct"] < -10
+    # over the sparse hatch the hatch alone moves Z0 past the tolerance
+    vs, _ = _check(tmp_path, hatched(0.1, 0.5), width=0.4, z0_ohm=z)
+    assert "hatch_impedance" in _kinds(vs)
+
+
 # ------------------------------------------------------ not judged
 
 def test_cell_wider_than_corridor_is_not_judged(tmp_path):
