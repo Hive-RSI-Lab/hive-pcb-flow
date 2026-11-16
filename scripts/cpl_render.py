@@ -206,7 +206,7 @@ def render(pcb: Path, cpl: dict[str, dict], lcsc: dict[str, str],
                 title = f"{ref}  FETCH FAILED{where}"
             elif model is None:
                 title = f"{ref}  NO LCSC MODEL{where}"
-                a1 = cv.footprint_basis(fp, lcsc.get(ref, ""), fetch)
+                a1 = cv.footprint_basis(fp, lcsc.get(ref, ""), True)
                 if a1 and "at" in a1:
                     at = _placed(a1["at"], c, fp.side)
                     ax.plot(*at, "o", color="orange", ms=7, zorder=7)

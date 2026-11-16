@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -123,6 +124,34 @@ def test_a_failed_model_fetch_is_not_judged_and_costs_nothing():
         assert score.judge(fs, [], {"dfm"}).charges == 2
     finally:
         score.NOT_JUDGED = old
+
+
+def test_not_judged_says_why_and_score_gates_run_offline(monkeypatch, tmp_path):
+    fetch = {"check": "dfm", "kind": "cpl_fetch_failed", "severity": "error",
+             "refs": ["L3"], "reason": "offline (HWDE_EASYEDA_OFFLINE): C844983"}
+    f = score.finding_of("dfm", fetch)
+    assert f["why"] == fetch["reason"]
+    # a judged finding carries no why: the ledger match is unchanged
+    assert "why" not in score.finding_of("dfm", {**fetch, "kind": "cpl_no_model"})
+    # every gate a score runs is offline: the network can't move a score
+    seen = {}
+
+    class Done:
+        returncode = 0
+
+    def run(cmd, **kw):
+        seen.update(kw["env"])
+        Path(cmd[cmd.index("--out") + 1]).write_text(
+            json.dumps({"failing": [fetch], "warnings": []}))
+        return Done()
+    monkeypatch.setattr(score.subprocess, "run", run)
+    monkeypatch.delenv("HWDE_EASYEDA_OFFLINE", raising=False)
+    monkeypatch.delenv("HWDE_STOCK_OFFLINE", raising=False)
+    monkeypatch.setattr(score, "board_file", lambda ws, n, ext: ws / f"b{ext}")
+    pin = type("P", (), {"name": "b"})()
+    fs, _ = score.run_gate(pin, tmp_path, "dfm", tmp_path)
+    assert seen["HWDE_EASYEDA_OFFLINE"] == "1" and seen["HWDE_STOCK_OFFLINE"] == "1"
+    assert fs[0]["why"].startswith("offline")
 
 
 def test_gate_charges_take_a_plain_string_warning():
@@ -337,3 +366,20 @@ def test_a_pinned_shipped_cpl_keeps_its_models():
     src = json.loads((ROOT / "pinned" / "oasis-v0-2.json").read_text())["source"]
     assert src["cpl"].endswith("positions.csv") and (d / "fab" / "CPL.csv").is_file()
     assert len(list((d / "fab" / "easyeda").glob("C*.json"))) >= 20
+
+
+def test_the_planted_faults_run_offline_too(monkeypatch):
+    """score's own process (the planted faults' dfm) never fetches either."""
+    monkeypatch.delenv("HWDE_EASYEDA_OFFLINE", raising=False)
+    monkeypatch.delenv("HWDE_STOCK_OFFLINE", raising=False)
+    monkeypatch.setattr(score, "pins", lambda: ["p"])
+    monkeypatch.setattr(score, "problems", lambda p: [])
+    seen = {}
+
+    def planted():
+        seen.update(os.environ)
+        raise RuntimeError("stop here")
+    monkeypatch.setattr(score, "planted", planted)
+    monkeypatch.setattr(sys, "argv", ["score.py"])
+    assert score.main() == 1
+    assert seen["HWDE_EASYEDA_OFFLINE"] == "1" and seen["HWDE_STOCK_OFFLINE"] == "1"

@@ -143,7 +143,7 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS / "lib"))
 
-from shapely.geometry import Point, box  # noqa: E402
+from shapely.geometry import LineString, Point, box  # noqa: E402
 
 import bgalib  # noqa: E402
 import checklib  # noqa: E402
@@ -556,6 +556,242 @@ def rip_in_fields(staged: Path, old_uuids: set[str],
     return len(ops)
 
 
+# #1339 (gaps row 139): a fine-via field's inner balls are fenced in. The
+# 12 filled through vias of a 6 x 6 0.5 mm field's second ring stand 0.5 mm
+# apart on every layer: 0.35 mm between hole edges where a track needs
+# 0.2 + 0.0889 + 0.2, and no smaller through drill exists at the fab, so KRT
+# finds no way out for the 2 x 2 inside on any layer. Freerouting can't
+# either (its DSN grows the 0.25/0.15 padstack to the hole rule). The way
+# out on a standard build: withhold one second-ring ball's via (a "gate"),
+# which leaves 1.0 mm between its neighbours' holes, room for two tracks,
+# and run two enclosed balls out through it on a free inner layer from
+# filled vias in their own pads. One ball traded, two escaped. Only balls
+# KRT already failed and that sit inside the via ring get this.
+GATE_JOG = 0.3     # pitch: each track's offset from the gate ball's centre
+GATE_REACH = 2.5   # pitch: stub end past the gate ball (1.5 beyond the field)
+GATE_SIDES = (     # name, outward (drow, dcol), along (drow, dcol)
+    ("left", (0, -1), (1, 0)), ("right", (0, 1), (1, 0)),
+    ("up", (-1, 0), (0, 1)), ("down", (1, 0), (0, 1)))
+
+
+def ball_grid(bg, bga: bgalib.Bga):
+    """(row, col) -> pad for an axis-aligned field (rows run down y), plus
+    the grid's (rows, cols); None when the balls don't sit on one."""
+    x0, y0, x1, y1 = bga.bbox
+    p = bga.pitch
+    out = {}
+    for pad in bg.pads_of(ref=bga.ref):
+        if pad.number not in bga.nets and not pad.net:
+            continue
+        c, r = (pad.center[0] - x0) / p, (pad.center[1] - y0) / p
+        if abs(c - round(c)) > 0.05 or abs(r - round(r)) > 0.05:
+            return None
+        out[(int(round(r)), int(round(c)))] = pad
+    nr, nc = int(round((y1 - y0) / p)) + 1, int(round((x1 - x0) / p)) + 1
+    return out, (nr, nc)
+
+
+def _ring(rc_, shape) -> int:
+    (r, c), (nr, nc) = rc_, shape
+    return min(r, c, nr - 1 - r, nc - 1 - c)
+
+
+def gate_trade_plan(bg, bga: bgalib.Bga, ep: dict, layers: list[str],
+                    unescaped: set[str], protect: set[str],
+                    old_uuids: set[str]) -> dict:
+    """The gate trade for the enclosed balls of a fine-via (underpad) field
+    that KRT left unescaped. Returns {"escaped": [nets], "traded": {gate
+    net: [nets it let out]}, "layer": {net: layer}, "not_escaped": {net:
+    why}, "ops": [route_edit ops to add]}; the traded nets' new copper is
+    the caller's to rip first. `protect`: nets never traded (pairs, held
+    wide nets). A gate ball with old copper of its own is never traded."""
+    fv = ep["fine_via"]
+    out = {"escaped": [], "traded": {}, "layer": {}, "not_escaped": {},
+           "ops": []}
+    got = ball_grid(bg, bga)
+    if not got:
+        return out
+    grid, shape = got
+    enclosed = {k: pad for k, pad in grid.items()
+                if pad.net in unescaped and _ring(k, shape) >= 2}
+    if not enclosed:
+        return out
+    for k, pad in enclosed.items():
+        if _ring(k, shape) > 2:
+            out["not_escaped"][pad.net] = (
+                f"enclosed {_ring(k, shape)} rings deep: needs an HDI build "
+                "(microvia in pad)")
+    groups, taken = [], set()
+    (nr, nc) = shape
+    for side, o, a in GATE_SIDES:
+        line = sorted((k for k in enclosed if _ring(k, shape) == 2
+                       and k not in taken
+                       and {"left": k[1] == 2, "right": k[1] == nc - 3,
+                            "up": k[0] == 2, "down": k[0] == nr - 3}[side]),
+                      key=lambda k: k[0] * a[0] + k[1] * a[1])
+        i = 0
+        while i < len(line):
+            x = line[i]
+            y = line[i + 1] if i + 1 < len(line) else None
+            if y and (y[0] - x[0], y[1] - x[1]) == a:
+                groups.append((o, a, [x, y]))
+                i += 2
+            else:
+                groups.append((o, a, [x]))
+                i += 1
+        taken.update(line)
+
+    p, w = bga.pitch, ep["track_width"]
+    # the courtyard rule's copper clearance (ep's own is the fine ring's
+    # track-to-via, which the fine rule's hole_clearance covers)
+    clr = ep.get("rule_clearance", ep["clearance"])
+    hclr = fv["hole_clearance"]
+    h2h = fv["hole_to_hole"]
+    vd, vh = fv["via_diameter"], fv["via_drill"]
+    x0, y0 = bga.bbox[0], bga.bbox[1]
+
+    def at(k, dr=0.0, dc=0.0):
+        return (round(x0 + (k[1] + dc) * p, 4), round(y0 + (k[0] + dr) * p, 4))
+
+    window = field_region(bga)
+    items = [x for x in list(bg.tracks_of()) + list(bg.vias_of())
+             + list(bg.pads_of()) if window.intersects(x.poly)]
+    old_nets = {x.net for x in list(bg.tracks_of()) + list(bg.vias_of())
+                if x.uuid in old_uuids and window.intersects(x.poly)}
+    planned = []        # (net, layer|None for a via, poly, hole|None)
+
+    def clash(net, layer, poly, hole, skip):
+        """What `poly` (copper on `layer`; None: a via's ring, every layer,
+        with its `hole`) comes too close to, or None when it keeps the
+        field's clearance, hole clearance and hole-to-hole."""
+        def who(n):
+            return f"{n} on {layer or 'a via'}"
+        for x in items:
+            if x.net == net or x.net in skip:
+                continue
+            if not _on(x, layer):
+                continue
+            xp, xh = x.poly, _hole(x)
+            if poly.distance(xp) < clr - 1e-6:
+                return f"copper of {who(x.net)}"
+            if xh is not None and poly.distance(xh) < hclr - 1e-6:
+                return f"a hole of {who(x.net)}"
+            if hole is not None and hole.distance(xp) < hclr - 1e-6:
+                return f"copper of {who(x.net)} (hole clearance)"
+            if hole is not None and xh is not None \
+                    and hole.distance(xh) < h2h - 1e-6:
+                return f"a hole of {who(x.net)} (hole to hole)"
+        for n, ly, pp, hh in planned:
+            if n == net:
+                continue
+            if layer is None or ly is None or ly == layer:
+                if pp.distance(poly) < clr - 1e-6 or (
+                        hole is not None and pp.distance(hole) < hclr - 1e-6
+                ) or (hh is not None and poly.distance(hh) < hclr - 1e-6):
+                    return f"the gate copper of {n}"
+            if hole is not None and hh is not None \
+                    and hole.distance(hh) < h2h - 1e-6:
+                return f"the gate via of {n}"
+        return None
+
+    cands = [ly for ly in layers if ly != bga.layer]
+    cands.sort(key=lambda ly: ly in ("F.Cu", "B.Cu"))     # inner first
+    for o, a, balls in groups:
+        nets = [enclosed[k].net for k in balls]
+        options = []
+        for s in ((1, -1),) if len(balls) == 1 else ((0, 1), (1, -1)):
+            # gate outward of balls[s[0]]; it jogs -s[1]*a toward its side
+            first = balls[s[0]]
+            g = (first[0] + o[0], first[1] + o[1])
+            gp = grid.get(g)
+            gnet = gp.net if gp and gp.net else None
+            if gnet and (gnet in protect or gnet in old_nets):
+                continue
+            paths = {}
+            for k in balls:
+                sgn = -s[1] if k == first else s[1]   # this track's side
+                j = GATE_JOG if k == first else 1 - GATE_JOG
+                if len(balls) == 1:     # straight out the gate's middle
+                    pts = [at(k), at(g, GATE_REACH * o[0], GATE_REACH * o[1])]
+                else:
+                    # jog to the gate's lane: j of a pitch outward, and
+                    # GATE_JOG to this track's side of the gate's centre
+                    off = sgn * GATE_JOG
+                    jdr = (j - 1) * o[0] + off * a[0]
+                    jdc = (j - 1) * o[1] + off * a[1]
+                    pts = [at(k), at(g, jdr, jdc),
+                           at(g, GATE_REACH * o[0] + off * a[0],
+                              GATE_REACH * o[1] + off * a[1])]
+                paths[enclosed[k].net] = pts
+            free = gnet is None or gnet in unescaped
+            if len(balls) == 1 and not free:
+                continue        # one for one gains nothing
+            options.append((not free, gnet, paths))
+        options.sort(key=lambda t: t[0])
+        done, why = False, {}
+        for _cost, gnet, paths in options:
+            skip = {gnet} if gnet else set()
+            for ly in cands:
+                trial = []
+                ok = True
+                for net, pts in paths.items():
+                    vp = Point(pts[0]).buffer(vd / 2)
+                    hp = Point(pts[0]).buffer(vh / 2)
+                    tp = LineString(pts).buffer(w / 2)
+                    hit = clash(net, None, vp, hp, skip) \
+                        or clash(net, ly, tp, None, skip)
+                    if hit:
+                        why.setdefault(ly, f"{net}: {hit}")
+                        ok = False
+                        break
+                    trial += [(net, None, vp, hp), (net, ly, tp, None)]
+                    planned.extend(trial[-2:])
+                if not ok:
+                    del planned[len(planned) - len(trial):]
+                    continue
+                for net, pts in paths.items():
+                    out["ops"].append({"op": "add_via", "at": list(pts[0]),
+                                       "size": vd, "drill": vh, "net": net})
+                    out["ops"].append({"op": "add_path",
+                                       "points": [list(q) for q in pts],
+                                       "width": w, "layer": ly, "net": net})
+                    out["escaped"].append(net)
+                    out["layer"][net] = ly
+                if gnet:
+                    out["traded"][gnet] = sorted(paths)
+                    items[:] = [x for x in items if x.net != gnet]
+                done = True
+                break
+            if done:
+                break
+        if not done:
+            for net in nets:
+                out["not_escaped"][net] = (
+                    "a lone enclosed ball: a gate would trade one ball for "
+                    "one" if not options else
+                    "no layer has room through a gate: " + "; ".join(
+                        f"{ly}: {h}" for ly, h in why.items()))
+    out["escaped"].sort()
+    return out
+
+
+def _hole(x):
+    if isinstance(x, geom.Via):
+        return Point(x.at).buffer(x.drill / 2)
+    if getattr(x, "drill", None):
+        return x.drill_poly
+    return None
+
+
+def _on(x, layer) -> bool:
+    """x has copper on `layer` (None: on any layer - a through via's ring)."""
+    if layer is None:
+        return True
+    if isinstance(x, geom.Track):
+        return x.layer == layer
+    return layer in x.layers
+
+
 def nets_with_new_copper(bg, old_uuids: set[str]) -> set[str]:
     return {x.net for x in list(bg.tracks_of()) + list(bg.vias_of())
             if x.net and x.uuid and x.uuid not in old_uuids}
@@ -800,6 +1036,9 @@ def run(argv: list[str] | None = None):
     ap.add_argument("--no-via-in-pad", action="store_true",
                     help="strip KRT's via-in-pad fallbacks even where the "
                          "fab fills vias free")
+    ap.add_argument("--no-gate-trade", action="store_true",
+                    help="never withhold a ring-B ball's via to let an "
+                         "enclosed inner ball out (row 139)")
     ap.add_argument("--no-cap-nudge", action="store_true",
                     help="never move decouplers; balls whose via lands on one "
                          "are ripped instead")
@@ -1050,6 +1289,27 @@ def run(argv: list[str] | None = None):
                     staged, old_uuids, {n: {b.ref} for n in clash}, [b])
         r["_vip"] = set(vip) if not keep_vip else set()
         r["_lost"] = set(held) | set(r["via_in_pad"].get("clashing", []))
+        if ep.get("fine_via") and keep_vip and not args.no_gate_trade:
+            # row 139: balls the filled ring-B vias fence in get out
+            # through a gate (one ring-B ball per side gives up its via)
+            unesc = set(r["krt"].get("unescaped_nets", []) or []) \
+                | set(r["via_in_pad"].get("clashing", []))
+            protect = {x for pr in p["pairs"] for x in pr} | set(held)
+            bg = geom.BoardGeom.from_file(staged)
+            gt = gate_trade_plan(bg, b, ep, p["layers"], unesc, protect,
+                                 old_uuids)
+            if gt["escaped"]:
+                traded = {g for g in gt["traded"]}
+                if traded:
+                    rc.rip_new_copper(staged, old_uuids, traded)
+                rc.route_edit.apply_ops(staged, gt["ops"])
+                r["_lost"] |= traded
+            if gt["escaped"] or gt["not_escaped"]:
+                r["enclosed_escape"] = {
+                    **{k: gt[k] for k in ("escaped", "traded", "layer",
+                                          "not_escaped")},
+                    "fab_cost": "filled, capped via in pad (the enclosed "
+                                "balls' own vias; free on this stack)"}
         results.append(r)
 
     moved = []
@@ -1095,7 +1355,10 @@ def run(argv: list[str] | None = None):
                 f"dropped {len(lost)}, via-in-pad stripped {len(vip)}, "
                 f"via-in-pad clashing "
                 f"{len(r['via_in_pad'].get('clashing', []))}, wide nets held "
-                f"{len(r.get('held_wide', []))}, DRC ripped "
+                f"{len(r.get('held_wide', []))}, traded as gates for "
+                f"enclosed balls "
+                f"{len((r.get('enclosed_escape') or {}).get('traded', {}))}"
+                f", DRC ripped "
                 f"{len(r['ripped_by_drc'])}); left for route_critical / "
                 "route_auto", SCRIPT, kind="bga_escape_incomplete",
                 nets=left[:40]))

@@ -4,11 +4,10 @@
  "fixture": "oasis_cpl_dfm",
  "board": "oasis",
  "metrics": {
-  "errors": 21,
+  "errors": 20,
   "warnings": 4,
   "by_kind": {
    "both_sides_needs_panel": 1,
-   "cpl_no_model": 1,
    "cpl_rotation": 3,
    "dfm_annular_ring": 12,
    "dfm_copper_to_edge": 5,
@@ -20,12 +19,12 @@
  },
  "metrics_live": null,
  "penalties": {
-  "errors": 21.0,
+  "errors": 20.0,
   "warnings": 4.0,
   "known_answer_missed": 0.0,
   "forbidden_errors": 0.0
  },
- "composite": 89.1,
+ "composite": 89.6,
  "composite_inputs": "full",
  "known_answer": {
   "status": "ok",
