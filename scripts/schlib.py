@@ -82,6 +82,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 import env  # noqa: E402
+import fplib  # noqa: E402
 
 env.export_kicad_symbol_dir()   # before kicad-sch-api's first library scan
 
@@ -235,6 +236,10 @@ class Sheet:
         self._lib_ids: dict[str, str] = {}    # ref -> lib_id
         self._rotations: dict[str, float] = {}
         self._anchors: dict[str, tuple[float, float]] = {}
+        # multi-unit parts (#378): ref -> {unit: (component, anchor)}, and
+        # ref -> {pad: unit} for each pad drawn on a unit past the first
+        self._units: dict[str, dict[int, tuple]] = {}
+        self._pad_unit: dict[str, dict[str, int]] = {}
         self._wires: list[tuple] = []         # segments, for the label guard
         self._pin_nets: dict[tuple[str, str], str] = {}  # (ref, pad) -> net
         self._pwr_i = pwr_base - 1
@@ -246,18 +251,49 @@ class Sheet:
     def add_component(self, lib_id: str, ref: str, value: str, at,
                       rotation: float = 0, footprint: str | None = None,
                       fields: dict | None = None, expect: dict | None = None,
-                      fixups: list[dict] | None = None):
+                      fixups: list[dict] | None = None,
+                      unit_at: dict | None = None):
         """Place a symbol. `expect` maps pad number -> substring the library
         pin NAME must contain (wiring insurance against wrong symbols).
         `fixups` repair kicad-sch-api's silent renumbering of alphanumeric
         pin numbers on save: [{"pin_name": "Shield", "wrong": "6",
-        "right": "SH"}] (LEARNINGS [python])."""
+        "right": "SH"}] (LEARNINGS [python]).
+        A symbol drawn as several units (a dual op-amp, a quad gate) gets
+        every unit, all as `ref` (#378): unit 1 at `at`, each further unit
+        to the right of the one before, clear of its stubs and labels, or
+        at `unit_at[unit]`. pin_pos/wire_pin find each pad on its own unit.
+        Returns unit 1's component."""
         assert_on_grid(at[:2], f"{ref} anchor")
         self._project_lib(lib_id)
         with _quiet():
             c = self.sch.components.add(lib_id, reference=ref, value=value,
                                         position=tuple(at[:2]),
                                         rotation=rotation)
+        fields = self._dress(c, lib_id, footprint, fields)
+        self._lib_ids[ref] = lib_id
+        self._rotations[ref] = rotation
+        self._anchors[ref] = (at[0], at[1])
+        units = lib_units(lib_id)
+        if len([u for u in units if u > 0]) > 1:
+            self._place_units(c, lib_id, ref, value, at, rotation, units,
+                              footprint, fields, unit_at or {})
+        for fx in fixups or []:
+            fx = dict(fx, lib_id=lib_id)
+            self._fixups.append(fx)
+            self._api_num[(lib_id, fx["right"])] = fx["wrong"]
+        if expect:
+            names = {p.number: p.name for p in c.pins}
+            for pad, want in expect.items():
+                got = names.get(pad, "<missing>")
+                if want not in got:
+                    raise ValueError(
+                        f"{ref} pin {pad}: expected name ~'{want}', got '{got}'")
+        return c
+
+    def _dress(self, c, lib_id: str, footprint: str | None,
+               fields: dict | None) -> dict:
+        """The library symbol's footprint, LCSC field and flags onto a placed
+        instance (each unit of a part gets the same). Returns the fields."""
         if footprint is None:
             # kicad-sch-api leaves the instance's Footprint empty even when
             # the library symbol names one (lib_pull's symbols all do); KiCad
@@ -283,21 +319,39 @@ class Sheet:
         for flag, on in lib_flags(lib_id).items():
             if not on:
                 setattr(c, flag, False)
-        self._lib_ids[ref] = lib_id
-        self._rotations[ref] = rotation
-        self._anchors[ref] = (at[0], at[1])
-        for fx in fixups or []:
-            fx = dict(fx, lib_id=lib_id)
-            self._fixups.append(fx)
-            self._api_num[(lib_id, fx["right"])] = fx["wrong"]
-        if expect:
-            names = {p.number: p.name for p in c.pins}
-            for pad, want in expect.items():
-                got = names.get(pad, "<missing>")
-                if want not in got:
-                    raise ValueError(
-                        f"{ref} pin {pad}: expected name ~'{want}', got '{got}'")
-        return c
+        return fields
+
+    def _place_units(self, c, lib_id: str, ref: str, value: str, at,
+                     rotation: float, units: dict, footprint: str | None,
+                     fields: dict, unit_at: dict) -> None:
+        """Units 2..N of a multi-unit part (add_component). Pads shared by
+        every unit (the symbol's unit 0) are wired on unit 1."""
+        common = units.get(0, [])
+
+        def half(u):
+            pts = units.get(u, []) + common
+            return max([max(abs(x), abs(y)) for _, x, y in pts] or [STUB])
+
+        self._units[ref] = {1: (c, (at[0], at[1]))}
+        self._pad_unit[ref] = {}
+        x, prev = at[0], 1
+        for u in sorted(k for k in units if k > 1):
+            if u in unit_at:
+                pos = tuple(unit_at[u][:2])
+            else:
+                gap = half(prev) + half(u) + 2 * (STUB + 12.7)
+                x = round(x + max(25.4, math.ceil(gap / 2.54 - 1e-9) * 2.54), 4)
+                pos = (x, at[1])
+            assert_on_grid(pos, f"{ref} unit {u} anchor")
+            with _quiet():
+                cu = self.sch.components.add(lib_id, reference=ref,
+                                             value=value, position=pos,
+                                             rotation=rotation, unit=u)
+            self._dress(cu, lib_id, footprint, fields)
+            self._units[ref][u] = (cu, (pos[0], pos[1]))
+            for num, _, _ in units[u]:
+                self._pad_unit[ref][num] = u
+            prev = u
 
     def _project_lib(self, lib_id: str) -> None:
         """Register the project's libraries the first time a lib_id names a
@@ -340,7 +394,17 @@ class Sheet:
         return self._api_num.get((self._lib_ids.get(ref, ""), pad), pad)
 
     def pin_pos(self, ref: str, pad: str) -> tuple[float, float]:
-        p = self.sch.get_component_pin_position(ref, self._api_pad(ref, pad))
+        u = self._pad_unit.get(ref, {}).get(pad, 1)
+        if u > 1:
+            # ksa's ref lookup finds unit 1, and would put this pad where
+            # unit 1's copy of it would be: ask the pad's own unit (#378)
+            from kicad_sch_api.core import pin_utils
+            comp, anchor = self._units[ref][u]
+            p = pin_utils.get_component_pin_position(
+                comp, self._api_pad(ref, pad))
+        else:
+            p = self.sch.get_component_pin_position(ref, self._api_pad(ref, pad))
+            anchor = self._anchors.get(ref)
         if p is None:
             raise ValueError(f"{ref} pin {pad}: no such pin in symbol")
         x, y = p.x, p.y
@@ -351,7 +415,7 @@ class Sheet:
             # correction R(2t) = -I at right angles). Real KiCad puts a
             # rot-90 Device:R pin1 (lib (0,+3.81)) at anchor x-3.81; ksa
             # says x+3.81. Reflect back through the anchor.
-            ax, ay = self._anchors[ref]
+            ax, ay = anchor
             x, y = 2 * ax - x, 2 * ay - y
         return (round(x, 4), round(y, 4))
 
@@ -606,6 +670,16 @@ class Sheet:
                     if keep_uuids and path.exists() else None)
         with _quiet():
             self.sch.save(str(path))
+        missing = missing_units(path)
+        if missing:
+            # a sheet built past add_component (sch.components.add) that
+            # placed one unit of a dual op-amp: the rest of its pins float
+            raise ValueError(
+                f"{path.name}: "
+                + "; ".join(f"{r} lacks unit(s) {', '.join(map(str, u))}"
+                            for r, u in missing.items())
+                + " - place every unit (Sheet.add_component does), or ERC "
+                "reports missing_unit and those pins are in no net (#378)")
         import schem_refdes as sr  # sibling script; deferred (shapely)
         sr.strip_private_properties(path)   # KiCad-10 stock-lib notes ksa mangles (exit 3 at ERC)
         apply_pin_number_fixups(self._fixups, path)
@@ -861,7 +935,7 @@ def _write_instances(root_path: Path, out_dir: Path,
             if isinstance(g, list) and len(g) >= 3 and g[0] == "property" \
                     and _unq(g[1]) == "Sheetname":
                 blocks[_unq(g[2])] = uid
-    seen: dict[str, str] = {}
+    seen: dict[tuple[str, str], str] = {}   # (ref, unit) -> block
     for child, insts in instances.items():
         missing = [b for b, _ in insts if b not in blocks]
         if missing:
@@ -881,15 +955,17 @@ def _write_instances(root_path: Path, out_dir: Path,
                                  "a reference")
             ind = text[text.rfind("\n", 0, m.start()) + 1:m.start()]
             lines = ["(instances", f'{ind}\t(project "{project}"']
+            unit = u.group(1) if u else "1"
             for block, base in insts:
                 ref = annotate(r.group(1), base)
-                if ref in seen:
-                    raise ValueError(f"{ref} annotated twice ({seen[ref]}, "
-                                     f"{block})")
-                seen[ref] = block
+                # a multi-unit part is one ref on several symbols (#378)
+                if (ref, unit) in seen:
+                    raise ValueError(f"{ref} annotated twice "
+                                     f"({seen[(ref, unit)]}, {block})")
+                seen[(ref, unit)] = block
                 lines += [f'{ind}\t\t(path "/{root_uuid}/{blocks[block]}"',
                           f'{ind}\t\t\t(reference "{ref}")',
-                          f'{ind}\t\t\t(unit {u.group(1) if u else 1})',
+                          f'{ind}\t\t\t(unit {unit})',
                           f"{ind}\t\t)"]
             lines += [f"{ind}\t)", f"{ind})"]
             out.append(text[pos:m.start()])
@@ -898,10 +974,11 @@ def _write_instances(root_path: Path, out_dir: Path,
         out.append(text[pos:])
         path.write_text("".join(out), encoding="utf-8")
     # the root's own refs must not land in a repeated sheet's range
+    blocks_of = {ref: block for (ref, _), block in seen.items()}
     for m in re.finditer(r'\(reference "([^"]*)"\)', root_text):
-        if m.group(1) in seen:
+        if m.group(1) in blocks_of:
             raise ValueError(f"root reference {m.group(1)} collides with "
-                             f"sheet block {seen[m.group(1)]}")
+                             f"sheet block {blocks_of[m.group(1)]}")
     # each repeated block: this project, a page of its own
     want = {b for ins in instances.values() for b, _ in ins}
     used = {1}
@@ -1132,22 +1209,34 @@ def apply_native_dnp(refs: list[str], sch_path: Path) -> None:
     `(dnp `), so the nearest preceding `(dnp no)` before that property
     belongs unambiguously to this instance - the same nearest-neighbour
     technique `apply_pin_number_fixups` uses. Leaves in_bom/on_board and
-    every custom field (e.g. `Variant`) untouched."""
+    every custom field (e.g. `Variant`) untouched. A multi-unit part is
+    one ref on several symbols (#378): each unit's instance is flipped."""
     if not refs:
         return
     text = sch_path.read_text(encoding="utf-8")
+    old = "(dnp no)"
     for ref in refs:
         needle = f'(property "Reference" "{ref}"'
-        ri = text.find(needle)
-        if ri < 0:
+        hits = [m.start() for m in re.finditer(re.escape(needle), text)]
+        if not hits:
             raise ValueError(f"dnp fixup: reference {ref} not found")
-        if text.find(needle, ri + 1) >= 0:
+        # several hits are one part only as distinct units of one symbol;
+        # two parts sharing a ref have no instance that is the ref's own
+        units = []
+        for ri in hits:
+            li = text.rfind("(lib_id ", 0, ri)
+            head = text[li:ri] if li >= 0 else ""
+            lid = re.match(r'\(lib_id "([^"]*)"', head)
+            un = re.search(r"\(unit (\d+)\)", head)
+            units.append((lid.group(1) if lid else "", un.group(1) if un else "1"))
+        if len(set(units)) < len(units) or len({u[0] for u in units}) > 1:
             raise ValueError(f"dnp fixup: reference {ref} is not unique")
-        old = "(dnp no)"
-        dn = text.rfind(old, 0, ri)
-        if dn < 0:
-            raise ValueError(f"dnp fixup: no preceding '{old}' for {ref}")
-        text = text[:dn] + "(dnp yes)" + text[dn + len(old):]
+        for ri in reversed(hits):   # from the end: earlier offsets hold
+            dn = text.rfind(old, 0, ri)
+            # another instance's (dnp ...) is not this one's
+            if dn < 0 or text.rfind("(property \"Reference\"", dn, ri) >= 0:
+                raise ValueError(f"dnp fixup: no preceding '{old}' for {ref}")
+            text = text[:dn] + "(dnp yes)" + text[dn + len(old):]
     sch_path.write_text(text, encoding="utf-8")
 
 
@@ -1409,6 +1498,59 @@ def _merge_kept(new: dict, old: dict) -> dict:
     return out
 
 
+def lib_units(lib_id: str) -> dict[int, list[tuple[str, float, float]]]:
+    """{unit: [(pin number, x, y)]} of the library symbol `lib_id` as the
+    kicad-sch-api cache has it (fplib.unit_pins; an `extends` alias reads
+    its parent's), or {} when it is unknown. Unit 0: pins every unit shares."""
+    try:
+        with _quiet():
+            cache = ksa.get_symbol_cache()
+            sym = cache.get_symbol(lib_id)
+            units = fplib.unit_pins(getattr(sym, "raw_kicad_data", None))
+            if not units and getattr(sym, "extends", None):
+                nick = lib_id.split(":", 1)[0]
+                parent = cache.get_symbol(f"{nick}:{sym.extends}")
+                units = fplib.unit_pins(getattr(parent, "raw_kicad_data", None))
+    except Exception:  # noqa: BLE001 - unknown lib/symbol: no units
+        return {}
+    return units
+
+
+def missing_units(sch_path: Path) -> dict[str, list[int]]:
+    """{ref: [unit, ...]} for each part on a saved sheet drawn as several
+    units (its embedded lib_symbols copy says how many) but not placed as
+    all of them (#378): those units' pins are in no net, and KiCad's ERC
+    says missing_unit. Power symbols (#...) are skipped."""
+    top = next((f for f in _sexp(sch_path.read_text(encoding="utf-8"))
+                if isinstance(f, list) and f and f[0] == "kicad_sch"), None)
+    if top is None:
+        return {}
+    libs = _child(top, "lib_symbols") or []
+    want = {}
+    for s in libs[1:]:
+        if isinstance(s, list) and len(s) > 1 and s[0] == "symbol":
+            # sub-symbols NAME_<unit>_<body style>; unit 0 is shared
+            n = {int(m.group(1)) for sub in s[2:]
+                 if isinstance(sub, list) and len(sub) > 1
+                 and sub[0] == "symbol"
+                 for m in [re.search(r"_(\d+)_\d+$", _unq(sub[1]))]
+                 if m and int(m.group(1)) > 0}
+            if len(n) > 1:
+                want[_unq(s[1])] = n
+    have: dict[tuple[str, str], set[int]] = {}
+    for f in top[1:]:
+        if not (isinstance(f, list) and f and f[0] == "symbol"):
+            continue
+        lid, ref = _child(f, "lib_id"), _prop(f, "Reference") or ""
+        if lid is None or ref.startswith("#") or _unq(lid[1]) not in want:
+            continue
+        unit = _child(f, "unit")
+        have.setdefault((ref, _unq(lid[1])), set()).add(
+            int(_unq(unit[1])) if unit else 1)
+    return {ref: sorted(want[lid] - got)
+            for (ref, lid), got in sorted(have.items()) if want[lid] - got}
+
+
 def lib_footprint(lib_id: str) -> str | None:
     """The Footprint property of the library symbol `lib_id` as the
     kicad-sch-api cache has it (a project lib must be registered first:
@@ -1486,16 +1628,23 @@ def pin_table(lib_id: str, lib_paths: list | None = None) -> dict:
         sch =ksa.create_schematic("_pins")
         c = sch.components.add(lib_id, reference="X1", value="x",
                                position=(127.0, 63.5))
+    unit_of = {num: u for u, ps in lib_units(lib_id).items()
+               for num, _, _ in ps}
     pins = []
     for p in c.pins:
         row = {"number": p.number, "name": p.name}
+        if p.number in unit_of:
+            row["unit"] = unit_of[p.number]
         for attr in ("electrical_type", "type", "pin_type"):
             v = getattr(p, attr, None)
             if v is not None:
                 row["type"] = str(getattr(v, "value", v))
                 break
         pins.append(row)
-    return {"lib_id": lib_id, "pin_count": len(pins), "pins": pins}
+    # units: how many a board places (unit 0 pins are on every one)
+    units = len({u for u in unit_of.values() if u > 0}) or 1
+    return {"lib_id": lib_id, "pin_count": len(pins), "units": units,
+            "pins": pins}
 
 
 def main(argv=None) -> int:

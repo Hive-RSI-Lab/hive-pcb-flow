@@ -50,6 +50,10 @@ the pull is reported (all idempotent, all text surgery):
                   retyped (power_in on an IC's VCC/GND-named pins, else
                   passive; from parts/<lcsc>.json extracts beside --parts when
                   there are any)            -> --no-pin-types to skip
+A symbol drawn as two or more units (a dual op-amp, a quad gate) is flagged,
+not changed: its result gets multi_unit (the unit count) and a warning, and
+the payload's multi_unit lists each with its pins by unit (#378). Place every
+unit; schlib's Sheet.add_component does.
 Every footprint's (model ...) path is then rewritten from the absolute path
 easyeda2kicad writes to ${KIPRJMOD}/../lib/<lib>.3dshapes/<name> (relative to
 --project, else <out_dir>/../kicad - for an out dir named lib/ even before
@@ -769,6 +773,30 @@ def _pin_types(sym_lib: Path, results: list[dict], parts_file: str | None) -> di
                                 if c["to"] == "power_in"})}
 
 
+def _multi_unit(sym_lib: Path, results: list[dict]) -> list[dict]:
+    """Flag each pulled (or present) symbol drawn as two or more units (#378).
+
+    A board generator that places only unit 1 of a dual op-amp or a quad
+    gate leaves the other units' pins out of the netlist: KiCad's ERC says
+    missing_unit, and the footprint's pads for them float. schlib's
+    Sheet.add_component places every unit; a hand-built sheet must too."""
+    units = fplib.symbol_units(sym_lib) if sym_lib.exists() else {}
+    out = []
+    for r in results:
+        u = units.get(r.get("symbol") or "")
+        if r["status"] not in ("pulled", "exists") or not u:
+            continue
+        n = len([k for k in u if k > 0])
+        r["multi_unit"] = n
+        r.setdefault("warnings", []).append(
+            f"{r['symbol']}: {n} units - place every unit (schlib "
+            f"Sheet.add_component does), or ERC reports missing_unit and "
+            f"those pins float")
+        out.append({"symbol": r["symbol"], "lcsc": r["lcsc"], "units": n,
+                    "pins": {str(k): v for k, v in sorted(u.items())}})
+    return out
+
+
 def _portable_models(pretty: Path, models: Path, project: Path | None,
                      explicit: bool = False) -> dict:
     """Point every footprint's (model ...) at ${KIPRJMOD}/.. instead of the
@@ -931,6 +959,7 @@ def main(argv: list[str] | None = None) -> int:
         dedup = _dedupe_symbols(sym_lib)
         pin_types = (None if args.no_pin_types
                      else _pin_types(sym_lib, results, args.parts))
+        multi_unit = _multi_unit(sym_lib, results)
 
         pulled_fps = sorted({fp["name"] for r in results
                              for fp in r.get("footprints", [])})
@@ -989,6 +1018,7 @@ def main(argv: list[str] | None = None) -> int:
             "autofix": autofix,
             "refdes_norm": refdes,
             "pin_types": pin_types,
+            "multi_unit": multi_unit,
             "model_paths": models,
             "models_restored": restored,
             "load_check": load,
