@@ -21,7 +21,9 @@ rules as routing constraints; cite the record id when you apply one.
 ## Steps
 0. Keep-outs, then zones: `scripts/keepout_gen.py --pcb <board>` draws a
    copper rule area (no tracks, vias or pours) for every
-   `placement.keepouts` entry with `"copper": true` (an antenna); then
+   `placement.keepouts` entry with `"copper": true` (an antenna), and
+   with `--edge-band W` (or `placement.edge_band_mm`) a band W mm wide
+   along the board edge where no track or via goes; then
    `scripts/planes_gen.py --pcb <board>` (defaults: 2L B.Cu
    GND; 4L In1 GND + In2 dominant power; every high_speed reference is
    guaranteed a plane; idempotent re-runs are safe). A 5 A rail into
