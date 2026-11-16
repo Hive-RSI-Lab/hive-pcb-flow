@@ -853,6 +853,39 @@ def check(pcb: Path, recs: Records) -> tuple[list[dict], dict]:
                         f"Fix the number or the Value",
                         SCRIPT, kind="lcsc_value_mismatch", lcsc=code,
                         value=fp["value"], record_value=got))
+        if part.get("can"):
+            # #1393: an aluminium can whose ordering code names its size
+            # (Panasonic FK) is judged by that can against the one its
+            # footprint is drawn for, as #1366 judges a part record's body
+            dia, height = part["can"]
+            body = {"shape": "can", "dia": dia, "height": height,
+                    "tol_dia": None, "tol_height": None,
+                    "text": pkg["package"]}
+            fbody = footprint_body(fp["fpid"])
+            verdict, why_not = ("skip", [
+                "the footprint's name gives no can size"]) \
+                if not fbody or fbody["shape"] != "can" \
+                else compare_body(body, fbody)
+            if verdict == "skip":
+                skip(why_not[0])
+                continue
+            judged.append({"ref": ref, "named": code or mpn, "from": where,
+                           "package": pkg["package"],
+                           "footprint": fp["fpid"], "ok": verdict == "ok"})
+            if verdict == "ok":
+                continue
+            viols.append(checklib.violation(
+                SCRIPT, "warning" if warn else verdict, fp["at"],
+                fp["layer"], None, [ref],
+                f"{ref} is {named}, a {pkg['package']} part "
+                f"({pkg['source']}; the part number from its {where}), but "
+                f"its footprint is {fp['fpid']}: {'; '.join(why_not)}. Fix: "
+                "the footprint the part's datasheet gives, or the part that "
+                "fits these pads",
+                SCRIPT, kind="footprint_package_mismatch",
+                footprint=fp["fpid"], package=pkg["package"],
+                part=code or mpn, part_from=where, reasons=why_not))
+            continue
         if not (part["mount"] or part["family"]):
             skip("the part's package name is not read")
             continue

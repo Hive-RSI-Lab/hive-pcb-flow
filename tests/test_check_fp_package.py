@@ -355,10 +355,12 @@ def test_mpn_table_rows_are_cited_and_regexes_compile():
     for e in entries:
         assert e["verified"] is True, e["name"]
         rows = [e.get("row")] + [r for g in (e.get("groups") or {}).values()
-                                 for r in g.values()] + (e.get("combos") or [])
+                                 for r in g.values()] + (
+            e.get("combos") or []) + list((e.get("sizes") or {}).values())
         for r in filter(None, rows):
             for c in r.get("cite") or []:
                 assert c["doc"] and c["page"] and c["quote"] and c["sha256"]
+            assert r.get("size") is None or r["size"] in e["sizes"], r
             fam = r.get("family")
             assert fam is None or fam in {
                 f for f, *_ in pkgname._FAMILIES} | {"NOLEAD"}, fam
@@ -619,30 +621,32 @@ CAN = "Capacitor_SMD:CP_Elec_6.3x7.7"
 
 
 def test_part_record_body_judges_a_maker_no_table_knows(tmp_path):
-    # #1366, haos-voice C715-C718: EEE-FK1E101P has no LCSC field and
-    # Panasonic is not in mpn_packages.yaml; its record says the 8 mm E can,
-    # its footprint is the 6.3 mm D8 one
-    part_record(tmp_path, "EEE-FK1E101P", FK_E)
+    # #1366, haos-voice C715-C718: EEE-FK1E101P had no LCSC field and
+    # Panasonic was not in mpn_packages.yaml (#1393 has since added FK, so
+    # a made-up MPN stands in); its record says the 8 mm E can, its
+    # footprint is the 6.3 mm D8 one
+    part_record(tmp_path, "CAN-E8", FK_E)
     pcb = board(tmp_path, footprint("C715", CAN, "100u",
-                                    {"MPN": "EEE-FK1E101P",
-                                     "Manufacturer": "Panasonic"}))
+                                    {"MPN": "CAN-E8",
+                                     "Manufacturer": "Acme"}))
     viols, facts = run(pcb)
     assert facts["judged"] == 1 and len(viols) == 1, facts
     v = viols[0]
     assert v["severity"] == "error" and v["refs"] == ["C715"]
     assert v["kind"] == "footprint_package_mismatch"
-    assert "EEE-FK1E101P.json" in v["msg"] and "can dia 8.0" in v["msg"]
+    assert "CAN-E8.json" in v["msg"] and "can dia 8.0" in v["msg"]
     assert "diameter is 8 mm (+-0.5), the footprint's 6.3 mm" in v["msg"]
 
 
 def test_part_record_body_that_fits_is_quiet(tmp_path):
-    # the quiet twin: the D8 part, EEE-FK1E101XP, on the same footprint
-    part_record(tmp_path, "EEE-FK1E101XP", FK_D8)
+    # the quiet twin: the D8 part (EEE-FK1E101XP's can) on the same
+    # footprint
+    part_record(tmp_path, "CAN-D8", FK_D8)
     pcb = board(tmp_path, footprint("C715", CAN, "100u",
-                                    {"MPN": "EEE-FK1E101XP"}))
+                                    {"MPN": "CAN-D8"}))
     viols, facts = run(pcb)
     assert viols == [] and facts["judged"] == 1, facts
-    assert "EEE-FK1E101XP.json" in facts["parts"][0]["from"]
+    assert "CAN-D8.json" in facts["parts"][0]["from"]
 
 
 def test_part_record_can_of_another_height_is_a_warning(tmp_path):
@@ -702,7 +706,7 @@ def test_part_record_not_judged(tmp_path, package, fpid, why):
 def test_no_part_record_keeps_the_old_reason(tmp_path):
     part_record(tmp_path, "OTHER", FK_E)
     _, facts = run(board(tmp_path, footprint("C1", CAN, "x",
-                                             {"MPN": "EEE-FK1E101P"})))
+                                             {"MPN": "CAN-E8"})))
     assert facts["judged"] == 0
     assert list(facts["not_judged"]) == [
         "an MPN is looked up only with --live"]
@@ -766,9 +770,60 @@ def test_footprint_body(fpid, want):
 def test_run_reads_part_records_from_the_parts_dir(tmp_path):
     parts = tmp_path / "parts"
     parts.mkdir()
-    part_record(parts, "EEE-FK1E101P", FK_E)
+    part_record(parts, "CAN-E8", FK_E)
     pcb = board(tmp_path, footprint("C715", CAN, "100u",
-                                    {"MPN": "EEE-FK1E101P"}))
+                                    {"MPN": "CAN-E8"}))
     rep, _ = cfp.run(["--pcb", str(pcb), "--parts", str(parts),
                       "--cache", ""])
     assert [v["refs"] for v in rep["violations"]] == [["C715"]]
+
+
+# ------------------------------------------------- an ordering code's can
+
+@pytest.mark.parametrize("mpn,fpid,hit", [
+    # #1393: EEE-FK1E101P is the 8 x 6.2 mm E can, not the 6.3 x 7.7 mm D8
+    ("EEE-FK1E101P", "Capacitor_SMD:CP_Elec_6.3x7.7", "error"),
+    # the quiet twins: the E part on its own can, the D8 part on the D8 one
+    ("EEE-FK1E101P", "Capacitor_SMD:CP_Elec_8x6.2", None),
+    ("EEE-FK1E101XP", "Capacitor_SMD:CP_Elec_6.3x7.7", None),
+    # an 8 mm can of the wrong height sits on the same land: a warning
+    ("EEE-FK1E101P", "Capacitor_SMD:CP_Elec_8x10.5", "warning"),
+])
+def test_fk_ordering_code_names_the_can(tmp_path, mpn, fpid, hit):
+    viols, facts = run(board(tmp_path, footprint(
+        "C715", fpid, "100u", {"MPN": mpn, "Manufacturer": "Panasonic"})))
+    assert facts["judged"] == 1, facts
+    assert [v["severity"] for v in viols] == ([hit] if hit else []), viols
+    if hit:
+        msg = viols[0]["msg"]
+        assert "reference/mpn_packages.yaml" in msg and "p4" in msg, msg
+        assert ("diameter is 8 mm" if hit == "error" else
+                "height is 6.2 mm") in msg, msg
+
+
+def test_fk_can_size_decoded():
+    assert mpn_decode.decode("EEE-FK1E101P")["desc"]["can"] == (8.0, 6.2)
+    assert mpn_decode.decode("EEEFK1E101XP")["desc"]["can"] == (6.3, 7.7)
+    # size C: page 2 gives its diameter, no cited row its height
+    assert mpn_decode.decode("EEE-FK1V220R")["desc"]["can"] == (5.0, None)
+
+
+@pytest.mark.parametrize("mpn", [
+    "EEE-FK1E101V",   # the vibration-proof part: another can, no row
+    "EEE-FK1A101P",   # 10 V, not on the page 4 list
+    "EEE-FK1E101",    # the suffix cut off
+])
+def test_fk_part_with_no_row_is_not_judged(tmp_path, mpn):
+    assert mpn_decode.decode(mpn) is None
+    viols, facts = run(board(tmp_path, footprint(
+        "C1", CAN, "100u", {"MPN": mpn})))
+    assert viols == [] and facts["judged"] == 0, facts
+
+
+def test_fk_on_a_footprint_with_no_can_is_not_judged(tmp_path):
+    viols, facts = run(board(tmp_path, footprint(
+        "C1", "Capacitor_SMD:C_1206_3216Metric", "100u",
+        {"MPN": "EEE-FK1E101P"})))
+    assert viols == [] and facts["judged"] == 0
+    assert facts["not_judged"] == {
+        "the footprint's name gives no can size": 1}, facts

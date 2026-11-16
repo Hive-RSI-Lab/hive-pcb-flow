@@ -19,6 +19,9 @@
 #   row     package, family (a lib/pkgname family), mount, pin_count, pitch,
 #           width (mm), width_in (inches) or width_mil (mils), body
 #           [a, b] mm, cite
+#   sizes   {size code: row} where the part number does not spell the case
+#           (Panasonic FK): a row's `size` picks one, can_dia and
+#           can_height give the can (mm); a size with no entry is not judged
 #   open    true on a generic JEDEC name (1N4007, 1N5819): its row is the
 #           registered package (DO-41), one candidate among the bodies other
 #           makers sell it in, never the part's package on its own
@@ -3381,3 +3384,182 @@ makers:
       page: 1
       quote: 'Package: DO-41'
       fields: []
+- name: Panasonic FK (SMD aluminium electrolytic)
+  verified: true
+  # The FK ordering code (EEE-FK1E101P: FK, rated voltage 1E = 25 V, 101 =
+  # 100 uF, P) does not spell the case: 25 V 100 uF is the 8 x 6.2 mm E can
+  # as EEEFK1E101P and the 6.3 x 7.7 mm D8 one as EEEFK1E101XP. So a row
+  # per part number from the page 4 characteristics list names its size
+  # code (that table's layout row reads "8.0 6.2 6.5 E 300 0.26 0.14
+  # EEEFK1E101P"; the PDF's text layer scrambles its columns, so the cite
+  # quotes the part number alone), and `sizes` gives each size code's can,
+  # cited from the page 1 and page 2 size tables. A vibration-proof part
+  # (suffix V: another can height) and any part not on page 4 has no row:
+  # not judged.
+  match: ^EE[EV]-?FK(?P<code>[0-2][A-Z][0-9R]{3}[A-Z]{1,2})$
+  pdf: &fk_pdf
+    doc: Panasonic FK series EEE-FK1E101P.pdf
+    sha256: b36857d089adaddf3042b33bf11d0f7d83bf70734e983f33b7827152e11854e3
+  row:
+    mount: smd
+  sizes:
+    B:
+      package: Panasonic FK size B, 4 x 5.8 mm can
+      can_dia: 4.0
+      can_height: 5.8
+      cite:
+      - <<: *fk_pdf
+        page: 2
+        quote: 'B (ø4) 1.0 2.5 1.6'
+        fields: [can_dia]
+      - <<: *fk_pdf
+        page: 1
+        quote: '4.0 5.8±0.3'
+        fields: [can_height]
+    C:
+      package: Panasonic FK size C, 5 mm dia can
+      can_dia: 5.0
+      cite:
+      - <<: *fk_pdf
+        page: 2
+        quote: 'C (ø5) 1.5 2.8 1.6'
+        fields: [can_dia]
+    D:
+      package: Panasonic FK size D, 6.3 x 5.8 mm can
+      can_dia: 6.3
+      can_height: 5.8
+      cite:
+      - <<: *fk_pdf
+        page: 2
+        quote: 'D (ø6.3) 1.8 3.2 1.6'
+        fields: [can_dia]
+      - <<: *fk_pdf
+        page: 1
+        quote: '6.3 5.8±0.3 6.6 7.8 max. 2.6'
+        fields: [can_height]
+    D8:
+      package: Panasonic FK size D8, 6.3 x 7.7 mm can
+      can_dia: 6.3
+      can_height: 7.7
+      cite:
+      - <<: *fk_pdf
+        page: 2
+        quote: 'D8 (ø6.3x7.7L) 1.8 3.2 1.6'
+        fields: [can_dia, can_height]
+    E:
+      package: Panasonic FK size E, 8 x 6.2 mm can
+      can_dia: 8.0
+      can_height: 6.2
+      cite:
+      - <<: *fk_pdf
+        page: 2
+        quote: 'E (ø8x6.2L) 2.2 4.0 1.6'
+        fields: [can_dia, can_height]
+    F:
+      package: Panasonic FK size F, 8 x 10.2 mm can
+      can_dia: 8.0
+      can_height: 10.2
+      cite:
+      - <<: *fk_pdf
+        page: 1
+        quote: 'F 8.0 10.2±0.3'
+        fields: [can_dia, can_height]
+    G:
+      package: Panasonic FK size G, 10 x 10.2 mm can
+      can_dia: 10.0
+      can_height: 10.2
+      cite:
+      - <<: *fk_pdf
+        page: 2
+        quote: 'G (ø10x10.2L) 4.6 4.1 2.0'
+        fields: [can_dia, can_height]
+    H13:
+      package: Panasonic FK size H13, 12.5 x 13.5 mm can
+      can_dia: 12.5
+      can_height: 13.5
+      cite:
+      - <<: *fk_pdf
+        page: 1
+        quote: 'H13 12.5 13.5±0.5'
+        fields: [can_dia, can_height]
+    J16:
+      package: Panasonic FK size J16, 16 x 16.5 mm can
+      can_dia: 16.0
+      can_height: 16.5
+      cite:
+      - <<: *fk_pdf
+        page: 1
+        quote: 'J16 16.0 16.5±0.5'
+        fields: [can_dia, can_height]
+    K16:
+      package: Panasonic FK size K16, 18 x 16.5 mm can
+      can_dia: 18.0
+      can_height: 16.5
+      cite:
+      - <<: *fk_pdf
+        page: 1
+        quote: 'K16 18.0 16.5±0.5'
+        fields: [can_dia, can_height]
+  groups:
+    code:
+      1E100R: {size: B, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E100R, fields: []}]}
+      1E220R: {size: C, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E220R, fields: []}]}
+      1E330UR: {size: C, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E330UR, fields: []}]}
+      1E330P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E330P, fields: []}]}
+      1E470P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E470P, fields: []}]}
+      1E680P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E680P, fields: []}]}
+      1E101XP: {size: D8, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E101XP, fields: []}]}
+      1E101P: {size: E, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E101P, fields: []}]}
+      1E151P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E151P, fields: []}]}
+      1E221P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E221P, fields: []}]}
+      1E331P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E331P, fields: []}]}
+      1E471P: {size: G, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1E471P, fields: []}]}
+      1E102Q: {size: H13, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1E102Q, fields: []}]}
+      1E152M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1E152M, fields: []}]}
+      1E222M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1E222M, fields: []}]}
+      1E332M: {size: K16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1E332M, fields: []}]}
+      1V4R7R: {size: B, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V4R7R, fields: []}]}
+      1V100UR: {size: B, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V100UR, fields: []}]}
+      1V100R: {size: C, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V100R, fields: []}]}
+      1V220R: {size: C, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V220R, fields: []}]}
+      1V330P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V330P, fields: []}]}
+      1V470P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V470P, fields: []}]}
+      1V680XP: {size: D8, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V680XP, fields: []}]}
+      1V101XP: {size: D8, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V101XP, fields: []}]}
+      1V101P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V101P, fields: []}]}
+      1V151P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V151P, fields: []}]}
+      1V221P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V221P, fields: []}]}
+      1V331P: {size: G, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1V331P, fields: []}]}
+      1V471Q: {size: H13, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1V471Q, fields: []}]}
+      1V681Q: {size: H13, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1V681Q, fields: []}]}
+      1V102M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1V102M, fields: []}]}
+      1V152M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1V152M, fields: []}]}
+      1H4R7R: {size: B, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H4R7R, fields: []}]}
+      1H100UR: {size: C, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H100UR, fields: []}]}
+      1H100P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H100P, fields: []}]}
+      1H220P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H220P, fields: []}]}
+      1H330XP: {size: D8, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H330XP, fields: []}]}
+      1H330P: {size: E, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H330P, fields: []}]}
+      1H470XP: {size: D8, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H470XP, fields: []}]}
+      1H470P: {size: E, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H470P, fields: []}]}
+      1H101P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H101P, fields: []}]}
+      1H151P: {size: G, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H151P, fields: []}]}
+      1H221P: {size: G, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1H221P, fields: []}]}
+      1H331Q: {size: H13, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1H331Q, fields: []}]}
+      1H391Q: {size: H13, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1H391Q, fields: []}]}
+      1H471M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1H471M, fields: []}]}
+      1H561M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1H561M, fields: []}]}
+      1H681M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1H681M, fields: []}]}
+      1H102M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1H102M, fields: []}]}
+      1J4R7R: {size: C, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J4R7R, fields: []}]}
+      1J100P: {size: D, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J100P, fields: []}]}
+      1J220XP: {size: D8, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J220XP, fields: []}]}
+      1J220P: {size: E, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J220P, fields: []}]}
+      1J330P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J330P, fields: []}]}
+      1J470P: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J470P, fields: []}]}
+      1J680UP: {size: F, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J680UP, fields: []}]}
+      1J101P: {size: G, cite: [{<<: *fk_pdf, page: 4, quote: EEEFK1J101P, fields: []}]}
+      1J151Q: {size: H13, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1J151Q, fields: []}]}
+      1J221Q: {size: H13, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1J221Q, fields: []}]}
+      1J471M: {size: J16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1J471M, fields: []}]}
+      1J681M: {size: K16, cite: [{<<: *fk_pdf, page: 4, quote: EEVFK1J681M, fields: []}]}
