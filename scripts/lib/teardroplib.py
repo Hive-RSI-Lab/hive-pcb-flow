@@ -852,3 +852,304 @@ def ring_findings(board: Board, *, req: bool, wander: float = DRILL_WANDER_MM,
                         f"{', '.join(layers)} has none "
                         f"(route_teardrops.py){why}")})
     return out
+
+
+# ------------------------------------------------------------------ necks
+# A join laid at a net's width can end a track too wide for a drop on a
+# via with teardrops on (KiCad makes none at or over filter_ratio x its
+# size): it narrows from the via out past where the drop ends (#1138,
+# part_repair; #1320, route_finish and route_auto too). These work on
+# route_edit ops (add_track, add_via with "teardrops"); neck_board turns
+# board tracks into such ops and back.
+
+NECK_PAST = 0.05  # mm a neck runs on past where its drop ends (#1138)
+NECK_TOL = 1e-3   # mm: an end this close to a point is on it
+
+
+def _r4(v) -> float:
+    return round(float(v), 4)
+
+
+def neck_widths(size: float, p: dict, widths, wide: float,
+                floor: float) -> list:
+    """The widths a track into a new via of size with teardrop settings p
+    may narrow to so KiCad makes its drop (#1138), best first: widths (the
+    removed via's tracks that took a drop), widest first, then wide (the
+    net's width), then floor (its narrowest DRC passes); only those at or
+    over floor that take a drop here (teardroplib takes_drop), each once.
+    Empty when none does."""
+    out: list = []
+    for w in sorted(set(widths), reverse=True) + [wide, floor]:
+        w = round(float(w), 6)
+        if w >= floor - 1e-9 and takes_drop(w, size, p) \
+                and w not in out:
+            out.append(w)
+    return out
+
+
+def _exit_at(a, b, c, r: float) -> float:
+    """The fraction along a->b where it leaves the circle (c, r) that a is
+    in: the larger root of |a + u(b - a) - c| = r, kept in [0, 1]."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    fx, fy = a[0] - c[0], a[1] - c[1]
+    qa = dx * dx + dy * dy
+    if qa <= 0:
+        return 1.0
+    qb = 2 * (fx * dx + fy * dy)
+    qc = fx * fx + fy * fy - r * r
+    disc = max(0.0, qb * qb - 4 * qa * qc)
+    return min(1.0, max(0.0, (-qb + math.sqrt(disc)) / (2 * qa)))
+
+
+def _pt(e) -> tuple:
+    return (float(e[0]), float(e[1]))
+
+
+def _far_end(t: dict, a) -> tuple:
+    """(the end of add_track t that is not a, True when a is its start)."""
+    at_start = math.dist(_pt(t["start"]), a) <= NECK_TOL
+    return (_pt(t["end"]) if at_start else _pt(t["start"])), at_start
+
+
+def _chain_next(kept, j, b, seen, shorter, board_at=None):
+    """The add_track a walk along kept[j] goes on to from its end b: the
+    one other add_track of its net and layer with an end at b (the prune's
+    shorter ones counted), when it is not in seen or shorter, no add_via
+    of the run stands at b, and no board copper of the net meets b on the
+    layer (board_at(net, layer, b)). Else None: the walk stops at a
+    branch, a via or a joint with the board."""
+    t = kept[j]
+    nxt = [k for k, o in enumerate(kept)
+           if k != j and o["op"] == "add_track" and o["net"] == t["net"]
+           and o["layer"] == t["layer"]
+           and any(math.dist(_pt(e), b) <= NECK_TOL
+                   for e in (o["start"], o["end"]))]
+    if len(nxt) != 1 or nxt[0] in seen or nxt[0] in shorter:
+        return None
+    if any(o["op"] == "add_via" and math.dist(_pt(o["at"]), b) <= NECK_TOL
+           for o in kept):
+        return None
+    if board_at is not None and board_at(t["net"], t["layer"], b):
+        return None
+    return nxt[0]
+
+
+def _leaving(kept, j, a, c, r, shorter, board_at=None):
+    """The ends (in the copper, outside it) of the track a drop on the via
+    (c, r) lies on, for kept[j] with end a in it: kept[j] when it leaves
+    the circle, else the first track the walk from its far end
+    (_chain_next) reaches that does, past stubs wholly inside. None when
+    the walk stops first."""
+    seen: set = set()
+    while j is not None and j not in seen:
+        seen.add(j)
+        b, _ = _far_end(kept[j], a)
+        if math.dist(b, c) > r:
+            return a, b
+        j, a = _chain_next(kept, j, b, seen, shorter, board_at), b
+    return None
+
+
+def neck_tracks(kept: list, td_src: list, shorter, width_of,
+                board_at=None) -> list:
+    """Tracks too wide for a drop on a new via that took teardrops (#1138).
+    The join lays a net at the widest width the run ripped from it, so it
+    can end a 0.3 mm track on a 0.254 mm via whose drops the removed via
+    had on 0.2 mm ones, and KiCad makes none for it (teardroplib
+    takes_drop). Each add_track in kept with an end in such a via's copper
+    (td_src not None), too wide for its drop, narrows from that end to
+    NECK_PAST past where the drop ends (drop_length past the via's edge),
+    walking on through the one add_track of its net and layer that goes on
+    from its far end (_chain_next); the rest keeps its width, a new
+    add_track appended to kept with None appended to td_src. width_of(i,
+    p): the widths the via at kept[i] with settings p may take
+    (neck_widths), best first; the neck takes the first one the track
+    does not graze the via at (teardroplib chord_of, grazes_on, read on
+    the track that leaves the copper, _leaving). With none, or no track
+    that leaves, the track stays and the gate names the drop it lost; a
+    track narrow enough for a drop that grazes stays too. Ops in shorter
+    (cut back by the prune) stay as they are. board_at(net, layer, pt):
+    True where board copper of the net meets pt, which ends a walk.
+    Returns one entry per via, net, layer, width and was: via (its "at"),
+    net, layer, width, was, length (mm narrowed) and ops (the kept
+    indices narrowed)."""
+    out: dict = {}
+    for i in range(len(kept)):
+        v = kept[i]
+        if v["op"] != "add_via" or td_src[i] is None \
+                or v.get("teardrops") is None:
+            continue
+        p = dict(ITEM_PARAMS, **v["teardrops"])
+        size, c = float(v["size"]), _pt(v["at"])
+        r = size / 2
+        ws = None
+        for j in range(len(kept)):
+            t = kept[j]
+            if t["op"] != "add_track" or t["net"] != v["net"] \
+                    or j in shorter \
+                    or takes_drop(float(t["width"]), size, p):
+                continue
+            near = [e for e in (_pt(t["start"]), _pt(t["end"]))
+                    if math.dist(e, c) <= r + NECK_TOL]
+            if not near:
+                continue
+            if ws is None:
+                ws = list(width_of(i, p) or [])
+            if not ws:
+                break
+            a = min(near, key=lambda e: math.dist(e, c))
+            leave = _leaving(kept, j, a, c, r, shorter, board_at)
+            if leave is None:
+                continue
+            chord = chord_of(leave[0], leave[1], c, size)
+            w = next((x for x in ws if not grazes_on(x, chord)), None)
+            if w is None:
+                continue
+            was = float(t["width"])
+            laid, ops = _neck_walk(kept, td_src, j, a, c, r,
+                                   drop_length(size, p) + NECK_PAST, w,
+                                   shorter, board_at)
+            if not ops:
+                continue
+            key = (_r4(c[0]), _r4(c[1]), v["net"], t["layer"], w, was)
+            e = out.setdefault(key, {
+                "via": [_r4(c[0]), _r4(c[1])], "net": v["net"],
+                "layer": t["layer"], "width": w, "was": was,
+                "length": 0.0, "ops": []})
+            e["length"] = _r4(e["length"] + laid)
+            e["ops"] += ops
+    return list(out.values())
+
+
+def _neck_walk(kept, td_src, j, a, c, r, reach, w, shorter,
+               board_at=None) -> tuple:
+    """Narrow kept[j] (an add_track with end a in the via's copper (c, r))
+    to w from a out to reach mm past where the walk leaves the copper,
+    then on through the one add_track of its net and layer that goes on
+    from its far end (_chain_next); a track that ends past that point is
+    split there, its far piece appended to kept (td_src gets None). A
+    split point that rounds onto the track's far end narrows it whole,
+    one that rounds onto a narrows none of it. Returns (the mm of track
+    narrowed, the kept indices narrowed)."""
+    left = None      # mm still to narrow past the via's edge; None inside
+    done = 0.0
+    ops: list = []
+    seen: set = set()
+    while j is not None and j not in seen:
+        seen.add(j)
+        t = kept[j]
+        if float(t["width"]) <= w + 1e-9:
+            break
+        b, at_start = _far_end(t, a)
+        n = math.dist(a, b)
+        u0 = 0.0
+        if left is None:
+            if math.dist(b, c) <= r:
+                u0 = None          # wholly inside: narrow it all
+            else:
+                u0 = _exit_at(a, b, c, r)
+                left = reach
+        if u0 is not None and n * (1 - u0) > left + 1e-9:
+            u = u0 + left / n
+            pt = [_r4(a[0] + (b[0] - a[0]) * u), _r4(a[1] + (b[1] - a[1]) * u)]
+            if pt == [_r4(a[0]), _r4(a[1])]:
+                break              # nothing of it to narrow
+            if pt != [_r4(b[0]), _r4(b[1])]:
+                if at_start:
+                    kept[j] = dict(t, end=pt, width=w)
+                    kept.append(dict(t, start=pt))
+                else:
+                    kept[j] = dict(t, start=pt, width=w)
+                    kept.append(dict(t, end=pt))
+                td_src.append(None)
+                ops.append(j)
+                return done + math.dist(a, pt), ops
+            kept[j] = dict(t, width=w)   # the split is its far end
+            ops.append(j)
+            return done + n, ops
+        kept[j] = dict(t, width=w)
+        ops.append(j)
+        done += n
+        if u0 is not None:
+            left -= n * (1 - u0)
+        j, a = _chain_next(kept, j, b, seen, shorter, board_at), b
+    return done, ops
+
+
+def neck_lengths(necks: list, kept: list, gone) -> list:
+    """necks (neck_tracks) as the re-prune leaves them (#1138): each
+    length read again from its ops in kept that are not in gone (the
+    indices the prune took off or the board already had), an entry with
+    none of them left dropped, and the ops left out."""
+    out = []
+    for e in necks:
+        live = [k for k in e["ops"] if k not in gone]
+        if not live:
+            continue
+        n = sum(math.dist(_pt(kept[k]["start"]), _pt(kept[k]["end"]))
+                for k in live)
+        out.append({k: v for k, v in e.items() if k != "ops"}
+                   | {"length": _r4(n)})
+    return out
+
+
+def drop_vias(bg, params: dict) -> list:
+    """The vias of BoardGeom bg with teardrops on (params: via_params of
+    its file), each as an add_via op with "teardrops" (its params) and
+    "uuid": what neck_tracks reads a via a drop must stay on from."""
+    out = []
+    for v in bg.vias_of():
+        p = params.get(v.uuid) if v.uuid else None
+        if not p or not p.get("enabled"):
+            continue
+        out.append({"op": "add_via", "at": [float(v.at[0]), float(v.at[1])],
+                    "size": float(v.diameter), "drill": float(v.drill),
+                    "net": v.net, "uuid": v.uuid,
+                    "teardrops": {k: x for k, x in p.items()
+                                  if k != "enabled"}})
+    return out
+
+
+def neck_ops(ops: list, vias: list, width_of, board_at=None) -> list:
+    """Neck a route's own ops (#1320): the add_tracks in ops that end too
+    wide for a drop on a via of the board with teardrops on (vias:
+    drop_vias), and on an add_via in ops that carries "teardrops", narrow
+    as neck_tracks has it. ops is changed in place (a split appends its
+    far piece); width_of(via op, p) gives the widths, best first
+    (neck_widths). Returns neck_tracks' entries without their ops."""
+    vs = [v for v in vias
+          if any(o["op"] == "add_track" and o["net"] == v["net"]
+                 for o in ops)]
+    kept = [dict(v) for v in vs] + ops
+    src = ["board"] * len(vs) + [
+        "own" if o["op"] == "add_via" and o.get("teardrops") is not None
+        else None for o in ops]
+    n = len(vs)
+    necks = neck_tracks(kept, src, {}, lambda i, p: width_of(kept[i], p),
+                        board_at)
+    ops[:] = kept[n:]
+    return [{k: x for k, x in e.items() if k != "ops"} for e in necks]
+
+
+def neck_board(tracks: list, vias: list, width_of,
+               board_at=None) -> tuple[list, list]:
+    """neck_ops for tracks already on a board (#1320: route_auto's, whose
+    vias Freerouting replaced and the run turned teardrops back on for):
+    tracks are geom Tracks with a uuid, vias drop_vias. A track that
+    narrows is removed and laid again as add_tracks: the narrowed piece
+    and, when it splits, the rest at its width. Returns (route_edit ops,
+    neck entries)."""
+    ops = [{"op": "add_track", "start": list(t.shape.coords[0]),
+            "end": list(t.shape.coords[-1]), "width": float(t.width),
+            "layer": t.layer, "net": t.net} for t in tracks]
+    was = [dict(o) for o in ops]
+    necks = neck_ops(ops, vias, width_of, board_at)
+    if not necks:
+        return [], []
+    out = []
+    for t, a, b in zip(tracks, was, ops):
+        if a != b:
+            out.append({"op": "remove", "uuid": t.uuid})
+            out.append(b)
+    out += ops[len(tracks):]
+    return out, necks

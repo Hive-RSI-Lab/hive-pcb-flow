@@ -779,6 +779,43 @@ def test_restored_teardrops_are_built_before_the_report_drc(tmp_path):
     assert tdl.read(routed, tdl.config(None)).drop_count >= 1
 
 
+def test_routed_tracks_too_wide_for_a_restored_drop_neck(tmp_path):
+    """#1320, planted fault: the route lays a 0.5 mm /A track on the
+    0.5 mm via whose teardrops the run turns back on, where KiCad makes no
+    drop over 0.45 mm: _neck_routed lays it again at /A's 0.2 mm from the
+    via out past the drop's end (0.55 mm from its centre), the rest at
+    0.5 mm. Quiet twin: a 0.5 mm track there before routing stays."""
+    cli = env.find_kicad_cli()
+    bp = env.find_kicad_python(cli) if cli else None
+    if bp is None:
+        pytest.skip("KiCad bundled python not installed")
+    old = ('  (segment (start 5 5) (end 2 5) (width 0.5) (layer "B.Cu")'
+           ' (net "/A") (uuid "3e1f7c6b-4d5e-4f60-9b2c-3d4e5f607182"))\n')
+    new = ('  (segment (start 5 5) (end 9 5) (width 0.5) (layer "F.Cu")'
+           ' (net "/A") (uuid "4f2a8d7c-5e6f-4a71-8c3d-4e5f60718293"))\n')
+    body = _TD_BOARD % _TD_ON
+    pre = tmp_path / "pre.kicad_pcb"
+    pre.write_text(body[:-2] + old + ")\n", encoding="utf-8")
+    staged = tmp_path / "routed.kicad_pcb"
+    staged.write_text(body[:-2] + old + new + ")\n", encoding="utf-8")
+    snap = route_auto._preexisting(geom.BoardGeom.from_file(pre))
+    work = tmp_path / "w"
+    work.mkdir()
+    necks = route_auto._neck_routed(bp, staged, work, snap)
+    assert [(n["net"], n["layer"], n["width"], n["was"]) for n in necks] \
+        == [("/A", "F.Cu", 0.2, 0.5)]
+    bg = geom.BoardGeom.from_file(staged)
+    got = sorted((t.layer, t.width, [tuple(round(c, 4) for c in xy)
+                                     for xy in t.shape.coords])
+                 for t in bg.tracks_of("/A"))
+    assert got == [("B.Cu", 0.5, [(5.0, 5.0), (2.0, 5.0)]),
+                   ("F.Cu", 0.15, [(5.0, 5.0), (5.0, 9.0)]),
+                   ("F.Cu", 0.2, [(5.0, 5.0), (5.55, 5.0)]),
+                   ("F.Cu", 0.5, [(5.55, 5.0), (9.0, 5.0)])]
+    # run again: nothing left too wide
+    assert route_auto._neck_routed(bp, staged, work, snap) == []
+
+
 # ---- row 129: per-ball escape keep-if-better ------------------------------
 
 def _seg(x0, y0, x1, y1, net, uid, layer="F.Cu", w=0.1):

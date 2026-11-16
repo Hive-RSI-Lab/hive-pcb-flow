@@ -690,15 +690,51 @@ def _restore_teardrops(bp, staged: Path, work: Path, td: list) -> int:
     return len(uu) - len(res.get("missing") or [])
 
 
+def _neck_routed(bp, staged: Path, work: Path, pre: dict) -> list:
+    """Neck the routed tracks too wide for a drop on a via with teardrops
+    on (#1320): Freerouting and the maze pass lay a net at its width, and
+    KiCad makes no drop for a track at or over filter_ratio x the via's
+    size, so a track that ends on a via the run turned teardrops back on
+    for narrows from it out past where the drop ends (teardroplib
+    neck_board, route_finish neck_fns). Tracks there before routing stay
+    as they are. Returns the necks."""
+    import route_finish
+    import teardroplib as tdl
+    bg = geom.BoardGeom.from_file(staged)
+    vias = route_finish.board_drop_vias(staged, bg)
+    if not vias:
+        return []
+    keep = _protect_uuids(pre, bg)
+    nets = {v["net"] for v in vias}
+    tracks = [t for t in bg.tracks_of() if t.uuid and t.uuid not in keep
+              and t.net in nets]
+    if not tracks:
+        return []
+    rules = route_finish.board_rules(staged, bg)
+    width_of, board_at = route_finish.neck_fns(
+        bg, rules, vias, {t.uuid for t in tracks})
+    ops, necks = tdl.neck_board(tracks, vias, width_of, board_at)
+    if ops:
+        route_edit.apply_ops(staged, ops)
+    return necks
+
+
 def _teardrops_back(bp, cli, staged: Path, work: Path, td: list, *,
-                    parity: bool) -> tuple[int, dict | None]:
-    """_restore_teardrops, then a refill and a fresh DRC when it turned any
-    back on: the setting makes no copper, KiCad builds the teardrop zones
-    on a refill, and the report's DRC has to see them (6-layer bench: 12
-    restored, then 0 drops and 12 dfm_ring_breakout until refilled).
-    Returns (restored, drc or None when nothing was restored)."""
+                    parity: bool, pre: dict | None = None,
+                    necks: list | None = None) -> tuple[int, dict | None]:
+    """_restore_teardrops, then (with pre, the copper from before routing)
+    the necks of the routed tracks too wide for those vias' drops
+    (_neck_routed, listed in necks), then a refill and a fresh DRC when it
+    turned any back on or necked any: the setting makes no copper, KiCad
+    builds the teardrop zones on a refill, and the report's DRC has to see
+    them (6-layer bench: 12 restored, then 0 drops and 12
+    dfm_ring_breakout until refilled). Returns (restored, drc or None when
+    nothing changed)."""
     n = _restore_teardrops(bp, staged, work, td)
-    if not n:
+    got = _neck_routed(bp, staged, work, pre) if td and pre else []
+    if necks is not None:
+        necks += got
+    if not n and not got:
         return 0, None
     kc.run_drc(cli, staged, refill=True, save_board=True)
     return n, kc.run_drc(cli, staged, parity=parity, all_track_errors=True)
@@ -1252,8 +1288,10 @@ def run(argv: list[str] | None = None):
                          "(board untouched)")
 
     # 6. sanity + swap the routed board in
+    td_necks: list = []
     teardrops_restored, td_drc = _teardrops_back(
-        bp, cli, staged, work, td_vias, parity=sch.is_file())
+        bp, cli, staged, work, td_vias, parity=sch.is_file(), pre=pre,
+        necks=td_necks)
     if td_drc is not None:
         drc = td_drc
     bg2 = geom.BoardGeom.from_file(staged)
@@ -1303,6 +1341,7 @@ def run(argv: list[str] | None = None):
             "maze_finish": maze_facts,
             "escape_drops": escape_drops,
             "teardrops_restored": teardrops_restored,
+            "teardrop_necks": td_necks,
             "ses_echo_dups_removed": dedup_facts.get("removed", 0),
             "neckdowns_snapped": dedup_facts.get("neckdowns_snapped", 0),
             "work_dir": str(work),
