@@ -158,6 +158,40 @@ def test_board_mode_finds_a_record_by_value_alone(tmp_path):
                    "U9": "bottom_view_numbering", "U10": "bottom_view_numbering"}
 
 
+def test_board_mode_ball_map(tmp_path):
+    """#377 on a board: U2 (BGA25_TOP, a pad on every site) against a ball
+    map that leaves C3 empty has a ball on a depopulated site; U1, the same
+    footprint against the full 25-ball map, is the quiet twin."""
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    for mpn, drop in (("BGA25FULL", ()), ("BGA25NOC3", ("C3",))):
+        balls = [f"{r}{c}" for r in "ABCDE" for c in range(1, 6)
+                 if f"{r}{c}" not in drop]
+        (parts / f"{mpn}.json").write_text(json.dumps({
+            "mpn": mpn, "land_pattern": {"pad_count": len(balls), "pin1": "A1"},
+            "pinout": [{"pin": b, "name": b, "type": "io"} for b in balls]}),
+            encoding="utf-8")
+    text = (BOARD / "placed.kicad_pcb").read_text(encoding="utf-8")
+    head, *fps = text.split("\n\t(footprint ")
+    value = {"U1": "BGA25FULL", "U2": "BGA25NOC3"}
+    out = [head]
+    for fp in fps:
+        for ref, mpn in value.items():
+            if f'(property "Reference" "{ref}"' in fp:
+                fp = fp.replace('(property "Value" ""', f'(property "Value" "{mpn}"')
+        out.append(fp)
+    pcb = tmp_path / "b.kicad_pcb"
+    pcb.write_text("\n\t(footprint ".join(out), encoding="utf-8")
+    code, rep = _run(tmp_path, "--pcb", str(pcb), "--parts", str(parts),
+                     "--ref", "U1", "--ref", "U2")
+    assert code == 1
+    v, = rep["violations"]
+    assert v["refs"] == ["U2"] and v["kind"] == "bga_numbering"
+    assert v["problem"] == "ball_not_in_map" and v["balls"] == ["C3"]
+    by = {p["ref"]: p for p in rep["parts"]}
+    assert by["U1"]["record"].endswith("BGA25FULL.json")
+
+
 def test_board_mode_value_lookup_is_exact_and_unique(tmp_path):
     """#1406: a Value two records carry, or one no record carries exactly
     (no prefix match), or one that is a component value, finds no record,

@@ -100,9 +100,24 @@ Checks (land_pattern fields drive which run):
                 numbers: left out; size_mm not two entries: ignored), pads
                 not a list, or a numbering other than ccw_top / cw_top
                 (ignored). `field` says which
+  - ball_map:   a ball grid's balls against the datasheet's ball  (error)
+                map (#377), the record's pinout named as balls (A1, B2 ..;
+                six or more, three rows and columns). kind bga_numbering,
+                problem ball_missing (a map ball with no pad),
+                ball_not_in_map (a pad the map has no ball for: on a
+                site inside its rows and columns it is a depopulated ball;
+                only when land_pattern.pad_count is the map's ball count,
+                else not_judged: a pinout read in part can't say a ball
+                isn't there) or ball_off_site (a pad more than 0.35 of the
+                grid's step from the site its name gives, rows taken in
+                the map's order: an I, O, Q or S row the datasheet skips
+                and the footprint doesn't). More than half the balls off
+                their sites, a record with no ball map for a ball-grid
+                footprint, or a ball map with pads not named as balls:
+                not_judged. Mirroring stays with pad_numbering
 
 Coverage: the payload's `coverage` says, per check (pin1, pad_numbering,
-pitch, pad_size, land_gap), judged / not_judged / not_stated, so a check
+pitch, pad_size, land_gap, ball_map), judged / not_judged / not_stated, so a check
 that judged nothing shows as such, not as a pass. `--pairs FILE` (FOOTPRINT<TAB>RECORD lines)
 runs the set and reports those counts plus every error.
 
@@ -699,6 +714,182 @@ def _grid_handedness(copper: list[fplib.Pad]) -> float | None:
     return hand if abs(hand) > 1e-6 else None
 
 
+def _row_order(rows) -> list[str]:
+    """Ball-grid row letters in order: A..Z, then AA, AB.. (JEDEC skips I, O,
+    Q, S, X and Z, and some makers others, so the order is the rows that
+    are there, not the alphabet's)."""
+    return sorted(set(rows), key=lambda r: (len(r), r))
+
+
+def _ball_names(names) -> dict[str, tuple[str, int]] | None:
+    """Ball name -> (row, column) when `names` are a letter-row / number-
+    column grid: six or more balls, three or more rows and columns, and at
+    least 0.8 of the names (a USB-C's A1..A12 / B1..B12 is two rows of
+    pins). None otherwise."""
+    names = [str(n) for n in names if n]
+    balls = {n: (m.group(1), int(m.group(2)))
+             for n in names if (m := BALL.match(n))}
+    if (len(balls) < 6 or len({r for r, _ in balls.values()}) < 3
+            or len({c for _, c in balls.values()}) < 3
+            or len(balls) < 0.8 * len(set(names))):
+        return None
+    return balls
+
+
+# A ball further than this share of the grid's step from the site its name
+# gives is on another ball's site, not a little off its own
+BALL_SITE_RATIO = 0.35
+
+
+def ball_map_check(copper: list[fplib.Pad], ds: dict, land: dict,
+                   pin1_reported: bool) -> tuple[list[tuple], list[dict], dict | None]:
+    """The footprint's balls against the record's ball map (#377): the
+    pinout's ball names (A1, B2 ...) are the datasheet's map, every ball
+    the package has, a depopulated site being one the map leaves out.
+    Returns (findings as (severity, pos, msg, problem, extra), not_judged,
+    fact). Judged:
+     - ball_missing: a ball in the map the footprint has no pad for;
+     - ball_not_in_map: a pad named as a ball the map doesn't have, at a
+       site inside the map's rows and columns (a depopulated ball) or
+       outside them. Only when the map is the whole package, the record's
+       land_pattern.pad_count being its ball count: a pinout read in part
+       can't say a ball is not there;
+     - ball_off_site: a pad whose name puts it on one site of the grid,
+       laid out by the footprint's own row and column steps in the map's
+       row order, and that sits on another (a row letter the map skips).
+    Mirroring is _grid_handedness's, from the footprint's names. A record
+    with no ball map, or a footprint whose pads aren't named as balls,
+    goes to not_judged with the reason; neither is a ball grid: nothing."""
+    pins = [str(p.get("pin") or "") for p in ds.get("pinout") or []]
+    want = _ball_names(pins)
+    names = [p.number for p in copper if p.number]
+    have = _ball_names(names)
+    if want is None and have is None:
+        return [], [], None
+    if want is None:
+        if not ds:
+            return [], [], None   # no record: the names' handedness only
+        return [], [{"check": "ball_map", "why": (
+            "the footprint is a ball grid but the record's pinout names "
+            "no ball grid (letter-row / number-column balls), so the "
+            "balls can't be laid on the datasheet's map")}], None
+    if have is None:
+        return [], [{"check": "ball_map", "why": (
+            "the record's pinout is a ball map but the footprint's pads "
+            "aren't named as balls, so they can't be laid on it")}], None
+    out: list[tuple] = []
+    nj: list[dict] = []
+    stated = land.get("pad_count")
+    whole = stated is not None and int(stated) == len(want)
+    pin1 = str(land.get("pin1", "1"))
+    missing = sorted((n for n in want if n not in have
+                      and not (pin1_reported and n == pin1)),
+                     key=lambda n: (len(want[n][0]), *want[n]))
+    rows = _row_order(r for r, _ in want.values())
+    cols = sorted({c for _, c in want.values()})
+    if missing:
+        out.append(("error", None,
+                    f"the datasheet's ball map has {len(missing)} ball(s) "
+                    f"the footprint has no pad for: {', '.join(missing[:12])}"
+                    + (" ..." if len(missing) > 12 else ""),
+                    "ball_missing", {"balls": missing}))
+    extra = sorted((n for n in have if n not in want),
+                   key=lambda n: (len(have[n][0]), have[n][0], have[n][1]))
+    if extra and not whole:
+        nj.append({"check": "ball_map", "why": (
+            f"the footprint has {len(extra)} ball(s) the record's pinout "
+            f"doesn't name ({', '.join(extra[:6])}), but the pinout is not "
+            "the whole map (no land_pattern.pad_count equal to its "
+            f"{len(want)} balls), so they may be balls it left out")})
+    elif extra:
+        inside = [n for n in extra if have[n][0] in rows
+                  and cols[0] <= have[n][1] <= cols[-1]]
+        outside = [n for n in extra if n not in inside]
+        if inside:
+            out.append(("error", None,
+                        f"pad(s) {', '.join(inside[:12])} sit on site(s) the "
+                        "datasheet's ball map leaves empty (depopulated "
+                        "balls): take them out of the footprint",
+                        "ball_not_in_map", {"balls": inside,
+                                            "depopulated": True}))
+        if outside:
+            out.append(("error", None,
+                        f"pad(s) {', '.join(outside[:12])} name no ball in "
+                        f"the datasheet's map (rows {rows[0]}..{rows[-1]} "
+                        f"without {', '.join(_skipped(rows)) or 'none'}, "
+                        f"columns {cols[0]}..{cols[-1]}): the footprint's "
+                        "row letters or column numbers differ from the "
+                        "datasheet's", "ball_not_in_map",
+                        {"balls": outside, "depopulated": False}))
+    # each shared ball on the site its name gives, rows in the map's order
+    order = _row_order(list(rows) + [r for r, _ in have.values()])
+    rank = {r: i for i, r in enumerate(order)}
+    cen = {p.number: p.center for p in copper if p.number in have}
+    shared = [n for n in have if n in want]
+    by_row: dict = {}
+    by_col: dict = {}
+    for n in shared:
+        r, c = have[n]
+        by_row.setdefault(r, []).append((c, *cen[n]))
+        by_col.setdefault(c, []).append((rank[r], *cen[n]))
+    across, down = _median_step(by_row), _median_step(by_col)
+    off: list[str] = []
+    site = None
+    if (across and down and len(shared) >= 6
+            and min(math.hypot(*across), math.hypot(*down)) > EPS_MM):
+        step = min(math.hypot(*across), math.hypot(*down))
+
+        def at(n):
+            r, c = have[n]
+            return (c * across[0] + rank[r] * down[0],
+                    c * across[1] + rank[r] * down[1])
+        ox = statistics.median(cen[n][0] - at(n)[0] for n in shared)
+        oy = statistics.median(cen[n][1] - at(n)[1] for n in shared)
+        dist = {n: math.hypot(cen[n][0] - ox - at(n)[0],
+                              cen[n][1] - oy - at(n)[1]) for n in shared}
+        off = sorted((n for n, d in dist.items() if d > BALL_SITE_RATIO * step),
+                     key=lambda n: (rank[have[n][0]], have[n][1]))
+        site = round(step, 4)
+    if site is None:
+        nj.append({"check": "ball_map", "why": (
+            "the footprint's balls give no row and column step, so no ball "
+            "can be put on the site its name gives")})
+    elif len(off) > len(shared) / 2:
+        nj.append({"check": "ball_map", "why": (
+            f"{len(off)} of {len(shared)} balls sit off the sites their "
+            "names give in the map's row order, too many to be a few "
+            "misplaced balls (a row or column the drawing leaves empty "
+            "throughout reads that way), so their sites are unchecked")})
+        off = []
+    elif off:
+        out.append(("error", cen[off[0]],
+                    f"ball(s) {', '.join(off[:12])} sit off the grid site "
+                    "their name gives (rows in the datasheet map's order "
+                    f"{''.join(rows) if all(len(r) == 1 for r in rows) else rows}"
+                    ", at the footprint's own row and column steps): the "
+                    "footprint's rows or columns are lettered or numbered "
+                    "differently from the datasheet's", "ball_off_site",
+                    {"balls": off}))
+    fact = {"balls": len(want), "whole": whole, "shared": len(shared),
+            "missing": len(missing), "not_in_map": len(extra) if whole else None,
+            "off_site": len(off), "step_mm": site}
+    return out, nj, fact
+
+
+# The row letters JEDEC's ball naming leaves out
+JEDEC_SKIPS = ("I", "O", "Q", "S", "X", "Z")
+
+
+def _skipped(rows: list[str]) -> list[str]:
+    """The single letters between the map's first and last row it leaves
+    out (I, O, Q, S ... on a JEDEC map)."""
+    one = [r for r in rows if len(r) == 1]
+    if not one:
+        return []
+    return [chr(c) for c in range(ord(one[0]), ord(one[-1]) + 1)
+            if chr(c) not in one]
+
+
 def _ccw_turn(got: dict) -> float | None:
     """Sum of the turn from pad k to pad k+1 about the pads' centroid over
     the numeric pads in order: negative is counter-clockwise seen from the
@@ -758,11 +949,12 @@ def _along(p: fplib.Pad, angle: float) -> tuple[float, float] | None:
     return None
 
 
-COVERED = ("pin1", "pad_numbering", "pitch", "pad_size", "land_gap")
+COVERED = ("pin1", "pad_numbering", "pitch", "pad_size", "land_gap",
+           "ball_map")
 
 
 def coverage(land: dict, not_judged: list[dict], numbering: dict | None,
-             numbered: int) -> dict[str, str]:
+             numbered: int, ball_map: dict | None = None) -> dict[str, str]:
     """Per check: judged, not_judged, or not_stated (the record gives it
     nothing to judge). A check that comes out not_judged on every part
     judges nothing: --pairs counts these over a set of parts so it shows
@@ -782,6 +974,8 @@ def coverage(land: dict, not_judged: list[dict], numbering: dict | None,
             out[c] = "not_judged"
         elif c == "pad_numbering":
             out[c] = "judged" if numbering else "not_stated"
+        elif c == "ball_map":
+            out[c] = "judged" if ball_map else "not_stated"
         elif not stated.get(c, True):
             out[c] = "not_stated"
         else:
@@ -1016,6 +1210,15 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         numbering_fact = _direction(fp, copper, land, ds, expected, declared, v)
         if numbering_fact is None:
             not_judged.append({"check": "pad_numbering", "why": unplaced})
+
+    # --- ball map (#377): a ball grid's names, depopulated sites and
+    # row lettering against the record's pinout as the datasheet's map
+    found, nj, ball_fact = ball_map_check(
+        copper, ds, land,
+        any(x.get("kind") == "pin1_missing" for x in viol))
+    for sev, pos, msg, problem, extra in found:
+        v(sev, pos, msg, "bga_numbering", problem=problem, **extra)
+    not_judged += nj
 
     # --- pad size and gap, axis by axis (#1331). The sorted pad_size_mm
     # check below passes a pad turned a quarter, and on a two-terminal chip
@@ -1383,8 +1586,10 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
         "mechanical": mech_fact or None,
         "pin1": pin1_fact,
         "pad_numbering": numbering_fact,
+        "ball_map": ball_fact,
         "not_judged": not_judged,
-        "coverage": coverage(land, not_judged, numbering_fact, len(got)),
+        "coverage": coverage(land, not_judged, numbering_fact, len(got),
+                             ball_fact),
     }
     return viol, facts, fp
 
