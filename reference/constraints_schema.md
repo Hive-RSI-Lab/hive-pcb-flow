@@ -688,6 +688,9 @@ Consumers per key (script -> phase):
   // #816: where the bus isn't one duty (a three-phase bridge), declare bus_irms_a
   // and bus_irms_source (where the design states it, e.g.
   // "research/power.md:91") instead; it wins over duty and must not pass iout_a.
+  // #847: check_ratings matches a block's operating_point vout_v to the
+  // regulator it names: a ref in name or block ("U1 AP64350 class"), or in
+  // its own ref (one part) or refs (a list).
   "blocks": [{"topology": "buck", "block": "B3", "name": "U1 AP64350 class",
               "operating_point": {"vin_v": 12, "vout_v": 5, "iout_a": 3,
                                   "pdiss_w": 0.8, "board_layers": 4,

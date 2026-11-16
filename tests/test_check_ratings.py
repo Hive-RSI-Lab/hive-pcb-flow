@@ -3939,3 +3939,148 @@ def test_a_row_with_no_fixed_turn_keeps_the_numbers(tmp_path):
     assert p["pins_by_position"] == {}
     assert "more than one turn" in p["pins_by_number_why"]["U1"]
     assert [e["pin"] for e in _errors(p)] == ["U1.3"]
+
+
+# ------------------------------- FB networks beyond a plain divider (#847)
+
+def _net_ws(tmp_path, net, pads=None, ext=None, bom=None):
+    """AP63200 (Vref 0.8 V) with FB on FB_DIV and the parts in net:
+    (ref, lcsc, pads[, footprint[, value]])."""
+    fps = [("U4", "C9", pads or _buck_pads("FB_DIV"))] + list(net)
+    return _ws(tmp_path, fps, {"C9": ext or _fixed_buck("AP63200WU-7",
+                                                         **ADJ)}, bom)
+
+
+def _r(ref, a, b, val, fp="R_0402"):
+    return (ref, "C1", {"1": a, "2": b}, fp, val)
+
+
+def _bot():
+    return _r("R2", "FB_DIV", "GND", "32k")
+
+
+@pytest.mark.parametrize("rail,bad", [("+3V3", False), ("+5V", True)])
+@pytest.mark.parametrize("top", [
+    [_r("R1", "{rail}", "MID", "47k"), _r("R3", "MID", "FB_DIV", "53k")],
+    [_r("R1", "{rail}", "FB_DIV", "200k"), _r("R3", "{rail}", "FB_DIV",
+                                              "200k")],
+    [_r("RFBT1", "{rail}", "FB_DIV", "100k")],
+    [_r("R1", "{rail}", "FB_DIV", "100k"),
+     ("C5", "C2", {"1": "{rail}", "2": "FB_DIV"}, "C_0402", "22p")],
+    [_r("R0", "{rail}", "SENSE", "0R"), _r("R1", "SENSE", "FB_DIV", "100k")],
+    [("NT1", "C3", {"1": "{rail}", "2": "SENSE"}, "NetTie_2_SMD", "NT"),
+     _r("R1", "SENSE", "FB_DIV", "100k")],
+    [_r("R1", "{rail}", "FB_DIV", "100k"), _r("R5", "FB_DIV", "GND", "DNP")],
+], ids=["series", "parallel", "rfbt-ref", "ff-cap", "zero-ohm", "net-tie",
+        "dnp-value"])
+def test_fb_networks_that_still_make_3v3(tmp_path, top, rail, bad):
+    """Every network here makes 3.3 V: on +3V3 it is quiet, on +5V the
+    planted fault blocks."""
+    net = [(ref, lcsc, {k: v.format(rail=rail) for k, v in pads.items()},
+            *rest) for ref, lcsc, pads, *rest in top] + [_bot()]
+    p = _run(_net_ws(tmp_path, net))
+    errs = _out_errs(p)
+    assert _unjudged(p) == []
+    if not bad:
+        assert errs == []
+        return
+    assert len(errs) == 1 and errs[0]["net"] == "+5V"
+    assert errs[0]["limit_v"] == pytest.approx(3.3, abs=0.02)
+
+
+@pytest.mark.parametrize("rail,bad", [("+3V3", False), ("+5V", True)])
+def test_a_dnp_attribute_leaves_the_option_open(tmp_path, rail, bad):
+    """R5 10k across R2 would make 9.9 V; it is DNP on the board."""
+    ws = _net_ws(tmp_path, [_r("R1", rail, "FB_DIV", "100k"), _bot(),
+                            _r("R5", "FB_DIV", "GND", "10k")])
+    pcb = ws / "kicad" / "board.kicad_pcb"
+    pcb.write_text(pcb.read_text().replace(
+        '(property "Reference" "R5")', '(property "Reference" "R5") '
+        '(attr smd dnp)'))
+    p = _run(ws)
+    errs = _out_errs(p)
+    assert _unjudged(p) == []
+    assert (len(errs) == 1) == bad
+    if bad:
+        assert "R5 is DNP" in errs[0]["msg"]
+
+
+@pytest.mark.parametrize("rail,bad", [("+3V3", False), ("+12V", True)])
+def test_a_trim_pot_is_judged_over_its_travel(tmp_path, rail, bad):
+    """R1 91k + RV1 20k pot (as a rheostat) over R2 32k: 0.8 * (1 + 91..111 /
+    32) is about 3.1-3.6 V with the pot's 20 %; 3.3 V is in reach, 12 V is
+    not."""
+    net = [_r("R1", rail, "TR", "91k"),
+           ("RV1", "C4", {"1": "TR", "2": "FB_DIV", "3": "FB_DIV"},
+            "Potentiometer_Bourns_3296W", "20k"), _bot()]
+    p = _run(_net_ws(tmp_path, net))
+    errs = _out_errs(p)
+    assert _unjudged(p) == []
+    assert (len(errs) == 1) == bad
+    if bad:
+        assert "can be trimmed to" in errs[0]["msg"]
+
+
+@pytest.mark.parametrize("rail,bad", [("+3V3", False), ("+5V", True)])
+def test_the_divider_reads_its_rail_through_a_bead(tmp_path, rail, bad):
+    """The top resistor senses VOUT_RAW, which reaches the stated rail through
+    a ferrite bead."""
+    net = [_r("R1", "VOUT_RAW", "FB_DIV", "100k"), _bot(),
+           ("FB1", "C6", {"1": "VOUT_RAW", "2": rail}, "L_0603", "600R"),
+           ("C7", "C2", {"1": "VOUT_RAW", "2": "GND"}, "C_0805", "22u")]
+    p = _run(_net_ws(tmp_path, net))
+    errs = _out_errs(p)
+    assert (len(errs) == 1) == bad
+    if bad:
+        assert errs[0]["net"] == "+5V" and "bead" in errs[0]["msg"]
+
+
+def test_a_bead_hop_is_not_taken_from_the_switch_node(tmp_path):
+    """The regulator's own pad on the net (its SW) stops the hop."""
+    net = [_r("R1", "SW_NODE", "FB_DIV", "100k"), _bot(),
+           ("L1", "C6", {"1": "SW_NODE", "2": "+5V"}, "L_1210", "4.7u")]
+    assert _out_errs(_run(_net_ws(tmp_path, net))) == []
+
+
+@pytest.mark.parametrize("net,why", [
+    ([_r("R1", "+5V", "FB_DIV", "100k"), _bot(),
+      ("U5", "C8", {"1": "FB_DIV", "2": "GND"}, "SOT-23", "DAC")],
+     "also carries U5"),
+    ([_r("R1", "+5V", "FB_DIV", "100k"), _bot(),
+      _r("R3", "+12V", "FB_DIV", "1M")], "more than one source"),
+    ([_bot()], "no resistor on FB_DIV reaches"),
+    ([_r("R1", "+5V", "FB_DIV", "100k"), _r("R2", "FB_DIV", "GND", "TBD")],
+     "doesn't parse"),
+], ids=["other-part", "two-sources", "no-top", "bad-value"])
+def test_fb_networks_it_cannot_read_are_not_judged(tmp_path, net, why):
+    """Each would make 3.3 V or worse on +5V; the check names why it can't
+    judge them and leaves them out of the errors."""
+    p = _run(_net_ws(tmp_path, net))
+    assert _out_errs(p) == []
+    [u] = _unjudged(p)
+    assert why in u["msg"] and u["severity"] == "warning"
+    assert any(n.startswith("U4 output:") and why in n
+               for n in p["not_judged"])
+
+
+@pytest.mark.parametrize("key", ["block", "ref", "refs"])
+@pytest.mark.parametrize("vout,bad", [(3.3, False), (5.0, True)])
+def test_a_block_naming_the_part_in_its_own_field(tmp_path, key, vout, bad):
+    ws = _net_ws(tmp_path, [_r("R1", "VOUT_A", "FB_DIV", "100k"), _bot()])
+    c = tmp_path / "constraints.json"
+    c.write_text(json.dumps({"blocks": [
+        {"name": "main buck", key: ["U4"] if key == "refs" else "U4",
+         "operating_point": {"vout_v": vout}}]}))
+    errs = _out_errs(_run(ws, c))
+    assert (len(errs) == 1) == bad
+    if bad:
+        assert "vout_v = 5" in errs[0]["msg"]
+
+
+@pytest.mark.parametrize("rail,bad", [("+3V3", False), ("+5V", True)])
+def test_a_combined_fb_vout_pad_name_is_read_as_fb(tmp_path, rail, bad):
+    ext = _fixed_buck("AP63200WU-7", **ADJ)
+    ext["pinout"][0] = {"pin": "1", "name": "FB/VOUT", "type": "input"}
+    p = _run(_net_ws(tmp_path, [_r("R1", rail, "FB_DIV", "100k"), _bot()],
+                     ext=ext))
+    assert (len(_out_errs(p)) == 1) == bad
