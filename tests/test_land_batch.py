@@ -370,7 +370,8 @@ def _by_value(ref, value):
 
 
 def _value_rows(store, value, rows):
-    f = store / "listings" / "value" / f"{value}.json"
+    """The JLC search's rows for the Value, as value_listing caches them."""
+    f = store / "listings" / "value-hits" / f"{value}.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(rows))
 
@@ -441,6 +442,99 @@ def test_a_value_no_one_source_names_is_left_out(stand_ins, tmp_path,
     rep = lb.read_part("mpn:SO8X", board, out, store, reader)
     assert rep["status"] == "kept"
     assert rep["datasheet_from"] == "reference/datasheet_urls.yaml"
+
+
+SO8_FP = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+QFN16_ROW = {**SO8X_ROW, "lcsc": "C11", "package": "QFN-16(3x3)"}
+
+
+def _on(fp, ref="U7"):
+    return {**_by_value(ref, "SO8X"), "footprint": fp}
+
+
+@pytest.fixture
+def no_table(tmp_path, monkeypatch):
+    t = tmp_path / "datasheet_urls.yaml"
+    t.write_text("version: 1\nparts: []\n")
+    monkeypatch.setattr(lb.amb, "DATASHEET_URLS", t)
+
+
+def test_a_value_in_several_packages_takes_the_one_its_footprint_fits(
+        stand_ins, no_table):
+    """#1444 planted case: SO8X listed as a QFN-16 (the lower LCSC code) and
+    an SOIC-8, on an SOIC-8 footprint: the SOIC-8 listing is read, and the
+    report says the footprint chose it."""
+    out, store, reader, calls, _, _ = stand_ins
+    _value_rows(store, "SO8X", [QFN16_ROW, SO8X_ROW])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP), _on(SO8_FP, "U8")], out,
+                       store, reader)
+    assert rep["status"] == "kept" and rep["lcsc"] == "C999008"
+    assert rep["package"] == "SOIC-8"
+    assert rep["package_from"].startswith("SOIC-8, of 2 packages")
+    assert "SOIC-8" in calls[0] and "QFN-16" not in calls[0]
+
+
+def test_one_package_under_two_spellings_is_one_package(stand_ins, no_table):
+    """#1444: SOIC-8 and SOP-8 are one package to lib/pkgname, so a Value
+    listed under both is read on a footprint that fits it."""
+    out, store, reader, _, _, _ = stand_ins
+    _value_rows(store, "SO8X", [SO8X_ROW, {**SO8X_ROW, "lcsc": "C999009",
+                                           "package": "SOP-8"}])
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "kept" and rep["lcsc"] == "C999008"
+
+
+@pytest.mark.parametrize("rows, foots, why", [
+    # the footprint fits neither package
+    ([QFN16_ROW, SO8X_ROW], ["Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm"],
+     "fits none of them (QFN-16(3x3), SOIC-8)"),
+    # two boards on footprints of the two packages: none fits both
+    ([QFN16_ROW, SO8X_ROW], [SO8_FP, "Package_DFN_QFN:QFN-16-1EP_3x3mm_P0.5mm"],
+     "fits none of them"),
+    # a 150 mil and a 208 mil SOIC-8 on an SOIC-8 footprint that says no width
+    ([SO8X_ROW, {**SO8X_ROW, "lcsc": "C12", "package": "SOIC-8-208mil"}],
+     ["SOIC-8"], "fits more than one (SOIC-8, SOIC-8-208mil)"),
+    # a footprint name pkgname can't read
+    ([QFN16_ROW, SO8X_ROW], ["MyLib:U_THING"], "footprint MyLib:U_THING is not read"),
+    # a package name pkgname can't read
+    ([SO8X_ROW, {**SO8X_ROW, "lcsc": "C12", "package": "WEIRD-PKG"}], [SO8_FP],
+     "the package WEIRD-PKG is not read"),
+])
+def test_a_footprint_that_does_not_settle_the_package_leaves_it_out(
+        stand_ins, no_table, rows, foots, why):
+    """#1444 quiet twins: no single package fits every footprint, or a name
+    is not read: left out, nothing read, the packages named."""
+    out, store, reader, calls, _, _ = stand_ins
+    _value_rows(store, "SO8X", rows)
+    rep = lb.read_part("mpn:SO8X", [_on(f, f"U{i}") for i, f in enumerate(foots)],
+                       out, store, reader)
+    assert rep["status"] == "not one listing for its Value"
+    assert "in 2 packages" in rep["why"] and why in rep["why"]
+    assert calls == [] and not (out / "ext" / "SO8X.json").exists()
+
+
+@pytest.mark.parametrize("rows, why", [
+    ([{**SO8X_ROW, "mpn": "SO8X-TR", "lcsc": "C77"},
+      {**SO8X_ROW, "mpn": "SO8X-TR-LONG", "lcsc": "C78"},
+      {**SO8X_ROW, "mpn": "SO1Y", "lcsc": "C5"}],
+     "no JLC listing has exactly that MPN; nearest: SO8X-TR (C77, SOIC-8)"),
+    ([{**SO8X_ROW, "mpn": "ZZTOP", "lcsc": "C5"}],
+     "no JLC listing has exactly that MPN, nor one near it"),
+    ([], "no JLC listing has exactly that MPN, nor one near it"),
+    ([{**SO8X_ROW, "datasheet": ""}],
+     "1 JLC listings have exactly that MPN, none with a datasheet"),
+])
+def test_no_exact_listing_names_the_nearest_and_reads_nothing(
+        stand_ins, no_table, rows, why):
+    """#1444: no exact listing: the reason names the nearest MPN the search
+    found (sharing at least half the Value's start), and nothing is read,
+    so the part's numbering stays not_judged."""
+    out, store, reader, calls, _, _ = stand_ins
+    _value_rows(store, "SO8X", rows)
+    rep = lb.read_part("mpn:SO8X", [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "not one listing for its Value"
+    assert rep["why"] == why
+    assert calls == [] and not (out / "ext" / "SO8X.json").exists()
 
 
 def test_a_part_with_an_mpn_somewhere_keeps_the_mpn_listing(stand_ins):

@@ -22,6 +22,14 @@ A part keyed only by its Value (#1406) is read only when one source names
 it unambiguously (`value_listing`): exactly one entry of
 reference/datasheet_urls.yaml, or else JLC listings whose MPN is exactly
 the Value, all of one package (the lowest LCSC code's datasheet is read).
+Listings in several packages are narrowed to the one package every board's
+footprint fits, as lib/pkgname reads both names (#1444: AMS1117-3.3 on a
+SOT-223 footprint takes the SOT-223 listing, not the SOT-89 one; SOT-23-6
+and SOT-23-6L are one package), and report.json says so in
+`package_from`. A footprint fitting none or more than one, or a name
+pkgname can't read, leaves it out. No exact listing leaves it out too, and
+the reason names the nearest MPN the search found (W25Q128JVS: nearest
+W25Q128JVSIQ), which is not read: its numbering stays not_judged.
 Anything else leaves it out with the reason. fp_verify then finds its
 record by the Value on one exact match only.
 
@@ -215,15 +223,21 @@ def wanted_parts(boards: list[dict], cache: Path, work: Path) -> tuple[dict, Cou
     return parts, skipped
 
 
-def value_listing(value: str, store: Path, table: Path | None = None
+def value_listing(value: str, store: Path, table: Path | None = None,
+                  footprints: list[tuple[str, int]] = ()
                   ) -> tuple[dict | None, str]:
-    """(listing, "") for a part keyed only by its Value (#1406) when one
+    """(listing, note) for a part keyed only by its Value (#1406) when one
     source names it unambiguously, else (None, why). The maker table first:
     exactly one entry naming the Value (read_part then reads that entry's
     datasheet), two or more is ambiguous. Else the JLC rows whose MPN is
     exactly the Value (case and spaces aside) and that name a datasheet:
     they must all give one package, and the lowest LCSC code's is kept.
-    The rows are cached under listings/value/."""
+    Rows in several packages are narrowed by the boards' footprints
+    (`footprints`: each copy's footprint name and numbered pad count) to
+    the one package all of them fit (`by_footprint`), and the note says so.
+    No exact row: the why names the nearest MPN the search found
+    (`nearest`), and the part stays unread. The search's rows are cached
+    under listings/value-hits/."""
     import yaml
     from mpn_decode import norm
     doc = yaml.safe_load((table or amb.DATASHEET_URLS).read_text(encoding="utf-8"))
@@ -233,26 +247,95 @@ def value_listing(value: str, store: Path, table: Path | None = None
         return None, f"reference/datasheet_urls.yaml names it in {len(ents)} entries"
     if ents:
         return {"mpn": value}, ""
-    f = store / "listings" / "value" / f"{amb.ext_name('mpn:' + value)}.json"
+    f = store / "listings" / "value-hits" / f"{amb.ext_name('mpn:' + value)}.json"
     if f.is_file():
-        rows = json.loads(f.read_text(encoding="utf-8"))
+        hits = json.loads(f.read_text(encoding="utf-8"))
     else:
         partslib = datasheet_extract._lib("partslib")
         got, _ = partslib.live_search(value, page_size=25)
         if not got and not partslib.endpoint_reachable():
             raise partslib.PartsError("JLC parts search unreachable")
-        rows = sorted((h for h in map(partslib.normalize, got)
-                       if norm(h.get("mpn")) == norm(value) and h.get("datasheet")),
-                      key=lambda h: (len(h.get("lcsc") or ""), h.get("lcsc") or ""))
+        hits = [partslib.normalize(h) for h in got]
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+        f.write_text(json.dumps(hits, ensure_ascii=False), encoding="utf-8")
+    exact = [h for h in hits if norm(h.get("mpn")) == norm(value)]
+    rows = sorted((h for h in exact if h.get("datasheet")),
+                  key=lambda h: (len(h.get("lcsc") or ""), h.get("lcsc") or ""))
     if not rows:
-        return None, "no JLC listing has exactly that MPN and a datasheet"
+        if exact:
+            return None, (f"{len(exact)} JLC listings have exactly that MPN, "
+                          "none with a datasheet")
+        near = nearest(value, hits)
+        return None, ("no JLC listing has exactly that MPN; nearest: "
+                      f"{near['mpn']} ({near.get('lcsc') or 'no LCSC code'}, "
+                      f"{near.get('package') or 'no package'})" if near else
+                      "no JLC listing has exactly that MPN, nor one near it")
     pkgs = sorted({norm(r.get("package") or "") for r in rows})
-    if len(pkgs) > 1:
+    if len(pkgs) == 1:
+        return rows[0], ""
+    kept, why = by_footprint(rows, footprints)
+    if not kept:
         return None, (f"{len(rows)} JLC listings have exactly that MPN, in "
-                      f"{len(pkgs)} packages")
-    return rows[0], ""
+                      f"{len(pkgs)} packages; {why}")
+    return kept[0], (f"{kept[0].get('package')}, of {len(pkgs)} packages "
+                     "listed, the one its footprint fits")
+
+
+def by_footprint(rows: list[dict], footprints: list[tuple[str, int]]
+                 ) -> tuple[list[dict], str]:
+    """The rows (in their order) of the one package every footprint fits,
+    else ([], why). Packages are told apart by what lib/pkgname reads from
+    their names (SOT-23-6 and SOT-23-6L are one package), and a footprint
+    fits a package when pkgname.compare finds nothing they disagree on.
+    Any package name or footprint name it can't read, no footprint, none
+    fitting or more than one: no pick."""
+    import pkgname
+    if not footprints:
+        return [], "no footprint to choose by"
+    foots = []
+    for name, pads in footprints:
+        d = pkgname.describe(name.split(":")[-1])
+        if not (d["mount"] or d["family"]):
+            return [], f"its footprint {name or '(none)'} is not read"
+        foots.append((d, pads))
+    groups: dict[tuple, list[dict]] = {}
+    for r in rows:
+        d = pkgname.describe(r.get("package") or "")
+        if not (d["family"] or d["chip"]):
+            return [], f"the package {r.get('package') or '(none)'} is not read"
+        groups.setdefault(tuple(sorted(d.items())), []).append(r)
+    fit = [g for k, g in groups.items()
+           if all(not pkgname.compare(dict(k), d, pads) for d, pads in foots)]
+
+    def names(gs) -> str:
+        return ", ".join(sorted({r.get("package") or "" for g in gs for r in g}))
+    if len(fit) == 1:
+        return fit[0], ""
+    if not fit:
+        return [], f"its footprint fits none of them ({names(groups.values())})"
+    return [], f"its footprint fits more than one ({names(fit)})"
+
+
+def nearest(value: str, hits: list[dict]) -> dict | None:
+    """The search row whose MPN shares the longest start with the Value
+    (case and spaces aside), at least half of it and four characters; the
+    shorter MPN, then the lower LCSC code, on a tie. None when none does."""
+    from mpn_decode import norm
+    v = norm(value)
+
+    def common(m: str) -> int:
+        n = 0
+        while n < min(len(m), len(v)) and m[n] == v[n]:
+            n += 1
+        return n
+    best = sorted(((common(norm(h.get("mpn"))), h) for h in hits
+                   if h.get("mpn")),
+                  key=lambda t: (-t[0], len(t[1]["mpn"]),
+                                 len(t[1].get("lcsc") or ""),
+                                 t[1].get("lcsc") or ""))
+    if best and best[0][0] >= max(4, (len(v) + 1) // 2):
+        return best[0][1]
+    return None
 
 
 # --- pages -----------------------------------------------------------------------
@@ -414,9 +497,14 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
         rep["keyed_by"] = "value"
     try:
         if by_value:
-            hit, vwhy = value_listing(key[4:], store)
+            hit, vwhy = value_listing(
+                key[4:], store, footprints=[
+                    (p.get("footprint") or "", len(p.get("nums") or p["pads"]))
+                    for p in on_boards])
             if hit is None:
                 return {**rep, "status": "not one listing for its Value", "why": vwhy}
+            if vwhy:
+                rep["package_from"] = vwhy
         else:
             hit = amb.find_listing(key, store)
         err = None
