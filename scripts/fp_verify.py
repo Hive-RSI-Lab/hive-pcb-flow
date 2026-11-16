@@ -28,7 +28,10 @@ Checks (land_pattern fields drive which run):
   - pad_size  : MIN and MAX pad size vs pad_size_mm (the mode hid a (warning)
                 tied asymmetric column 0.25 mm over max - LEARNINGS
                 2026-07-28 SSOP-20). Sorted, so it can't see a pad turned
-                a quarter; pads judged axis by axis (below) are left out
+                a quarter; pads judged axis by axis (below) are left out,
+                and so are pads given a size_mm there that couldn't be
+                judged (split, custom or odd-angled: a custom pad's size
+                is only its anchor's)
   - pad_turned / pad_size by axis (#1331): each land_pattern.pads   (error /
                 entry with size_mm [x, y] in the drawing's frame, laid   warning)
                 on its pad under the quarter turn that fits the drawing's
@@ -767,6 +770,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
     # pad_width_mm along and across the line through a two-terminal land's
     # pads. Each is one number (+- size_tol) or the maker's [min, max]
     size_judged: set[int] = set()   # id() of each pad judged on both axes
+    size_unjudged: set[int] = set()  # id() of each pad sized there but unjudged
     by_axis_fact: dict | None = None
     sized = [q for q in stated_pads if q.get("size_mm")]
     if sized:
@@ -790,6 +794,7 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
                         and p.shape != "custom" else None)
                 if dims is None:
                     odd.append(n)
+                    size_unjudged |= {id(x) for x in same}
                     continue
                 want = [_span(d, size_tol) for d in q["size_mm"]]
                 size_judged.add(id(p))
@@ -1000,8 +1005,12 @@ def verify(footprint: Path, ds: dict, pitch_tol: float, size_tol: float) -> tupl
     # --- pad size (warning): bound MIN and MAX, never the mode - a 10/10 tie
     # on an asymmetric SSOP-20 hid a column 0.25 mm over the datasheet max
     # (LEARNINGS 2026-07-28 [librarian][easyeda2kicad]). Sorted, so blind to
-    # a pad turned a quarter: pads judged axis by axis above are left out
-    rest = [p for p in copper if id(p) not in size_judged]
+    # a pad turned a quarter: pads judged axis by axis above are left out,
+    # and so are pads the drawing sizes one by one that couldn't be judged
+    # there (split, custom or at an odd angle): pad_size_mm isn't their
+    # size, and a custom pad's size is only its anchor's
+    rest = [p for p in copper
+            if id(p) not in size_judged and id(p) not in size_unjudged]
     if land.get("pad_size_mm") and rest:
         exp = tuple(sorted(float(x) for x in land["pad_size_mm"]))
         distinct = sorted({tuple(round(v_, 3) for v_ in sorted(p.size))

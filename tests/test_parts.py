@@ -1852,6 +1852,44 @@ def test_fp_verify_per_pad_size_in_the_drawings_frame(tmp_path, capsys):
     assert v["pads"] == ["5"] and v["expected_mm"] == [[[1.4, 1.6], [0.5, 0.7]]]
 
 
+def test_fp_verify_pads_unjudged_by_axis_left_out_of_sorted_size(tmp_path, capsys):
+    """A pad the drawing sizes one by one that can't be judged there (split,
+    custom or at an odd angle) is left out of the sorted pad_size_mm check
+    too: pad_size_mm isn't its size, and a custom pad's size is only its
+    anchor's (a MEMS mic's custom ring pad warned on its 0.3 mm anchor)."""
+    ds = _so8_sized_ds(tmp_path)
+
+    def pads(but):
+        return [f'  (pad "{n}" smd rect (at {x:g} {y:g}) (size 1.5 0.6) '
+                '(layers "F.Cu" "F.Paste" "F.Mask"))'
+                for n, (x, y) in SO8_PINS.items() if n != but]
+
+    # pad 3 custom: a 0.3 mm anchor under a 1.5 x 0.6 polygon
+    x, y = SO8_PINS["3"]
+    fp = _mk_fp(tmp_path, pads("3") + [
+        f'  (pad "3" smd custom (at {x:g} {y:g} 0) (size 0.3 0.3) '
+        '(layers "F.Cu" "F.Paste" "F.Mask")\n'
+        '    (primitives (gr_poly (pts (xy -0.75 -0.3) (xy 0.75 -0.3) (xy 0.75 0.3)'
+        ' (xy -0.75 0.3)) (width 0) (fill yes))))'], "SO8")
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and _kinds(payload) == ["no_courtyard"], payload["violations"]
+    why, = [n["why"] for n in payload["not_judged"] if n["check"] == "pad_size"]
+    assert why.startswith("pads 3: split in parts, custom-shaped")
+    assert sorted(payload["pad_size_by_axis"]["pads"]) == ["1", "2", "4", "5", "6", "7", "8"]
+    # pad 6 split in two 0.75 mm halves: neither half is pad_size_mm
+    rec = json.loads(ds.read_text(encoding="utf-8"))
+    rec["land_pattern"]["pad_count"] = 9
+    ds = write_ds(tmp_path, rec)
+    x, y = SO8_PINS["6"]
+    fp = _mk_fp(tmp_path, pads("6") + [
+        f'  (pad "6" smd rect (at {x + d:g} {y:g}) (size 0.75 0.6) '
+        '(layers "F.Cu" "F.Paste" "F.Mask"))' for d in (-0.375, 0.375)], "SO8")
+    code, payload = _fpv(tmp_path, capsys, fp, ds)
+    assert code == 0 and _kinds(payload) == ["no_courtyard"], payload["violations"]
+    why, = [n["why"] for n in payload["not_judged"] if n["check"] == "pad_size"]
+    assert why.startswith("pads 6: split in parts")
+
+
 def test_fp_verify_land_size_and_gap_not_judged(tmp_path, capsys):
     ds = _chip_ds(tmp_path, gap_mm=0.3, pad_length_mm=0.3, pad_width_mm=0.5)
     # three pads: no two-terminal land to measure
