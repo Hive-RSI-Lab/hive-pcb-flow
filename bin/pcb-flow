@@ -42,6 +42,9 @@
 #                         follows main at every merge) whenever it can see
 #                         it and both pin the same requirements.lock, so
 #                         only a lock change needs a new publish.
+#   pcb-flow fpfix --lib DIR.pretty | --pcb BOARD  repair footprints (courtyard,
+#                         attr, body text...); it lives in scripts/lib/fpfix.py,
+#                         since other scripts import it as fpfix
 #   pcb-flow <script> [args]  run scripts/<script>.py with the venv python
 #                         (or the published copy's own)
 #
@@ -369,6 +372,14 @@ check)
 *)
 	s=${1%.py}
 	shift
+	# Tools that live in scripts/lib, where other scripts import them by the
+	# same name (a scripts/fpfix.py would shadow lib's fpfix for a script that
+	# puts scripts/ ahead of lib/), so `pcb-flow fpfix`, which the courtyard,
+	# attr and CPL checks tell the user to run, runs lib's main() (#895).
+	lib_tools="fpfix"
+	case " $lib_tools " in
+	*" $s "*) x "$py" "$here/scripts/lib/$s.py" "$@" ;;
+	esac
 	# The scripts that run KiCad over a whole board, the router or a sim.
 	case $s in
 	route_auto | route_critical | route_escape | route_tune | place_anneal | part_repair | gate | verify_all | bench | render | sim_run | sim_si | sim_solve | fab_export)
