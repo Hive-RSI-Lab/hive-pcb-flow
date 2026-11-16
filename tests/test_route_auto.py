@@ -621,6 +621,8 @@ def test_route_probe_out_of_heap_is_a_clean_error(tmp_path, monkeypatch):
                  "_dsn_hole_rules", "_dsn_merge_wires", "_dsn_barriers",
                  "_export_dsn"):
         monkeypatch.setattr(route_auto, name, lambda *a, **k: [])
+    monkeypatch.setattr(route_auto, "_closed_layers",
+                        lambda *a, **k: ([], {}, []))
     monkeypatch.setattr(routelib, "run_freerouting", lambda *a, **k: {
         "oom": True, "heap_mb": 512, "rc": 3, "timed_out": False})
     with pytest.raises(CheckError, match="ran out of its 512 MB heap"):

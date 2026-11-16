@@ -1098,3 +1098,46 @@ def test_courtyard_still_flags_a_lone_part_with_pads_outside(tmp_path):
     v, seen = cc.check(pcb)
     assert [x["refs"] for x in v if x["kind"] == "courtyard_pads"] == [["TP1"]]
     assert seen["duplicate_refs"] == []
+
+
+def _can(ref, courtyard, at=(50, 50), layer="F"):
+    # EasyEDA's CAP-TH_BD10.0-P5.00: two pads 5.08 apart, the can a 10 mm
+    # circle on the silk
+    body = (pad("1", -2.54, 0, 1.6, 1.6, drill=1.0, kind="thru_hole", shape="circle")
+            + pad("2", 2.54, 0, 1.6, 1.6, drill=1.0, kind="thru_hole", shape="circle")
+            + f'\t\t(fp_circle (center 0 0) (end 5 0) (stroke (width 0.25) '
+              f'(type solid)) (fill none) (layer "{layer}.SilkS"))\n' + courtyard)
+    return footprint(ref, "aiee:CAP-TH_BD10.0-P5.00-D1.0-FD", body, at=at,
+                     layer=f"{layer}.Cu")
+
+
+def test_courtyard_round_the_pads_under_a_drawn_can_is_caught(tmp_path):
+    # #587: hc-power's cans carried a courtyard round the pads only, and
+    # placement put an SO-8 and 1210s under them. The twin: the same can
+    # with a circle courtyard round the body is quiet, and so is a part
+    # with no body drawn.
+    import check_courtyard as cc
+    padsonly = crt("F", -3.6, -1.05, 3.6, 1.05)
+    circle = ('\t\t(fp_circle (center 0 0) (end 5.3 0) (stroke (width 0.05) '
+              '(type solid)) (fill none) (layer "F.CrtYd"))\n')
+    tp = pad("1", 0, 0, 1.0, 1.0) + crt("F", -0.75, -0.75, 0.75, 0.75)
+    pcb = _cy_board(tmp_path, _can("C1", padsonly),
+                    _can("C2", circle, at=(80, 50)),
+                    footprint("TP1", "TestPoint:TP", tp, at=(110, 50)))
+    v, seen = cc.check(pcb)
+    got = [(x["refs"], x["kind"]) for x in v]
+    assert got == [(["C1"], "courtyard_body")]
+    assert v[0]["body_diameter_mm"] == 10.0 and v[0]["body_outside_mm2"] > 60
+    assert seen["with_body"] == 2
+
+
+def test_courtyard_body_on_the_back_reads_the_back_courtyard(tmp_path):
+    import check_courtyard as cc
+    padsonly = crt("B", -3.6, -1.05, 3.6, 1.05)
+    circle = ('\t\t(fp_circle (center 0 0) (end 5.3 0) (stroke (width 0.05) '
+              '(type solid)) (fill none) (layer "B.CrtYd"))\n')
+    pcb = _cy_board(tmp_path, _can("C1", padsonly, layer="B"),
+                    _can("C2", circle, at=(80, 50), layer="B"))
+    v, _ = cc.check(pcb)
+    assert [(x["refs"], x["kind"], x["layer"]) for x in v] == \
+        [(["C1"], "courtyard_body", "B.CrtYd")]

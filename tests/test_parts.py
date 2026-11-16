@@ -1753,6 +1753,78 @@ def test_lib_pin_types_dry_run_and_stale_extract(tmp_path, capsys):
     assert lib_pin_types.main(["--lib", str(tmp_path / "nope.kicad_sym")]) == 2
 
 
+def _imported_sch(tmp_path: Path, io: str = "bidirectional",
+                  gnd: str = "power_in", flag: str = "power_out") -> Path:
+    """A schematic as eda_io import-sch leaves an Eagle board (#528): its
+    lib_symbols name symbols "LIB:SYM", the IC's pins all typed from Eagle's
+    `io`, and a GND symbol and a PWR_FLAG carrying KiCad's power flag."""
+    ic = "\n".join([_pin("1", "VDDIO", io), _pin("2", "USB_VDD", io),
+                    _pin("3", "ADC_VDD", io), _pin("4", "VDD_1V1", io),
+                    _pin("5", "GND", io), _pin("6", "GPIO0", io),
+                    _pin("7", "DVDD", "power_out"), _pin("8", "GND", "power_out")])
+    sch = tmp_path / "pro-micro.kicad_sch"
+    sch.write_text(
+        '(kicad_sch (version 20231120) (generator eda_io)\n'
+        ' (lib_symbols\n'
+        '  (symbol "pro-micro:RP2040" (property "Reference" "U" (at 0 0 0))\n'
+        '    (property "Value" "RP2040 (\\"B2\\")" (at 0 0 0))\n'
+        '    (property "Description" "(pin number consists of a letter)" (at 0 0 0))\n'
+        '    (symbol "RP2040_1_1"\n' + ic + '))\n'
+        '  (symbol "power:GND" (power) (property "Reference" "#PWR" (at 0 0 0))\n'
+        '    (symbol "GND_0_1"\n' + _pin("1", "GND", gnd) + '))\n'
+        '  (symbol "power:PWR_FLAG" (power) (property "Reference" "#FLG" (at 0 0 0))\n'
+        '    (symbol "PWR_FLAG_0_1"\n' + _pin("1", "pwr", flag) + ')))\n'
+        ' (symbol (lib_id "pro-micro:RP2040") (at 50 50 0)\n'
+        '  (property "Reference" "U1" (at 0 0 0))\n'
+        '  (pin "1" (uuid "a")) (pin "6" (uuid "b"))))\n', encoding="utf-8")
+    return sch
+
+
+def _sch_types(sch: Path) -> list[str]:
+    import re as _re
+    return _re.findall(r"\(pin (\w+) line", sch.read_text(encoding="utf-8"))
+
+
+def test_lib_pin_types_on_an_imported_schematic(tmp_path, capsys):
+    # planted (#528): main read no symbols from a .kicad_sch, so every pin went
+    # passive: GND and PWR_FLAG lost their rail types, the IC its supplies
+    sch = _imported_sch(tmp_path)
+    tail = sch.read_text(encoding="utf-8").split("(symbol (lib_id")[1]
+    code, payload = run_main(lib_pin_types, ["--lib", str(sch)], tmp_path, capsys)
+    assert code == 0 and payload["status"] == "pass" and payload["symbols"] == 3
+    # DVDD typed power_out (an internal regulator's output) keeps it; a GND
+    # typed power_out is a library slip and becomes power_in
+    assert _sch_types(sch) == ["power_in"] * 5 + [
+        "passive", "power_out", "power_in", "power_in", "power_out"]
+    assert {c["symbol"] for c in payload["changes"]} == {"pro-micro:RP2040"}
+    assert sch.read_text(encoding="utf-8").split("(symbol (lib_id")[1] == tail
+    assert "(pin number consists" in sch.read_text(encoding="utf-8")
+
+
+def test_lib_pin_types_leaves_a_typed_schematic_alone(tmp_path, capsys):
+    # quiet twin: pins already as ERC wants them, power symbols included
+    sch = _imported_sch(tmp_path)
+    run_main(lib_pin_types, ["--lib", str(sch)], tmp_path, capsys)
+    before = sch.read_text(encoding="utf-8")
+    code, payload = run_main(lib_pin_types, ["--lib", str(sch)], tmp_path,
+                             capsys, name="again")
+    assert code == 0 and payload["changed"] == 0
+    assert sch.read_text(encoding="utf-8") == before
+
+
+def test_lib_pin_types_keeps_power_symbols_in_a_library(tmp_path, capsys):
+    lib = tmp_path / "power.kicad_sym"
+    lib.write_text(
+        '(kicad_symbol_lib (version 20211014) (generator test)\n'
+        '  (symbol "+3V3" (power) (property "Reference" "#PWR" (at 0 0 0))\n'
+        '    (symbol "+3V3_0_1"\n' + _pin("1", "+3V3", "power_in") + '))\n'
+        '  (symbol "PWR_FLAG" (property "Reference" "#FLG" (at 0 0 0))\n'
+        '    (symbol "PWR_FLAG_0_1"\n' + _pin("1", "pwr", "power_out") + ')))\n',
+        encoding="utf-8")
+    code, payload = run_main(lib_pin_types, ["--lib", str(lib)], tmp_path, capsys)
+    assert code == 0 and payload["changed"] == 0
+
+
 # ============================================================ live (net) tests
 
 def _skip_if_offline():

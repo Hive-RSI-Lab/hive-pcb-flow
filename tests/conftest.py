@@ -75,6 +75,7 @@ _BOARD = "runs a whole fixture board's checks or bench stage"
 _INTAKE = "materializes a whole KiCad project through intake"
 SLOW = {
     "tests/test_dsn_order.py::test_export_dsn_is_the_same_whatever_the_footprint_order": _TOOLS,
+    "tests/test_power_layers.py::test_live_dsn_export_types_in2_as_the_list_says": _TOOLS,
     "tests/test_zone_patch.py::test_live_drop_and_rebuild_the_patches_on_a_copy_of_core": _TOOLS,
     "tests/test_zone_patch.py::test_live_via_array_on_a_copy_of_core": _TOOLS,
     "tests/test_route_edit_patches.py::test_live_rip_names_then_takes_the_patch": _TOOLS,
@@ -104,6 +105,8 @@ SLOW = {
     "tests/test_route_escape.py::test_live_fault_track_between_two_pads_is_ripped": "runs KRT bga_fanout and kicad-cli DRC on a synthetic BGA",
     "tests/test_route_escape.py::test_live_fine_via_escape_6_layer_quiet": "runs KRT bga_fanout and kicad-cli DRC on a synthetic 6-layer BGA",
     "tests/test_route_escape.py::test_live_fault_fine_via_outside_the_courtyard_is_ripped": "runs KRT bga_fanout and kicad-cli DRC on a synthetic 6-layer BGA",
+    "tests/test_route_escape.py::test_live_pad_via_0_8mm_keeps_every_ball": "runs KRT bga_fanout and kicad-cli DRC on a synthetic 6-layer 0.8 mm BGA",
+    "tests/test_route_escape.py::test_live_fault_unshrunk_pad_vias_clash": "runs KRT bga_fanout and kicad-cli DRC on a synthetic 6-layer 0.8 mm BGA",
     "tests/test_zroute.py::test_live_route_critical_pair_l1_l3_drc_clean": "runs KRT route_diff/route and kicad-cli DRC on a synthetic 6-layer board",
     "tests/test_zroute.py::test_live_freerouting_draws_dsn_layer_widths": "runs Freerouting and kicad-cli DRC on a synthetic 6-layer board",
     "tests/test_check_net_tie.py::test_stock_net_tie_footprints_pass_and_keep_their_copper": "runs KRT's writer on every net-tie footprint KiCad ships, front and back",

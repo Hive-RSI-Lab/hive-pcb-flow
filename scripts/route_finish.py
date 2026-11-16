@@ -12,7 +12,9 @@ time, on a fine grid (default 0.1 mm) with 8-way moves and through vias:
 - The rules are the board's own: track width per net from the .kicad_dru
   (rules_gen's power widths), clearance from the .kicad_dru baseline or the
   netclass, per-net clearance floors, hole-to-hole, hole clearance, copper to
-  edge, rule-area keepouts. Vias match the board's most common through via.
+  edge, rule-area keepouts. A clearance rule for a net pair or a part's
+  courtyard (rules_gen's HV waivers and package ratings) is read per item
+  pair as DRC reads it, the last rule that holds winning (#682). Vias match the board's most common through via.
   On an HDI build (#477) a layer change may also take any span the build
   laminates, at its own size and JLC's HDI numbers, for a share of a through
   via's cost (SPAN_COST): a microvia is the cheap way down one layer.
@@ -30,6 +32,9 @@ time, on a fine grid (default 0.1 mm) with 8-way moves and through vias:
   board copper is passable at a price, ripping the fewest signal nets in the
   way (never a pour net or a net with a width rule; at most 4 nets). Ripped
   nets come back unconnected and the next pass routes them again.
+  A side no track can leave even then, with only fixed copper about (every
+  cell of its own copper inside a neighbour's clearance), fails with the
+  pad, the value and the rule that wall it in, and no rip is tried (#682).
 - Every route is applied through route_edit, the board refilled and DRC run.
   A connection whose copper DRC names in an error is taken out again. A pass
   is kept when the unconnected count drops and no error type grows; a pass
@@ -66,6 +71,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import dataclasses
+import fnmatch
 import hashlib
 import heapq
 import json
@@ -85,6 +91,7 @@ sys.path.insert(0, str(SCRIPTS / "lib"))
 
 import numpy as np  # noqa: E402
 import shapely  # noqa: E402
+import shapely.affinity  # noqa: E402
 import shapely.ops  # noqa: E402
 from shapely.geometry import LineString, Point, box  # noqa: E402
 from shapely.strtree import STRtree  # noqa: E402
@@ -153,6 +160,10 @@ class Rules:
     #       margins and untented sides, None when the board sets none (#636)
     pad_vias: bool = False   # every own-net SMD pad takes a via: only the
     #       search that names the pad a failed route needs (#636)
+    pair: object = None   # PairRules: the DRU's clearance rules held per
+    #       net pair or courtyard, None when it has none (#682)
+    net_clearance_rule: dict = field(default_factory=dict)   # net -> the
+    #       DRU rule its net_clearance floor comes from
 
     def pad_via_keep(self, ref: str, number: str, via_r: float,
                      drill: float) -> float:
@@ -191,8 +202,23 @@ class Rules:
         return min(self.width(net), math.ceil(w * 1000 - 1e-6) / 1000)
 
     def clr(self, a: str | None, b: str | None) -> float:
+        return self.net_clr(a, b) + self.margin
+
+    def net_clr(self, a: str | None, b: str | None) -> float:
+        """The net-wide clearance of a net pair, no margin."""
         return max(self.clearance, self.net_clearance.get(a or "", 0.0),
-                   self.net_clearance.get(b or "", 0.0)) + self.margin
+                   self.net_clearance.get(b or "", 0.0))
+
+    def item_clr(self, a, b) -> float:
+        """clr() for two items (Item or Probe), lowered where a pair or
+        courtyard rule of the DRU holds them closer (#682)."""
+        if self.pair is None:
+            return self.clr(a.net, b.net)
+        return self.pair.value(a, b)[0] + self.margin
+
+    def held_by(self, net: str) -> str:
+        """The rule a net's clearance floor comes from, or ''."""
+        return self.net_clearance_rule.get(net, "")
 
 
 # A DRU rule conditioned on just this applies to every via, so its via
@@ -246,6 +272,22 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
     vd = via_drill or (common[1] if common else max(
         floors["via_drill"], base.get("hole_size", 0.0), 0.3))
     classes = routelib.pro_net_classes(pro_json, bg.nets)
+    dru_text = dru.read_text(encoding="utf-8") if dru.is_file() else ""
+    net_clr = rc.dru_net_floors(dru, "clearance")
+    held: dict[str, tuple] = {}
+    for r in rc.parse_dru_rules(dru_text) if dru_text else []:
+        if r["constraint"] == "clearance" and not re.search(
+                r"intersectsCourtyard", r["condition"] or ""):
+            for n in r["nets"]:
+                if r["min_mm"] >= held.get(n, (-1.0, ""))[0]:
+                    held[n] = (r["min_mm"], r["name"])
+    clearance = base.get("clearance", floors["clearance"])
+
+    def old(a, b):
+        return max(clearance, net_clr.get(a or "", 0.0),
+                   net_clr.get(b or "", 0.0))
+    pair = pair_rules(pcb, dru_text, old, float(
+        pro_rules.get("min_clearance") or 0.0)) if dru_text else None
     build, entry = hdilib.board_build(bg)
     hdi: dict = {}
     if build:
@@ -255,7 +297,8 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
                "span_hole_to_hole": float(caps["hole_to_hole_diff_net_mm"]),
                "copper": list(bg.copper_layers)}
     return Rules(
-        clearance=base.get("clearance", floors["clearance"]),
+        clearance=clearance, pair=pair,
+        net_clearance_rule={n: v[1] for n, v in held.items()},
         hole_clearance=max(base.get("hole_clearance", 0.0), float(
             pro_rules.get("min_hole_clearance", KICAD_HOLE_CLEARANCE))),
         hole_to_hole=max(base.get("hole_to_hole", 0.0), float(
@@ -269,7 +312,7 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
                    min(vd, base.get("hole_size", floors["via_drill"]))),
         via_size=vs, via_drill=vd,
         net_width=rc.dru_net_floors(dru, "track_width"),
-        net_clearance=rc.dru_net_floors(dru, "clearance"),
+        net_clearance=net_clr,
         necks=board_necks(pcb, bg, rc.dru_neck_rules(dru, "track_width")),
         bans=routelib.dru_layer_bans(
             dru.read_text(encoding="utf-8") if dru.is_file() else "",
@@ -278,6 +321,263 @@ def board_rules(pcb: Path, bg: geom.BoardGeom, *, min_width: float = 0.2,
         sized_nets=frozenset(rc.dru_sized_nets(dru, bg.nets, classes)),
         mask=check_wicking.via_keep_model(pcb),
         margin=margin, **hdi)
+
+
+# ------------------------------------------------------ pair rules (#682)
+
+PAIR_TRIES = 4        # searches again when a found path's track misses a
+#                       courtyard rule's value: the grid reads the rule per
+#                       cell, DRC per whole segment
+PAIR_COURTS_MAX = 3   # courtyards near one item the grid tells apart; past
+#                       it the item keeps its net-wide clearance
+_PAIR_TYPES = {"pad", "via", "track", "arc", "zone", "text", "graphic",
+               "footprint"}
+
+
+class Probe:
+    """A track or via not laid yet as a DRU condition reads it (#682): its
+    net, its type (track or via) and the courtyards it meets."""
+    __slots__ = ("net", "kind", "courts", "layers", "ref")
+
+    def __init__(self, net: str, kind: str, courts=frozenset(), layers=()):
+        self.net, self.kind, self.courts = net, kind, frozenset(courts)
+        self.layers, self.ref = frozenset(layers), ""
+
+
+def _dru_terms(tree, out: list) -> list:
+    """Every leaf term of a parsed DRU condition."""
+    if tree[0] in ("and", "or"):
+        for t in tree[1]:
+            _dru_terms(t, out)
+    else:
+        out.append(tree)
+    return out
+
+
+def _rule_layer_ok(layer: str | None, ly: str) -> bool:
+    """Whether a .kicad_dru rule's (layer ...) clause takes in copper layer
+    ly (board_update._rule_layer_ok): outer, inner, or one layer's name;
+    no clause or a name this reader does not know takes in every layer."""
+    if layer == "outer":
+        return ly in ("F.Cu", "B.Cu")
+    if layer == "inner":
+        return re.fullmatch(r"In\d+\.Cu", ly) is not None
+    if layer is not None and re.fullmatch(r"(F|B|In\d+)\.Cu", layer):
+        return layer == ly
+    return True
+
+
+class PairRules:
+    """The .kicad_dru clearance rules that hold for a pair of items, not a
+    net (#682): a net pair (A.NetName == 'x' && B.NetName == 'y', rules_gen's
+    aiee_hv_waived_*) or a part's courtyard (A.intersectsCourtyard('U2') &&
+    B.intersectsCourtyard('U2'), its aiee_pkg_rating_*), which Rules.clr's
+    net-wide floors hold at the HV value. value() resolves a pair as KiCad
+    does: the last rule in the file that holds wins, floored by the board's
+    minimum clearance and any isolation barrier, and never above Rules.clr's
+    net-wide value: a term this reader cannot answer keeps that value."""
+
+    def __init__(self, rows: list, fps: dict, courts: dict, floor: float,
+                 barriers: list, old):
+        self.rows = rows            # [(min, layer, tree, name)], file order
+        self.fps = fps              # ref -> placelib.Footprint, None: dup
+        self.courts = courts        # (ref, side 0 own / 1 far) -> polygon
+        self.keys = list(courts)
+        self.tree = STRtree([courts[k] for k in self.keys]) \
+            if self.keys else None
+        self.floor = floor
+        self.barriers = barriers    # routelib.dru_barriers
+        self.old = old              # (net, net) -> net-wide value, no margin
+        self._named: dict = {}
+        self._memo: dict = {}
+        self._held: dict = {}       # id(item) -> (item, courts)
+
+    # -- the items' courtyards
+    def courts_of(self, it, keep: bool = True) -> frozenset:
+        """The (ref, side) courtyards an item's copper meets."""
+        if isinstance(it, Probe):
+            return it.courts
+        got = self._held.get(id(it))
+        if got is not None and got[0] is it:
+            return got[1]
+        out = frozenset()
+        if self.tree is not None:
+            shape = it.shape if it.half <= 0 else it.shape.buffer(
+                it.half, quad_segs=4)
+            out = frozenset(self.keys[i] for i in self.tree.query(
+                shape, predicate="intersects"))
+        if keep:
+            self._held[id(it)] = (it, out)
+        return out
+
+    def near(self, shape, reach: float) -> list:
+        """The courtyards within reach of shape."""
+        if self.tree is None:
+            return []
+        return [self.keys[i] for i in self.tree.query(
+            shape, predicate="dwithin", distance=reach)]
+
+    # -- the condition
+    def _fpid(self, ref: str, sel: str):
+        fp = self.fps.get(ref)
+        return fp.fpid if fp is not None and ":" in sel else None
+
+    def _scope(self, fn: str, sel: str, it):
+        import route_critical as rc
+        if fn == "member":
+            if getattr(it, "kind", "") != "pad":
+                return False
+            return rc.dru_selector_matches(sel, it.ref, self._fpid(it.ref,
+                                                                    sel))
+        if sel in ("A", "B"):
+            return False
+        if sel not in self._named:
+            self._named[sel] = [
+                (ref, m) for ref in self.fps
+                if (m := rc.dru_selector_matches(
+                    sel, ref, self._fpid(ref, sel))) is not False]
+        mine = self.courts_of(it)
+        out = False
+        for ref, m in self._named[sel]:
+            fp = self.fps.get(ref)
+            if fp is None:
+                out = None
+                continue
+            sides = (0, 1) if fn == "court" else (0 if fn == fp.side else 1,)
+            hit = rc._or3(None if fp.courtyard_unreadable[s] else
+                          False if fp.courtyard_exact[s] is None else
+                          (ref, s) in mine for s in sides)
+            if hit is False:
+                continue
+            if m is True and hit is True:
+                return True
+            out = None
+        return out
+
+    @staticmethod
+    def _type_eq(it, literal: str):
+        lit = literal.lower()
+        if "*" in lit or "?" in lit or lit not in _PAIR_TYPES:
+            return None
+        kind = getattr(it, "kind", "")
+        if kind in ("pad", "zone"):
+            return lit == kind
+        if kind == "via":
+            return True if lit == "via" else None if lit == "track" else False
+        if kind == "segment":       # a board track or arc
+            return None if lit in ("track", "arc") else False
+        if kind == "track":         # a straight one laid here
+            return lit == "track"
+        return None
+
+    def _eval(self, tree, a, b):
+        import route_critical as rc
+        kind = tree[0]
+        if kind == "and":
+            return rc._and3(self._eval(t, a, b) for t in tree[1])
+        if kind == "or":
+            return rc._or3(self._eval(t, a, b) for t in tree[1])
+        if kind not in ("scope", "type", "net"):
+            return None
+        it = a if tree[1] == "A" else b
+        if kind == "scope":
+            return self._scope(tree[2], tree[3], it)
+        hit = self._type_eq(it, tree[3]) if kind == "type" else \
+            rc._dru_str_eq(getattr(it, "net", None) or "", tree[3])
+        return hit if hit is None or tree[2] == "==" else not hit
+
+    def _barrier(self, x: str, y: str) -> float:
+        x, y = x.lower(), y.lower()
+
+        def hit(gs, n):
+            return any(fnmatch.fnmatchcase(n, g.lower()) for g in gs)
+        return max([b["clearance_mm"] for b in self.barriers
+                    if (hit(b["a"], x) and hit(b["b"], y))
+                    or (hit(b["a"], y) and hit(b["b"], x))] or [0.0])
+
+    def _sig(self, it) -> tuple:
+        kind = getattr(it, "kind", "")
+        return (it.net or "", kind, self.courts_of(it),
+                it.ref if kind == "pad" else "")
+
+    def resolve(self, a, b, layer: str) -> tuple[float, str | None]:
+        """(clearance, rule) DRC holds a and b to on layer, no margin; rule
+        None when it is the net-wide value."""
+        import route_critical as rc
+        key = (self._sig(a), self._sig(b), layer)
+        got = self._memo.get(key)
+        if got is not None:
+            return got
+        old = self.old(a.net, b.net)
+        win, maybe = None, []
+        for mn, ly, tree, name in reversed(self.rows):
+            if not _rule_layer_ok(ly, layer):
+                continue
+            h = rc._or3((self._eval(tree, a, b), self._eval(tree, b, a)))
+            if h is True:
+                win = (mn, name)
+                break
+            if h is None:
+                maybe.append(mn)
+        got = (old, None)
+        if win is not None:
+            v = max([win[0], self.floor, self._barrier(a.net or "",
+                                                        b.net or "")] + maybe)
+            if v < old - 1e-9:
+                got = (v, win[1])
+        self._memo[key] = got
+        return got
+
+    def value(self, a, b) -> tuple[float, str | None]:
+        """The largest of resolve() over the layers a and b share (all
+        either has when they share none)."""
+        lys = (a.layers & b.layers) or (a.layers | b.layers)
+        best = (-1.0, None)
+        for ly in sorted(lys):
+            v = self.resolve(a, b, ly)
+            if v[0] > best[0]:
+                best = v
+        return best if best[0] >= 0 else (self.old(a.net, b.net), None)
+
+
+def pair_rules(pcb: Path, dru_text: str, old, floor: float):
+    """PairRules for the board, or None when its .kicad_dru has no
+    clearance rule a pair or courtyard conditions (#682)."""
+    import placelib
+    import route_critical as rc
+    rows, selectors = [], set()
+    pairwise = False
+    for r in rc.parse_dru_rules(dru_text):
+        if r["constraint"] != "clearance":
+            continue
+        tree = rc.parse_dru_condition(r["condition"])
+        terms = _dru_terms(tree, [])
+        sides = {t[1] for t in terms if t[0] == "net"}
+        scoped = [t for t in terms if t[0] == "scope"]
+        pairwise |= bool(scoped) or sides == {"A", "B"}
+        selectors |= {t[3] for t in scoped if t[2] != "member"}
+        rows.append((r["min_mm"], r["layer"], tree, r["name"]))
+    if not pairwise:
+        return None
+    model = placelib.PlaceModel.__new__(placelib.PlaceModel)
+    model.footprints, model.dup_refs = {}, set()
+    model._parse(pcb)
+    fps = dict(model.footprints)
+    fps.update(dict.fromkeys(model.dup_refs))
+    courts = {}
+    for ref, fp in fps.items():
+        if fp is None or not any(
+                rc.dru_selector_matches(s, ref, fp.fpid) is not False
+                for s in selectors):
+            continue
+        for s in (0, 1):
+            g = fp.courtyard_exact[s]
+            if g is not None and not fp.courtyard_unreadable[s]:
+                courts[ref, s] = shapely.affinity.translate(
+                    shapely.affinity.rotate(g, -fp.angle, origin=(0, 0)),
+                    *fp.pos)
+    return PairRules(rows, fps, courts, floor,
+                     routelib.dru_barriers(dru_text), old)
 
 
 # ---------------------------------------------------------------- islands
@@ -354,6 +654,9 @@ class Item:
     ref: str = ""          # a pad's footprint ref
     number: str = ""       # and its number
     locked: bool = False   # (locked yes) board copper: a wall, never ripped
+    kind: str = ""         # pad, via, segment (a board track or arc), track
+    #   (one routed here), "" (footprint copper): what a rule's A.Type
+    #   reads (#682)
 
 
 class Obstacles:
@@ -372,6 +675,13 @@ class Obstacles:
         # pockets a found path walled off with a pour link, kept clear on
         # the next search (pour_cuts): (zone net, layer, shape, clearance)
         self.guards: list = []
+        # #682: items a pair or courtyard rule let a route pass closer than
+        # the net-wide value (id -> item), checked exactly on a found path;
+        # those it missed against, read stricter on the next search (id ->
+        # 1: a track meets a courtyard only where its copper does, 2: the
+        # net-wide value)
+        self.pair_soft: dict = {}
+        self.pair_strict: dict = {}
         self._spoke_pads = None      # (pad, zone, layer, gap, width, min)
         self._spoke_tree = None
         self._spoke_live: dict = {}  # index into _spoke_pads -> live spokes
@@ -380,18 +690,19 @@ class Obstacles:
         items: list[Item] = []
         for t in bg.tracks_of():
             items.append(Item(t.net or "", frozenset({t.layer}), t.shape,
-                              t.width / 2, uuid=t.uuid, locked=t.locked))
+                              t.width / 2, uuid=t.uuid, locked=t.locked,
+                              kind="segment"))
         for v in bg.vias_of():
             items.append(Item(v.net or "", frozenset(v.layers) or cu,
                               Point(v.at), v.diameter / 2,
                               Point(v.at).buffer(v.drill / 2, quad_segs=4),
-                              uuid=v.uuid, locked=v.locked))
+                              uuid=v.uuid, locked=v.locked, kind="via"))
         for p in bg.pads_of():
             dp = p.drill_poly if p.drill else None
             items.append(Item(p.net or "", frozenset(p.layers) & cu, p.poly,
                               0.0, dp if dp is not None and not dp.is_empty
                               else None, smd=p.kind == "smd", ref=p.ref,
-                              number=p.number))
+                              number=p.number, kind="pad"))
         # DRC sees this copper as netless, so a track through it is a short
         for c in bg.fp_copper:
             items.append(Item("", frozenset({c["layer"]}), c["shape"], 0.0,
@@ -988,6 +1299,72 @@ def _on_board(window, outline, slack: float = 1.0):
     return cut if cut[0] < cut[2] and cut[1] < cut[3] else window
 
 
+def _pair_split(obs: Obstacles, rules: Rules, net: str, it: Item,
+                kind: str, layers, reach: float) -> tuple | None:
+    """For a route of net past item it (#682): (courts, values), values[code]
+    the clearance (margin in) a kind ("track" or "via") of copper holds to
+    it when it meets the courts code's bits name, or None when the net-wide
+    value holds wherever it runs."""
+    pr = rules.pair
+    if pr is None:
+        return None
+    old = rules.clr(net, it.net)
+    if obs.pair_strict.get(id(it), 0) >= 2:
+        return None
+    cand = pr.near(it.shape, reach)
+    if len(cand) > PAIR_COURTS_MAX:
+        return None
+    lys = frozenset(layers)
+    vals = []
+    for code in range(1 << len(cand)):
+        S = [cand[j] for j in range(len(cand)) if code >> j & 1]
+        vals.append(min(old, rules.item_clr(Probe(net, kind, S, lys), it)))
+    if min(vals) >= old - 1e-9:
+        return None
+    obs.pair_soft[id(it)] = it
+    return cand, vals
+
+
+def pair_misses(obs: Obstacles, rules: Rules, ops: list, net: str) -> list:
+    """The items of obs.pair_soft a path's copper (ops) comes closer to
+    than the rule DRC reads for the pair (#682), as ids: the grid read a
+    track's courtyards per cell, DRC reads the whole segment."""
+    pr = rules.pair
+    if pr is None or not obs.pair_soft:
+        return []
+    mine = [(op, Probe(net, op.kind, pr.courts_of(op, keep=False), op.layers))
+            for op in ops_items(ops, -1, obs.bg.copper_layers)]
+    out = []
+    for i, it in obs.pair_soft.items():
+        for op, probe in mine:
+            if not op.layers & it.layers:
+                continue
+            gap = op.shape.distance(it.shape) - op.half - it.half
+            if gap < rules.net_clr(net, it.net) and gap < (
+                    pr.value(probe, it)[0] - 1e-4):
+                out.append(i)
+                break
+    return out
+
+
+def _pair_mask(pr, cand, vals, it_shape, rad, r_in, X, Y, args):
+    """_mask with a radius per grid point: rad(values[code]), code the
+    courts (of cand) within r_in of the point."""
+    m = _mask(it_shape, max(rad(v) for v in vals), *args)
+    if not m or len(set(vals)) == 1 or not m[1].any():
+        return m
+    at, hit = m
+    sub = np.nonzero(hit)
+    pts = shapely.points(X[at][sub], Y[at][sub])
+    code = np.zeros(len(pts), int)
+    for j, key in enumerate(cand):
+        code |= (shapely.distance(pr.courts[key], pts) <= r_in).astype(int) << j
+    r = np.array([rad(v) for v in vals])[code]
+    out = np.zeros_like(hit)
+    out[sub] = shapely.distance(it_shape, pts) <= r
+    return at, out
+
+
 def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
                side_b: dict, layers: list, window, g: float,
                pour_cost: float = 3.0, inner_cost: float = 2.0,
@@ -1027,32 +1404,55 @@ def build_grid(obs: Obstacles, rules: Rules, net: str, side_a: dict,
     args = (X, Y, x0, y0, g, nx, ny)
 
     soft = obs.soft_board
+    pr = rules.pair
+    obs.pair_soft = {}
+    vh = via_drill / 2 + rules.hole_clearance + rules.margin
+
+    def track_mask(it, on):
+        # a pair or courtyard rule may hold it closer to some cells (#682);
+        # a track meets a courtyard where any of it does, so a cell this
+        # near one reads as in it, and the found path is checked exactly
+        c = rules.clr(net, it.net)
+        sp = _pair_split(obs, rules, net, it, "track",
+                         [layers[k] for k in on], it.half + w + 2 * c) \
+            if on else None
+        if sp is None:
+            return _mask(it.shape, it.half + w / 2 + c, *args)
+        r_in = w / 2 + (0 if obs.pair_strict.get(id(it)) else c)
+        return _pair_mask(pr, sp[0], sp[1], it.shape,
+                          lambda v: it.half + w / 2 + v, r_in, X, Y, args)
+
+    def via_mask(it):
+        c = rules.clr(net, it.net)
+        sp = _pair_split(obs, rules, net, it, "via", it.layers,
+                         it.half + 2 * vr + c)
+        if sp is None:
+            return _mask(it.shape, it.half + max(vr + c, vh), *args)
+        return _pair_mask(pr, sp[0], sp[1], it.shape,
+                          lambda v: it.half + max(vr + v, vh), vr, X, Y, args)
+
     for it in obs.near(win):
         other = it.net != net and net not in it.tied
         if other and soft is not None and it.uuid and it.net not in soft \
                 and not it.locked:
             # crossing it means ripping it: passable, at a price
             on = [k for k, layer in enumerate(layers) if layer in it.layers]
-            m = _mask(it.shape, it.half + w / 2 + rules.clr(net, it.net),
-                      *args)
+            m = track_mask(it, on)
             if m:
                 for k in on:
                     cost[k][m[0]][m[1]] += rip_cost
             other = False   # its copper is passable; its hole still counts
         if other:
-            c = rules.clr(net, it.net)
             on = [k for k, layer in enumerate(layers) if layer in it.layers]
             if on:
-                m = _mask(it.shape, it.half + w / 2 + c, *args)
+                m = track_mask(it, on)
                 if m:
                     for k in on:
                         blk[k][m[0]] |= m[1]
             if it.layers:
                 # the via's ring keeps the clearance, its hole the hole
                 # clearance, from other-net copper
-                m = _mask(it.shape, it.half + max(
-                    vr + c, via_drill / 2 + rules.hole_clearance
-                    + rules.margin), *args)
+                m = via_mask(it)
                 if m:
                     vblk[m[0]] |= m[1]
         if it.smd and not other and not rules.pad_vias \
@@ -1667,7 +2067,7 @@ def ops_items(ops: list, conn: int, copper_layers) -> list[Item]:
         if op["op"] == "add_track":
             out.append(Item(op["net"], frozenset({op["layer"]}),
                             LineString([op["start"], op["end"]]),
-                            op["width"] / 2, conn=conn))
+                            op["width"] / 2, conn=conn, kind="track"))
         else:
             on = list(copper_layers)
             if "top" in op:
@@ -1675,7 +2075,8 @@ def ops_items(ops: list, conn: int, copper_layers) -> list[Item]:
             out.append(Item(op["net"], frozenset(on),
                             Point(op["at"]), op["size"] / 2,
                             Point(op["at"]).buffer(op["drill"] / 2,
-                                                   quad_segs=4), conn=conn))
+                                                   quad_segs=4), conn=conn,
+                            kind="via"))
     return out
 
 
@@ -1785,7 +2186,7 @@ def exit_keepouts(exits: dict, open_nets, routing: str, length: float,
     width. routing: the net being routed, whose own corridors aren't needed."""
     return [Item(net, frozenset({layer}),
                  LineString([(x, y), (x + dx * length, y + dy * length)]),
-                 half(net))
+                 half(net), kind="track")
             for net in dict.fromkeys(open_nets) if net != routing
             for layer, (x, y), (dx, dy) in exits.get(net, ())]
 
@@ -1898,6 +2299,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
         fine = dataclasses.replace(
             rules_, margin=min(rules.margin, FINE_MARGIN_MM))
         guards = list(obs.guards)
+        strict = dict(obs.pair_strict)
         try:
             for m, g, (w, v), rr in (
                     (margin, grid, start, rules_),
@@ -1907,10 +2309,13 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                 win = (min(ax, bx) - m, min(ay, by) - m,
                        max(ax, bx) + m, max(ay, by) + m)
                 hit = None
+                rounds = tries = 0
                 # a path that cuts a pour off a via or pad only the pour
                 # joins is searched again round the pocket it walls off
-                # (#1311); one that still cuts is kept and noted
-                for _ in range(LINK_ROUNDS + 1):
+                # (#1311); one that still cuts is kept and noted. One that
+                # misses a pair or courtyard rule's exact value is searched
+                # again with that item read stricter (#682)
+                while True:
                     gr = build_grid(obs, rr, net, job["side_a"],
                                     job["side_b"], layers, win, g, width=w,
                                     via=v, **inner_cost)
@@ -1933,12 +2338,21 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                         if hit is None:
                             job["gave_up"] = job.get("gave_up") or gr.gave_up
                         break
-                    cuts = pour_cuts(obs, path_to_ops(gr, path, net, w, rules),
-                                     net, rules)
+                    ops = path_to_ops(gr, path, net, w, rules)
+                    miss = pair_misses(obs, rr, ops, net)
+                    if miss:
+                        if tries >= PAIR_TRIES:
+                            break
+                        tries += 1
+                        for i in miss:
+                            obs.pair_strict[i] = obs.pair_strict.get(i, 0) + 1
+                        continue
+                    cuts = pour_cuts(obs, ops, net, rules)
                     if hit is None or not cuts:
                         hit = (path, gr, w, cuts)
-                    if not cuts:
+                    if not cuts or rounds >= LINK_ROUNDS:
                         break
+                    rounds += 1
                     obs.guards += [(zn, ly, pk, zc)
                                    for _, ly, pk, zn, zc in cuts]
                 if hit:
@@ -1952,6 +2366,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
             obs.added = held
             obs.soft_board = None
             obs.guards = guards
+            obs.pair_strict = strict
         return None, None, None
 
     def commit(n, job, path, gr, w):
@@ -2016,6 +2431,65 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                 job.pop(k, None)
             job.update(held)
 
+    def _walled(job) -> str:
+        """#682: why a failed job's side can't be left even by a floor-width
+        track on the fine rung with only fixed copper about (pads, locked
+        copper, fills; no other route): every cell of its own copper is
+        inside a neighbour's clearance and it has no plane to drop to. ''
+        when neither side is so held, or a side spans 10 mm or more."""
+        net = job["net"]
+        w, v = rules.width_floor(net), rules.via_floor
+        fine = dataclasses.replace(
+            rules, margin=min(rules.margin, FINE_MARGIN_MM))
+        held = obs.added, set(obs.hidden)
+        obs.added = []
+        obs.hidden |= {it.uuid for it in obs.items
+                       if it.uuid and not it.locked}
+        try:
+            for key in ("side_a", "side_b"):
+                sd = job[key]
+                u = shapely.union_all([p for ps in sd.values() for p in ps])
+                x0, y0, x1, y1 = u.bounds
+                if max(x1 - x0, y1 - y0) >= 10.0:
+                    continue
+                try:
+                    gr = build_grid(obs, fine, net, sd, sd, layers,
+                                    (x0 - 1, y0 - 1, x1 + 1, y1 + 1),
+                                    grid / 2, width=w, via=v, **inner_cost)
+                except CheckError:
+                    return ""
+                if any(gr.a_plane) or any(
+                        ((np.frombuffer(a, np.uint8) > 0)
+                         & (np.frombuffer(b, np.uint8) == 0)).any()
+                        for a, b in zip(gr.in_a, gr.blk)):
+                    continue
+                by: dict = {}
+                for it in obs.near(u.buffer(1.0)):
+                    if not it.net or it.net == net or net in it.tied \
+                            or not it.layers & set(gr.layers):
+                        continue
+                    c = rules.item_clr(Probe(net, "track", (), gr.layers),
+                                       it) - rules.margin
+                    if it.shape.distance(u) - it.half < c + w:
+                        by[it.net] = max(by.get(it.net, 0.0), c)
+                if not by:
+                    continue
+                top = max(by.values())
+                rule = rules.held_by(net) or next(
+                    (rules.held_by(n) for n in sorted(by)
+                     if by[n] >= top - 1e-9 and rules.held_by(n)), "")
+                pads = sorted({f"{it.ref} pad {it.number}"
+                               for it in obs.near(u) if it.kind == "pad"
+                               and it.net == net and it.ref
+                               and it.shape.intersects(u)})
+                return (f"no path: {', '.join(pads) or 'its copper'} walled "
+                        f"in: {net} held {top:g} mm"
+                        + (f" (rule {rule})" if rule else "")
+                        + f" from {', '.join(sorted(by))}")
+            return ""
+        finally:
+            obs.added, obs.hidden = held
+
     queue = list(range(len(todo)))
     ripped_once: set[int] = set()
     ripped_board: set[int] = set()
@@ -2031,8 +2505,14 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
         if on_try:
             on_try(job)
         path, gr, w = search(job)
+        walled = ""
         if path:
             commit(n, job, path, gr, w)
+        elif not (job.get("banned") or job.get("gave_up") or expired()):
+            # #682: a side only fixed copper holds in; no rip frees it
+            walled = _walled(job)
+        if walled:
+            pass
         elif n not in ripped_once:
             # rip-up and reroute: when only this pass's own routes are in
             # the way, take out the ones the free path runs into, route
@@ -2050,7 +2530,8 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                     for m in mine:
                         if not (it.layers & m.layers):
                             continue
-                        if it.shape.distance(m.shape) < it.half + m.half + c:
+                        d = it.shape.distance(m.shape) - it.half - m.half
+                        if d < c and d < rules.item_clr(m, it):
                             block.add(it.conn)
                             break
                 if block:
@@ -2062,7 +2543,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                         queue.append(c)
                     commit(n, job, path, gr, w)
                     job["ripped"] = len(block)
-        if job.get("status") != "routed" and rip_board \
+        if job.get("status") != "routed" and rip_board and not walled \
                 and n not in ripped_board:
             # still walled in: the tracks and vias of other nets in the
             # way (pads, pours and holes stay) are ripped, and their nets
@@ -2078,8 +2559,9 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                     if it.net == job["net"]:
                         continue
                     c = rules.clr(job["net"], it.net)
-                    if any(((it.layers & m.layers) and it.shape.distance(
-                            m.shape) < it.half + m.half + c) or (
+                    if any(((it.layers & m.layers) and (d := it.shape.distance(
+                            m.shape) - it.half - m.half) < c
+                            and d < rules.item_clr(m, it)) or (
                             it.hole is not None and m.hole is not None
                             and it.hole.distance(m.hole)
                             < rules.hole_to_hole + rules.margin)
@@ -2123,7 +2605,11 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                     if job.get("banned") else
                     "search stopped at --max-nodes; a path may exist"
                     if job.get("gave_up") else "no path on the grid"))
-                if not job.get("banned"):
+                if walled:
+                    # #682: no rip or pad via frees it; route_close sets
+                    # it aside rather than trying it every round
+                    job.update(walled=True, reason=walled)
+                elif not job.get("banned"):
                     in_pad = _needs_pad_via(job)
                     if in_pad:
                         # #636: no via in a pad unasked; say which pad
