@@ -236,7 +236,9 @@ rules as routing constraints; cite the record id when you apply one.
 6. Gate: `scripts/gate.py --gate drc_routed kicad/<board>.kicad_pcb` -
    exit 0 (parity + all track errors, err+warn zero). Check the exit code,
    not just the report: a wrong board path exits 2 before any check runs
-   and leaves the previous report on disk.
+   and leaves the previous report on disk. Add `--summary --out
+   reports/drc_routed-gate.json` to read the findings as one line each,
+   with positions from the board outline's top-left, and keep the JSON.
 
 ## When nets remain unrouted
 - route_auto already ladders retries. If its facts carry
