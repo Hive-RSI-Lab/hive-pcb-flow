@@ -362,7 +362,9 @@ check)
 	x "$py" "$here/scripts/check_env.py" "$@"
 	;;
 "" | -h | --help)
-	sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+	# the header up to its second bare '#' line, so a new usage line can't
+	# fall off the end of a fixed range (it did twice: #894, #1417)
+	awk 'NR==1{next} /^#$/{if(++n==2)exit} {print}' "$0" | sed 's/^# \{0,1\}//'
 	;;
 *)
 	s=${1%.py}
