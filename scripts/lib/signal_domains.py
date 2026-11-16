@@ -22,7 +22,11 @@ Active level (polarity):
    or held by its only pull with nothing to drive it. The level comes
    from the family's datasheet (_LATCHES), not the symbol: 74x373/573 LE
    and 4094 STR are transparent while high (held high is a buffer, held
-   low never updates), 74x259 LE while low; a 74x595 RCLK or a 74x165 ~PL
+   low never updates), 74x259 LE while low; the names the stock symbols
+   use count too (573 Load, 75/375 E01, 137 ~LE and ~GL low, 4543 ~LE
+   or LD high, 4511 ~EL low, 4514 EL, 4508 ST, 4099 WR), keyed by part
+   since one name asserts high on one part and low on another; a 4042,
+   whose E0/E1 picks the clock edge, isn't in the table; a 74x595 RCLK or a 74x165 ~PL
    has to move, so held either way is a fault. A pin named like one (LE,
    STB, STROBE, RCLK, XLAT...) on a part not in the table is not_judged.
    A table part with numbers only for pin names is read by its package's
@@ -566,8 +570,8 @@ def _idle_pull(nets, comps, comp_pins, rails, h):
 _FAM = r"(?:SN|MC|CD|HEF|NLV|NL|M|IDT|QS)?74[A-Z]{0,6}"
 _LATCHES = (
     (re.compile(_FAM + r"(?:16|162|1G)?(?:373|573|533|563|580|841)"
-                r"(?![0-9])"), {"LE", "C", "G"}, "high"),
-    (re.compile(_FAM + r"(?:259|4724)(?![0-9])"), {"LE", "E"}, "low"),
+                r"(?![0-9])"), {"LE", "C", "G", "LOAD"}, "high"),
+    (re.compile(_FAM + r"(?:259|256|4724)(?![0-9])"), {"LE", "E"}, "low"),
     (re.compile(_FAM + r"(?:595|594|596|599|6595)(?![0-9])|"
                 r"[NT]PIC6[A-Z]?59[56]"),
      {"RCLK", "RCK", "STCP", "LATCH"}, "toggle"),
@@ -582,13 +586,26 @@ _LATCHES = (
     (re.compile(r"TLC59(?:40|41|47)(?![0-9])"), {"XLAT"}, "high"),
     (re.compile(r"MAX72(?:19|21)(?![0-9])"), {"LOAD", "CS", "LD"},
      "toggle"),
+    # 4-bit latches (E01/E23 on the stock symbols), decoders with address
+    # latches, 4000-series latches and latched display decoders
+    (re.compile(r"(?<![0-9])" + _FAM + r"(?:75|77|375)(?![0-9])"),
+     {"E", "EN", "C", "G"}, "high"),
+    (re.compile(_FAM + r"(?:137|237)(?![0-9])"), {"LE", "GL"}, "low"),
+    (re.compile(r"(?<![0-9])(?:74[A-Z]{0,6}|CD|HEF|MC1)?4543(?![0-9])"),
+     {"LE", "LD"}, "high"),
+    (re.compile(r"(?<![0-9])(?:74[A-Z]{0,6}|CD|HEF|MC1)?4511(?![0-9])"),
+     {"LE", "EL"}, "low"),
+    (re.compile(r"(?<![0-9])(?:CD|HEF|MC1|MM)?(?:4508|451[45]|40373|4056)"
+                r"(?![0-9])"), {"ST", "STB", "STR", "STROBE", "EL"}, "high"),
+    (re.compile(r"(?<![0-9])(?:CD|HEF|MC1)?(?:4099|4724)(?![0-9])"),
+     {"WD", "WR", "E"}, "low"),
 )
 # the level each family's level-sensitive pin asserts at (transparent,
 # or loading the parallel inputs), from the datasheet, in _LATCHES'
 # order; a storage clock or LOAD that acts on an edge isn't listed: a
 # driver of either polarity clocks it, half a pulse apart
 _LATCH_ASSERT = (
-    {"LE": "high", "C": "high", "G": "high"},
+    {"LE": "high", "C": "high", "G": "high", "LOAD": "high"},
     {"LE": "low", "E": "low"},
     {},
     {"PL": "low", "SLOAD": "low", "LD": "low"},
@@ -597,7 +614,15 @@ _LATCH_ASSERT = (
     {"LE": "high"},
     {},
     {},
+    {"E": "high", "EN": "high", "C": "high", "G": "high"},
+    {"LE": "low", "GL": "low"},
+    {"LE": "high", "LD": "high"},
+    {"LE": "low", "EL": "low"},
+    {"ST": "high", "STB": "high", "STR": "high", "STROBE": "high",
+     "EL": "high"},
+    {"WD": "low", "WR": "low", "E": "low"},
 )
+assert len(_LATCH_ASSERT) == len(_LATCHES)
 # names a latch or strobe pin goes by on a part not in the table above:
 # its active level isn't known, so a held one is listed in not_judged
 _LATCH_NAMES = {"LE", "STB", "STR", "STROBE", "LATCH", "LAT", "RCLK",

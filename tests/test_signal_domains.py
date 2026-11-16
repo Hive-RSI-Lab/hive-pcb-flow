@@ -434,6 +434,63 @@ def test_a_driver_of_unknown_level_is_not_judged():
     assert any("latch_enable_polarity on LATCH" in x for x in nj), nj
 
 
+# the enable names the stock KiCad latch symbols use, each driven at the
+# wrong level (a fault) and at the right one (its quiet twin)
+_STOCK_ENABLES = (
+    ("74LS573", "Load", "~{CS}", "ALE"),       # transparent high
+    ("74LS375", "E01", "~{CS}", "ALE"),        # 4-bit latch, high
+    ("74HC75", "E23", "~{WR}", "STB"),
+    ("74HC137", "~{LE}", "ALE", "~{CS}"),      # address latch, low
+    ("74LS137", "~{GL}", "STB", "~{WR}"),
+    ("74LS256", "~{E}", "STB", "~{WR}"),       # addressable latch, low
+    ("CD4543B", "~{LE}", "~{CS}", "ALE"),      # LD: transparent high
+    ("CD4543B", "LD", "~{CS}", "ALE"),
+    ("CD4511B", "~{EL}", "STB", "~{CS}"),      # LE: transparent low
+    ("CD4514B", "EL", "~{CS}", "STB"),         # strobe, high
+    ("CD4508B", "ST", "~{WR}", "STB"),
+    ("MM74C373", "LE", "~{WR}", "STB"),
+    ("CD4056B", "STROBE", "~{CS}", "ALE"),
+    ("CD4099B", "WR", "STB", "~{WR}"),         # write disable, low
+    ("74LVC1G373", "LE", "~{CS}", "ALE"),
+)
+
+
+def test_a_stock_enable_name_driven_at_the_wrong_level_is_a_fault():
+    for value, func, bad, good in _STOCK_ENABLES:
+        hits, facts = _audit(*_drive(value, func, bad))
+        assert _kinds(hits) == [("latch_enable_polarity", "error",
+                                 ["U1"])], (value, func)
+        assert facts["latch_drive_checked"] == 1, (value, func)
+        assert _audit(*_drive(value, func, good))[0] == [], (value, func)
+
+
+def test_one_name_asserts_by_part_not_by_name():
+    # ~{LE} is transparent low on a 74x137 and high on a 4543
+    assert _audit(*_drive("74HC137", "~{LE}", "~{CS}"))[0] == []
+    assert _kinds(_audit(*_drive("CD4543B", "~{LE}", "~{CS}"))[0]) == [
+        ("latch_enable_polarity", "error", ["U1"])]
+
+
+def test_a_stock_enable_name_held_where_it_never_updates():
+    hits, _ = _audit(*_latch("CD4543B", "LD", "GND"))
+    assert _kinds(hits) == [("latch_enable_held", "error", ["U1"])]
+    # a 4543 with LD tied high is the usual transparent decoder
+    assert _audit(*_latch("CD4543B", "LD", "+3V3"))[0] == []
+    assert _audit(*_latch("CD4511B", "~{EL}", "GND"))[0] == []
+
+
+def test_a_clock_polarity_latch_and_other_decoder_enables_stay_out():
+    # a 4042's E0/E1 picks the latching edge, not a fixed level
+    hits, facts = _audit(*_drive("CD4042B", "E0", "~{CS}"))
+    assert hits == [] and facts["latch_drive_checked"] == 0
+    # a 74x137's E1/E2 gate the decoder outputs, not the address latch
+    hits, facts = _audit(*_drive("74HC137", "~{E1}", "STB"))
+    assert hits == [] and facts["latch_drive_checked"] == 0
+    # a 74x175's clock is an edge, and a 74x4075 is an OR gate
+    for value in ("74LS175", "74HC4075"):
+        hits, facts = _audit(*_drive(value, "E", "~{CS}"))
+        assert hits == [] and facts["latch_drive_checked"] == 0, value
+
 # ---------------------------------------------------- drive_level_mismatch
 
 def _cross(tgt, via=None, drv="~{ALERT}", drv_type="open_collector",
