@@ -235,6 +235,7 @@ def verb_apply_ops(job):
 
     results = []
     to_remove = []
+    drops_taken = set()     # remove_teardrop: zones (load-time uuids) taken
     for i, op in enumerate(job["ops"]):
         kind = op["op"]
         if kind == "add_track":
@@ -365,6 +366,31 @@ def verb_apply_ops(job):
                     n += 1
             results.append({"op": kind, "status": "renamed" if n else
                             "absent", "count": n})
+        elif kind == "remove_teardrop":
+            # a teardrop zone has no uuid in the file (#1144): the driver
+            # names it by net, layer and one vertex of its outline
+            at = (iu(op["at"][0]), iu(op["at"][1]))
+            lid = _layer_id(board, op["layer"])
+            hit = None
+            for z in board.Zones():
+                if not z.IsTeardropArea() or z.GetNetname() != op["net"] \
+                        or z.GetLayer() != lid \
+                        or z.m_Uuid.AsString() in drops_taken:
+                    continue
+                o = z.Outline()
+                for k in range(o.TotalVertices()):
+                    v = o.CVertex(k)
+                    if abs(v.x - at[0]) <= tol and abs(v.y - at[1]) <= tol:
+                        hit = z
+                        break
+                if hit is not None:
+                    break
+            if hit is None:
+                results.append({"op": kind, "status": "absent"})
+            else:
+                drops_taken.add(hit.m_Uuid.AsString())
+                to_remove.append(hit)
+                results.append({"op": kind, "status": "removed"})
         elif kind == "remove":
             item = by_uuid.get(op["uuid"]) or zone_by_uuid.get(op["uuid"])
             if item is None:

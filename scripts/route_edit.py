@@ -18,6 +18,7 @@ Contract:
                      # key left out takes the default on a new via and keeps
                      # its value on a via already there ({} only enables)
     remove    {uuid}                         # track, via or zone; absent=noop
+                     # a track's teardrops go with it (#1144): see below
     set_net   {uuid, net}                            # worker-level (renet)
     set_via_fill {uuid, filled}                      # filling + capping
     set_point {uuid, which: start|end|at, to}  # a straight track's start
@@ -136,6 +137,17 @@ os.replace() swap the .kicad_pcb in (same volume -> atomic; sibling project
 files never touched). Any failure leaves the original board byte-identical.
 Re-applying the same op list is idempotent: identical existing items are
 skipped ("exists"), absent removal uuids are no-ops ("absent").
+
+Teardrops (#1144): KiCad keeps a teardrop as a zone with no uuid, rebuilt
+only by a refill, so a rip used to leave the track's drop behind as copper of
+its net. A remove that takes a track also takes each drop that track
+answered (teardroplib.left_by: the drop's tip in the track's band, and in no
+kept track's), through a remove_teardrop {net, layer, at} the driver adds
+(the worker takes the teardrop zone of that net and layer with a vertex at
+`at`); the verify checks it is gone, and the op's result counts them
+(teardrops_removed). A drop that also answers a track the list keeps or
+lays stays. Drops of tracks other ops move (set_point, move_via) are not
+looked at: refill for those.
 
 Zone fills are NOT refreshed here: adding/removing copper stales any pour it
 crosses. Callers that touch plane layers must refill afterwards
@@ -686,6 +698,36 @@ def _resolve_copy_from(bg, op: dict) -> list[dict]:
     return out
 
 
+def _drops_left(pcb: Path, bg, flat: list[dict]) -> list[tuple[int, dict]]:
+    """(index of the remove in flat, remove_teardrop op) for each drop the
+    tracks the list removes leave with nothing to answer (#1144,
+    teardroplib.left_by). Only a board with teardrop zones is read."""
+    tracks = {t.uuid: t for t in bg.tracks_of() if t.uuid}
+    gone = {op["uuid"]: j for j, op in enumerate(flat)
+            if op["op"] == "remove" and op["uuid"] in tracks}
+    if not gone or "(teardrop" not in pcb.read_text(encoding="utf-8"):
+        return []
+    from shapely.geometry import LineString
+    kept = [t for u, t in tracks.items() if u not in gone]
+    kept += [t for t in bg.tracks_of() if not t.uuid]
+    kept += [geom.Track(op["net"], op["layer"], float(op["width"]),
+                        LineString([op["start"], op["end"]]))
+             for op in flat if op["op"] == "add_track"]
+    out = []
+    for d in tdl.left_by(pcb, [tracks[u] for u in gone], kept):
+        # the remove whose track the drop answered (the first, if several)
+        j = min(j for u, j in gone.items()
+                if tracks[u].net == d["net"] and tracks[u].layer == d["layer"]
+                and tdl._in_band(_point(d["at"]), tdl._bands([tracks[u]])))
+        out.append((j, dict(op="remove_teardrop", **d)))
+    return out
+
+
+def _point(xy):
+    from shapely.geometry import Point
+    return Point(xy)
+
+
 def _close(a: tuple[float, float], b) -> bool:
     return abs(a[0] - b[0]) <= POS_TOL and abs(a[1] - b[1]) <= POS_TOL
 
@@ -697,6 +739,8 @@ def _verify(staged: Path, ops: list[dict]) -> list[str]:
                                       for op in ops) else {}
     drops = _via_teardrops(text) if any(
         op["op"] == "add_via" and "teardrops" in op for op in ops) else {}
+    left = _drop_vertices(text) if any(
+        op["op"] == "remove_teardrop" for op in ops) else set()
     problems = []
     for i, op in enumerate(ops):
         kind = op["op"]
@@ -735,6 +779,10 @@ def _verify(staged: Path, ops: list[dict]) -> list[str]:
         elif kind == "remove":
             if op["uuid"] in text:
                 problems.append(f"ops[{i}]: uuid {op['uuid']} still present")
+        elif kind == "remove_teardrop":
+            if _drop_key(op["net"], op["layer"], op["at"]) in left:
+                problems.append(f"ops[{i}]: teardrop of {op['net']} on "
+                                f"{op['layer']} at {op['at']} still present")
         elif kind == "set_net":
             hit = [it for it in bg.tracks_of() + bg.vias_of()
                    if it.uuid == op["uuid"]]
@@ -779,6 +827,18 @@ def _verify(staged: Path, ops: list[dict]) -> list[str]:
                 problems.append(f"ops[{i}]: {left} items still on "
                                 f"{op['from']}")
     return problems
+
+
+def _drop_key(net: str, layer: str, xy) -> tuple:
+    return (net, layer, round(xy[0] * 1000), round(xy[1] * 1000))
+
+
+def _drop_vertices(text: str) -> set:
+    """(net, layer, x um, y um) of every teardrop zone vertex."""
+    import sexpdata
+    return {_drop_key(net, layer, v)
+            for net, layer, xy, _ in tdl.teardrop_zones(sexpdata.loads(text))
+            for v in xy}
 
 
 def _via_teardrops(text: str) -> dict:
@@ -861,6 +921,8 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
                                  f"{gone}")
     guards: dict = {}
     flat, spans = resolve_ops(bg, ops, guards)
+    drop_by = _drops_left(pcb, bg, flat)
+    flat = flat + [op for _, op in drop_by]
 
     cli = env.find_kicad_cli()
     bp = env.find_kicad_python(cli) if cli else None
@@ -901,8 +963,15 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
                                     if v.get("check") == "track_width"]}
         if flat:
             os.replace(staged, pcb)
-        return [_fold(op, [worker[j] for j in span], [flat[j] for j in span])
-                for op, span in zip(ops, spans)]
+        out = [_fold(op, [worker[j] for j in span], [flat[j] for j in span])
+               for op, span in zip(ops, spans)]
+        base = len(flat) - len(drop_by)
+        for k, (j, _) in enumerate(drop_by):
+            if worker[base + k]["status"] != "removed":
+                continue
+            r = out[next(n for n, span in enumerate(spans) if j in span)]
+            r["teardrops_removed"] = r.get("teardrops_removed", 0) + 1
+        return out
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
