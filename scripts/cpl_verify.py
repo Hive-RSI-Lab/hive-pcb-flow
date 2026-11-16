@@ -243,6 +243,7 @@ class KPad:
     h: float
     function: str = ""
     angle: float = 0.0  # absolute pad angle on the board (includes fp rot)
+    net: str = ""  # the pad's net name, "" when it has none
 
 
 @dataclass
@@ -290,6 +291,29 @@ def _nums(n):
     return [float(v) for v in n[1:] if isinstance(v, (int, float))] if n else []
 
 
+def _arc3(node):
+    """An arc's (start, mid, end) points. KiCad 6+ writes them; KiCad 5 writes
+    (start CENTRE) (end START) (angle SWEEP), the sweep clockwise on screen
+    (y down), so mid and end are worked out here."""
+    if _kid(node, "mid"):
+        return tuple(tuple(_nums(_kid(node, k))[:2]) for k in ("start", "mid", "end"))
+    c, a, sweep = _nums(_kid(node, "start")), _nums(_kid(node, "end")), _nums(_kid(node, "angle"))
+    if len(c) < 2 or len(a) < 2 or not sweep:
+        return None
+    r = math.hypot(a[0] - c[0], a[1] - c[1])
+    t0 = math.atan2(a[1] - c[1], a[0] - c[0])
+    at = lambda t: (c[0] + r * math.cos(t), c[1] + r * math.sin(t))
+    return ((a[0], a[1]), at(t0 + math.radians(sweep[0]) / 2),
+            at(t0 + math.radians(sweep[0])))
+
+
+def _net_name(node) -> str:
+    """A pad's net name: `(net 3 "GND")` (KiCad 5 to 9) or `(net "GND")`
+    (KiCad 10); "" for no net."""
+    names = [v for v in (node or [])[1:] if not isinstance(v, (int, float))]
+    return str(_t(names[-1])) if names else ""
+
+
 def _silk_shape(node) -> list[tuple[float, float]] | None:
     lay = _kid(node, "layer")
     if not lay or not str(_t(lay[1])).endswith("SilkS"):
@@ -310,7 +334,8 @@ def _silk_shape(node) -> list[tuple[float, float]] | None:
         return [(cx + r * math.cos(a / 12 * math.pi),
                  cy + r * math.sin(a / 12 * math.pi)) for a in range(25)]
     if head == "fp_arc":
-        return [tuple(_nums(_kid(node, k))) for k in ("start", "mid", "end")]
+        a3 = _arc3(node)
+        return list(a3) if a3 else None
     return None
 
 
@@ -363,9 +388,9 @@ def _silk_mark(node, side: str, box) -> tuple[float, float] | None:
         (cx, cy), (ex, ey) = _nums(_kid(node, "center")), _nums(_kid(node, "end"))
         if math.hypot(ex - cx, ey - cy) <= MARK_MAX_R_MM:
             at = (cx, cy)
-    elif head == "fp_arc" and _kid(node, "mid"):
+    elif head == "fp_arc" and _arc3(node):
         # a dot: start and end meet, so it's a full circle through mid
-        a, m, e = (_nums(_kid(node, k)) for k in ("start", "mid", "end"))
+        a, m, e = _arc3(node)
         if (math.hypot(a[0] - e[0], a[1] - e[1]) <= ARC_CLOSED_MM
                 and math.hypot(a[0] - m[0], a[1] - m[1]) / 2 <= MARK_MAX_R_MM):
             at = ((a[0] + m[0]) / 2, (a[1] + m[1]) / 2)
@@ -396,10 +421,12 @@ def _custom_copper(pad, size, local_rot: float):
 
 
 def board_footprints(pcb: Path) -> dict[str, Footprint]:
-    """{ref: Footprint} with pads and silk in the footprint's LOCAL frame."""
+    """{ref: Footprint} with pads and silk in the footprint's LOCAL frame.
+    A KiCad 5 board's parts are `module` blocks; they read the same way (their
+    text is fp_text, their arcs are converted by _arc3)."""
     tree = sexpdata.loads(Path(pcb).read_text(encoding="utf-8"))
     out: dict[str, Footprint] = {}
-    for fp in _kids(tree, "footprint"):
+    for fp in _kids(tree, "footprint") + _kids(tree, "module"):
         at = _nums(_kid(fp, "at"))
         props = {str(_t(p[1])): str(_t(p[2])) for p in _kids(fp, "property")
                  if len(p) > 2}
@@ -416,6 +443,7 @@ def board_footprints(pcb: Path) -> dict[str, Footprint]:
             pat = _nums(_kid(pad, "at"))
             size = _nums(_kid(pad, "size")) or [0.0, 0.0]
             pf = _kid(pad, "pinfunction")
+            pn = _kid(pad, "net")
             px, py, w, h = pat[0], pat[1], size[0], size[1]
             if len(pad) > 3 and str(_t(pad[3])) == "custom":
                 # a custom pad lands where its copper is, not at its anchor
@@ -426,7 +454,8 @@ def board_footprints(pcb: Path) -> dict[str, Footprint]:
             f.pads.append(KPad(number=str(_t(pad[1])), x=px, y=py,
                                w=w, h=h,
                                function=str(_t(pf[1])) if pf else "",
-                               angle=pat[2] if len(pat) > 2 else 0.0))
+                               angle=pat[2] if len(pat) > 2 else 0.0,
+                               net=_net_name(pn)))
         for node in fp[1:]:
             if isinstance(node, list) and node:
                 s = _silk_shape(node)

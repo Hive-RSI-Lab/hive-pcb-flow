@@ -5,7 +5,8 @@ the pad the board says is cathode, + or pin 1, read from the board alone.
 The planted fault is a diode's band flipped to its anode; its quiet twin is
 the same board with the band by the cathode. Parts whose mark or pad roles
 aren't known, and marks that aren't pin-1 marks (a seven-segment display's
-decimal point), are not_judged with why, never a finding.
+decimal point), are not_judged with why, never a finding. A KiCad 5 board's
+`module` parts are read the same way as `footprint` ones.
 """
 from __future__ import annotations
 
@@ -233,17 +234,113 @@ def test_unpolarised_parts_are_left_out(tmp_path):
                                    "not_judged_refs": []}
 
 
-def test_a_kicad5_board_is_not_judged_not_passed(tmp_path):
-    """The part reader reads `footprint` blocks only: a KiCad 5 board's
-    `module` blocks give it nothing, which must not read as a clean pass."""
-    pcb = tmp_path / "k5.kicad_pcb"
+# A KiCad 5 board writes its parts as `module` blocks, pads with numbered
+# nets and unquoted names, and arcs as centre + start + sweep. This SOT-23-6
+# is CMM2-JLC rev A's U3 (an SRV05-4) as its board file has it, at 180
+# degrees, with a pin-1 dot added: by pad 1 (the quiet twin) or by pad 6
+# (the planted fault).
+K5_SOT236 = """  (module Package_TO_SOT_SMD:SOT-23-6 (layer F.Cu) (tedit 5A02FF57) (tstamp 5F04A80D)
+    (at 38.5 34.6 180)
+    (attr smd)
+    (fp_text reference U3 (at 0 -2.9) (layer F.SilkS)
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_text value SRV05-4 (at 0 2.9) (layer F.Fab)
+      (effects (font (size 1 1) (thickness 0.15))))
+    (fp_line (start -0.9 1.61) (end 0.9 1.61) (layer F.SilkS) (width 0.12))
+    (fp_line (start 0.9 -1.61) (end -1.55 -1.61) (layer F.SilkS) (width 0.12))
+    {dot}
+    (pad 5 smd rect (at 1.1 0 180) (size 1.06 0.65) (layers F.Cu F.Paste F.Mask) (net 146 +5V))
+    (pad 6 smd rect (at 1.1 -0.95 180) (size 1.06 0.65) (layers F.Cu F.Paste F.Mask) (net 203 /USB_HOST_D-))
+    (pad 4 smd rect (at 1.1 0.95 180) (size 1.06 0.65) (layers F.Cu F.Paste F.Mask) (net 202 /USB_HOST_D+))
+    (pad 3 smd rect (at -1.1 0.95 180) (size 1.06 0.65) (layers F.Cu F.Paste F.Mask) (net 200 /USB_C_D+))
+    (pad 2 smd rect (at -1.1 0 180) (size 1.06 0.65) (layers F.Cu F.Paste F.Mask) (net 1 GND))
+    (pad 1 smd rect (at -1.1 -0.95 180) (size 1.06 0.65) (layers F.Cu F.Paste F.Mask) (net 201 /USB_C_D-))
+  )
+"""
+K5_DOT = {"pad_1": "(fp_circle (center -1.75 -1.5) (end -1.65 -1.5) (layer F.SilkS) (width 0.12))",
+          "pad_6": "(fp_circle (center 1.75 -1.5) (end 1.85 -1.5) (layer F.SilkS) (width 0.12))",
+          # the same dot by pad 1, drawn as a closed KiCad 5 arc
+          "arc_pad_1": "(fp_arc (start -1.75 -1.5) (end -1.65 -1.5) (angle 360) (layer F.SilkS) (width 0.12))",
+          "none": ""}
+
+
+def _k5_board(tmp_path, *modules, name="k5.kicad_pcb"):
+    pcb = tmp_path / name
     pcb.write_text(
-        '(kicad_pcb (version 20171130) (host pcbnew 5.1.6)\n'
-        '  (module Diode_SMD:D_SOD-123 (layer F.Cu) (at 20 20)\n'
-        '    (fp_text reference D1 (at 0 -2) (layer F.SilkS))\n'
-        '    (pad 1 smd rect (at -1.65 0) (size 0.9 1.2) (layers F.Cu))\n'
-        '    (pad 2 smd rect (at 1.65 0) (size 0.9 1.2) (layers F.Cu)))\n'
-        ')\n', encoding="utf-8")
-    refs, fact = _polarity(pcb)
+        "(kicad_pcb (version 20171130) (host pcbnew 5.1.6)\n"
+        "  (layers (0 F.Cu signal) (31 B.Cu signal) (37 F.SilkS user) (44 Edge.Cuts user))\n"
+        "  (gr_line (start 0 0) (end 60 0) (layer Edge.Cuts) (width 0.1))\n"
+        "  (gr_line (start 60 0) (end 60 50) (layer Edge.Cuts) (width 0.1))\n"
+        "  (gr_line (start 60 50) (end 0 50) (layer Edge.Cuts) (width 0.1))\n"
+        "  (gr_line (start 0 50) (end 0 0) (layer Edge.Cuts) (width 0.1))\n"
+        + "".join(modules) + ")\n", encoding="utf-8")
+    return pcb
+
+
+def test_planted_kicad5_pin_1_dot_by_pad_6_is_an_error(tmp_path):
+    """The planted fault on a KiCad 5 board: the SOT-23-6's dot by pad 6."""
+    pcb = _k5_board(tmp_path, K5_SOT236.format(dot=K5_DOT["pad_6"]))
+    payload, _ = cs.run(["--pcb", str(pcb)])
+    hits = [v for v in payload["violations"] if v["kind"] == KIND]
+    assert [(v["severity"], v["refs"]) for v in hits] == [("error", ["U3"])]
+    assert "pad 6" in hits[0]["msg"]
+    assert payload["polarity_marks"]["wrong"] == 1
+
+
+@pytest.mark.parametrize("dot", ["pad_1", "arc_pad_1"])
+def test_quiet_twin_kicad5_dot_by_pad_1_is_clean(dot, tmp_path):
+    """The quiet twin: the same KiCad 5 part with its dot by pad 1 (a circle
+    or a closed arc) is one ok part, not a not_judged board."""
+    payload, _ = cs.run(["--pcb", str(_k5_board(tmp_path, K5_SOT236.format(dot=K5_DOT[dot])))])
+    assert [v for v in payload["violations"] if v["kind"] == KIND] == []
+    assert payload["polarity_marks"]["ok"] == 1
+    assert "not_judged_board" not in payload["polarity_marks"]
+
+
+def test_a_kicad5_part_with_no_mark_is_not_judged_not_passed(tmp_path):
+    """CMM2-JLC rev A's U3 as drawn: only KiCad's long silk edge, no dot."""
+    refs, fact = _polarity(_k5_board(tmp_path, K5_SOT236.format(dot=K5_DOT["none"])))
     assert refs == [] and fact["ok"] == 0 and fact["not_judged"] == 1
-    assert "KiCad 5" in fact["not_judged_board"]
+
+
+def test_a_kicad5_module_reads_as_its_kicad10_footprint(tmp_path):
+    """The same bottom-side diode as a KiCad 5 module and as the KiCad 10
+    footprint KiCad converts it to: the same pads, nets, side and silk
+    (the arc's mid and end worked out from its centre and sweep)."""
+    import cpl_verify as cv
+    k5 = _k5_board(tmp_path, """  (module Diode_SMD:D_SOD-123 (layer B.Cu) (at 20 20 90)
+    (fp_text reference D7 (at 0 2) (layer B.SilkS) (effects (font (size 1 1)) (justify mirror)))
+    (fp_line (start -2.36 1) (end 1.65 1) (layer B.SilkS) (width 0.12))
+    (fp_arc (start 0 0) (end 2 0) (angle 90) (layer B.SilkS) (width 0.12))
+    (pad 1 smd rect (at -1.65 0 90) (size 0.9 1.2) (layers B.Cu B.Paste B.Mask) (net 4 GND))
+    (pad 2 smd rect (at 1.65 0 90) (size 0.9 1.2) (layers B.Cu B.Paste B.Mask) (net 5 "Net-(D7-Pad2)"))
+  )
+""")
+    k10 = tmp_path / "k10.kicad_pcb"
+    k10.write_text(
+        '(kicad_pcb (version 20260206) (generator "pcbnew")\n'
+        '(footprint "Diode_SMD:D_SOD-123" (layer "B.Cu") (at 20 20 90)\n'
+        '  (property "Reference" "D7" (at 0 2 90) (layer "B.SilkS"))\n'
+        '  (fp_line (start -2.36 1) (end 1.65 1) (stroke (width 0.12)) (layer "B.SilkS"))\n'
+        '  (fp_arc (start 2 0) (mid 1.414214 1.414214) (end 0 2) (stroke (width 0.12)) (layer "B.SilkS"))\n'
+        '  (pad "1" smd rect (at -1.65 0 90) (size 0.9 1.2) (layers "B.Cu" "B.Paste" "B.Mask") (net "GND"))\n'
+        '  (pad "2" smd rect (at 1.65 0 90) (size 0.9 1.2) (layers "B.Cu" "B.Paste" "B.Mask") (net "Net-(D7-Pad2)"))\n'
+        '))\n', encoding="utf-8")
+    a, b = cv.board_footprints(k5)["D7"], cv.board_footprints(k10)["D7"]
+    assert (a.side, a.rot, a.x, a.y) == (b.side, b.rot, b.x, b.y) == ("bottom", 90.0, 20.0, 20.0)
+    assert [(p.number, p.x, p.y, p.net) for p in a.pads] == \
+        [(p.number, p.x, p.y, p.net) for p in b.pads] == \
+        [("1", -1.65, 0.0, "GND"), ("2", 1.65, 0.0, "Net-(D7-Pad2)")]
+    rnd = lambda fp: sorted(tuple(round(v, 4) for pt in s for v in pt) for s in fp.silk)
+    assert rnd(a) == rnd(b)
+
+
+def test_a_kicad5_arc_sweeps_clockwise_on_screen():
+    """KiCad 5's (start CENTRE) (end START) (angle SWEEP): a positive sweep
+    turns clockwise on screen, i.e. toward +y from +x with y down."""
+    import cpl_verify as cv
+    import sexpdata
+    a, m, e = cv._arc3(sexpdata.loads("(fp_arc (start 1 1) (end 3 1) (angle 90))"))
+    assert a == (3.0, 1.0)
+    assert m == pytest.approx((1 + 2 ** 0.5, 1 + 2 ** 0.5))
+    assert e == pytest.approx((1.0, 3.0))

@@ -950,7 +950,6 @@ def _notch(cv, fp):
     return where, ("ok" if ends == {pin_v > mid_v} else "wrong")
 
 
-KICAD5_MODULE = re.compile(r"^\s*\(module\s", re.M)
 FIGURE_STROKES = 7  # a seven-segment display's 8 is seven strokes
 
 
@@ -1069,13 +1068,6 @@ def check_polarity_marks(pcb) -> tuple[list[dict], dict]:
     import cpl_verify as cv
     vios, ok, unjudged = [], 0, {}
     fps = cv.board_footprints(pcb)
-    if not fps:
-        old = len(KICAD5_MODULE.findall(Path(pcb).read_text(encoding="utf-8")))
-        if old:
-            return [], {"ok": 0, "wrong": 0, "not_judged": old,
-                        "not_judged_refs": [], "not_judged_board": (
-                            f"a KiCad 5 board: its {old} parts are `module` "
-                            f"blocks, which the part reader does not read")}
     for ref in sorted(fps, key=cv._natural):
         fp = fps[ref]
         r = polarity_mark_of(cv, fp)
