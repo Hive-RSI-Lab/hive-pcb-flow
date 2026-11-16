@@ -496,7 +496,7 @@ fixtures:
     dirs:
       gerbers:
         path: tests/fixtures/stages/oasis_cpl/gerbers
-        sha256: 25b3390cbf1bfc86e798d5a875e102c853caf92096e02bfdca39004156d1b61f
+        sha256: b2e9508a0912a02bdc0ac675b12c9b764bb66ab57e8070f04110482f26d89af9
     args:
       copper_oz: 1.0
     known_answer:

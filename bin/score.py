@@ -471,6 +471,7 @@ def main() -> int:
                          "unjudged (then judge them and re-stamp with bin/hwde pin --digests)")
     args = ap.parse_args()
     sys.path.insert(0, str(SKILL))
+    os.environ.update(OFFLINE)  # the planted faults too: nothing here fetches
     try:
         todo = pins()
         bad = [m for p in todo for m in problems(p)]

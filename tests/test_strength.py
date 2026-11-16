@@ -203,3 +203,20 @@ def test_an_expected_severity_must_match():
     assert score_checks.catches({"kind": "creepage", "ref": "J1"}, v)
     assert not score_checks.catches({"kind": "creepage", "severity": "error"}, v)
     assert score_checks.catches({"severity": "error"}, {**v, "severity": "error"})
+
+
+def test_dfm_faults_leave_the_fixtures_as_frozen(monkeypatch):
+    """The planted dfm faults run on copies: a dfm run that keeps what it
+    learns beside the CPL (a model, EasyEDA's "no model") must not write it
+    into a pinned bench fixture (#1348)."""
+    import yaml
+    seen = []
+    monkeypatch.setattr(strength, "_dfm", lambda fx, g: seen.append(Path(g)) or [])
+    monkeypatch.setattr(strength, "inner_faults", lambda *a, **k: [])
+    strength.dfm_faults()
+    stages = strength.ROOT / "tests" / "fixtures" / "stages"
+    frozen = {(strength.ROOT / fx["dirs"]["gerbers"]["path"]).resolve()
+              for fx in yaml.safe_load((stages / "manifest.yaml").read_text(
+                  encoding="utf-8"))["fixtures"].values()
+              if fx.get("dirs", {}).get("gerbers")}
+    assert seen and not any(g.resolve() in frozen for g in seen)

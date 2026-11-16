@@ -245,10 +245,9 @@ def get(lcsc: str, cache_dir: Path | None = None, fetch: bool = True,
         # offline: a part EasyEDA was asked about and had nothing for is a
         # known "no model"; one never asked about is a miss the caller
         # passing `errors` must not read as "no model" (a cold cache)
-        if none_known(lcsc, path.parent):
-            return None
-        if none_known(lcsc, shared.parent):
-            _keep_none(lcsc, path, path, "kept in the shared cache")
+        # (read, never written: an offline run adds nothing to the dir it
+        # checks, so a test or score leaves a pinned fixture as it was)
+        if none_known(lcsc, path.parent) or none_known(lcsc, shared.parent):
             return None
         if errors is not None:
             errors[lcsc] = (f"offline (HWDE_EASYEDA_OFFLINE): {lcsc}'s model "

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -365,3 +366,20 @@ def test_a_pinned_shipped_cpl_keeps_its_models():
     src = json.loads((ROOT / "pinned" / "oasis-v0-2.json").read_text())["source"]
     assert src["cpl"].endswith("positions.csv") and (d / "fab" / "CPL.csv").is_file()
     assert len(list((d / "fab" / "easyeda").glob("C*.json"))) >= 20
+
+
+def test_the_planted_faults_run_offline_too(monkeypatch):
+    """score's own process (the planted faults' dfm) never fetches either."""
+    monkeypatch.delenv("HWDE_EASYEDA_OFFLINE", raising=False)
+    monkeypatch.delenv("HWDE_STOCK_OFFLINE", raising=False)
+    monkeypatch.setattr(score, "pins", lambda: ["p"])
+    monkeypatch.setattr(score, "problems", lambda p: [])
+    seen = {}
+
+    def planted():
+        seen.update(os.environ)
+        raise RuntimeError("stop here")
+    monkeypatch.setattr(score, "planted", planted)
+    monkeypatch.setattr(sys, "argv", ["score.py"])
+    assert score.main() == 1
+    assert seen["HWDE_EASYEDA_OFFLINE"] == "1" and seen["HWDE_STOCK_OFFLINE"] == "1"

@@ -650,10 +650,11 @@ def test_no_model_answer_is_kept_and_read_offline(tmp_path):
     errs = {}
     assert easyeda.get("C3", board, fetch=False, errors=errs) is None
     assert "offline" in errs["C3"] and "not in the cache" in errs["C3"]
-    # a marker only in the shared cache is copied into the board's
+    # a marker only in the shared cache is read, and nothing is written
+    # into the dir an offline run checks (a pinned fixture stays frozen)
     other = tmp_path / "other"
     assert easyeda.get("C1", other, fetch=False, errors=errs) is None
-    assert "C1" not in errs and easyeda.none_known("C1", other)
+    assert "C1" not in errs and not other.exists()
     # a network error is not an answer: no marker
     import urllib.error
 
