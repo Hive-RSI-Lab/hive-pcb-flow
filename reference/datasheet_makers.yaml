@@ -106,3 +106,41 @@ makers:
     prefixes: ['TSL2\d', 'TCS3\d', 'AS7\d']
     urls: []
     cite: ams-osram.com is not on the fetch allowlist; LCSC's copy only
+  # #1434: makers of fmcw-radar's passives, connectors and diodes, named by
+  # their LCSC brand strings (2026-11-16). No family is theirs alone, so no
+  # prefixes; none of their sites is on the fetch allowlist, so LCSC's copy only.
+  - name: Fenghua
+    brands: [fenghua, fh]
+    prefixes: []
+    urls: []
+    cite: 'LCSC brand "FH (Guangdong Fenghua Advanced Tech)" (C9196); fhcomp.com is not on the fetch allowlist; LCSC''s copy only'
+  - name: KENTO
+    brands: [kento]
+    prefixes: []
+    urls: []
+    cite: 'LCSC brand "Hubei KENTO Elec" (C12624, C2286); its site is not on the fetch allowlist; LCSC''s copy only'
+  - name: TXC
+    brands: [txc]
+    prefixes: []
+    urls: []
+    cite: 'LCSC brand "TXC Corp" (C5203597); txccorp.com is not on the fetch allowlist; LCSC''s copy only'
+  - name: HRO
+    brands: [hroparts, hro]
+    prefixes: []
+    urls: []
+    cite: 'LCSC brand "Korean Hroparts Elec" (C165948); its site is not on the fetch allowlist; LCSC''s copy only'
+  - name: JSMSEMI
+    brands: [jsmsemi]
+    prefixes: []
+    urls: []
+    cite: 'LCSC brand "JSMSEMI" (C2857264); its site is not on the fetch allowlist; LCSC''s copy only'
+  - name: Changjiang Microelectronics
+    brands: [cjiang, changjiang microelectronics]
+    prefixes: []
+    urls: []
+    cite: 'LCSC brand "cjiang (Changjiang Microelectronics Tech)" (C167865), not "CJ" (Jiangsu Changjing); its site is not on the fetch allowlist; LCSC''s copy only'
+  - name: XKB
+    brands: [xkb]
+    prefixes: []
+    urls: []
+    cite: 'LCSC brand "XKB Connection" (C318884); its site is not on the fetch allowlist; LCSC''s copy only'
