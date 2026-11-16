@@ -282,3 +282,48 @@ def test_generic_values_are_not_judged():
     assert not pnb.disagree({"AMS1117-3.3"}, {"LM1117MPX-3.3"})
     assert pnb.disagree({"10k"}, {"100nF"})
     assert not pnb.disagree({"4k7"}, {"10K"})
+
+
+def _borrow(tmp: Path, rows: str) -> tuple[dict, Path]:
+    """rev_a ships the BOM, rev_b (this board) borrows from it; both carry
+    the amplifier as U1 and an LDO as U2 on matching footprints."""
+    a, b = tmp / "rev_a", tmp / "rev_b"
+    a.mkdir()
+    b.mkdir()
+    fps = (_fp("U1", value="AD8232ACPZ-R7",
+               name="Package_DFN_QFN:QFN-20-1EP_4x4mm_P0.5mm"),
+           _fp("U2", value="TPS7A2033PDBVR",
+               name="Package_TO_SOT_SMD:SOT-23-5"))
+    pa, pb = _board(a, *fps), _board(b, *fps)
+    (a / "bom.csv").write_text("Comment,Designator,LCSC\n" + rows)
+    out, rep = tmp / "out.kicad_pcb", tmp / "r.json"
+    assert pnb.main(["--pcb", str(pb), "--src-pcb", str(pb), "--repo",
+                     str(b), "--other-pcb", str(pa), "--other-src-pcb",
+                     str(pa), "--other-repo", str(a), "--out", str(out),
+                     "--out-report", str(rep)]) == 0
+    rep = json.loads(rep.read_text())
+    return rep, out if out.exists() else pb
+
+
+def test_a_swap_in_the_other_revisions_bom_is_not_borrowed(tmp_path):
+    """Planted swap in the other revision's BOM: its rows put the LDO's
+    number on the amplifier and the amplifier's on the LDO. The footprints
+    match across revisions, but the borrowed rows plainly disagree with this
+    board's Values: nothing is filled and both are counted."""
+    rep, out = _borrow(tmp_path, "TPS7A2028PDBVR,U1,C2862740\n"
+                                 "AD8232ACPZ-R7,U2,C43216\n")
+    got = _props(out)
+    assert "LCSC" not in got["U1"] and "LCSC" not in got["U2"]
+    assert rep["counts"]["part_conflicts"] == 2
+    assert {c["source"] for c in rep["part_conflicts"]} == {"other_revision"}
+    assert rep["counts"]["added_from"]["other_revision"] == 0
+
+
+def test_the_other_revisions_bom_in_order_is_borrowed(tmp_path):
+    """Quiet twin: the same rows on the right refs are borrowed."""
+    rep, out = _borrow(tmp_path, "AD8232ACPZ-R7,U1,C43216\n"
+                                 "TPS7A2028PDBVR,U2,C2862740\n")
+    got = _props(out)
+    assert got["U1"]["LCSC"] == "C43216" and got["U2"]["LCSC"] == "C2862740"
+    assert rep["counts"]["part_conflicts"] == 0
+    assert rep["counts"]["added_from"]["other_revision"] == 2

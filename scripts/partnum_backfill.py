@@ -587,24 +587,34 @@ def from_other_revision(fps: list[dict], other_fps: list[dict],
                         other: dict) -> tuple[dict, int]:
     """{ref: {kind: {value}}} the other revision's own sources give the same
     ref, first source wins as in plan(), where the two footprints match; and
-    how many refs were not borrowed because they did not."""
+    how many refs were not borrowed because they did not. Each row also
+    carries, as "label", the part names the source rows it came from give
+    (their MPN and Comment/Value), so plan() refuses a borrowed number whose
+    own row plainly disagrees with this board's Value, as it does for the
+    board's own BOM: a swap in the other revision's BOM is not passed on."""
     mine = {fp["ref"]: fp_key(fp) for fp in fps if fp["ref"]}
     theirs = {fp["ref"]: fp_key(fp) for fp in other_fps if fp["ref"]}
     out: dict[str, dict[str, set]] = {}
     unmatched = 0
     for ref in sorted(mine):
         got = {}
+        names: set[str] = set()
         for kind in ("code", "mpn"):
             for s in SOURCES[:3]:
-                vals = other[s].get(ref, {}).get(kind)
+                row = other[s].get(ref, {})
+                vals = row.get(kind)
                 if vals:
                     got[kind] = set(vals)
+                    names |= set(row.get("mpn") or ()) | set(
+                        row.get("label") or ())
                     break
         if not got:
             continue
         if theirs.get(ref) != mine[ref]:
             unmatched += 1
             continue
+        if names:
+            got["label"] = names
         out[ref] = got
     return out, unmatched
 
