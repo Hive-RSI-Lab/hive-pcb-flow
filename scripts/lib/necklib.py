@@ -89,3 +89,55 @@ def neck_width(necks: dict, net: str, layer: str, shape) -> float | None:
     ws = [w for zone, w in (necks.get(net) or {}).get(layer, [])
           if zone.buffer(1e-6).covers(shape)]
     return min(ws) if ws else None
+
+
+def under_width_rules(bg, widths: dict, necks: dict, uuids) -> list[dict]:
+    """The tracks of `uuids` under their net's .kicad_dru width floor
+    (`widths`, route_critical.dru_net_floors) that aren't wholly in one of
+    its neck zones at no less than the neck width (#937, #1153):
+    [{"uuid", "net", "layer", "width", "rule_mm", "track"}]."""
+    uuids = set(uuids)
+    out = []
+    for t in bg.tracks_of():
+        if not t.uuid or t.uuid not in uuids:
+            continue
+        floor = widths.get(t.net, 0.0)
+        if t.width >= floor - 1e-4:
+            continue
+        nw = neck_width(necks or {}, t.net, t.layer, t.shape)
+        if nw is None or t.width < nw - 1e-4:
+            out.append({"uuid": t.uuid, "net": t.net, "layer": t.layer,
+                        "width": round(t.width, 4), "rule_mm": floor,
+                        "track": t})
+    return out
+
+
+def narrow_new_tracks(staged: Path, widths: dict[str, float],
+                      before: set, necks: dict | None = None) -> list[str]:
+    """uuids of tracks not on the board before that sit under their net's
+    width rule. A track wholly in its net's neck zone at no less than the
+    neck width keeps (#937): DRC's courtyard-held rule passes it."""
+    scripts_dir = Path(__file__).resolve().parents[1]
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    import geom
+    bg = geom.BoardGeom.from_file(staged)
+    new = {t.uuid for t in bg.tracks_of() if t.uuid and t.uuid not in before}
+    return [r["uuid"] for r in under_width_rules(bg, widths, necks, new)]
+
+
+def courtyard_neck_rule(fps: dict, neck_rules: list, row: dict):
+    """The neck rule (route_critical.dru_neck_rules) of the row's net whose
+    part's courtyard the track's copper meets, at a min the track's width
+    meets, or None. DRC's intersectsCourtyard holds such a track to the
+    neck's min, so it may pass a track the neck zone (cut to NECK_REACH_MM
+    round the pads) leaves out (#1153). fps = placelib.PlaceModel's
+    footprints."""
+    rules = [r for r in neck_rules if r["net"] == row["net"]
+             and row["width"] >= r["min_mm"] - 1e-4]
+    for r in rules:
+        cy = courtyard_abs(fps.get(r["ref"]))
+        if cy is not None and not cy.is_empty \
+                and cy.intersects(row["track"].poly):
+            return r
+    return None

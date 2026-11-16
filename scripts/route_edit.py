@@ -116,7 +116,16 @@ worker ops above, so they share the atomic apply + verify:
 
   --op '{"op": "rip", "net": "VBUS"}' (repeatable) takes ops inline instead
   of --ops FILE; --refill refills zones on the staged copy (with the board's
-  .kicad_pro/.kicad_dru beside it) before the swap.
+  .kicad_pro/.kicad_dru beside it) before the swap, and the report's "drc"
+  holds that DRC's counts and track_width violations.
+
+  Width rules (#1153): a track the ops add, set_width or renet that sits
+  under its net's .kicad_dru width floor (rules_gen's aiee_pwr_width_*),
+  outside the net's neck zones at the neck width (aiee_pwr_neck_*, #937),
+  refuses the run, each named with its net, width and the rule's width.
+  One that only meets a neck rule's part courtyard at that rule's min is
+  listed in "under_width_rule" with its "courtyard_rule", not refused: DRC
+  may pass it. --allow-under-rule lists them all instead of refusing.
 
 Atomic + rollback (place_edit pattern): ops are validated (schema + nets/
 layers against the board); the board is copied to a scratch dir INSIDE the
@@ -791,14 +800,27 @@ def _via_fills(pcb: Path) -> dict:
             for v in cw.read_vias(root, dflt, ["F.Cu", "B.Cu"])}
 
 
-def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False) -> list:
+def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False,
+              width_rules: str = "warn", report: dict | None = None) -> list:
     """Validate, resolve ECO selectors, stage, run the SWIG worker, verify,
     atomically swap in.
 
     Returns one result per input op (a selector op's result counts and names
     what it resolved to). Raises CheckError (original board untouched) on any
     failure. Importable - generators use this directly.
+
+    width_rules (#1153): a track the ops add, widen, narrow or renet that
+    sits under its net's .kicad_dru width floor, outside its neck zones,
+    is refused ("refuse": rolled back, each named) or only listed
+    ("warn", the default for importers; "off" skips the check). A track
+    that only meets a neck rule's courtyard is listed, not refused: DRC's
+    intersectsCourtyard may pass it. `report`, if given, gets
+    "under_width_rule" (the rows) and, on a refill, "drc" (the refill
+    DRC's counts and its track_width violations).
     """
+    if width_rules not in ("refuse", "warn", "off"):
+        raise CheckError(f"width_rules must be refuse, warn or off, "
+                         f"not {width_rules!r}")
     pcb = Path(pcb).resolve()
     if not pcb.is_file():
         raise CheckError(f"board not found: {pcb}")
@@ -857,11 +879,26 @@ def apply_ops(pcb: Path, ops: list[dict], *, refill: bool = False) -> list:
         if guards and not problems:
             problems = [f"reroute guard: {p}" for p in check_guards(
                 bg, geom.BoardGeom.from_file(staged), guards)]
+        if flat and not problems and width_rules != "off":
+            under = _under_width_rules(pcb, staged, bg, flat)
+            if report is not None:
+                report["under_width_rule"] = under
+            if width_rules == "refuse":
+                problems = [
+                    f"{r['net']} track {r['uuid'][:8]} on {r['layer']} is "
+                    f"{r['width']:g} mm, under the .kicad_dru width rule's "
+                    f"{r['rule_mm']:g} mm" for r in under
+                    if not r.get("courtyard_rule")]
         if problems:
             raise CheckError("post-apply verify failed (rolled back): "
                              + "; ".join(problems[:10]))
         if refill and flat:
-            _refill(cli, pcb, staged)
+            drc = _refill(cli, pcb, staged)
+            if report is not None:
+                report["drc"] = {
+                    "counts": drc.get("counts"),
+                    "track_width": [v for v in drc.get("violations", [])
+                                    if v.get("check") == "track_width"]}
         if flat:
             os.replace(staged, pcb)
         return [_fold(op, [worker[j] for j in span], [flat[j] for j in span])
@@ -893,9 +930,49 @@ def _fold(op: dict, results: list[dict], flat: list[dict]) -> dict:
     return out
 
 
-def _refill(cli, pcb: Path, staged: Path) -> None:
+def _under_width_rules(pcb: Path, staged: Path, before_bg,
+                       flat: list[dict]) -> list[dict]:
+    """The tracks the flat ops added (uuids not on the board before) or
+    changed (set_width, set_net) that sit under their net's .kicad_dru
+    width floor, outside its neck zones (#1153; route_auto's check, #937).
+    The rules are the board's own .kicad_dru: the staged copy has none
+    beside it. A row whose track meets a neck rule's courtyard at that
+    rule's min carries "courtyard_rule" (DRC may pass it)."""
+    import necklib
+    import route_critical as rc
+
+    dru = pcb.with_suffix(".kicad_dru")
+    floors = rc.dru_net_floors(dru, "track_width")
+    if not floors:
+        return []
+    bg = geom.BoardGeom.from_file(staged)
+    before = {t.uuid for t in before_bg.tracks_of()}
+    pick = {t.uuid for t in bg.tracks_of() if t.uuid and t.uuid not in before}
+    pick |= {f["uuid"] for f in flat
+             if f["op"] in ("set_width", "set_net") and f.get("uuid")}
+    if not any(t.uuid in pick and t.net in floors for t in bg.tracks_of()):
+        return []
+    neck_rules = rc.dru_neck_rules(dru, "track_width")
+    necks = necklib.board_necks(staged, bg, neck_rules)
+    rows = necklib.under_width_rules(bg, floors, necks, pick)
+    fps = None
+    if rows and neck_rules:
+        import placelib
+        fps = placelib.PlaceModel(staged).footprints
+    out = []
+    for r in rows:
+        cy = necklib.courtyard_neck_rule(fps, neck_rules, r) if fps else None
+        row = {k: v for k, v in r.items() if k != "track"}
+        if cy is not None:
+            row["courtyard_rule"] = {"ref": cy["ref"], "min_mm": cy["min_mm"]}
+        out.append(row)
+    return out
+
+
+def _refill(cli, pcb: Path, staged: Path) -> dict:
     """Refill zones on the staged copy, with the board's own project files
-    beside it (kicad-cli would refill against default rules otherwise)."""
+    beside it (kicad-cli would refill against default rules otherwise).
+    Returns the refill's DRC report (#1153: it was dropped)."""
     import kc
 
     for ext in (".kicad_pro", ".kicad_dru"):
@@ -903,7 +980,7 @@ def _refill(cli, pcb: Path, staged: Path) -> None:
         if side.is_file():
             shutil.copy2(side, staged.with_suffix(ext))
     try:
-        kc.run_drc(cli, staged, refill=True, save_board=True)
+        return kc.run_drc(cli, staged, refill=True, save_board=True)
     except Exception as e:  # noqa: BLE001 - any refill failure rolls back
         raise CheckError(f"zone refill failed (rolled back): {e}") from e
 
@@ -937,17 +1014,27 @@ def run(argv: list[str] | None = None):
                     help="one op (or a list) as JSON; repeatable")
     ap.add_argument("--refill", action="store_true",
                     help="refill zones on the staged copy before the swap")
+    ap.add_argument("--allow-under-rule", action="store_true",
+                    help="list a track under its net's .kicad_dru width "
+                         "rule in the report instead of refusing the run")
     ap.add_argument("--out-report", default=None)
     args = ap.parse_args(argv)
 
     ops = load_ops(args.ops, args.op)
-    results = apply_ops(Path(args.pcb), ops, refill=args.refill)
+    extra: dict = {}
+    results = apply_ops(Path(args.pcb), ops, refill=args.refill,
+                        width_rules="warn" if args.allow_under_rule
+                        else "refuse", report=extra)
     counts = {}
     for r in results:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
     payload = {"script": "route_edit", "status": "pass", "board": args.pcb,
                "applied": len(ops), "verified": True, "by_status": counts,
                "refilled": args.refill, "results": results}
+    if extra.get("under_width_rule"):
+        payload["under_width_rule"] = extra["under_width_rule"]
+    if "drc" in extra:
+        payload["drc"] = extra["drc"]
     return payload, args.out_report
 
 
