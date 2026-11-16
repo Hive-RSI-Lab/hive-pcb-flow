@@ -1418,6 +1418,18 @@ def test_partslib_rewrites_www_datasheet_urls():
     assert partslib.fix_datasheet_url(_WMSC_URL) == _WMSC_URL      # idempotent
     assert partslib.fix_datasheet_url("https://x.com/a.pdf") == "https://x.com/a.pdf"
     assert partslib.fix_datasheet_url("") == ""
+    # #1476: the older datasheet.lcsc.com forms, which redirect to the shell
+    stem = "1912111437_STMicroelectronics-LPS25HBTR_C87898.pdf"
+    wmsc = "https://wmsc.lcsc.com/wmsc/upload/file/pdf/v2/lcsc/" + stem
+    for old in ("https://datasheet.lcsc.com/szlcsc/", "https://datasheet.lcsc.com/lcsc/",
+                "http://datasheet.lcsc.com/lcsc/"):
+        assert partslib.fix_datasheet_url(old + stem) == wmsc
+    # planted faults: the stub's own target, a deeper path, a query, another host
+    for keep in ("https://datasheet.lcsc.com/datasheet/pdf/b576f6.pdf?productCode=C87898",
+                 "https://datasheet.lcsc.com/lcsc/x/" + stem,
+                 "https://datasheet.lcsc.com/lcsc/" + stem + "?a=1",
+                 "https://datasheet.lcsc.com.evil.example/lcsc/" + stem):
+        assert partslib.fix_datasheet_url(keep) == keep
     # applied inside normalize so no agent ever sees the unfetchable form
     row = partslib.normalize({"lcsc": "C142961", "datasheet": _WWW_URL})
     assert row["datasheet"] == _WMSC_URL

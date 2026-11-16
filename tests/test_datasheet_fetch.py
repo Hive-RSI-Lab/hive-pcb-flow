@@ -1000,3 +1000,57 @@ def test_a_line_with_no_lcsc_id_is_named():
             Namespace(fetch=str(ws), lcsc=None), transport=_serve(RIGHT),
             lookup=_never, resolve=_never)
         assert code == 1 and "no LCSC id" in out["datasheets"][0]["error"]
+
+
+# --- #1476: an http hop only as a step to https -----------------------------
+LC_S = "https://datasheet.lcsc.com/szlcsc/1912111437_ST-LPS25HBTR_C87898.pdf"
+LC_H = "http://datasheet.lcsc.com/lcsc/1912111437_ST-LPS25HBTR_C87898.pdf"
+LC_U = "https://datasheet.lcsc.com/lcsc/1912111437_ST-LPS25HBTR_C87898.pdf"
+ST = "https://www.st.com/resource/en/datasheet/lps25hb.pdf"
+
+
+@pytest.mark.parametrize("hops", [
+    [LC_S, LC_H, LC_U, "https://www.lcsc.com/datasheet/C87898.pdf"],  # LPS25HB
+    [LC_S, LC_H, LC_U],                       # same URL, scheme upgraded
+    [LC_S, "http://www.lcsc.com/x.pdf", ST],  # LCSC http -> maker https
+])
+def test_http_step_to_https_is_followed(hops):
+    assert researchlib.hop_refusal(hops) is None
+
+
+@pytest.mark.parametrize("hops,bad", [
+    ([LC_S, LC_H], LC_H),                                  # http is the last hop
+    ([LC_S, LC_H, "https://evil.example/x.pdf"], LC_H),    # http -> other host
+    ([LC_S, LC_H, LC_U.replace("C87898", "C1")], LC_H),    # path changed
+    ([LC_S, LC_H, LC_U + "?x=1"], LC_H),                   # query changed
+    ([LC_S, LC_H, "https://www.lcsc.com/datasheet/C87898.pdf"], LC_H),  # LCSC -> distributor
+    ([LC_S, "http://www.st.com/a.pdf", "https://www.ti.com/a.pdf"],
+     "http://www.st.com/a.pdf"),                           # maker -> maker is not LCSC
+    ([LC_S, "http://evil.example/x.pdf", "https://evil.example/x.pdf"],
+     "http://evil.example/x.pdf"),                         # upgrade of an off-list host
+    ([LC_S, "http://u@datasheet.lcsc.com/x.pdf",
+      "https://u@datasheet.lcsc.com/x.pdf"], "http://u@datasheet.lcsc.com/x.pdf"),
+    ([LC_S, "ftp://datasheet.lcsc.com/x.pdf", LC_U], "ftp://datasheet.lcsc.com/x.pdf"),
+])
+def test_other_http_hops_stay_refused(hops, bad):
+    why = researchlib.hop_refusal(hops)
+    assert why and bad in why and "https only" in why, why
+
+
+def _hops(hops: list[str], body: bytes):
+    return lambda u: {"status": 200, "final_url": hops[-1], "hops": hops,
+                      "body": body}
+
+
+def test_fetch_follows_lcsc_scheme_upgrade_and_refuses_its_twin():
+    with tempfile.TemporaryDirectory() as d:
+        dest = Path(d) / "x.pdf"
+        r = datasheet_extract.fetch_datasheet(
+            LC_S, dest, transport=_hops([LC_S, LC_H, LC_U], PDF))
+        assert r["status"] == "fetched" and dest.read_bytes() == PDF, r
+        dest.unlink()
+        r = datasheet_extract.fetch_datasheet(
+            LC_S, dest, transport=_hops(
+                [LC_S, LC_H, "https://evil.example/x.pdf"], PDF))
+        assert r["status"] == "refused" and LC_H in r["error"], r
+        assert not dest.exists()
