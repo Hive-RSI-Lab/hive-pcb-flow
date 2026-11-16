@@ -84,6 +84,7 @@ pairs get kind sense only on a narrow name rule (is_sense_name).
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 import os
 import re
@@ -226,6 +227,91 @@ def trunk_length(bg, net, terminals):
     if best is None:
         return total, False, sorted(name for name, _ in named)
     return best, True, []
+
+
+_ROW = re.compile(r"^([A-Za-z]+)\d+$")
+
+
+def contact_ties(bg, p, n, term) -> dict:
+    """{ref: [(p_pad, n_pad), ...]} for each matched part that carries both
+    nets on two or more pads, one (p, n) per way it can be met (#634). A
+    USB-C receptacle ties A6/B6 and A7/B7: a plug in one orientation meets
+    the A row and the other contact pair is a stub, so the trunk is the path
+    to one row, never to whichever is farther. Rows come from the pad names
+    (letters before the number) when each row holds one pad of each net;
+    else the part's matched pairs stand for the ways."""
+    ties = {}
+    for ref in dict.fromkeys(pp.ref for pp, _ in term):
+        if ref == "?":  # no Reference read: '?' lumps every such part
+            continue
+        ps = [q for q in bg.pads_of(net=p) if q.ref == ref]
+        ns = [q for q in bg.pads_of(net=n) if q.ref == ref]
+        if len(ps) < 2 or len(ns) < 2:
+            continue
+        rows: dict[str, list] = {}
+        for q in ps + ns:
+            m = _ROW.match(str(q.number))
+            rows.setdefault(m.group(1) if m else None, []).append(q)
+        if None not in rows and len(rows) > 1 and all(
+                sum(q.net == p for q in qs) == 1 and len(qs) == 2
+                for qs in rows.values()):
+            ties[ref] = [tuple(sorted(qs, key=lambda q: q.net != p))
+                         for _, qs in sorted(rows.items())]
+        else:
+            ways = list(dict.fromkeys((pp, nn) for pp, nn in term
+                                      if pp.ref == ref))
+            if len(ways) > 1:
+                ties[ref] = ways
+    return ties
+
+
+def _way_trunk(g, active, idle):
+    """(length, [stub per idle pad]) of a net's trunk between its farthest
+    active terminals; a stub is the idle pad's run off that trunk, the
+    branch length (d(x,a) + d(x,b) - L) / 2. None when the trunk is open."""
+    nodes = [netconn.pad_node(g, t) for t in active]
+    best = None
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            L = netconn.shortest_path_len(g, nodes[i], nodes[j])
+            if L is not None and (best is None or L > best[0]):
+                best = (L, nodes[i], nodes[j])
+    if best is None:
+        return None
+    L, a, b = best
+    stubs = []
+    for t in idle:
+        x = netconn.pad_node(g, t)
+        da = netconn.shortest_path_len(g, x, a)
+        db = netconn.shortest_path_len(g, x, b)
+        stubs.append(None if da is None or db is None
+                     else max(0.0, (da + db - L) / 2))
+    return L, stubs
+
+
+def tied_ways(bg, p, n, term, ties) -> list[dict] | None:
+    """One row per way the tied contacts can be met (each choice of one
+    (p, n) per tied part): the active terminals, both trunk lengths, the
+    skew and each net's longest stub to an idle contact. None when a way
+    leaves either trunk open."""
+    gp, gn = netconn.build(bg, p), netconn.build(bg, n)
+    fixed = [pr for pr in term if pr[0].ref not in ties]
+    out = []
+    for pick in itertools.product(*ties.values()):
+        active = fixed + list(pick)
+        idle = [pr for ways in ties.values() for pr in ways if pr not in pick]
+        rp = _way_trunk(gp, [a for a, _ in active], [a for a, _ in idle])
+        rn = _way_trunk(gn, [b for _, b in active], [b for _, b in idle])
+        if rp is None or rn is None:
+            return None
+        stub = [max((s for s in r[1] if s is not None), default=0.0)
+                for r in (rp, rn)]
+        out.append({"contacts": [f"{a.ref}.{a.number}/{b.number}"
+                                 for a, b in pick],
+                    "term": active, "length_p_mm": rp[0],
+                    "length_n_mm": rn[0], "skew_mm": abs(rp[0] - rn[0]),
+                    "stub_p_mm": stub[0], "stub_n_mm": stub[1]})
+    return out
 
 
 # ------------------------------------------------------------ running skew
@@ -490,6 +576,16 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
             lp, okp, unreach_p = (r[0] if r[0] is not None else lp), True, []
         else:
             ln, okn, unreach_n = (r[0] if r[0] is not None else ln), True, []
+    # contacts tied on one part (USB-C A6/B6, #634): the trunk is judged per
+    # way a plug meets them, at the worst one; never branch free
+    ways = None
+    ties = contact_ties(bg, p, n, term) if okp and okn and not through_zone \
+        else {}
+    if ties:
+        ways = tied_ways(bg, p, n, term, ties)
+    if ways:
+        worst = max(ways, key=lambda w: w["skew_mm"])
+        lp, ln, term = worst["length_p_mm"], worst["length_n_mm"], worst["term"]
     skew = abs(lp - ln)
 
     # nominal pitch drives the coupling threshold
@@ -520,8 +616,9 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
     rep_pt = _rep_point(bg, p)
 
     violations: list[dict] = []
+    branch_free = bool(okp and okn and not ties)
     common = dict(kind=None, pair=[p, n], length_p_mm=checklib.rnd(lp),
-                  length_n_mm=checklib.rnd(ln), branch_free=bool(okp and okn))
+                  length_n_mm=checklib.rnd(ln), branch_free=branch_free)
 
     # An open trunk means the length above is TOTAL copper, not a trunk - the
     # skew number is meaningless and must never pass silently (LEARNINGS
@@ -540,7 +637,7 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
                        "fallback_length_mm": checklib.rnd(length)}))
 
     sense = is_sense(spec)
-    measured = not zone_why
+    measured = not zone_why and not (ties and not ways)
     violations += pair_rules(spec, p, n, lp if measured else None,
                              ln if measured else None, unc_p, unc_n,
                              coupling_max, eps, rep_pt, common)
@@ -622,7 +719,7 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
 
     facts = {"pair": [p, n], "kind": "sense" if sense else "diff", "length_p_mm": checklib.rnd(lp),
              "length_n_mm": checklib.rnd(ln), "skew_mm": checklib.rnd(skew),
-             "skew_ps": checklib.rnd(skew_ps), "branch_free": bool(okp and okn),
+             "skew_ps": checklib.rnd(skew_ps), "branch_free": branch_free,
              "uncoupled_p_mm": checklib.rnd(unc_p),
              "uncoupled_n_mm": checklib.rnd(unc_n),
              "coupling_max_mm": checklib.rnd(coupling_max),
@@ -642,6 +739,16 @@ def check_pair(bg: geom.BoardGeom, spec: dict):
             not_judged.append(PHASE_ZONES)
     if zone_rows:
         facts["zones"] = zone_rows
+    if ways:
+        facts["tied_contacts"] = [
+            {k: (checklib.rnd(v) if k.endswith("_mm") else v)
+             for k, v in w.items() if k != "term"} for w in ways]
+    elif ties and not sense:
+        facts.pop("skew_mm", None)
+        facts.pop("skew_ps", None)
+        not_judged.append("skew: the contacts tied on " + ", ".join(ties)
+                          + " leave a trunk open in some way a plug meets "
+                          "them")
     if not_judged:
         facts["not_judged"] = not_judged
     return violations, facts
