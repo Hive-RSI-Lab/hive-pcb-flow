@@ -112,6 +112,7 @@ class Router:
         self.via_cost_mm = via_cost_mm
         self.max_nodes = max_nodes
         self._conn = 0
+        self.cuts: list = []     # (net, rf.pour_cuts) of kept routes
         # power, pour and rule-width nets are never ripped (route_finish's
         # keep_nets): their copper is sized by rule. A teardrop is no pour.
         self.keep_nets = (rf.pour_nets(bg) | set(self.rules.net_width)
@@ -229,14 +230,38 @@ class Router:
 
     def find(self, net, a, b, width=None):
         """(ops, path, grid) for a route from side a to side b over a
-        widening window, or None."""
+        widening window, or None. A path that would cut a pour off a via or
+        pad only the pour joins (rf.pour_cuts, #1311) is searched again
+        round what it walled off, up to rf.LINK_ROUNDS times; one that still
+        cuts is kept, and its cuts noted in self.cuts and on stderr."""
         w = width or self.rules.width(net)
-        for m in (self.margin, self.margin * 2.5):
-            gr = self.grid(net, a, b, self.window(a, b, m), w)
-            path = self.search(gr, a, b)
-            if path:
-                return rf.path_to_ops(gr, path, net, w, self.rules), path, gr
-        return None
+        held = list(self.obs.guards)
+        try:
+            for m in (self.margin, self.margin * 2.5):
+                hit = None
+                for _ in range(rf.LINK_ROUNDS + 1):
+                    gr = self.grid(net, a, b, self.window(a, b, m), w)
+                    path = self.search(gr, a, b)
+                    if not path:
+                        break
+                    ops = rf.path_to_ops(gr, path, net, w, self.rules)
+                    cuts = rf.pour_cuts(self.obs, ops, net, self.rules)
+                    if hit is None or not cuts:
+                        hit = (ops, path, gr, cuts)
+                    if not cuts:
+                        break
+                    self.obs.guards += [
+                        (zn, ly, pk, zc) for _, ly, pk, zn, zc in cuts]
+                if hit:
+                    ops, path, gr, cuts = hit
+                    if cuts:
+                        self.cuts.append((net, cuts))
+                        print(f"mazeroute: {net}'s route {rf.cut_note(cuts)}",
+                              file=sys.stderr)
+                    return ops, path, gr
+            return None
+        finally:
+            self.obs.guards = held
 
     def commit(self, ops: list) -> None:
         """Later routes keep clear of these."""

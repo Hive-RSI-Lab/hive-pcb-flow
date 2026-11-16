@@ -332,11 +332,19 @@ class Item:
 class Obstacles:
     """The board's copper and holes, indexed for windowed rasterising.
     spokes=True: spokes_near() also gives the thermal spokes a route must
-    leave (#1140); off, it gives none, as before."""
+    leave (#1140); off, it gives none, as before. links=True (the default):
+    it also gives the bands where a pour alone joins a via or pad to the
+    rest of its net (pour_links, #1311)."""
 
-    def __init__(self, bg: geom.BoardGeom, *, spokes: bool = False):
+    def __init__(self, bg: geom.BoardGeom, *, spokes: bool = False,
+                 links: bool = True):
         self.bg = bg
         self.spokes = spokes
+        self.links = links
+        self._link_tree = None
+        # pockets a found path walled off with a pour link, kept clear on
+        # the next search (pour_cuts): (zone net, layer, shape, clearance)
+        self.guards: list = []
         self._spoke_pads = None      # (pad, zone, layer, gap, width, min)
         self._spoke_tree = None
         self._spoke_live: dict = {}  # index into _spoke_pads -> live spokes
@@ -459,20 +467,42 @@ class Obstacles:
         return self._spoke_live[i]
 
     def spokes_near(self, win) -> list:
-        """(zone net, layer, keep-out, zone clearance) of the spokes kept for
-        each thermal pad near win: its best SPOKES_MIN live ones in the
+        """(zone net, layer, keep-out, zone clearance) of the pour links near
+        win (links_near), then of the spokes kept for each thermal pad near
+        win: its best SPOKES_MIN live ones in the
         board's fill (thermal_spokes). Other-net copper held its clearance
         off them leaves the refill those spokes, so a route does not starve
         a thermal pad (C221 on the voice board). Built per pad on first use.
-        None unless the Obstacles were made with spokes=True."""
+        No spokes unless the Obstacles were made with spokes=True."""
+        out = self.links_near(win)
         if not self.spokes or not self._thermal_index():
-            return []
-        out = []
+            return out
         for i in self._spoke_tree.query(win):
             p, z, layer = self._spoke_pads[int(i)][:3]
             out += [(z.net, layer, shape, z.clearance)
                     for _, shape in self._live(int(i))[:SPOKES_MIN]]
         return out
+
+    def links_near(self, win) -> list:
+        """(zone net, layer, band, zone clearance) of each pour link near
+        win (pour_links): where a pour's fill alone joins a via or pad to
+        the rest of its net. [] unless the Obstacles were made with
+        links=True."""
+        if not self.links:
+            return []
+        out = [self.link(int(i)) for i in self.link_index().query(win)]
+        return out + [g for g in self.guards if g[2].intersects(win)]
+
+    def link_index(self):
+        """STRtree of the pour links' bands (pour_links), built on first
+        use."""
+        if self._link_tree is None:
+            self._links = pour_links(self.bg)
+            self._link_tree = STRtree([b for _, _, b, _, _ in self._links])
+        return self._link_tree
+
+    def link(self, i: int) -> tuple:
+        return self._links[i][:4]
 
     def spoke_count(self, i: int) -> int:
         """The spokes KiCad's DRC counts for thermal pad i (zones/zc.cpp):
@@ -564,6 +594,225 @@ def thermal_pads(bg: geom.BoardGeom) -> list:
             out += [(p, z, layer, gap, sw, mt) for layer in p.layers
                     if z.fills.get(layer)]
     return out
+
+
+LINK_TOL = 1e-3               # copper this near is joined (_net_graph)
+
+
+def _net_graph(bg: geom.BoardGeom, net: str) -> tuple[list, list]:
+    """`net`'s copper as a graph: nodes (kind, owner, layers, shape, zone),
+    kind "pad", "via", "track" or "fill" (a fill polygon of one layer;
+    zone None for the others), and edges (node, node, layer), two nodes
+    whose copper meets on a layer they share. Close to KiCad's
+    connectivity: a track joins by any of its copper, not only its ends."""
+    cu = tuple(bg.copper_layers)
+    nodes = []
+    for p in bg.pads_of(net=net):
+        nodes.append(("pad", (p.ref, p.number), set(p.layers) & set(cu),
+                      p.poly, None))
+    for v in bg.vias_of(net=net):
+        nodes.append(("via", v.uuid, set(v.layers or cu), v.poly, None))
+    for t in bg.tracks_of(net=net):
+        nodes.append(("track", t.uuid, {t.layer}, t.poly, None))
+    for z in bg.zones_of(net):
+        for layer, ps in z.fills.items():
+            for p in ps:
+                nodes.append(("fill", id(z), {layer}, p, z))
+    edges = []
+    for layer in cu:
+        on = [i for i, n in enumerate(nodes) if layer in n[2]]
+        if len(on) < 2:
+            continue
+        tree = STRtree([nodes[i][3] for i in on])
+        a, b = tree.query([nodes[i][3] for i in on], predicate="dwithin",
+                          distance=LINK_TOL)
+        edges += [(on[i], on[j], layer) for i, j in zip(a, b) if i < j]
+    return nodes, edges
+
+
+def _bridges(n: int, edges: list, weight: list) -> list:
+    """(edge index, weight on the far side, weight of its component) of each
+    bridge of the graph (Tarjan, iterative): the edge whose loss splits its
+    component, the far side being the DFS child's subtree."""
+    adj: list[list] = [[] for _ in range(n)]
+    for e, (a, b, _) in enumerate(edges):
+        adj[a].append((b, e))
+        adj[b].append((a, e))
+    tin = [-1] * n
+    low = [0] * n
+    sub = list(weight)
+    out, timer = [], 0
+    for root in range(n):
+        if tin[root] != -1:
+            continue
+        found = []
+        tin[root] = low[root] = timer
+        timer += 1
+        stack = [(root, -1, iter(adj[root]))]
+        while stack:
+            v, pe, it = stack[-1]
+            for w, e in it:
+                if e == pe:
+                    continue
+                if tin[w] == -1:
+                    tin[w] = low[w] = timer
+                    timer += 1
+                    stack.append((w, e, iter(adj[w])))
+                    break
+                low[v] = min(low[v], tin[w])
+            else:
+                stack.pop()
+                if stack:
+                    u = stack[-1][0]
+                    low[u] = min(low[u], low[v])
+                    sub[u] += sub[v]
+                    if low[v] > tin[u]:
+                        found.append((pe, v))
+        out += [(e, sub[v], sub[root]) for e, v in found]
+    return out
+
+
+def pour_links(bg: geom.BoardGeom) -> list:
+    """(net, layer, band, zone clearance, owner) for each via, and each pad
+    a pour joins solid, whose join to a fill polygon of its pour is all
+    that keeps pads of its net together: an edge of the net's copper graph
+    (_net_graph) whose loss leaves pads on both sides (#1311; U202.1's via
+    to the In3.Cu +0V75 pour on the voice board). band is that fill within
+    the zone's min thickness of the item's copper: other nets' copper held
+    the zone's clearance off it leaves the refill the join, as with a
+    thermal pad's spokes. owner is ("via", uuid) or ("pad", ref, number).
+    A thermal pad is left to its spokes (Obstacles.spokes_near). Built once
+    per board: its copper is not changed after parsing."""
+    cache = bg.__dict__.setdefault("_pour_links", {})
+    if "all" in cache:
+        return cache["all"]
+    out, detail = [], []
+    for net in sorted(pour_nets(bg)):
+        nodes, edges = _net_graph(bg, net)
+        pads = [1 if nd[0] == "pad" else 0 for nd in nodes]
+        adj: dict = {}
+        for a, b, layer in edges:
+            adj.setdefault((a, layer), []).append(b)
+            adj.setdefault((b, layer), []).append(a)
+        for e, far, total in _bridges(len(nodes), edges, pads):
+            if not 0 < far < total:
+                continue
+            a, b, layer = edges[e]
+            if nodes[a][0] == "fill":
+                a, b = b, a
+            item, fill = nodes[a], nodes[b]
+            z = fill[4]
+            if fill[0] != "fill" or z.teardrop or item[0] not in (
+                    "via", "pad"):
+                continue
+            if item[0] == "pad":
+                p = next(q for q in bg.pads_of(net=net)
+                         if (q.ref, q.number) == item[1])
+                if zone_join(p, z) != geom.ZONE_CONNECT_SOLID:
+                    continue
+            mt = z.min_thickness or SPOKE_DEFAULTS[2]
+            band = fill[3].intersection(item[3].buffer(mt + LINK_TOL,
+                                                       quad_segs=8))
+            if band.is_empty:
+                continue
+            out.append((net, layer, band, z.clearance,
+                        (item[0],) + (item[1] if item[0] == "pad"
+                                      else (item[1],))))
+            # what pour_cuts needs: the item's copper, the zone, the fill's
+            # other copper on the layer (not more of the zone's fill), the
+            # min thickness
+            detail.append((item[3], z, [
+                nodes[k][3] for k in adj.get((b, layer), ())
+                if k != a and nodes[k][4] is not z], mt))
+    cache["all"] = out
+    cache["detail"] = detail
+    return out
+
+
+LINK_ROUNDS = 4          # searches again round a pocket a path walls off
+LINK_WINDOW_MM = 3.0     # how far round a pour link pour_cuts looks
+
+
+def pour_cuts(obs: Obstacles, ops: list, net: str, rules: Rules) -> list:
+    """(owner, layer, pocket, zone net, zone clearance) of each pour link
+    (pour_links) of another net that the copper of `ops` would cut from
+    the rest of its pour (#1311). Predicts the refill round the link: the
+    fill less the new copper, held max(zone clearance, rule clearance) off,
+    opened by the zone's min thickness; the link is cut when no piece of
+    that fill both meets the item and reaches the fill's other copper or
+    the edge of the LINK_WINDOW_MM window, past which the fill goes on.
+    pocket is what a search again keeps the clearance off: the fill the new
+    copper walls in with the item, or, when it only thins the fill to
+    nothing, the band and what is left of the fill at the item. [] with
+    links off."""
+    if not obs.links or not ops:
+        return []
+    cu: dict = {}
+    for it in ops_items(ops, 0, obs.bg.copper_layers):
+        shape = it.shape.buffer(it.half, quad_segs=8)
+        for layer in it.layers:
+            cu.setdefault(layer, []).append(shape)
+    if not any(cu.values()):
+        return []
+    cu = {k: shapely.union_all(v) for k, v in cu.items()}
+    tree = obs.link_index()
+    detail = obs.bg.__dict__["_pour_links"]["detail"]
+    reach = shapely.union_all(list(cu.values())).buffer(LINK_WINDOW_MM)
+    out = []
+    for i in sorted(int(i) for i in tree.query(reach, predicate="intersects")):
+        znet, layer, band, zclr, owner = obs._links[i]
+        if znet == net or layer not in cu:
+            continue
+        item, z, others, mt = detail[i]
+        fill = _zone_fill(obs.bg, z, layer)
+        x0, y0, x1, y1 = band.bounds
+        win = box(x0 - LINK_WINDOW_MM, y0 - LINK_WINDOW_MM,
+                  x1 + LINK_WINDOW_MM, y1 + LINK_WINDOW_MM)
+        copper = cu[layer].intersection(win)
+        if copper.is_empty:
+            continue
+        c = max(zclr or 0.0, rules.clr(net, znet))
+        f = fill.intersection(win)
+        left = f.difference(copper.buffer(c, quad_segs=8)).buffer(
+            -mt / 2 + LINK_TOL, quad_segs=8).buffer(mt / 2 - LINK_TOL,
+                                                     quad_segs=8)
+        edge = win.exterior
+        if fill.difference(win).is_empty:
+            edge = None                    # the fill ends inside the window
+        outer = [o.intersection(win) for o in others]
+        outer = [o for o in outer if not o.is_empty]
+
+        def joined(piece):
+            return (edge is not None and piece.distance(edge) <= LINK_TOL) \
+                or any(piece.distance(o) <= LINK_TOL for o in outer)
+
+        pieces = [g for g in getattr(left, "geoms", [left])
+                  if not g.is_empty and g.distance(item) <= LINK_TOL]
+        if any(joined(g) for g in pieces):
+            continue
+        walled = f.difference(copper)
+        walled = [g for g in getattr(walled, "geoms", [walled])
+                  if not g.is_empty and g.distance(item) <= LINK_TOL]
+        pocket = [g for g in walled if not joined(g)]
+        pocket = shapely.union_all(pocket or [band.buffer(mt)] + pieces)
+        out.append((owner, layer, pocket, znet, zclr))
+    return out
+
+
+def _zone_fill(bg: geom.BoardGeom, z, layer: str):
+    """z's fill on layer as one shape, made once per board."""
+    cache = bg.__dict__["_pour_links"].setdefault("fill", {})
+    if (id(z), layer) not in cache:
+        cache[(id(z), layer)] = shapely.union_all(z.fills.get(layer, []))
+    return cache[(id(z), layer)]
+
+
+def cut_note(cuts: list) -> str:
+    """pour_cuts' links, one line."""
+    return "; ".join(
+        f"cuts the {layer} {znet} pour off "
+        + (f"via {o[1]}" if o[0] == "via" else f"pad {o[1]}.{o[2]}")
+        for o, layer, _, znet, _ in cuts)
 
 
 def thermal_spokes(pad, fills, gap: float, sw: float, mt: float,
@@ -1616,6 +1865,7 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
             obs.soft_board = keep_nets
         fine = dataclasses.replace(
             rules, margin=min(rules.margin, FINE_MARGIN_MM))
+        guards = list(obs.guards)
         try:
             for m, g, (w, v), rr in (
                     (margin, grid, start, rules),
@@ -1624,30 +1874,52 @@ def plan_routes(bg: geom.BoardGeom, rules: Rules, pairs: list[dict],
                 (ax, ay), (bx, by) = job["pa"], job["pb"]
                 win = (min(ax, bx) - m, min(ay, by) - m,
                        max(ax, bx) + m, max(ay, by) + m)
-                gr = build_grid(obs, rr, net, job["side_a"],
-                                job["side_b"], layers, win, g, width=w,
-                                via=v, **inner_cost)
-                if no_path(gr):
-                    continue
-                target = (int(round((bx - gr.x0) / g)),
-                          int(round((by - gr.y0) / g)))
-                for _ in range(VIA_RETRIES + 1):
-                    path = astar(gr, target, via_cost=via_cost_mm / g,
-                                 max_nodes=max_nodes, deadline=deadline,
-                                 search_weight=search_weight)
-                    near = path and too_close_via(gr, path, rr)
-                    if not near:
+                hit = None
+                # a path that cuts a pour off a via or pad only the pour
+                # joins is searched again round the pocket it walls off
+                # (#1311); one that still cuts is kept and noted
+                for _ in range(LINK_ROUNDS + 1):
+                    gr = build_grid(obs, rr, net, job["side_a"],
+                                    job["side_b"], layers, win, g, width=w,
+                                    via=v, **inner_cost)
+                    if no_path(gr):
                         break
-                    # search again with that layer change's cell closed
-                    k, c = near
-                    gr.blk[k] = gr.blk[k][:c] + b"\1" + gr.blk[k][c + 1:]
-                    path = None
-                if path:
+                    target = (int(round((bx - gr.x0) / g)),
+                              int(round((by - gr.y0) / g)))
+                    for _ in range(VIA_RETRIES + 1):
+                        path = astar(gr, target, via_cost=via_cost_mm / g,
+                                     max_nodes=max_nodes, deadline=deadline,
+                                     search_weight=search_weight)
+                        near = path and too_close_via(gr, path, rr)
+                        if not near:
+                            break
+                        # search again with that layer change's cell closed
+                        k, c = near
+                        gr.blk[k] = gr.blk[k][:c] + b"\1" + gr.blk[k][c + 1:]
+                        path = None
+                    if not path:
+                        if hit is None:
+                            job["gave_up"] = job.get("gave_up") or gr.gave_up
+                        break
+                    cuts = pour_cuts(obs, path_to_ops(gr, path, net, w, rules),
+                                     net, rules)
+                    if hit is None or not cuts:
+                        hit = (path, gr, w, cuts)
+                    if not cuts:
+                        break
+                    obs.guards += [(zn, ly, pk, zc)
+                                   for _, ly, pk, zn, zc in cuts]
+                if hit:
+                    path, gr, w, cuts = hit
+                    if cuts:
+                        job["pour_cut"] = cut_note(cuts)
+                    else:
+                        job.pop("pour_cut", None)
                     return path, gr, w
-                job["gave_up"] = job.get("gave_up") or gr.gave_up
         finally:
             obs.added = held
             obs.soft_board = None
+            obs.guards = guards
         return None, None, None
 
     def commit(n, job, path, gr, w):
