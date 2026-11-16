@@ -1879,18 +1879,20 @@ def i2c_findings(board, rails, model, opts, vios, unknowns, facts):
             by_fn = bool({"SDA", "SCL"} & set(p["fn"])) and \
                 pin_role(c, pin, p, modes) != ("off", "pin_modes")
             if I2C_RE.search(name) or by_fn:
-                buses.setdefault(r, {"ics": set(), "off": set()})
+                buses.setdefault(r, {"ics": set(), "off": set(), "pins": 0})
     # a second pass, so an IC met before the pin that names the bus counts
     for c in board["comps"].values():
         for p in c["pins"].values():
             b = buses.get(grp.get(p["net"]))
             if b is None or p["net"] in rails:
                 continue
+            if {"SDA", "SCL"} & set(p["fn"]):
+                b["pins"] += 1
             if c["kind"] in ("U", "IC"):
                 b["ics"].add(c["ref"])
             elif c["kind"] in OFFBOARD_KINDS:
                 b["off"].add(c["ref"])
-    out, lone = [], []
+    out, lone, straps = [], [], []
     for r, b in sorted(buses.items()):
         nets = members[r]
         pulls = [(e, _other(e, n)) for e in model["elems"] if e["kind"] == "R"
@@ -1898,6 +1900,17 @@ def i2c_findings(board, rails, model, opts, vios, unknowns, facts):
                  and _other(e, n) in rails and rails[_other(e, n)][0] > 0]
         label = "/".join(sorted(nets))
         if len(b["ics"]) < 1:
+            continue
+        # a strap (#511): one SDA/SCL pin, held low by a pull-down and with
+        # no pull-up, cannot idle high, so it is not a bus whatever else is
+        # on the net (a GPIO setting the strap, a test point): a hub's
+        # SCL/SMBCLK/CFG_SEL0 strapped to 0
+        downs = [e["ref"] for e in model["elems"] if e["kind"] == "R"
+                 and e["value"] > 1 for n in nets if n in e["nets"]
+                 and _other(e, n) in model["grounds"]]
+        if downs and not pulls and b["pins"] < 2:
+            straps.append({"nets": sorted(nets), "ics": sorted(b["ics"]),
+                           "pulldowns": sorted(downs)})
             continue
         # a bus needs a peer: a second IC, or a connector or test point
         # taking it off the board; one IC alone is a port left unused (or
@@ -1953,6 +1966,14 @@ def i2c_findings(board, rails, model, opts, vios, unknowns, facts):
                                 "pass --i2c-cb-pf once the layout is known"})
     facts["i2c"] = out
     facts["i2c_no_peer"] = lone
+    facts["i2c_straps"] = straps
+    for x in straps:
+        unknowns.append({"ref": ",".join(x["ics"]),
+                         "what": "I2C pin used as a strap",
+                         "why": f"{'/'.join(x['nets'])} has one SDA/SCL pin "
+                                f"held low by {', '.join(x['pulldowns'])} and "
+                                "no pull-up: read as a strap, not a bus, and "
+                                "not judged"})
     for ic in sorted({x["ic"] for x in lone}):
         nets = [n for x in lone if x["ic"] == ic for n in x["nets"]]
         unknowns.append({"ref": ic, "what": "I2C port with no peer",
