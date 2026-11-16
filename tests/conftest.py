@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 
 RECORDED_KICAD = (10, 0, 6)
+# the LCSC models the boards under tests/ use (#1254; _easyeda_offline)
+EASYEDA_PINNED = Path(__file__).resolve().parent / "fixtures" / "easyeda_pinned"
 _STRANDED = pytest.StashKey[tuple]()
 
 
@@ -338,7 +340,9 @@ def _never_file_documents(monkeypatch, tmp_path_factory):
 @pytest.fixture(autouse=True)
 def _easyeda_offline(monkeypatch, tmp_path_factory):
     """No test fetches an LCSC footprint model or reads the user's cache: a
-    test that needs models copies tests/fixtures/easyeda into its own dir."""
+    test that needs models copies tests/fixtures/easyeda into its own dir.
+    Every test reads tests/fixtures/easyeda_pinned (read-only) after its
+    own cache: the models the boards under tests/ use."""
     monkeypatch.setenv("HWDE_EASYEDA_OFFLINE", "1")
     # nor asks JLC or LCSC for stock (test_stock_check fakes the sources)
     monkeypatch.setenv("HWDE_STOCK_OFFLINE", "1")
@@ -352,6 +356,9 @@ def _easyeda_offline(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("HWDE_NO_FSYNC", "1")
     monkeypatch.setenv("HWDE_EASYEDA_CACHE",
                        str(tmp_path_factory.mktemp("easyeda_empty")))
+    # The models the boards under tests/ use, pinned read-only, so this host
+    # and CI (which has no shared cache) judge the same footprints (#1254)
+    monkeypatch.setenv("HWDE_EASYEDA_PINNED", str(EASYEDA_PINNED))
     # The rate-limit latch is process state: one test's mocked 403 must not
     # skip every later test's fetches.
     mod = sys.modules.get("easyeda")

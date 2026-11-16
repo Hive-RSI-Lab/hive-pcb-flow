@@ -23,6 +23,9 @@ never silently ignored - a wrong pin must fail loudly):
                         boards repo; hwde itself holds no boards)
   HWDE_EASYEDA_CACHE    LCSC model cache (default: the board's easyeda/ dir,
                         made on the first fetch, else ~/.cache/hwde/easyeda)
+  HWDE_EASYEDA_PINNED   read-only LCSC model dirs (os.pathsep-separated), read
+                        after the caches and never written (the test suite's
+                        tests/fixtures/easyeda_pinned; #1254)
   HWDE_TOOLS_DIR        the tools/ dir holding jre/, freerouting/ and krt/
                         (default: this checkout's tools/ when it has one, else
                         ~/dev/ai-ee/tools - a vendored copy of the skill, as in

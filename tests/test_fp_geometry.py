@@ -887,3 +887,35 @@ def test_gap_rule():
     assert "likely a land for another part" in g.gap_note(1.0, [0.7, 0.7])
     assert g.gap_note(-0.5, [-0.2, -0.2]) == "the pads overlap"
     assert "check the record's pitch" in g.gap_note(0.3, [-0.2, -0.2])
+
+
+def _uncached(nj):
+    return sorted(r for why, refs in nj.items() if "not cached" in why for r in refs)
+
+
+def test_a_test_board_is_judged_by_its_model_from_the_pinned_cache(monkeypatch):
+    # #1254: CI has no shared model cache, so a test board's LCSC footprint
+    # was judged on the tower and skipped on CI. The suite pins the models
+    # the boards under tests/ use; without the pin, D1 is not judged (the
+    # planted fault), with it, D1 is judged by its model (the quiet twin)
+    pcb = HERE / "fixtures" / "teardrops" / "led.kicad_pcb"
+    _, judged, nj = g.check(pcb)
+    assert judged["model"] == 1 and _uncached(nj) == []
+    monkeypatch.delenv("HWDE_EASYEDA_PINNED")
+    _, judged, nj = g.check(pcb)
+    assert "model" not in judged and _uncached(nj) == ["D1"]
+
+
+@pytest.mark.slow
+def test_every_test_board_has_its_lcsc_models_pinned():
+    # CI and a host with a full shared cache judge the same footprints: no
+    # board under tests/ has an LCSC model left uncached, bar fp_board's own
+    # planted ones (fp_geometry_coverage's uncached rows)
+    left = {}
+    for pcb in sorted(HERE.rglob("*.kicad_pcb")):
+        refs = _uncached(g.check(pcb)[2])
+        if refs:
+            left[str(pcb.relative_to(HERE))] = refs
+    assert left == {"fixtures/fp_board/placed.kicad_pcb": ["U10", "U7", "U8", "U9"]}, (
+        "a test board's LCSC model is not pinned: copy <LCSC>.json (or .none) "
+        "from ~/.cache/hwde/easyeda into tests/fixtures/easyeda_pinned")
