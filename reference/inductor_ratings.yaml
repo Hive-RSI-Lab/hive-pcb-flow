@@ -64,3 +64,30 @@ inductors:
       Saturation(Isat) 1.4A", "Current Rating 1.2A", "DC Resistance(DCR)
       500mΩ". The datasheet LCSC serves is scanned images with no text.
     verified: false
+  - match: '^DFE322520FD-2R2M'
+    mpn: Murata DFE322520FD-2R2M=P2 (2.2 uH, 3225, automotive grade)
+    isat_a: 5.0
+    isat_condition: inductance drops 30 %, max rating (typ 6.2 A)
+    source: >-
+      Murata Reference Specification DFE3225RFD, Spec No.
+      J(E)TE243A-9104F-01 (sha256
+      0c88b3c6592078c89bac23f98fc50da43c2bfa9288eadaed18bd081d433f425e,
+      https://search.murata.co.jp/Ceramy/image/img/P02/J(E)TE243A-9104.pdf),
+      p. 2: "DFE322520FD-2R2M=P2 2.2 ±20 46 35 5.0 6.2 2.9 3.6" (Rated
+      Current Based on Inductance Change 5.0 A max, 6.2 A typ; Based on
+      Temperature rise 2.9 A max), "the decrease of the initial
+      Inductance value at 30%".
+    verified: true
+  - match: '^DFE322520F-2R2M'
+    mpn: Murata DFE322520F-2R2M=P2 (2.2 uH, 3225, consumer grade)
+    isat_a: 4.4
+    isat_condition: inductance drops 30 %, max rating
+    source: >-
+      Murata Reference Specification DFE322520F, Spec No.
+      J(E)TE243A-0040D-01 (sha256
+      25c21eab4918ea908ead54602a7234658e463a1f5482be11b6700ac2eff53821,
+      https://pim.murata.com/asset/pim4/inductor/J(E)TE243A-0040_PDF_INDUCTOR),
+      p. 2: "DFE322520F-2R2M=P2 2.2 ±20 40 4.4 3.3" (Rated Current Based
+      on Inductance Change 4.4 A max; Based on Temperature rise 3.3 A
+      max), "the decrease of the initial Inductance value at 30%".
+    verified: true
