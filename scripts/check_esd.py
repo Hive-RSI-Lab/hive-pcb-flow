@@ -19,7 +19,9 @@ Which connectors: refs J*, P*, CN*, X*, USB* (not TP*), or constraints.json
 {"esd": {"connectors": [...]}}; {"esd": {"internal": [...]}} drops board-to-
 board ones nobody touches, and so do FFC / FPC / board-to-board Values and
 (#1496) pin header, pin socket and JST ZH / SH / PH footprints, the
-programming, board-to-board and in-housing harness families; {"esd":
+programming, board-to-board and in-housing harness families, and the
+board-to-board families by footprint or Value (backplane, module
+receptacle, mezzanine, flat-flex: B2B_RE); {"esd":
 {"external": [...]}} keeps a ref judged all the same. Which nets: every
 pad's net but ground-like (GND, AGND, SHIELD, CHASSIS, EARTH...) and
 unconnected ones; {"esd": {"exempt_nets": [...]}} drops more. Which parts
@@ -180,12 +182,24 @@ INTERNAL_RE = re.compile(r"\bFFC\b|\bFPC\b|B2B|BOARD.TO.BOARD", re.I)
 # esd.external lists a ref that is user-facing all the same.
 INTERNAL_FP_RE = re.compile(
     r"PinHeader_|PinSocket_|:HDR-|JST_(?:ZH|SH|PH)_", re.I)
+# board-to-board by family (G6, #1496 follow-up k2293): a backplane edge
+# (DIN 41612 / Eurocard), a module receptacle (TE AMPMODU 5530843), a
+# mezzanine or harness header (Hirose DF12, DF14, DF40) and a flat-flex
+# socket (Hirose FH12, FH34, any FFC / FPC) mate with another board or a
+# part of the same product, not a cable to the outside. Matched on the
+# footprint name or the Value; esd.external keeps a ref judged. IDC
+# headers and card edges are left judged: both are as often a user port.
+B2B_RE = re.compile(
+    r"EUROCARD|DIN.?41612|5530843|AMPMODU"
+    r"|(?<![A-Z0-9])(?:DF1[24]|DF40|FH12|FH34)(?![0-9])"
+    r"|(?<![A-Z])F[FP]C(?![A-Z])", re.I)
 # a connector whose lines sit behind its own isolation transformer: an RJ45
 # with integrated magnetics (HanRun HR911105A, "magjack"); the cable side is
 # the transformer's, the board side never sees the strike's common mode.
 # constraints esd.barriers adds more
 BARRIER_RE = re.compile(r"HR911105|MAG.?JACK|INTEGRATED.MAGNETICS", re.I)
 FUSE_REF_RE = re.compile(r"^F\d", re.I)
+LED_RE = re.compile(r"(?<![A-Z])LED", re.I)
 IC_REF_RE = re.compile(r"^(U|IC)\d", re.I)
 CAP_REF_RE = re.compile(r"^C(?!ONN)[A-Z]*\d", re.I)   # C3, Cin1, CX2
 # a shunt capacitor this large soaks the strike's charge: the IEC 61000-4-2
@@ -258,6 +272,40 @@ def shunt_cap(bg, cp, on_net: list, best: dict) -> dict | None:
         if mm < first_ic and (out is None or mm < out["mm"]):
             out = {"ref": p.ref, "farads": f, "mm": mm, "routed": routed}
     return out
+
+
+def no_victim(bg, net: str, ref: str, not_victims: set) -> bool:
+    """Whether a strike on `net` (entering at connector `ref`) only runs on
+    to another connector or an LED, with no part it could damage. The line
+    is walked across two-pin resistors, beads, inductors, fuses and LEDs
+    (parts in series with it); the pads of connectors and test points are
+    not victims, nor is ground. Any other part (an IC, a capacitor, a
+    resistor network, a diode that is no LED) is one. A line that ends in a
+    resistor to ground and reaches neither (a USB-C CC pull-down) is left
+    judged."""
+    seen, todo, onward = {net}, [net], False
+    while todo:
+        n = todo.pop()
+        for p in bg.pads_of(n):
+            if p.ref == ref:
+                continue
+            if p.ref in not_victims:
+                onward = True
+                continue
+            fp = bg.footprints.get(p.ref) or {}
+            led = (p.ref.upper().startswith("D")
+                   and LED_RE.search(fp_text(fp)))
+            two = (bg.pads_of(ref=p.ref)
+                   if led or SERIES_REF_RE.match(p.ref) else [])
+            if len(two) != 2:
+                return False
+            onward = onward or bool(led)
+            for q in two:
+                if (q.number != p.number and q.net and q.net not in seen
+                        and not is_ground(q.net)):
+                    seen.add(q.net)
+                    todo.append(q.net)
+    return onward
 
 
 def is_clamp(fp: dict, extra: set, ref: str) -> bool:
@@ -934,7 +982,7 @@ def check(pcb: Path, constraints: dict | None = None,
     bg = geom.load_board(pcb)
     fps = bg.footprints
     clamps = {r for r, fp in fps.items() if is_clamp(fp, extra_clamps, r)}
-    conns, skipped, by_fp = [], [], []
+    conns, skipped, by_fp, b2b = [], [], [], []
     for r in sorted(fps):
         if r in clamps or r in internal:
             continue
@@ -951,7 +999,15 @@ def check(pcb: Path, constraints: dict | None = None,
             if INTERNAL_FP_RE.search(fps[r].get("lib") or ""):
                 by_fp.append(r)
                 continue
+            if B2B_RE.search(f'{fps[r].get("lib") or ""} '
+                             f'{fps[r].get("value") or ""}'):
+                b2b.append(r)
+                continue
         conns.append(r)
+    not_victims = {r for r in fps
+                   if r in conns or r in skipped or r in by_fp or r in b2b
+                   or r in internal or r.upper().startswith("TP")
+                   or (CONNECTOR_RE.match(r) and r not in clamps)}
     barriers = sorted(r for r in conns if r in set(cfg.get("barriers") or [])
                       or BARRIER_RE.search(fp_text(fps[r])))
     graphs: dict = {}
@@ -1011,6 +1067,11 @@ def check(pcb: Path, constraints: dict | None = None,
                         "routed": shunt["routed"],
                         "est_v": checklib.rnd(STRIKE_F * level_kv * 1e3
                                               / shunt["farads"], 3)})
+                    continue
+                if no_victim(bg, net, ref, not_victims):
+                    # the line runs on to another connector or an LED
+                    # through series parts only: nothing here to hurt
+                    fact.update(clamp=None, no_victim=True)
                     continue
                 sev = "warning" if power else "error"
                 viols.append(checklib.violation(
@@ -1151,7 +1212,8 @@ def check(pcb: Path, constraints: dict | None = None,
     viols += rate_clamps(bg, lines, cfg, constraints or {}, load_esd_clamps())
     return viols, {"level_kv": level_kv, "di_dt_a_per_s": didt,
                    "connectors": conns, "internal_by_value": skipped,
-                   "internal_by_footprint": by_fp, "barriers": barriers,
+                   "internal_by_footprint": by_fp,
+                   "internal_board_to_board": b2b, "barriers": barriers,
                    "clamps": sorted(clamps),
                    "lines": lines}
 

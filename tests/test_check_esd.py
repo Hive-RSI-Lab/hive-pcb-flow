@@ -675,6 +675,99 @@ def test_field_wiring_footprints_stay_judged(tmp_path, lib):
     assert kinds == {"esd_unclamped"}
 
 
+# k2293 (G6): connectors that mate with another board or a part inside the
+# same product, by footprint or Value. esd.external keeps a ref judged.
+DF12 = "Connector_Hirose:Hirose_DF12_DF12C3.0-60DS-0.5V_2x30_P0.50mm_Vertical"
+
+
+@pytest.mark.parametrize("lib,value", [
+    (DF12, "Conn_02x30"),
+    ("Connector_Hirose:Hirose_DF40C-30DS-0.4V_2x15_P0.40mm_Vertical",
+     "Conn_02x15"),
+    ("Connector_Hirose:Hirose_DF14A-4P-1.25H_1x04_P1.25mm_Horizontal",
+     "Conn_01x04"),
+    ("Connector_FFC-FPC:Hirose_FH12-24S-0.5SH_1x24-1MP_P0.50mm_Horizontal",
+     "Conn_01x24"),
+    ("Connector_FFC-FPC:Hirose_FH34SRJ-8S-0.5SH_1x08-1MP_P0.50mm_Horizontal",
+     "FH34SRJ-8S"),
+    ("Connector_DIN:DIN41612_C_3x32_Male_Horizontal_THT", "Backplane"),
+    ("gcm:EUROCARD_96", "Conn_03x32"),
+    ("gcm:MODULE_RECEPTACLE", "5530843-4"),
+    ("cards:FPC-20P_0.5mm", "Conn_01x20"),
+])
+def test_board_to_board_family_is_internal(tmp_path, lib, value):
+    j = _fp_lib("J1", value, "5 10", J_PADS, lib)
+    payload, kinds = _run(_pcb(tmp_path, j + U1 + _seg(5, 10, 30, 10)))
+    assert payload["status"] == "pass", kinds
+    assert payload["checked"][0]["internal_board_to_board"] == ["J1"]
+
+
+def test_df12_named_external_stays_judged(tmp_path):
+    """The planted fault: a DF12 the designer lists in esd.external is a
+    cable to the outside after all, and its unclamped line fires."""
+    j = _fp_lib("J1", "Conn_02x30", "5 10", J_PADS, DF12)
+    payload, kinds = _run(_pcb(tmp_path, j + U1 + _seg(5, 10, 30, 10)),
+                          {"esd": {"external": ["J1"]}})
+    assert kinds == {"esd_unclamped"}
+    assert payload["checked"][0]["internal_board_to_board"] == []
+
+
+@pytest.mark.parametrize("lib,value", [
+    ("Connector_IDC:IDC-Header_2x05_P2.54mm_Vertical", "EXTERNAL I/O"),
+    ("Connector_PCBEdge:BUS_PCIexpress_x1", "Card edge"),
+    ("Connector_Hirose:Hirose_DF13-02P-1.25DSA_1x02_P1.25mm_Vertical",
+     "Conn_01x02"),
+    ("Connector_Generic:XFFCX_1x02", "Conn_01x02"),
+])
+def test_idc_card_edge_and_lookalikes_stay_judged(tmp_path, lib, value):
+    j = _fp_lib("J1", value, "5 10", J_PADS, lib)
+    payload, kinds = _run(_pcb(tmp_path, j + U1 + _seg(5, 10, 30, 10)))
+    assert kinds == {"esd_unclamped"}
+
+
+# k2293 follow-up: a line that reaches no part it could damage (only other
+# connectors' pads, series passives and LEDs) is not judged as unclamped.
+def _no_ic(tail: str) -> str:
+    j2 = _fp("J2", "Conn_02x04", "40 10", [("1", 0, 0, "SIG2")])
+    r = _fp("R1", "330", "20 10", [("1", 0, 0, "SIG"), ("2", 1, 0, "SIG2")])
+    return J1 + r + j2 + tail + _seg(5, 10, 20, 10)
+
+
+def test_line_to_another_connector_only_has_no_victim(tmp_path):
+    led = _fp_lib("D1", "LED", "30 12",
+                  [("1", 0, 0, "SIG2"), ("2", 0, 1, "GND")],
+                  "LED_SMD:LED_0603_1608Metric")
+    payload, kinds = _run(_pcb(tmp_path, _no_ic(led)))
+    assert payload["status"] == "pass", kinds
+    line = payload["checked"][0]["lines"][0]
+    assert line["no_victim"] and line["clamp"] is None
+
+
+def test_pull_down_to_ground_alone_stays_judged(tmp_path):
+    """A CC-style line: a resistor to ground and nothing onward (no other
+    connector, no LED) is not a no-victim line; #1496 called these real."""
+    r = _fp("R1", "5.1k", "20 10", [("1", 0, 0, "SIG"), ("2", 1, 0, "GND")])
+    payload, kinds = _run(_pcb(tmp_path, J1 + r + _seg(5, 10, 20, 10)))
+    assert kinds == {"esd_unclamped"}
+
+
+@pytest.mark.parametrize("ref,value,pads", [
+    # the quiet twin: an IC pin behind the resistor
+    ("U2", "MCU", [("1", 0, 0, "SIG2")]),
+    # a capacitor or a resistor network is a part the strike can hurt
+    ("C2", "100nF", [("1", 0, 0, "SIG2"), ("2", 0, 2, "GND")]),
+    ("RN1", "4x10k", [("1", 0, 0, "SIG2"), ("8", 0, 2, "X")]),
+    # a diode that is no LED is a part too
+    ("D1", "1N4148", [("1", 0, 0, "SIG2"), ("2", 0, 2, "GND")]),
+])
+def test_line_that_reaches_a_part_is_still_unclamped(tmp_path, ref, value,
+                                                     pads):
+    payload, kinds = _run(_pcb(tmp_path, _no_ic(_fp(ref, value, "45 10",
+                                                    pads))))
+    assert kinds == {"esd_unclamped"}
+    assert "no_victim" not in payload["checked"][0]["lines"][0]
+
+
 def _shunt(value: str, x: float = 8) -> str:
     return _fp("C1", value, f"{x} 10", [("1", 0, 0, "SIG"), ("2", 0, 2, "GND")])
 
