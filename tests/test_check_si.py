@@ -76,7 +76,13 @@ def kinds(payload):
     ("/RMII_TXD0", "rmii"), ("/RMII_CRS_DV", "rmii"), ("/I2S_LRCK", "i2s"),
     ("/I2S_DOUT_MAIN", "i2s"), ("/LCD_MOSI", "spi"), ("/USB_DP", "usb_fs"),
     ("/ethernet/ETH_TXN", "eth_mdi"), ("/I2C_SCL", None), ("/MDC", None),
-    ("/mcu/U0TXD", None), ("/DAC_EN", None), ("GND", None)])
+    ("/mcu/U0TXD", None), ("/DAC_EN", None), ("GND", None),
+    # 1000BASE-T pairs A-D (#510), chip and line side
+    ("/MDI1_A_P", "eth_mdi"), ("/MDI5_D_N", "eth_mdi"), ("/BI_DA+", "eth_mdi"),
+    ("/BI_DD-", "eth_mdi"), ("/eth/TRD0_P", "eth_mdi"), ("/TRD3N", "eth_mdi"),
+    ("/TXRX1P_A", "eth_mdi"), ("/TXRX4M_D", "eth_mdi"), ("/MDI0+", "eth_mdi"),
+    ("/ports/L1_A_P", "eth_mdi"), ("/DAP", None), ("/L1_A", None),
+    ("/MDI1_E_P", None), ("/MDIO", None)])
 def test_classify_by_name(net, cls):
     assert check_si.classify(net) == cls
 
@@ -234,6 +240,36 @@ def test_crosstalk_needs_coupling_past_the_budget(tmp_path):
     got = board(tmp_path, base + seg(50, 5, 50, 15, "/GPIO5", layer="F.Cu"),
                 {"si": {"nets": {"/SPI_CLK": {"class": "spi"}}}})
     assert not [v for v in got["violations"] if v["kind"] == "si_crosstalk"]
+
+
+@pytest.mark.parametrize("net,mate", [
+    ("/MDI1_A_P", "/MDI1_A_N"), ("/BI_DA+", "/BI_DA-"), ("/TRD0P", "/TRD0N"),
+    ("/TXRX1P_A", "/TXRX1M_A"), ("/ETH_TXP", "/ETH_TXN")])
+def test_gigabit_pair_halves(net, mate):
+    specs = {net: {}, mate: {}}
+    assert check_si.pair_of(net, specs) == mate
+    assert check_si.pair_of(mate, specs) == net
+
+
+def _mdi_pair(p, n, w, gap):
+    y2 = 10 + w + gap
+    return (fp("U1", 4, 10, "PHY", [("1", 0, p), ("2", 0.8, n)])
+            + fp("J1", 96, 10, "RJ45", [("1", 0, p), ("2", 0.8, n)])
+            + seg(4, 10, 96, 10, p, w=w) + seg(4, y2, 96, y2, n, w=w))
+
+
+@pytest.mark.parametrize("p,n", [("/MDI1_A_P", "/MDI1_A_N"),
+                                 ("/TXRX1P_A", "/TXRX1M_A")])
+def test_gigabit_mdi_pair_held_to_100_ohm(tmp_path, p, n):
+    # planted: a Gigabit MDI pair split 2 mm apart is ~170 ohm; named for
+    # 1000BASE-T it went unclassed and unchecked (#510)
+    got = board(tmp_path, _mdi_pair(p, n, 0.1, 2.0))
+    hit = [v for v in got["violations"] if v["kind"] == "si_impedance_target"]
+    assert hit and hit[0]["target_ohm"] == 100.0 and hit[0]["zdiff_ohm"] > 150
+    # quiet twin: the same pair coupled at 0.2/0.2 mm is classed and passes
+    got = board(tmp_path, _mdi_pair(p, n, 0.2, 0.2))
+    assert {x["net"]: x["class"] for x in got["nets"]}[p] == "eth_mdi"
+    assert got["violations"] == []
 
 
 def test_impedance_step_and_target(tmp_path):
