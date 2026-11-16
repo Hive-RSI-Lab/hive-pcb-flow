@@ -1,0 +1,60 @@
+# Switch current limits, minimum on-time and inductor ripple guidance of a
+# buck or boost IC, read by check_converter (#355). Every number is copied
+# from the datasheet named in `source`, with its page and the line quoted.
+# Add a row only from a datasheet in hand, never from memory.
+#
+# match: a regex tried against the part's Value and MPN fields
+#   (case-insensitive).
+# peak_limit_a: the high-side (switch) peak current limit, {min, typ, max}.
+# valley_limit_a: the low-side valley current limit, {min, typ, max}.
+# isat_floor: the current the datasheet says the inductor's saturation
+#   rating must not be below, {limit: peak|valley, quote}. With no
+#   isat_floor, check_converter still warns below the peak limit's typical,
+#   as a part-dependent rule, and says so.
+# ton_min_s: minimum on-time, {value, kind: typ|max}. A typ-only figure is
+#   judged and the finding says it is a typical.
+# ripple_band: {lo, hi, of: rated|load}, the datasheet's peak-to-peak
+#   inductor ripple as a fraction of its rated current (`iout_rated_a`) or of
+#   the load.
+# verified: true means the datasheet was re-read for this row.
+regulators:
+  - match: '^AP6320[0135]'
+    mpn: AP63200/AP63201/AP63203/AP63205
+    peak_limit_a: {min: 2.5, typ: 2.8, max: 3.1}
+    valley_limit_a: {min: 2.5, typ: 3.2, max: 3.9}
+    ton_min_s: {value: 80.0e-9, kind: typ}
+    iout_rated_a: 2.0
+    ripple_band: {lo: 0.30, hi: 0.50, of: rated}
+    source: >-
+      Diodes AP63200/AP63201/AP63203/AP63205 datasheet DS41326 Rev. 3-2,
+      November 2024 (sha256 ef99daa3789d835bc025dfcb4c605c5c2e6d3e7223e86d40b33e6b497ea5a722,
+      https://www.diodes.com/assets/Datasheets/AP63200-AP63201-AP63203-AP63205.pdf).
+      p. 5: "IPEAK_LIMIT HS Peak Current Limit 2.5 2.8 3.1 A", "IVALLEY_LIMIT
+      LS Valley Current Limit 2.5 3.2 3.9 A", "tON Minimum On Time 80 ns"
+      (typical only). p. 13: "choose ∆IL to be 30% to 50% of the maximum load
+      current of 2A", "ILPEAK = ILOAD + ∆IL/2" (Eq. 8), "Peak current
+      determines the required saturation current rating".
+    verified: true
+  - match: '^LMR33630'
+    mpn: LMR33630
+    peak_limit_a: {min: 3.85, typ: 4.5, max: 5.05}
+    valley_limit_a: {min: 2.9, typ: 3.5, max: 4.1}
+    isat_floor:
+      limit: valley
+      quote: >-
+        p. 22: "the inductor saturation current must not be less than the
+        device low-side current limit, ILIMIT"; p. 21: "Ideally, the
+        saturation current rating of the inductor must be at least as large
+        as the high-side switch current limit, ISC".
+    ton_min_s: {value: 108.0e-9, kind: max}
+    iout_rated_a: 3.0
+    ripple_band: {lo: 0.20, hi: 0.40, of: rated}
+    source: >-
+      TI LMR33630 datasheet SNVSAN3F, revised November 2020 (sha256
+      3b0920a4e56a0b3f5f214a6317d3c06cff6e541e5054024adc31c30acc50c04a).
+      p. 4 Device Comparison Table: 3 A. p. 7: "ISC High-side current limit
+      3.85 4.5 5.05 A", "ILIMIT Low-side current limit 2.9 3.5 4.1 A".
+      p. 8: "tON-MIN Minimum switch on-time DDA package 75 108 ns" (RNX 68
+      typ, 80 max; the larger DDA max is used). pp. 21-22: ripple "in the
+      range of 20% to 40% of the maximum output current".
+    verified: true

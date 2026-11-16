@@ -11,3 +11,25 @@ regulators:
     fsw_hz: 300000
     source: SCT2A25 datasheet, FSW 260/300/340 kHz, "fixed at 300KHz" (LCSC C5124114)
     verified: true
+  - match: '^AP6320[35]'
+    fsw_hz: 1100000
+    source: >-
+      Diodes DS41326 Rev. 3-2 p. 5, "fSW Oscillator Frequency AP63203/AP63205
+      1100 kHz" (typical only; AP63200/AP63201 are 500 kHz)
+    verified: true
+  - match: '^AP6320[01]'
+    fsw_hz: 500000
+    source: Diodes DS41326 Rev. 3-2 p. 5, "fSW Oscillator Frequency AP63200/AP63201 500 kHz"
+    verified: true
+  - match: '^LMR33630A'
+    fsw_hz: 400000
+    source: TI SNVSAN3F p. 8, "ƒSW Switching frequency "A" Version 340 400 460 kHz"
+    verified: true
+  - match: '^LMR33630B'
+    fsw_hz: 1400000
+    source: TI SNVSAN3F p. 8, "ƒSW Switching frequency "B" Version 1.2 1.4 1.6 MHz"
+    verified: true
+  - match: '^LMR33630C'
+    fsw_hz: 2100000
+    source: TI SNVSAN3F p. 8, "ƒSW Switching frequency "C" Version 1.8 2.1 2.4 MHz" (DDA; RNX 2.3 max)
+    verified: true

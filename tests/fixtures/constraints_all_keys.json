@@ -132,7 +132,9 @@
     {"topology": "buck", "block": "input", "name": "main buck", "ref": "U1",
      "refs": ["U1"],
      "operating_point": {"vin_v": 12, "vout_v": 5, "fsw_khz": 500,
-                         "iout_a": 2, "duty": 0.42, "bus_net": "+12V"}},
+                         "iout_a": 2, "duty": 0.42, "bus_net": "+12V",
+                         "inductor": "L1", "inductor_isat_a": 3.5,
+                         "vin_max_v": 13.2}},
     {"topology": "buck", "block": "bus",
      "operating_point": {"bus_irms_a": 1.1, "bus_irms_source": "datasheet"}}
   ],
