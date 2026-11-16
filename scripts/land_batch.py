@@ -29,7 +29,15 @@ and SOT-23-6L are one package), and report.json says so in
 `package_from`. A footprint fitting none or more than one, or a name
 pkgname can't read, leaves it out. No exact listing leaves it out too, and
 the reason names the nearest MPN the search found (W25Q128JVS: nearest
-W25Q128JVSIQ), which is not read: its numbering stays not_judged.
+W25Q128JVSIQ), which is not read: its numbering stays not_judged. Two
+cases are not near misses (#1471). A listing whose MPN is the Value plus
+its maker's packing code alone (`PACKING`: ST's TR, TI's R or T after its
+package code, LPS25HB as LPS25HBTR, SN74LV1T34DBV as SN74LV1T34DBVR),
+under that maker's brand, is the same part on a reel, and is taken under
+the same package rule when no exact listing names a datasheet. An exact
+listing that names no datasheet goes to the resolver like any other: a
+"JLCPCB Assembly" listing (JLC's own, for a consigned part) names no
+maker, so the MPN's family decides it (ESP32-C3-WROOM-02: Espressif).
 Anything else leaves it out with the reason. fp_verify then finds its
 record by the Value on one exact match only.
 
@@ -250,7 +258,12 @@ def value_listing(value: str, store: Path, table: Path | None = None,
     Rows in several packages are narrowed by the boards' footprints
     (`footprints`: each copy's footprint name and numbered pad count) to
     the one package all of them fit (`by_footprint`), and the note says so.
-    No exact row: the why names the nearest MPN the search found
+    No exact row with a datasheet: the rows whose MPN is the Value plus
+    its maker's packing code (`packing_suffix`) and that name one, under
+    the same rule (#1471); else the exact rows, or those packing-code rows,
+    with no datasheet, for fetch_pages's resolver to find the maker's (a
+    brand in NOT_MAKERS dropped, so the MPN's family names the maker). No
+    row at all: the why names the nearest MPN the search found
     (`nearest`), and the part stays unread. The search's rows are cached
     under listings/value-hits/."""
     import yaml
@@ -274,12 +287,15 @@ def value_listing(value: str, store: Path, table: Path | None = None,
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(json.dumps(hits, ensure_ascii=False), encoding="utf-8")
     exact = [h for h in hits if norm(h.get("mpn")) == norm(value)]
-    rows = sorted((h for h in exact if h.get("datasheet")),
-                  key=lambda h: (len(h.get("lcsc") or ""), h.get("lcsc") or ""))
+    reel = [h for h in hits if packing_suffix(value, h)]
+
+    def by_code(rs):
+        return sorted(rs, key=lambda h: (len(h.get("lcsc") or ""), h.get("lcsc") or ""))
+    rows = (by_code(h for h in exact if h.get("datasheet"))
+            or by_code(h for h in reel if h.get("datasheet"))
+            or [{**h, "brand": "" if h.get("brand") in NOT_MAKERS else h.get("brand")}
+                for h in by_code(exact or reel)])
     if not rows:
-        if exact:
-            return None, (f"{len(exact)} JLC listings have exactly that MPN, "
-                          "none with a datasheet")
         near = nearest(value, hits)
         return None, ("no JLC listing has exactly that MPN; nearest: "
                       f"{near['mpn']} ({near.get('lcsc') or 'no LCSC code'}, "
@@ -290,9 +306,52 @@ def value_listing(value: str, store: Path, table: Path | None = None,
         return rows[0], ""
     kept, why = by_footprint(rows, footprints)
     if not kept:
-        return None, (f"{len(rows)} JLC listings have exactly that MPN, under "
-                      f"{len(pkgs)} package names; {why}")
+        return None, (f"{len(rows)} JLC listings have "
+                      + ("exactly that MPN" if norm(rows[0].get("mpn")) == norm(value)
+                         else "that MPN with a packing code")
+                      + f", under {len(pkgs)} package names; {why}")
     return kept[0], f"{kept[0].get('package')}, {why}, the one its footprint fits"
+
+
+# A maker's packing codes (#1471): a suffix that says only how the part is
+# shipped (tape and reel, reel size), from each maker's ordering
+# information. (brand aliases, suffixes, the package codes the Value must
+# end in first, or None for any). A listing's MPN that is the Value plus
+# one of these, under that maker's brand, is the same part.
+TI_PACKAGES = ("D", "DB", "DBQ", "DBV", "DBZ", "DCK", "DCN", "DCT", "DCU",
+               "DDC", "DDF", "DGK", "DGN", "DGS", "DGV", "DPW", "DQE", "DRB",
+               "DRC", "DRL", "DRV", "DRY", "DSF", "DSG", "DW", "DYY", "NS",
+               "PW", "PWP", "RGE", "RGT", "RGW", "RGZ", "RHA", "RHB", "RTE",
+               "RTJ", "RTW", "RUK", "YFF", "YZP")
+PACKING = (
+    (("stmicroelectronics", "st"), ("TR",), None),
+    (("texas instruments",), ("R", "T"), TI_PACKAGES),
+    (("analog devices",), ("-REEL", "-REEL7", "-RL", "-RL7"), None),
+    (("diodes",), ("-7", "-13"), None),
+    (("renesas", "intersil"), ("-T", "-T7", "-T13"), None),
+    (("nexperia", "nxp"), tuple(f",{n}" for n in (
+        "115", "118", "125", "132", "135", "165", "215", "235", "315",
+        "518", "551", "653")), None),
+)
+# brands that are a distributor's or assembler's own listing, not a maker
+NOT_MAKERS = ("JLCPCB Assembly",)
+
+
+def packing_suffix(value: str, hit: dict) -> str:
+    """The packing code that is all the listing's MPN adds to the Value,
+    when the listing's brand is the maker whose code it is, else ''."""
+    import dsresolve
+    from mpn_decode import norm
+    v, m = norm(value), norm(hit.get("mpn"))
+    if not (m.startswith(v) and len(m) > len(v)):
+        return ""
+    rest = m[len(v):]
+    for brands, codes, after in PACKING:
+        if (rest in codes and any(dsresolve._brand_has(hit.get("brand") or "", b)
+                                  for b in brands)
+                and (after is None or any(v.endswith(c) for c in after))):
+            return rest
+    return ""
 
 
 def by_footprint(rows: list[dict], footprints: list[tuple[str, int]]
@@ -523,6 +582,10 @@ def fetch_pages(key: str, on_boards: list[dict], store: Path, rep: dict
                 return None, {**rep, "status": "not one listing for its Value", "why": vwhy}
             if vwhy:
                 rep["package_from"] = vwhy
+            code = packing_suffix(key[4:], hit)
+            if code:
+                rep["listing_from"] = (f"{hit.get('mpn')}: the Value with "
+                                       f"{hit.get('brand')}'s packing code {code}")
         else:
             hit = amb.find_listing(key, store)
         err = None
