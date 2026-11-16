@@ -862,6 +862,31 @@ def test_escape_drop_keeps_routed_joined_zoned_and_router_copper(tmp_path):
     assert route_auto._escape_drops(bg3, ["/S0_0"], protect) == []
 
 
+def test_escape_drop_keeps_an_enclosed_fine_balls_escape(tmp_path):
+    """Planted fault (the 6-layer bench's U2 /B3_2): a 0.5 mm field's C3
+    (/S2_2, two rings deep) escaped by a via in its pad and an In1.Cu
+    track, unrouted after the route: its bare pad has no way out, so the
+    escape stays. Quiet twins: the same escape on a ring-1 ball (B2,
+    /S1_1) still goes, and so does C3's on a 0.8 mm field."""
+    from test_route_escape import _via, board
+
+    def esc(pitch, row, col, name):
+        net = f"/S{row}_{col}"
+        bare = geom.BoardGeom.from_file(board(
+            tmp_path, pitch=pitch, pad=0.25, name=name + "0"))
+        (pad,) = [p for p in bare.pads_of(ref="U1") if p.net == net]
+        x, y = pad.center
+        extra = (_via(x, y, net, "e-v", size=0.25, drill=0.15)
+                 + _seg(x, y, 10, y, net, "e-s", layer="In1.Cu"))
+        bg = geom.BoardGeom.from_file(board(
+            tmp_path, pitch=pitch, pad=0.25, extra=extra, name=name))
+        return route_auto._escape_drops(bg, [net], {"e-v", "e-s"})
+
+    assert esc(0.5, 2, 2, "c3") == []
+    assert [d["ball"] for d in esc(0.5, 1, 1, "b2")] == ["B2"]
+    assert [d["ball"] for d in esc(0.8, 2, 2, "c3w")] == ["C3"]
+
+
 def test_drop_pre_forgets_only_the_dropped_copper(tmp_path):
     """The lost-copper audit must not report a drop escape_drops reports:
     the dropped stub and via leave pre, another pre-routed track stays."""

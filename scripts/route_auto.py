@@ -881,6 +881,35 @@ def _ball_islands(bg, net: str) -> list[dict]:
     return list(groups.values())
 
 
+def _enclosed_balls(bg, b) -> set[str]:
+    """Pad numbers of b's balls two or more rings deep in a fine field
+    (pitch <= bgalib.FINE_PITCH_MM): no track fits between two balls of
+    the outer rings and their through vias block every layer, so such a
+    ball gets out only by route_escape's way (a gate trade, row 139), never
+    from its bare pad. The 6-layer bench's U2 /B3_2, escaped through a
+    traded gate and unrouted after Freerouting, lost its escape to the drop
+    and then had no path on the grid. Empty for a coarser or rotated
+    field."""
+    import bgalib
+    if b.pitch > bgalib.FINE_PITCH_MM + 1e-6:
+        return set()
+    x0, y0, x1, y1 = b.bbox
+    nr = round((y1 - y0) / b.pitch) + 1
+    nc = round((x1 - x0) / b.pitch) + 1
+    out = set()
+    for pad in bg.pads_of(ref=b.ref):
+        if pad.number not in b.nets:
+            continue
+        c = (pad.center[0] - x0) / b.pitch
+        r = (pad.center[1] - y0) / b.pitch
+        if abs(c - round(c)) > 0.05 or abs(r - round(r)) > 0.05:
+            return set()
+        r, c = round(r), round(c)
+        if min(r, c, nr - 1 - r, nc - 1 - c) >= 2:
+            out.add(pad.number)
+    return out
+
+
 def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
     """Escapes that leave their ball cut off after the route (row 129): a
     BGA ball whose net DRC still calls unrouted, sitting on an island that
@@ -888,7 +917,9 @@ def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
     (route_escape's dog-bone). Its dog-bone took room the finish needs and
     joins nothing, so it goes before 5b/5c and the ball is routed from the
     bare pad. A routed ball, an island that reaches another pad, a net a
-    zone carries and an island of the router's own copper are kept."""
+    zone carries and an island of the router's own copper are kept, and so
+    is an enclosed ball's escape (_enclosed_balls): its bare pad has no way
+    out, so a drop loses it for good."""
     import bgalib
     bad = set(unrouted)
     zoned = {z.net for z in bg.zones_of()}
@@ -896,11 +927,14 @@ def _escape_drops(bg, unrouted: list[str], protect: set[str]) -> list[dict]:
     for b in bgalib.find_bgas(bg):
         nets = sorted({n for n in b.nets.values()
                        if n in bad and n not in zoned})
+        boxed = _enclosed_balls(bg, b) if nets else set()
         for net in nets:
             for isl in _ball_islands(bg, net):
                 if len(isl["pads"]) != 1 or isl["pads"][0][0] != b.ref:
                     continue
                 if not protect.intersection(isl["uuids"]):
+                    continue
+                if isl["pads"][0][1] in boxed:
                     continue
                 out.append({"ref": b.ref, "ball": isl["pads"][0][1],
                             "net": net, "uuids": sorted(isl["uuids"])})
