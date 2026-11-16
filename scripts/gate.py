@@ -114,6 +114,16 @@ gate reports on disk and `gates: {}` in state.json):
  - a REQUESTED-but-failed record is an operational error (exit 2), exactly
    like a requested-but-failed commit: a caller keying on exit 0 must not
    believe the evidence was preserved when it was not.
+
+#857: --summary prints a short text summary to stdout in place of the JSON
+(which still goes to --out when given), so a board needs no drc.sh of its
+own. The first line gives the status and the failing count by check. Next
+comes the origin positions are measured from: the top-left of the input
+board's Edge.Cuts outline, the corner board_init reports as outline_origin.
+Then each failing non-silk finding gets one line: check, net, refs, its
+position from that origin, and the item messages. Silk findings are counted
+but not listed; a pos-less finding prints "pos ?". Waived findings are only
+counted. Exit codes are unchanged.
 """
 from __future__ import annotations
 
@@ -817,6 +827,85 @@ def git_commit_on_pass(msg: str, cwd: Path,
             **extras}
 
 
+SUMMARY_MSG_CHARS = 60
+
+
+def summary_origin(input_file: Path | None) -> tuple[list[float] | None, str]:
+    """(origin, where it came from) for --summary positions (#857).
+
+    The top-left of the input board's Edge.Cuts outline - the corner
+    board_init reports as outline_origin - so a position reads as "from the
+    board's corner". No outline (a schematic, a board without Edge.Cuts) ->
+    (None, why): positions stay absolute and the summary says so.
+    """
+    if input_file is None or Path(input_file).suffix != ".kicad_pcb":
+        return None, "absolute (no board input)"
+    try:
+        from board_init import outline_origin  # sibling script
+        o = outline_origin(Path(input_file))
+    except Exception as exc:  # noqa: BLE001 - said in the summary, not hidden
+        return None, f"absolute (outline unreadable: {type(exc).__name__})"
+    if o is None:
+        return None, "absolute (no Edge.Cuts outline)"
+    return o, f"from the Edge.Cuts outline's top-left ({o[0]:g}, {o[1]:g})"
+
+
+def _is_silk(check) -> bool:
+    return str(check or "").startswith("silk")
+
+
+def summary_lines(result: dict, origin: list[float] | None,
+                  origin_note: str) -> list[str]:
+    """The --summary text (#857): what pinned lite-main's drc.sh printed.
+
+    Line 1: gate, status, failing count, and the count by check (silk
+    included). Line 2: what positions are measured from. Then one line per
+    failing non-silk finding: check, net, refs, position, item messages
+    (each cut to SUMMARY_MSG_CHARS). A last line counts the silk findings
+    left unlisted and the waived ones, when there are any.
+    """
+    failing = [v for v in result.get("failing") or [] if isinstance(v, dict)]
+    by_check: dict[str, int] = {}
+    for v in failing:
+        k = str(v.get("check"))
+        by_check[k] = by_check.get(k, 0) + 1
+    counts = ", ".join(f"{k} {n}" for k, n in
+                       sorted(by_check.items(), key=lambda kv: (-kv[1], kv[0])))
+    head = (f"{result.get('gate')}: {str(result.get('status')).upper()}, "
+            f"{result.get('failing_count', len(failing))} failing")
+    lines = [head + (f" ({counts})" if counts else "")]
+    lines.append(f"positions: {origin_note}")
+    silk = 0
+    for v in failing:
+        if _is_silk(v.get("check")):
+            silk += 1
+            continue
+        p = v.get("pos")
+        if isinstance(p, (list, tuple)) and len(p) >= 2:
+            x, y = float(p[0]), float(p[1])
+            if origin is not None:
+                x, y = x - origin[0], y - origin[1]
+            where = f"({x:.2f}, {y:.2f})"
+        else:
+            where = "pos ?"
+        refs = ",".join(str(r) for r in v.get("refs") or []) or "-"
+        msgs = [str(i.get("msg") or "")[:SUMMARY_MSG_CHARS]
+                for i in v.get("items") or [] if isinstance(i, dict)]
+        if not msgs and v.get("msg"):
+            msgs = [str(v["msg"])[:SUMMARY_MSG_CHARS]]
+        lines.append(f"  {v.get('check')}  net {v.get('net') or '-'}  "
+                     f"refs {refs}  at {where}  | " + " | ".join(msgs))
+    tail = []
+    if silk:
+        tail.append(f"{silk} silk finding{'s' * (silk != 1)} not listed")
+    nw = result.get("waived_count") or 0
+    if nw:
+        tail.append(f"{nw} waived")
+    if tail:
+        lines.append("  (" + "; ".join(tail) + ")")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -846,6 +935,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="evaluate only - do not record the result in "
                          "state.json")
     ap.add_argument("--list", action="store_true", help="list gates and exit")
+    ap.add_argument("--summary", action="store_true",
+                    help="print a short text summary to stdout instead of the "
+                         "JSON (still written to --out): status, failing "
+                         "count by check, and one line per non-silk finding "
+                         "with its position from the board outline's "
+                         "top-left (#857)")
     args = ap.parse_args(argv)
 
     try:
@@ -924,7 +1019,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(text, encoding="utf-8")
-    else:
+    if args.summary:
+        origin, note = summary_origin(eff_input)
+        print("\n".join(summary_lines(result, origin, note)))
+    elif not args.out:
         print(text)
 
     # one-line human summary to stderr; stdout stays pure JSON
