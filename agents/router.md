@@ -270,7 +270,9 @@ rules as routing constraints; cite the record id when you apply one.
   `{"op": "rip", "net": "VBUS", "pads": ["J1"]}`), `add_path` (a polyline),
   `renet` (copper that touches no pad) and `rename_net` (board-wide, routed
   copper included), `set_width` (the selected tracks, in place),
-  `move_via` (drags its tracks along), `join_end` (a free track end to the
+  `move_via` (drags its tracks along), `set_end` (the straight track ends at
+  a point go to another, uuids kept: shorten a track without a rip),
+  `join_end` (a free track end to the
   nearest same-net anchor) and `copy_from` (a selector's copper from an
   older copy of the board: rip it, then copy it back). `--refill` refills
   zones on the staged copy before the swap; use it after any edit that
