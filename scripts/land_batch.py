@@ -42,10 +42,17 @@ the module itself. An exact
 listing that names no datasheet goes to the resolver like any other: a
 "JLCPCB Assembly" listing (JLC's own, for a consigned part) names no
 maker, so the MPN's family decides it (ESP32-C3-WROOM-02: Espressif).
-Anything else leaves it out with the reason. fp_verify then finds its
-record by the Value on one exact match only. A board soldered on as a
-module is left out as abs_max_batch leaves it ("left out: a board",
-#1521: every exact JLC row under Development Boards & Kits).
+With no exact or packing-code listing at all, land (never abs-max: grade
+can change ratings, not pads) takes the maker's own listing of the Value
+plus a grade, temperature or RoHS code from its ordering information
+(`NEAR_GRADES`, #1536: W25Q128JVS as Winbond's W25Q128JVSIQ, EPM1270T144
+as EPM1270T144C5N) when its package fits every board's footprint, even
+when it is the only package, and report.json marks it "pads from nearest
+listing X". Anything else leaves it out with the reason. fp_verify
+then finds its record by the Value on one exact match only. A board
+soldered on as a module is left out as abs_max_batch leaves it ("left
+out: a board", #1521: every exact JLC row under Development Boards &
+Kits).
 
 For each part: the datasheet's pin-drawing pages (a page whose text says
 "top view" or "bottom view", those that also name the pins first) and its
@@ -269,9 +276,12 @@ def value_listing(value: str, store: Path, table: Path | None = None,
     the same rule (#1471), a module's fit code only with no exact row
     (#1481); else the exact rows, or those packing-code rows,
     with no datasheet, for fetch_pages's resolver to find the maker's (a
-    brand in NOT_MAKERS dropped, so the MPN's family names the maker). No
-    row at all: the why names the nearest MPN the search found
-    (`abs_max_batch.nearest`), and the part stays unread. The search's
+    brand in NOT_MAKERS dropped, so the MPN's family names the maker). None
+    of those: the maker's rows of the Value plus a grade code
+    (`near_suffix`) that name a datasheet, kept only in the one package
+    every footprint fits (#1536). Nothing: the why names the nearest MPN
+    the search found (`abs_max_batch.nearest`), and the part stays
+    unread. The search's
     rows are cached under listings/value-hits/ (`abs_max_batch.search_rows`)."""
     import yaml
     from mpn_decode import norm
@@ -297,7 +307,19 @@ def value_listing(value: str, store: Path, table: Path | None = None,
             or [{**h, "brand": "" if h.get("brand") in NOT_MAKERS else h.get("brand")}
                 for h in by_code(exact or reel)])
     if not rows:
-        return None, amb.no_exact_why(value, hits)
+        # land only (#1536): no exact or packing-code row at all, so the
+        # maker's listing of the Value with a grade, temperature or RoHS
+        # code (`near_suffix`), whose package the footprint fits, gives the
+        # pads; grade can change ratings, so abs_max_batch never does this
+        near = by_code(h for h in hits if near_suffix(value, h) and h.get("datasheet"))
+        if not near:
+            return None, amb.no_exact_why(value, hits)
+        kept, why = by_footprint(near, footprints)
+        if not kept:
+            return None, (amb.no_exact_why(value, hits) + f"; {len(near)} near "
+                          + ("listing" if len(near) == 1 else "listings")
+                          + f" by grade, and {why}")
+        return kept[0], f"{kept[0].get('package')}, {why}, the one its footprint fits"
     pkgs = sorted({norm(r.get("package") or "") for r in rows})
     if len(pkgs) == 1:
         return rows[0], ""
@@ -362,6 +384,40 @@ def packing_suffix(value: str, hit: dict) -> str:
     return ""
 
 
+# A maker's grade codes (#1536): what a listing's MPN may add to a Value
+# that names the package but no grade, from each maker's ordering
+# information: speed or temperature grade, lead-free or RoHS. Pads and
+# pinout are one across them; ratings are not, so only land takes them.
+# (brand aliases, the Value's pattern, the suffix's pattern, source). A
+# package code is never a grade here: the Value already names the package.
+NEAR_GRADES = (
+    # MAX II handbook, Fig 6-1: EPM 1270 T 144, then C or I (temperature),
+    # 3, 4 or 5 (speed), N (lead-free); ES (engineering sample) is not
+    (("altera", "intel"), r"EPM(240|570|1270|2210)G?[TFM]\d+", r"[CI][345]N?",
+     "MAX II Device Handbook, Ordering Information, Fig 6-1"),
+    # W25Q128JV datasheet rev E, 11 Ordering Information (p.74): W25Q128JV
+    # and its package letter, then I (industrial) and Q or M (green package)
+    (("winbond",), r"W25Q128JV(S|F|ZP|ZE|B|C|Y)", r"I[QM]",
+     "W25Q128JV datasheet rev E, Ordering Information p.74"),
+)
+
+
+def near_suffix(value: str, hit: dict) -> str:
+    """The grade code that is all the listing's MPN adds to the Value
+    (`NEAR_GRADES`), when the listing's brand is that maker, else ''."""
+    import dsresolve
+    from mpn_decode import norm
+    v, m = norm(value), norm(hit.get("mpn"))
+    if not (m.startswith(v) and len(m) > len(v)):
+        return ""
+    rest = m[len(v):]
+    for brands, val, suffix, _ in NEAR_GRADES:
+        if (re.fullmatch(val, v) and re.fullmatch(suffix, rest)
+                and any(dsresolve._brand_has(hit.get("brand") or "", b) for b in brands)):
+            return rest
+    return ""
+
+
 def by_footprint(rows: list[dict], footprints: list[tuple[str, int]]
                  ) -> tuple[list[dict], str]:
     """The rows (in their order) of the one package every footprint fits,
@@ -393,7 +449,8 @@ def by_footprint(rows: list[dict], footprints: list[tuple[str, int]]
     if len(fit) == 1:
         spell = len({r.get("package") or "" for r in rows})
         if len(groups) == 1:
-            return fit[0], f"its one package, listed under {spell} names"
+            return fit[0], (f"its one package, listed under {spell} "
+                            + ("name" if spell == 1 else "names"))
         return fit[0], (f"of {len(groups)} packages listed"
                         + (f" ({spell} names)" if spell != len(groups) else ""))
     if not fit:
@@ -569,7 +626,12 @@ def fetch_pages(key: str, on_boards: list[dict], store: Path, rep: dict
             if vwhy:
                 rep["package_from"] = vwhy
             code = packing_suffix(key[4:], hit)
-            if code:
+            grade = near_suffix(key[4:], hit)
+            if grade:
+                rep["listing_from"] = (f"pads from nearest listing {hit.get('mpn')} "
+                                       f"({hit.get('lcsc')}): the Value with "
+                                       f"{hit.get('brand')}'s grade code {grade}")
+            elif code:
                 what = ("module fit code" if code in ESPRESSIF_FITS
                         else "packing code")
                 rep["listing_from"] = (f"{hit.get('mpn')}: the Value with "

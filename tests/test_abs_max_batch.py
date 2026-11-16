@@ -393,6 +393,22 @@ def test_a_value_with_no_exact_listing_is_named_as_land_names_it(
     assert rep["why"] == "no JLC listing has exactly that MPN, nor one near it"
 
 
+def test_a_grade_listing_is_never_read_for_ratings(stand_ins, monkeypatch):
+    """#1536: land takes pads from the maker's listing with a grade code
+    (W25Q128JVSIQ for W25Q128JVS); ratings change with grade, so abs-max
+    keeps the Value a near miss and reads nothing."""
+    out, reader, calls = stand_ins
+    row = {"lcsc": "C97521", "mpn": "W25Q128JVSIQ", "brand": "Winbond Elec",
+           "package": "SOIC-8-208mil", "datasheet": "https://example.com/W25.pdf"}
+    _no_datasheet(monkeypatch, [row])
+    board = _fp("U1", VALUE_PADS, value="W25Q128JVS")
+    rep = amb.read_part("mpn:W25Q128JVS", [board], out, reader)
+    assert rep["status"] == "not one listing for its Value", rep
+    assert rep["why"].startswith("no JLC listing has exactly that MPN; nearest: "
+                                 "W25Q128JVSIQ (C97521")
+    assert calls == []
+
+
 def test_the_old_labels_stay_where_the_value_rule_does_not_hold(
         stand_ins, monkeypatch):
     """#1521 quiet twins: an exact row with no URL, an MPN field (not a

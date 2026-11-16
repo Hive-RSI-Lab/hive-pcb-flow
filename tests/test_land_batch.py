@@ -629,6 +629,83 @@ def test_a_module_listed_only_with_its_fit_code_is_read(stand_ins, no_table):
                                    "Systems's module fit code -N8")
 
 
+@pytest.mark.parametrize("value, mpn, brand, code", [
+    # #1536 quiet twins: the Value plus its maker's grade code alone
+    ("EPM1270T144", "EPM1270T144C5N", "Intel/Altera", "C5N"),
+    ("EPM1270T144", "EPM1270T144I5", "Intel/Altera", "I5"),
+    ("EPM240T100", "EPM240T100C3", "Altera", "C3"),
+    ("W25Q128JVS", "W25Q128JVSIQ", "Winbond Elec", "IQ"),
+    ("W25Q128JVS", "W25Q128JVSIM", "Winbond Elec", "IM"),
+    # planted faults: under JLC's own brand or another maker's, a code off
+    # the maker's ordering table (ES, A, N, TR after it, -3), a package code
+    # (the Value names no package), an evaluation board, another family
+    ("W25Q128JVS", "W25Q128JVSIQ", "JLCPCB Assembly", ""),
+    ("W25Q128JVS", "W25Q128JVSQ", "JLCPCB Assembly", ""),
+    ("W25Q128JVS", "W25Q128JVSIQ", "TECH PUBLIC", ""),
+    ("W25Q128JVS", "W25Q128JVSIN", "Winbond Elec", ""),
+    ("W25Q128JVS", "W25Q128JVSIQTR", "Winbond Elec", ""),
+    ("W25Q128JV", "W25Q128JVSIQ", "Winbond Elec", ""),
+    ("EPM1270T144", "EPM1270T144C5ES", "Intel/Altera", ""),
+    ("EPM1270T144", "EPM1270T144A5N", "Intel/Altera", ""),
+    ("EPM1270T144", "EPM1270T144C5N-3", "Intel/Altera", ""),
+    ("EPM1270", "EPM1270T144C5N", "Intel/Altera", ""),
+    ("TLV320AIC3104", "TLV320AIC3104EVM", "Texas Instruments", ""),
+    ("PCM5102A", "PCM5102APW", "Texas Instruments", ""),
+    ("Si7021", "SI7021-A20-GM", "Silicon Labs", ""),
+    ("W25Q64JVS", "W25Q64JVSIQ", "Winbond Elec", ""),
+])
+def test_only_a_makers_grade_code_is_a_near_listing(value, mpn, brand, code):
+    assert lb.near_suffix(value, {"mpn": mpn, "brand": brand}) == code
+
+
+W25_FP = "Package_SO:SOIC-8_5.23x5.23mm_P1.27mm"
+W25_ROW = {"lcsc": "C97521", "mpn": "W25Q128JVSIQ", "brand": "Winbond Elec",
+           "package": "SOIC-8-208mil", "datasheet": "https://example.com/W25.pdf"}
+
+
+def test_pads_come_from_a_grade_listing_in_the_footprints_package(
+        stand_ins, no_table):
+    """#1536. Planted fault: W25Q128JVS listed only by its maker with a
+    grade code, but in WSON-8 (and as JLC's own W25Q128JVSQ) on an SOIC-8
+    208 mil footprint: a near listing in another package is not read, the
+    part stays a near miss. Quiet twin: the same grade listing in SOIC-8
+    208 mil is read as the Value, marked 'pads from nearest listing'."""
+    out, store, reader, calls, pages, readings = stand_ins
+    value = "W25Q128JVS"
+    pages[value], readings[value] = SO8_PAGES, so8_reading()
+    jlc = {**W25_ROW, "mpn": "W25Q128JVSQ", "brand": "JLCPCB Assembly",
+           "lcsc": "C9900018990", "package": "WSON8", "datasheet": ""}
+    _value_rows(store, value, [jlc, {**W25_ROW, "package": "WSON-8(6x5)"}])
+    rep = lb.read_part("mpn:" + value, [_on(W25_FP)], out, store, reader)
+    assert rep["status"] == "not one listing for its Value"
+    assert rep["why"].startswith("no JLC listing has exactly that MPN; nearest:")
+    assert "1 near listing by grade, and its footprint fits none" in rep["why"]
+    assert calls == [] and not (out / "ext" / f"{value}.json").exists()
+
+    _value_rows(store, value, [jlc, {**W25_ROW, "lcsc": "C113767"}, W25_ROW])
+    rep = lb.read_part("mpn:" + value, [_on(W25_FP), _on(W25_FP, "U8")],
+                       out, store, reader)
+    assert rep["status"] == "kept" and rep["mpn"] == value
+    assert rep["lcsc"] == "C97521"
+    assert rep["listing_from"] == ("pads from nearest listing W25Q128JVSIQ "
+                                   "(C97521): the Value with Winbond Elec's "
+                                   "grade code IQ")
+    assert rep["package_from"].startswith("SOIC-8-208mil, its one package")
+    assert (out / "ext" / f"{value}.json").is_file()
+
+
+def test_a_grade_listing_waits_behind_any_exact_or_reel_listing(
+        stand_ins, no_table):
+    """#1536 quiet twin: an exact listing, even with no datasheet, goes to
+    the resolver as before; a grade listing beside it is not taken."""
+    out, store, reader, calls, _, _ = stand_ins
+    value = "W25Q128JVS"
+    _value_rows(store, value, [{**W25_ROW, "mpn": value, "lcsc": "C5",
+                                "datasheet": ""}, W25_ROW])
+    hit, why = lb.value_listing(value, store, footprints=[(W25_FP, 8)])
+    assert hit["mpn"] == value and hit["lcsc"] == "C5" and why == ""
+
+
 def test_a_part_listed_only_as_a_dev_board_is_left_out(
         stand_ins, no_table, monkeypatch):
     """#1521 planted fault: a Value whose one exact JLC row is under
