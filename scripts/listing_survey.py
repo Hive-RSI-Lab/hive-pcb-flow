@@ -50,24 +50,43 @@ DESCRIBED = (("connector", r"connector|header|terminal|socket|\bwire.to"),
              ("resistor", r"resistor"), ("inductor", r"inductor|ferrite"),
              ("fuse", r"\bfuse"))
 
+# LCSC's category names an IC by what it does ("I/O Expanders", "Gate Drivers",
+# "NOR FLASH"), and these words come before DESCRIBED's: in a category, "LED"
+# or "Gate" is the load, not the part (#1435)
+IC_CATEGORY = (r"regulator|converter|amplifier|comparator|controller|sensor|expander|"
+               r"microcontroller|\bmcu\b|fpga|cpld|programmable logic|eeprom|flash|"
+               r"\bs?d?ram\b|sdram|memory|logic gate|buffer|transceiver|translator|"
+               r"level shifter|supervisor|timer|isolator|driver|battery management|"
+               r"distribution switch|load switch|analog switch|module|accelerometer|"
+               r"gyroscope|receiver|interface|digital to analog|analog to digital")
+IC_DESCRIBED = (r"regulator|converter|amplifier|controller|sensor|\bic\b|switch|"
+                r"expander|management|module|comparator")
+
 
 def part_class(part: dict) -> str:
     """A part's class from its first reference designator's letters, else from
-    the parts.json hint for one, else from its description. Anything left with
-    a voltage rating and no words for it is `other`."""
+    the parts.json hint for one, else from its LCSC category, else from its
+    description. The category comes before the description because a feature
+    list names what the part works with: "Built-in LED driver" on an I/O
+    expander, "Noise bypass terminal" on an LDO (#1435). Anything left with a
+    voltage rating and no words for it is `other`."""
     refs = part.get("refdes") or part.get("refs") or part.get("ref_prefix_hint") or []
     ref = refs[0] if isinstance(refs, list) and refs else str(refs)
     m = re.match(r"[A-Za-z]+", str(ref))
     known = CLASSES.get(m.group(0).upper()) if m else None
     if known:
         return known
+    category = str(part.get("category") or "")
+    if re.search(IC_CATEGORY, category, re.I):
+        return "ic"
+    for name, rx in DESCRIBED:
+        if re.search(rx, category, re.I):
+            return name
     text = str(part.get("description") or "")
     for name, rx in DESCRIBED:
         if re.search(rx, text, re.I):
             return name
-    return "ic" if re.search(r"regulator|converter|amplifier|controller|sensor|"
-                             r"\bic\b|switch|expander|management|module|comparator",
-                             text, re.I) else "other"
+    return "ic" if re.search(IC_DESCRIBED, text, re.I) else "other"
 
 
 def wilson_upper(hits: int, n: int, z: float = 1.96) -> float:
