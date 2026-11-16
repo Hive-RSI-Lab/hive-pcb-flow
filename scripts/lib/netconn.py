@@ -74,7 +74,11 @@ def build(bg, net: str, include_zones: bool = False, snap: int = SNAP,
        coincident cross-layer endpoints connect).
     b) same-layer cap overlap: endpoints of two DIFFERENT tracks on the SAME
        layer within (w1 + w2)/2 + tol are joined (round end caps overlap;
-       weight = endpoint distance).
+       weight = endpoint distance), except that an end in reach of both end
+       nodes of one track (its own included) drops the farther: a T-tap
+       reaching both caps of a short trunk joins the nearer only (#1336, no
+       false loop beside the trunk). Two ends join only when each keeps the
+       other's node.
     c) via join: an endpoint within via.diameter/2 + tol of the via center,
        with the via spanning the track's layer (weight = distance to center).
     d) pad join: an endpoint inside pad.poly buffered by tol, with the
@@ -120,6 +124,15 @@ def build(bg, net: str, include_zones: bool = False, snap: int = SNAP,
     if ends:
         cell = max(max(2.0 * hw for _, _, _, hw, _ in ends) + tol, 0.1)
         grid: dict[tuple[int, int], list[int]] = {}
+        # end k -> {node: distance} of the ends in cap reach of it, its own
+        # node at 0. A short track can have both its end nodes in reach of
+        # one end (a T-tap on its body, #1336): joining both makes a loop
+        # beside the track that isn't in the copper, also when other tracks
+        # carry those nodes on. So of any track's two end nodes in reach,
+        # the farther is dropped, and two ends join only when each keeps
+        # the other's node.
+        reach: list[dict] = [{e[0]: 0.0} for e in ends]
+        pairs: list[tuple[int, int, float]] = []
         for k, (_, pt, _, _, _) in enumerate(ends):
             grid.setdefault((int(pt[0] // cell), int(pt[1] // cell)), []).append(k)
         for (cx, cy), members in grid.items():
@@ -131,11 +144,23 @@ def build(bg, net: str, include_zones: bool = False, snap: int = SNAP,
                     if kb <= ka:
                         continue
                     nb, pb, lb, hb, tb = ends[kb]
-                    if ta == tb or la != lb or na == nb:
+                    if ta == tb or la != lb:
                         continue
                     d = math.hypot(pa[0] - pb[0], pa[1] - pb[1])
                     if d <= ha + hb + tol:
-                        join(na, nb, d)
+                        pairs.append((ka, kb, d))
+                        for k, o in ((ka, nb), (kb, na)):
+                            if d < reach[k].get(o, math.inf):
+                                reach[k][o] = d
+        span = {(ends[k][0], ends[k + 1][0]) for k in range(0, len(ends), 2)}
+        kept = []
+        for r in reach:
+            drop = {(x if r[x] > r[y] else y) for x, y in span
+                    if x != y and x in r and y in r}
+            kept.append(r.keys() - drop)
+        for ka, kb, d in pairs:
+            if ends[kb][0] in kept[ka] and ends[ka][0] in kept[kb]:
+                join(ends[ka][0], ends[kb][0], d)
 
     # c) via joins
     for vi, v in enumerate(vias):
