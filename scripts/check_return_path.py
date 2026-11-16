@@ -53,8 +53,8 @@ Per net in constraints.json["high_speed"]:
     copper in full), and Z0 rises by 1 / sqrt(1 - share (1 - f_eff)),
     share 1 for a microstrip and the plane's capacitance share h_other /
     (h + h_other) for a stripline. The estimate is reported in facts
-    ("hatch_impedance"); with a target (the entry's z0_ohm, z0_tol_pct
-    default 10) a miss warns as hatch_impedance, never an error, since it
+    ("hatch_impedance"); with a target (the entry's z0_ohm, else its
+    impedance_ohm; z0_tol_pct default 10) a miss warns as hatch_impedance, never an error, since it
     is an estimate. Left as not_judged, with the reason: a cell wider than
     the return corridor, 2 k x the trace width (the trace's whole return
     can sit over one open cell, so it runs over gaps, not a thinner
@@ -305,11 +305,12 @@ def hatch_impedance(bg: geom.BoardGeom, net: str, entry: dict, layer: str,
                z0_estimate_ohm=checklib.rnd(z_est, 1), model=model,
                basis="estimate: solid-plane field solve scaled by the "
                      "hatch's effective fill")
-    target = entry.get("z0_ohm")
+    target = entry.get("z0_ohm") or entry.get("impedance_ohm")
     if not target:
         return out, None, (f"{head}: Z0 estimated at {z_est:.0f} ohm "
                            f"({z_solid:.0f} ohm over solid copper), but the "
-                           "entry has no z0_ohm target to judge it against")
+                           "entry has no z0_ohm or impedance_ohm target to judge "
+                           "it against")
     tol = float(entry.get("z0_tol_pct", HATCH_Z_TOL_PCT))
     miss = 100.0 * (z_est - float(target)) / float(target)
     out.update(target_ohm=float(target), miss_pct=checklib.rnd(miss, 1))

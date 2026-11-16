@@ -31,12 +31,17 @@ Consumers per key (script -> phase):
     "data_rate_mbps": 10000,         // check_via_stubs knee (also on diff_pairs)
     "f_max_ghz": 6.0,                // check_via_stubs knee, RF nets (also on rf)
     "return_via_radius_mm": 2.0,     // fallback when t_rise_ns absent
-    "impedance_ohm": 50              // optional; rules_gen reports the outer
+    "impedance_ohm": 50,             // optional; rules_gen reports the outer
                                      // microstrip width (impedance facts) and
                                      // writes a track_width rule per inner
                                      // stripline layer (pours above + below
                                      // in "planes"); no netclass, the board
                                      // keeps its own (RF boards)
+    "z0_ohm": 50,                    // check_return_path, over a hatched
+    "z0_tol_pct": 10                 // plane only: the line's Z0 estimated
+                                     // from the hatch's fill must be within
+                                     // tol of z0_ohm (else impedance_ohm);
+                                     // a miss warns as hatch_impedance
   }],
 
   // check_current (P8), rules_gen per-net width rules (P5),

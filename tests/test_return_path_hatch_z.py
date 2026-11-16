@@ -128,6 +128,13 @@ def test_sparse_hatch_misses_its_target(tmp_path):
     assert "not_judged" not in facts
 
 
+def test_impedance_ohm_is_the_target_when_z0_ohm_is_absent(tmp_path):
+    z = _target(tmp_path)
+    vs, facts = _check(tmp_path, hatched(0.1, 0.5), impedance_ohm=z)
+    assert _kinds(vs) == ["hatch_impedance"]
+    assert facts["hatch_impedance"][0]["target_ohm"] == z
+
+
 # ------------------------------------------------------ quiet twins
 
 def test_same_line_over_solid_copper_is_quiet(tmp_path):
@@ -174,7 +181,7 @@ def test_pitch_against_a_fast_edge_is_not_judged(tmp_path):
 def test_hatch_without_a_target_is_not_judged(tmp_path):
     vs, facts = _check(tmp_path, hatched(0.1, 0.5))
     assert vs == []
-    assert "no z0_ohm target" in facts["not_judged"][0]
+    assert "no z0_ohm or impedance_ohm target" in facts["not_judged"][0]
     assert facts["hatch_impedance"][0]["z0_estimate_ohm"] > 0
 
 
