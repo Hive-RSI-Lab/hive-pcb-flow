@@ -507,3 +507,98 @@ def test_netconn_end_on_a_short_tracks_end_skips_its_far_end(tmp_path_factory):
     bg = _board(tmp_path_factory, "shortend", body)
     g = netconn.build(bg, "N")
     assert netconn.bridge_tracks(g) == {0, 1, 2}
+
+# ============================================================ tied contacts (#634)
+# A USB-C receptacle's row B7 A6 A7 B6 at 0.5 mm: D+ is A6 and B6, D- A7 and
+# B7. Each pair is tied across the row through B.Cu and two vias, D+ by 3 mm,
+# D- by 4 mm. A plug meets one row: the other contact pair is a stub.
+
+def _usbc_body(tie_n=True):
+    pad = ('    (pad "{}" smd rect (at {} 0) (size 0.3 1.0) (layers "F.Cu") '
+           '(net "{}"))\n')
+    body = (
+        '  (footprint "t:USBC" (at 100 80) (layer "F.Cu")\n'
+        '    (property "Reference" "J1" (at 0 0 0) (layer "F.SilkS"))\n'
+        + pad.format("B7", -0.75, "/USB_D-") + pad.format("A6", -0.25, "/USB_D+")
+        + pad.format("A7", 0.25, "/USB_D-") + pad.format("B6", 0.75, "/USB_D+")
+        + '  )\n'
+        '  (footprint "t:U" (at 100 90) (layer "F.Cu")\n'
+        '    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))\n'
+        + pad.format("1", -0.25, "/USB_D+") + pad.format("2", 0.25, "/USB_D-")
+        + '  )\n'
+        + seg(99.75, 90, 99.75, 80, net="/USB_D+")
+        + seg(100.25, 90, 100.25, 80, net="/USB_D-")
+        # D+ tie, A6 -> B6: 1 + 1 + 1 mm
+        + seg(99.75, 80, 99.75, 79, net="/USB_D+") + via(99.75, 79, net="/USB_D+")
+        + seg(99.75, 79, 100.75, 79, net="/USB_D+", layer="B.Cu")
+        + via(100.75, 79, net="/USB_D+") + seg(100.75, 79, 100.75, 80, net="/USB_D+"))
+    if tie_n:   # D- tie, A7 -> B7: 1.5 + 1 + 1.5 mm
+        body += (seg(100.25, 80, 100.25, 78.5, net="/USB_D-")
+                 + via(100.25, 78.5, net="/USB_D-")
+                 + seg(100.25, 78.5, 99.25, 78.5, net="/USB_D-", layer="B.Cu")
+                 + via(99.25, 78.5, net="/USB_D-")
+                 + seg(99.25, 78.5, 99.25, 80, net="/USB_D-"))
+    return body
+
+
+def test_diffpair_usbc_tie_rows(tmp_path_factory):
+    bg = _board(tmp_path_factory, "usbc", _usbc_body(), outline=(95, 75, 105, 95))
+    term = check_diffpair.matched_terminals(bg, "/USB_D+", "/USB_D-")
+    ties = check_diffpair.contact_ties(bg, "/USB_D+", "/USB_D-", term)
+    # rows by pad name, not nearest pad: A6's nearest D- pads are A7 and B7
+    assert {r: [(a.number, b.number) for a, b in w] for r, w in ties.items()} \
+        == {"J1": [("A6", "A7"), ("B6", "B7")]}
+
+
+def test_diffpair_usbc_tie_per_orientation(tmp_path_factory):
+    bg = _board(tmp_path_factory, "usbc2", _usbc_body(), outline=(95, 75, 105, 95))
+    vs, facts = check_diffpair.check_pair(
+        bg, {"p": "/USB_D+", "n": "/USB_D-", "max_uncoupled_mm": 20})
+    assert facts["branch_free"] is False
+    a, b = facts["tied_contacts"]
+    assert a["contacts"] == ["J1.A6/A7"] and b["contacts"] == ["J1.B6/B7"]
+    # plug meets row A: both trunks 10 mm, the B row hangs off as stubs
+    assert a["length_p_mm"] == pytest.approx(10.0, abs=0.01)
+    assert a["skew_mm"] == pytest.approx(0.0, abs=0.01)
+    assert a["stub_p_mm"] == pytest.approx(3.0, abs=0.05)
+    assert a["stub_n_mm"] == pytest.approx(4.0, abs=0.05)
+    # row B: the ties are in the trunk, and their 1 mm difference is skew
+    assert b["length_p_mm"] == pytest.approx(13.0, abs=0.05)
+    assert b["length_n_mm"] == pytest.approx(14.0, abs=0.05)
+    assert b["skew_mm"] == pytest.approx(1.0, abs=0.05)
+    assert b["stub_p_mm"] == pytest.approx(0.0, abs=0.05)
+    # the pair is judged at its worst way
+    assert facts["skew_mm"] == pytest.approx(1.0, abs=0.05)
+    assert facts["length_n_mm"] == pytest.approx(14.0, abs=0.05)
+    assert all(v["branch_free"] is False for v in vs if "branch_free" in v)
+
+
+def test_diffpair_usbc_tie_skew_judged_at_worst_way(tmp_path_factory):
+    bg = _board(tmp_path_factory, "usbc3", _usbc_body(), outline=(95, 75, 105, 95))
+    vs, facts = check_diffpair.check_pair(
+        bg, {"p": "/USB_D+", "n": "/USB_D-", "max_uncoupled_mm": 20,
+             "max_skew_mm": 0.5})
+    assert "diffpair_skew" in _kinds(vs)        # row B: 1 mm > 0.5 mm
+
+
+def test_diffpair_usbc_untied_row_is_not_a_way(tmp_path_factory):
+    # D- tied on one pad only (B7 left unrouted): a way through B7 leaves the
+    # D- trunk open, so skew is not judged rather than read off one row
+    bg = _board(tmp_path_factory, "usbc4", _usbc_body(tie_n=False),
+                outline=(95, 75, 105, 95))
+    vs, facts = check_diffpair.check_pair(
+        bg, {"p": "/USB_D+", "n": "/USB_D-", "max_uncoupled_mm": 20})
+    assert facts["branch_free"] is False
+    assert "skew_mm" not in facts and "tied_contacts" not in facts
+    assert any("tied on J1" in s for s in facts["not_judged"])
+    assert "diffpair_skew" not in _kinds(vs)
+
+
+def test_diffpair_unread_ref_is_no_tie(tmp_path_factory):
+    # a KiCad 6 board's refs read as "?" (#1429): every such part shares that
+    # ref, so two unrelated parts must not read as one part's tied contacts
+    body = _usbc_body().replace('"Reference" "J1"', '"Reference" "?"') \
+        .replace('"Reference" "U1"', '"Reference" "?"')
+    bg = _board(tmp_path_factory, "usbc5", body, outline=(95, 75, 105, 95))
+    term = check_diffpair.matched_terminals(bg, "/USB_D+", "/USB_D-")
+    assert check_diffpair.contact_ties(bg, "/USB_D+", "/USB_D-", term) == {}
