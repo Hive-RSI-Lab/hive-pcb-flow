@@ -344,6 +344,36 @@ def test_pinout_fact():
     assert check_ratings.pinout_fact(b, None)[0] == "unknown"
 
 
+# sizif's U13, a 74HCT4053D: the board's CD4053-style names, pad by pad,
+# and the Philips datasheet's pin description (Table 3)
+HC4053 = ["2Y1", "2Y0", "3Y1", "3Z", "3Y0", "E", "VEE", "GND", "S3", "S2",
+          "S1", "1Y0", "1Y1", "1Z", "2Z", "VCC"]
+CD4053 = ["Y1", "Y0", "Z1", "Z", "Z0", "INH", "VEE", "VSS", "C", "B", "A",
+          "", "X1", "X", "Y", "VDD"]
+
+
+def test_a_4053_named_two_ways_is_one_pinout():
+    """#1522 quiet twin: a 74HCT4053D drawn with CD4053 names (A/B/C, X1,
+    INH, VDD) is the datasheet's S1/S2/S3, 1Y1, E, VCC: verified. Planted
+    faults: select pins A and B swapped is caught, and the table is only
+    a 4053's (a 4051 maps A to S0)."""
+    import check_ratings
+    ext = {"mpn": "74HCT4053D", "pinout": [
+        {"pin": str(i + 1), "name": n} for i, n in enumerate(HC4053)]}
+    nums = [str(i + 1) for i in range(16)]
+    b = {"ref": "U13", "nums": nums,
+         "fns": {str(i + 1): n for i, n in enumerate(CD4053) if n}}
+    st, why = check_ratings.pinout_fact(b, ext)
+    assert st == "verified", why
+    swapped = {**b, "fns": {**b["fns"], "10": "A", "11": "B"}}
+    st, why = check_ratings.pinout_fact(swapped, ext)
+    assert st == "unknown"
+    assert "10: board A / datasheet S2" in why
+    assert "11: board B / datasheet S1" in why
+    assert check_ratings.pinout_fact(b, {**ext, "mpn": "74HCT4051D"})[0] \
+        == "unknown"
+
+
 def test_rating_facts_from_findings():
     import check_ratings
     board = [{"ref": "U1", "lcsc": "C1", "pads": {"1": "+5V"}},
