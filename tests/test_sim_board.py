@@ -632,8 +632,9 @@ def test_pin_rating():
 
 # Shunt inputs ride the bus, not VS (#521): each pin form KiCad's own
 # symbols and boards use (Vin+ on INA226/233, bare + on INA240, per-channel
-# IN+2 on INA3221, SENSE1+ on PAC193x/195x, +IN on NCS21x) reads its own
-# rating; a control pin of the same part, or PAC194x (no row yet), does not.
+# IN+2 on INA3221, SENSE1+ on PAC19xx, +IN on NCS21x and AD82xx, Vin+ on
+# AD8211, -INS on LTC6102, RS+ on MAX4080/471, SENSE+ on LTC4151) reads its
+# own rating; a control or supply pin of the same part does not.
 @pytest.mark.parametrize("value,fn,lim", [
     ("INA3221AIRGVR", "IN+2", 26), ("INA3221", "IN3-", 26),
     ("INA3221AIRGVR", "VPU", 26), ("INA3221AIRGVR", "SCL", None),
@@ -645,9 +646,22 @@ def test_pin_rating():
     ("PAC1934T-I/JQ", "SENSE4-", 32), ("PAC1934T-I/JQ", "VDD", None),
     ("INA200AIDR", "V_{IN+", 80), ("INA225AIDGSR", "IN+", 36),
     ("INA253A1IPW", "IS-", 80), ("INA233AIDGSR", "SDA", None),
-    ("PAC1954T-E/4MX", "SENSE3+", 32), ("PAC1944T-E/4MX", "SENSE1+", None),
+    ("PAC1954T-E/4MX", "SENSE3+", 32), ("PAC1944T-E/4MX", "SENSE1+", 9),
     ("NCS210RSQT2G", "+IN", 26), ("NCV214RMUTAG", "-IN", 26),
     ("NCS210RSQT2G", "REF", None),
+    ("AD8202YRZ", "+IN", 28), ("AD8203YRZ", "-IN", 30),
+    ("AD8205YRZ", "+IN", 65), ("AD8208WBRZ", "-IN", 45),
+    ("AD8210YRZ", "+IN", 65), ("AD8211YRJZ", "VIN+", 65),
+    ("AD8213YRMZ", "+IN1", 65), ("AD8212YRMZ", "VSNS", 65),
+    ("AD8216WYRZ", "-IN", 65), ("AD8217BRMZ", "+IN", 80),
+    ("AD8218BRMZ", "-IN", 80), ("AD8219WBRMZ", "+IN", 80),
+    ("AD8218BRMZ", "VS", None), ("LTC6102CMS8", "-INS", 60),
+    ("LTC6102HVCMS8", "+IN", 100), ("LTC6102CMS8", "V-", None),
+    ("LTC4151CMS", "SENSE+", 80), ("LTC4151CMS", "ADIN", None),
+    ("MAX4080SASA+", "RS-", 76), ("MAX4081TAUA+", "RS+", 76),
+    ("MAX471CSA", "RS+", 36), ("MAX472ESA", "SENSE-", 36),
+    ("MAX472ESA", "VCC", None), ("PAC1942T-E/J6CX", "SENSE2-", 9),
+    ("PAC1941T-E/J6CX", "VDD", None),
 ])
 def test_current_sense_pin_ratings(value, fn, lim):
     table = sim_board.load_pin_ratings()
