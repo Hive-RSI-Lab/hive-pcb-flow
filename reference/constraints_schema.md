@@ -697,6 +697,13 @@ Consumers per key (script -> phase):
   // #847: check_ratings matches a block's operating_point vout_v to the
   // regulator it names: a ref in name or block ("U1 AP64350 class"), or in
   // its own ref (one part) or refs (a list).
+  // #355: check_converter judges a buck's or boost's inductor against its
+  // peak current and the IC's limits (reference/converter_limits.yaml).
+  // inductor_isat_a is the inductor's saturation current from its datasheet
+  // (without it the Isat checks stay unjudged and say so); vin_max_v the
+  // highest input, for the minimum on-time at the narrowest duty; inductor
+  // the inductor's ref, to pick this block when two share a topology and
+  // vout_v.
   "blocks": [{"topology": "buck", "block": "B3", "name": "U1 AP64350 class",
               "operating_point": {"vin_v": 12, "vout_v": 5, "iout_a": 3,
                                   "pdiss_w": 0.8, "board_layers": 4,
