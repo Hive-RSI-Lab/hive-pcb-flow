@@ -36,7 +36,14 @@ venv python; JSON out, exit 0/1/2. Keep output ASCII.
    to get the image-only pages and the mechanical-drawing pages as PNGs
    (`rendered` in the payload; a scan is OCR'd into text_by_page when
    tesseract is installed) - read the drawings from those images, not from
-   the text layer's loose numbers.
+   the text layer's loose numbers. A drawing page names a land pattern or
+   a package drawing; a page with only a general word (dimension, hole,
+   ...) renders only when no page does. `rendered.pages` lists every
+   candidate page with its words and whether it rendered, and
+   `rendered.note` says why. For a datasheet that covers a family, add
+   `--part <MPN or package code>` to render only the drawing pages that
+   name your part. If the drawing you need is on a listed page that did
+   not render, open that page yourself or re-run with `--render-all`.
 2. Fill the template -> write `parts/<lcsc>.json`.
 3. `scripts/datasheet_extract.py --validate parts/<lcsc>.json` - MUST exit 0
    (schema errors come back with precise paths; fix and re-validate).

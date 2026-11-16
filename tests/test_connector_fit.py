@@ -529,12 +529,102 @@ def test_pdf_render_lists_image_only_pages(tmp_path):
                                  str(tmp_path / "pages"), "--out", str(out)])
     assert rc == 0
     r = json.loads(out.read_text())["rendered"]
-    assert r["pages"] == [{"page": 0, "why": "image_only"}]
+    assert r["pages"] == [{"page": 0, "why": "image_only", "words": [],
+                           "render": True}]
+    assert "note" not in r
     if r["renderer"] is None:
         assert r["rendered"] == []      # no pdftoppm: listed, not drawn
     else:
         png = Path(r["rendered"][0]["png"])
         assert png.is_file() and png.name == "page-001.png"
+    out2 = tmp_path / "payload2.json"
+    rc = datasheet_extract.main(["--pdf", str(pdf), "--render",
+                                 str(tmp_path / "pages2"), "--render-all",
+                                 "--part", "DBV0005A", "--out", str(out2)])
+    assert rc == 0
+    r2 = json.loads(out2.read_text())["rendered"]
+    assert r2["note"] == "--part is ignored with --render-all."
+
+
+def _pg(n, text):
+    """Page n of a datasheet's text layer, long enough not to read as a
+    scan."""
+    return {"page": n, "text": text + " filler" * 40}
+
+
+def _picked(rows):
+    return [(r["page"], r["why"], r["render"]) for r in rows]
+
+
+def test_a_page_naming_the_land_pattern_renders_and_general_words_wait():
+    # #1333: "dimension" in a table heading and "hole" in a feature list
+    # drew 25 pages of a 33-page capacitor catalogue.
+    rows, note = datasheet_extract.pick_pages([
+        _pg(0, "Electrical characteristics: dimension of the case"),
+        _pg(1, "Recommended Land\nPattern for the DBV package"),
+        _pg(2, "Features: two mounting holes")])
+    assert _picked(rows) == [(0, "keyword", False), (1, "drawing", True),
+                             (2, "keyword", False)]
+    assert rows[1]["words"] == ["land pattern", "recommended land"]
+    assert rows[2]["words"] == ["hole", "mounting"]
+    assert datasheet_extract._drawing_words("to the PCB-\nedge") == \
+        ["pcb edge"]
+    assert note.startswith("Rendered the 1 page naming a land pattern")
+    assert "listed, not rendered, the 2 pages with only a general word" \
+        in note and note.endswith("--render-all renders those too.")
+
+
+def test_with_no_land_phrase_the_general_word_pages_render():
+    rows, note = datasheet_extract.pick_pages([
+        _pg(0, "Pin functions"), _pg(1, "Dimensions in mm"),
+        _pg(2, "Two mounting holes")])
+    assert _picked(rows) == [(1, "keyword", True), (2, "keyword", True)]
+    assert note.startswith("No page names a land pattern or a package "
+                           "drawing: rendered the 2 pages with a general "
+                           "word")
+
+
+def test_part_keeps_the_drawing_pages_that_name_it():
+    rows, note = datasheet_extract.pick_pages([
+        _pg(0, "DBV0005A package outline"),
+        _pg(1, "DCK0005A package outline"),
+        _pg(2, "Example board layout, dbv-0005a"),
+        _pg(3, "Dimension table for DBV0005A")], parts=["DBV 0005A"])
+    assert _picked(rows) == [(0, "drawing", True), (1, "drawing", False),
+                             (2, "drawing", True), (3, "keyword", False)]
+    assert note.startswith("Found the 3 pages naming a land pattern")
+    assert note.endswith("--part DBV 0005A: rendered only the 2 pages "
+                         "naming it, of 3.")
+
+
+def test_part_named_on_no_drawing_page_drops_none():
+    rows, note = datasheet_extract.pick_pages([
+        _pg(0, "SOT-23 package outline"), _pg(1, "SC-70 package outline")],
+        parts=["TPS22918DBVR"])
+    assert _picked(rows) == [(0, "drawing", True), (1, "drawing", True)]
+    assert note.startswith("--part TPS22918DBVR: no drawing page names "
+                           "it, so none was dropped")
+
+
+def test_render_all_renders_every_word_page_and_ignores_part():
+    rows, note = datasheet_extract.pick_pages([
+        _pg(0, "Land pattern for DBV0005A"), _pg(1, "Dimension table")],
+        parts=["DBV0005A"], render_all=True)
+    assert _picked(rows) == [(0, "drawing", True), (1, "keyword", True)]
+    assert note == "--part is ignored with --render-all."
+
+
+def test_more_drawing_pages_than_a_part_needs_ask_for_part():
+    four = [_pg(n, f"Package outline {n}") for n in range(4)]
+    rows, note = datasheet_extract.pick_pages(four)
+    assert all(r["render"] for r in rows) and note == ""
+    rows, note = datasheet_extract.pick_pages(four + [_pg(4, "Land pattern")])
+    assert all(r["render"] for r in rows)
+    assert note.startswith("Rendered 5 drawing pages: if the datasheet "
+                           "covers a family, re-run with --part")
+    rows, note = datasheet_extract.pick_pages(
+        four + [_pg(4, "Land pattern")], parts=["NONE"])
+    assert "re-run with --part" not in note
 
 
 def test_fp_verify_holds_a_library_footprint_to_the_drawing(tmp_path):

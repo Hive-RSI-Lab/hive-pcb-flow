@@ -45,6 +45,19 @@ reads the PDF pages); this script owns the deterministic half:
                     them under "rendered" for the agent to read - a
                     connector drawing's pin and post sizes and its PCB-edge
                     line go into the extraction's `mechanical` block.
+                    A drawing page names a land pattern or a package
+                    drawing (LAND_PHRASES); a page with only a general word
+                    (DRAWING_WORDS: hole, dimension, ...) renders only when
+                    no page has a phrase (#1333). rendered.pages lists every
+                    such page with its words and whether it rendered, and
+                    rendered.note says why.
+  --part CODE       with --render: of those drawing pages, render only the
+                    ones naming CODE, an MPN or a package code such as
+                    DBV0005A (case, spaces and dashes ignored; repeatable).
+                    When no page names it, none is dropped.
+  --render-all      with --render: render every page with a drawing word,
+                    general or not (the rule before #1333); --part is then
+                    ignored.
   --validate FILE   validate a candidate extraction against the schema.
                     exit 0 = valid, 1 = schema violations, 2 = unreadable.
   --schema          print the JSON Schema (single source of truth).
@@ -525,32 +538,133 @@ def _checked_pdf(path: str) -> tuple[Path | None, dict | None]:
 IMAGE_ONLY_CHARS = 200
 # Pages that hold the mechanical drawing (mechanical: pins, posts, edge) are
 # rendered too: a dimension read off a drawing needs the picture, not the
-# text layer's loose numbers.
-DRAWING_KEYWORDS = ("land pattern", "recommended pcb", "pcb layout",
-                    "pcb edge", "board edge", "panel", "hole", "dimension",
-                    "mounting", "footprint", "package outline", "drawing")
+# text layer's loose numbers. Each phrase here names the land pattern or the
+# package drawing itself.
+LAND_PHRASES = ("land pattern", "recommended land", "land dimension",
+                "land size", "landing pad", "example board layout",
+                "package outline", "outline dimension", "package dimension",
+                "case outline", "outline drawing", "mechanical drawing",
+                "mechanical dimension", "physical dimension",
+                "product dimension", "appearance and dimension",
+                "recommended pcb", "pcb layout", "pc board layout",
+                "pcb pattern", "pcb edge", "board edge", "pad layout",
+                "recommended pad", "solder pad", "mounting pad",
+                "mounting pattern", "recommended footprint",
+                "soldering footprint")
+# These words turn up on most pages of a long datasheet ("dimension" in a
+# table heading, "hole" in a feature list): rendering every page with one
+# drew 25 pages of a 33-page capacitor catalogue (#1333). A page with only
+# these renders when no page of the datasheet has a phrase.
+DRAWING_WORDS = ("panel", "hole", "dimension", "mounting", "drawing",
+                 "footprint")
+DRAWING_KEYWORDS = LAND_PHRASES + DRAWING_WORDS
+# More drawing pages to render than this and the datasheet likely covers a
+# family of parts: the note then asks for --part.
+MANY_DRAWING_PAGES = 4
+
+
+def _drawing_words(text: str) -> list[str]:
+    """The DRAWING_KEYWORDS on a page, with case, line breaks and hyphens
+    ignored ("Land\\nPattern", "PCB-edge")."""
+    flat = " ".join(text.lower().replace("-", " ").split())
+    return [k for k in DRAWING_KEYWORDS if k in flat]
+
+
+def _n_pages(n: int) -> str:
+    return f"{n} page" if n == 1 else f"{n} pages"
+
+
+def pick_pages(pages: list[dict], parts: list[str] | None = None,
+               render_all: bool = False) -> tuple[list[dict], str]:
+    """Which pages of a datasheet to render, and a note saying why (#1333).
+    An image-only page always renders. Of the pages with a drawing word, the
+    ones with a LAND_PHRASES phrase render, or, when no page has one, the
+    ones with a DRAWING_WORDS word. `parts` (MPNs or package codes, compared
+    as _norm) then keeps the pages that name one, unless none does.
+    `render_all` renders every page with a word and ignores `parts`.
+    Returns one row {page, why: image_only | drawing | keyword, words,
+    render} per candidate page, in page order, and the note."""
+    rows, text = [], {}
+    for p in pages:
+        t = p.get("text", "")
+        if len(t.strip()) < IMAGE_ONLY_CHARS:
+            rows.append({"page": p["page"], "why": "image_only", "words": [],
+                         "render": True})
+            continue
+        words = _drawing_words(t)
+        if words:
+            text[p["page"]] = t
+            land = any(w in LAND_PHRASES for w in words)
+            rows.append({"page": p["page"],
+                         "why": "drawing" if land else "keyword",
+                         "words": words, "render": False})
+    found = [r for r in rows if r["why"] != "image_only"]
+    notes = []
+    if render_all:
+        chosen = found
+        if parts:
+            notes.append("--part is ignored with --render-all.")
+    else:
+        land = [r for r in found if r["why"] == "drawing"]
+        chosen = land or found
+        codes = [c for c in (_norm(x) for x in parts or []) if c]
+        named = [r for r in chosen
+                 if any(c in _norm(text[r["page"]]) for c in codes)]
+        verb = "found" if named else "rendered"
+        general = ", ".join(DRAWING_WORDS)
+        if found and not land:
+            notes.append(f"No page names a land pattern or a package "
+                         f"drawing: {verb} the {_n_pages(len(found))} with "
+                         f"a general word ({general}).")
+        elif len(land) < len(found):
+            notes.append(f"{verb.capitalize()} the {_n_pages(len(land))} "
+                         f"naming a land pattern or a package drawing; "
+                         f"listed, not rendered, the "
+                         f"{_n_pages(len(found) - len(land))} with only a "
+                         f"general word ({general}): --render-all renders "
+                         f"those too.")
+        if parts and chosen:
+            asked = " ".join(parts)
+            if named:
+                notes.append(f"--part {asked}: rendered only the "
+                             f"{_n_pages(len(named))} naming it, of "
+                             f"{len(chosen)}.")
+                chosen = named
+            else:
+                notes.append(f"--part {asked}: no drawing page names it, so "
+                             f"none was dropped; try the package code the "
+                             f"drawing pages use (TI's DBV0005A, say).")
+    for r in chosen:
+        r["render"] = True
+    if len(chosen) > MANY_DRAWING_PAGES and not parts and not render_all:
+        notes.append(f"Rendered {len(chosen)} drawing pages: if the "
+                     f"datasheet covers a family, re-run with --part and "
+                     f"the part's MPN or package code to render only the "
+                     f"pages that name it.")
+    return rows, " ".join(notes)
 
 
 def render_pages(pdf: Path, pages: list[dict], out_dir: Path,
-                 dpi: int = 200) -> dict:
-    """Render the image-only and drawing pages of `pdf` to PNGs in `out_dir`
-    with poppler's pdftoppm, OCR the image-only ones with tesseract when it
-    is installed, and put that text into their `pages` entry (`ocr`: true).
-    Neither tool is a hard dependency: without pdftoppm nothing is rendered
-    and `renderer` is null; the agent then reads the PDF pages itself."""
+                 dpi: int = 200, parts: list[str] | None = None,
+                 render_all: bool = False) -> dict:
+    """Render the pages of `pdf` that pick_pages chooses (image-only and
+    drawing pages) to PNGs in `out_dir` with poppler's pdftoppm, OCR the
+    image-only ones with tesseract when it is installed, and put that text
+    into their text_by_page entry (`ocr`: true). `pages` in the result lists
+    every candidate page, rendered or not, and `note` says why. Neither tool
+    is a hard dependency: without pdftoppm nothing is rendered and
+    `renderer` is null; the agent then reads the PDF pages itself."""
     import shutil
     import subprocess
     renderer, ocr = shutil.which("pdftoppm"), shutil.which("tesseract")
     out: dict = {"renderer": renderer, "ocr": ocr, "dir": str(out_dir),
                  "rendered": []}
-    want = []
-    for p in pages:
-        text = p.get("text", "")
-        if len(text.strip()) < IMAGE_ONLY_CHARS:
-            want.append((p, "image_only"))
-        elif any(k in text.lower() for k in DRAWING_KEYWORDS):
-            want.append((p, "drawing"))
-    out["pages"] = [{"page": p["page"], "why": why} for p, why in want]
+    rows, note = pick_pages(pages, parts, render_all)
+    out["pages"] = rows
+    if note:
+        out["note"] = note
+    by_page = {p["page"]: p for p in pages}
+    want = [(by_page[r["page"]], r["why"]) for r in rows if r["render"]]
     if renderer is None or not want:
         return out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -582,7 +696,8 @@ def do_pdf(args) -> tuple[dict, int]:
         return err, 2
     pages = extract_pdf_text(pdf)
     total_chars = sum(len(p.get("text", "")) for p in pages)
-    rendered = render_pages(pdf, pages, Path(args.render)) \
+    rendered = render_pages(pdf, pages, Path(args.render), parts=args.part,
+                            render_all=args.render_all) \
         if args.render else None
     trimmed = 0
     if not args.full_text:
@@ -1243,6 +1358,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="--pdf: render image-only and drawing pages to "
                          "PNGs in DIR (pdftoppm), OCR the image-only ones "
                          "(tesseract, when installed)")
+    ap.add_argument("--part", action="append", metavar="CODE",
+                    help="--render: render only the drawing pages naming "
+                         "this MPN or package code, when any does "
+                         "(repeatable; case, spaces and dashes ignored)")
+    ap.add_argument("--render-all", action="store_true",
+                    help="--render: render every page with a drawing word, "
+                         "not only those naming a land pattern or a "
+                         "package drawing")
     ap.add_argument("--full-text", action="store_true",
                     help="--pdf: emit full text for EVERY page (no stubbing)")
     ap.add_argument("--out", help="write JSON here instead of stdout")
