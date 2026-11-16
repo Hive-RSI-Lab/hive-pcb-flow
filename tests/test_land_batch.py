@@ -571,6 +571,17 @@ def test_no_exact_listing_names_the_nearest_and_reads_nothing(
     ("TPS7A20", "TPS7A20R", "Texas Instruments", ""),
     ("ISL29035", "ISL29035IROZ-T7", "RENESAS", ""),
     ("LPS25HB", "LPS25HB", "STMicroelectronics", ""),
+    # #1481 quiet twins: an Espressif module and its flash/PSRAM fit code
+    ("ESP32-S3-WROOM-1", "ESP32-S3-WROOM-1-N8", "Espressif Systems", "-N8"),
+    ("ESP32-S3-WROOM-1U", "ESP32-S3-WROOM-1U-N16R8", "Espressif Systems", "-N16R8"),
+    ("ESP32-C3-WROOM-02", "ESP32-C3-WROOM-02-H4", "Espressif Systems", "-H4"),
+    # planted faults: the antenna variant U (another module size), a fit
+    # code under JLC's own brand, a code off the list, a chip not a module
+    ("ESP32-S3-WROOM-1", "ESP32-S3-WROOM-1U-N8", "Espressif Systems", ""),
+    ("ESP32-S3-WROOM-1", "ESP32-S3-WROOM-1-N8", "JLCPCB Assembly", ""),
+    ("ESP32-S3-WROOM-1", "ESP32-S3-WROOM-1-MCN4", "Espressif Systems", ""),
+    ("ESP32-S3-WROOM-1", "ESP32-S3-WROOM-1R16N8", "Espressif Systems", ""),
+    ("ESP32-S3", "ESP32-S3-N8", "Espressif Systems", ""),
 ])
 def test_only_a_makers_packing_code_is_the_same_part(value, mpn, brand, code):
     assert lb.packing_suffix(value, {"mpn": mpn, "brand": brand}) == code
@@ -595,6 +606,27 @@ def test_a_value_listed_only_on_a_reel_is_read(stand_ins, no_table):
     assert rep["listing_from"] == ("SO8XTR: the Value with STMicroelectronics's "
                                    "packing code TR")
     assert (out / "ext" / "SO8X.json").is_file()
+
+
+def test_a_module_listed_only_with_its_fit_code_is_read(stand_ins, no_table):
+    """#1481 quiet twin: an Espressif module listed only with a flash-size
+    fit code (-N8) is read as its Value, the report naming the listing.
+    Planted fault: the antenna variant -1U-N8, a module of another size,
+    stays a near miss for a -1 Value."""
+    out, store, reader, calls, pages, readings = stand_ins
+    value = "ESP32-S3-WROOM-1"
+    pages[value], readings[value] = SO8_PAGES, so8_reading()
+    row = {**SO8X_ROW, "brand": "Espressif Systems"}
+    _value_rows(store, value, [{**row, "mpn": value + "U-N8"}])
+    rep = lb.read_part("mpn:" + value, [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "not one listing for its Value"
+    assert calls == []
+
+    _value_rows(store, value, [{**row, "mpn": value + "-N8"}])
+    rep = lb.read_part("mpn:" + value, [_on(SO8_FP)], out, store, reader)
+    assert rep["status"] == "kept" and rep["mpn"] == value
+    assert rep["listing_from"] == (f"{value}-N8: the Value with Espressif "
+                                   "Systems's module fit code -N8")
 
 
 def test_an_exact_listing_with_no_datasheet_goes_to_the_resolver(

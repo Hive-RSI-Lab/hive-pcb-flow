@@ -34,7 +34,10 @@ cases are not near misses (#1471). A listing whose MPN is the Value plus
 its maker's packing code alone (`PACKING`: ST's TR, TI's R or T after its
 package code, LPS25HB as LPS25HBTR, SN74LV1T34DBV as SN74LV1T34DBVR),
 under that maker's brand, is the same part on a reel, and is taken under
-the same package rule when no exact listing names a datasheet. An exact
+the same package rule when no exact listing names a datasheet; so is an
+Espressif module's fit code after its name (`ESPRESSIF_FITS`, #1481:
+ESP32-S3-WROOM-1 as ESP32-S3-WROOM-1-N8, flash size only), never its
+antenna variant U, a module of another size. An exact
 listing that names no datasheet goes to the resolver like any other: a
 "JLCPCB Assembly" listing (JLC's own, for a consigned part) names no
 maker, so the MPN's family decides it (ESP32-C3-WROOM-02: Espressif).
@@ -323,6 +326,16 @@ TI_PACKAGES = ("D", "DB", "DBQ", "DBV", "DBZ", "DCK", "DCN", "DCT", "DCU",
                "DRC", "DRL", "DRV", "DRY", "DSF", "DSG", "DW", "DYY", "NS",
                "PW", "PWP", "RGE", "RGT", "RGW", "RGZ", "RHA", "RHB", "RTE",
                "RTJ", "RTW", "RUK", "YFF", "YZP")
+# Espressif's module fit codes (#1481): flash and PSRAM size only (N8 is
+# 8 MB flash, N8R8 that and 8 MB PSRAM, H4 4 MB rated to 105 C), from the
+# modules' ordering information; one datasheet and one land pattern cover
+# them all. Only after a module's name (-1, -02U ...): U is the antenna
+# variant, a shorter module of its own, so ESP32-S3-WROOM-1 never takes an
+# ESP32-S3-WROOM-1U listing.
+ESPRESSIF_FITS = tuple(f"-{c}" for c in (
+    "N4", "N8", "N16", "N32", "H4", "N4R2", "N8R2", "N16R2", "H4R2",
+    "N4R8", "N8R8", "N16R8", "N16R16V", "N32R8V"))
+ESPRESSIF_MODULES = ("-1", "-1U", "-2", "-2U", "-02", "-02U", "-32E", "-32UE")
 PACKING = (
     (("stmicroelectronics", "st"), ("TR",), None),
     (("texas instruments",), ("R", "T"), TI_PACKAGES),
@@ -332,6 +345,7 @@ PACKING = (
     (("nexperia", "nxp"), tuple(f",{n}" for n in (
         "115", "118", "125", "132", "135", "165", "215", "235", "315",
         "518", "551", "653")), None),
+    (("espressif",), ESPRESSIF_FITS, ESPRESSIF_MODULES),
 )
 # brands that are a distributor's or assembler's own listing, not a maker
 NOT_MAKERS = ("JLCPCB Assembly",)
@@ -584,8 +598,10 @@ def fetch_pages(key: str, on_boards: list[dict], store: Path, rep: dict
                 rep["package_from"] = vwhy
             code = packing_suffix(key[4:], hit)
             if code:
+                what = ("module fit code" if code in ESPRESSIF_FITS
+                        else "packing code")
                 rep["listing_from"] = (f"{hit.get('mpn')}: the Value with "
-                                       f"{hit.get('brand')}'s packing code {code}")
+                                       f"{hit.get('brand')}'s {what} {code}")
         else:
             hit = amb.find_listing(key, store)
         err = None
