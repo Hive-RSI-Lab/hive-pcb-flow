@@ -14,7 +14,9 @@ places or numbering direction (land_pattern.pads or numbering in
 reference/extractions). The listing and the datasheet are the ones
 abs_max_batch.py fetches, in the same cache (abs-max/<set>/listings, pdfs),
 the maker's datasheet too where reference/datasheet_urls.yaml names the
-part: a part is fetched once for both.
+part, and the one abs_max_batch's resolver (scripts/lib/dsresolve.py) finds
+by maker when the listing names none, cached under resolved/ with where it
+came from in `datasheet_from`: a part is fetched once for both.
 
 A part keyed only by its Value (#1406) is read only when one source names
 it unambiguously (`value_listing`): exactly one entry of
@@ -432,7 +434,16 @@ def read_part(key: str, on_boards: list[dict], out: Path, store: Path,
     elif err is not None:
         return {**rep, "status": "no listing", "why": str(err)[:200]}
     if not hit.get("datasheet"):
-        return {**rep, "status": "no listing with a datasheet URL"}
+        # abs_max_batch's resolver and its cache (#815, #1406): one lookup
+        # by maker serves both batches
+        found = amb.resolved(mpn, hit.get("brand"), store, name)
+        if not found.get("url"):
+            return {**rep, "status": "no listing with a datasheet URL",
+                    "resolver": found.get("miss"),
+                    "why": str(found.get("why") or amb._tried(found))[:300]}
+        hit.update(datasheet=found["url"],
+                   brand=hit.get("brand") or found["maker"])
+        rep["datasheet_from"] = found["via"]
     lcsc = hit.get("lcsc") or ""
     pkg = hit.get("package") or ""
     rep.update(mpn=mpn, lcsc=lcsc, package=pkg)
