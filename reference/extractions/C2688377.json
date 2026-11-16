@@ -24,7 +24,7 @@
     {"pin": "18", "name": "DVCC", "type": "power_in", "notes": "digital 1.8V to 3.3V"},
     {"pin": "19", "name": "N.C.", "type": "nc"},
     {"pin": "20", "name": "DGND", "type": "ground", "notes": "internally connected to exposed pad"},
-    {"pin": "21", "name": "DVDD", "type": "power_out", "notes": "1.2V digital core, internal regulator from DVCC, decouple; may be externally supplied"},
+    {"pin": "21", "name": "DVDD", "type": "power_out", "internal_v": 1.2, "notes": "1.2V digital core, internal regulator from DVCC, decouple; may be externally supplied. internal_v: v3.7 p.28 'Internal Digital Core supply DVDD +1.2V (typical)'; p.7: internal DVDD up to the MCLK limit of p.31 note 2 (50 MHz), an external +1.3V above it"},
     {"pin": "22", "name": "N.C.", "type": "nc"},
     {"pin": "23", "name": "GPIO2", "type": "bidirectional"},
     {"pin": "24", "name": "GPIO1", "type": "bidirectional"},

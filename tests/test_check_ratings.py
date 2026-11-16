@@ -4237,3 +4237,62 @@ def test_mpn_clamp_reads_the_family_row():
     assert diode_vr.mpn_clamp("SMCJ58CA")["bi"] is True
     assert diode_vr.mpn_clamp("SS14") is None
     assert diode_vr.mpn_clamp("") is None
+
+
+# ------------------------------------------------------------ internal regulator
+
+CORE = {"mpn": "TESTDAC", "pinout": [
+    {"pin": "1", "name": "DVCC", "type": "power_in"},
+    {"pin": "2", "name": "GND", "type": "ground"},
+    {"pin": "3", "name": "DVDD", "type": "power_out", "internal_v": 3.3}],
+    "pin_ratings": [
+        {"pins": ["DVCC"], "kind": "voltage", "level": "abs_max",
+         "max": 6.0, "source": "test p.1"},
+        {"pins": ["DVDD"], "kind": "voltage", "level": "abs_max",
+         "max": 3.6, "source": "test p.1"}]}
+
+
+def _dvdd_cap(rated):
+    return [{"lcsc": "C9", "mpn": "CAP",
+             "attributes": [{"name": "Voltage Rated", "value": rated}]}]
+
+
+def test_internal_regulator_pin_with_decoupling_only_is_rated(tmp_path):
+    """#843: a power_out pin with `internal_v` and only a cap to ground on
+    its net puts the datasheet's internal value on the net. Planted: the cap
+    is rated 2.5 V under a 3.3 V internal rail, an error; its quiet twin at
+    6.3 V is clean and the pin itself is compared, not left unknown."""
+    fps = [("U1", "C1", {"1": "+5V", "2": "GND", "3": "/DVDD"}),
+           ("C2", "C9", {"1": "/DVDD", "2": "GND"})]
+    p = _run(_ws(tmp_path, fps, {"C1": CORE}, _dvdd_cap("2.5V")))
+    assert p["net_volts"]["/DVDD"]["v"] == pytest.approx(3.3)
+    assert p["net_volts"]["/DVDD"]["src"].startswith(
+        "internal regulator U1.3 DVDD")
+    assert [(e["kind"], e["refs"]) for e in _errors(p)] == \
+        [("rating_over_voltage", ["C2"])]
+    ws = _ws(tmp_path / "b", fps, {"C1": CORE}, _dvdd_cap("6.3V"))
+    assert _findings(_run(ws)) == []
+    _, facts = cr.run_check(ws / "kicad" / "board.kicad_pcb", ws / "parts",
+                            None, None)
+    u1 = next(f for f in facts["ledger_facts"] if f["subject"] == "U1"
+              and f["kind"] == "rating")
+    assert u1["status"] == "verified" and u1["value"].startswith("2 ")  # DVCC and DVDD
+
+
+def test_internal_regulator_net_with_more_than_decoupling_stays_unknown(tmp_path):
+    """#843: an outside supply or a load on the net, a cap not to ground, or
+    no `internal_v` keeps the net unknown: the internal value is only the
+    rail when nothing else can set it."""
+    base = [("U1", "C1", {"1": "+5V", "2": "GND", "3": "/DVDD"}),
+            ("C2", "C9", {"1": "/DVDD", "2": "GND"})]
+    for i, extra in enumerate([
+            [("U2", "C1", {"1": "/DVDD", "2": "GND"})],
+            [("C3", "C9", {"1": "/DVDD", "2": "/OTHER"})],
+            [("R1", "", {"1": "/DVDD", "2": "GND"})]]):
+        p = _run(_ws(tmp_path / str(i), base + extra, {"C1": CORE},
+                     _dvdd_cap("2.5V")))
+        assert "/DVDD" not in p["net_volts"], extra
+    bare = {**CORE, "pinout": [{k: v for k, v in r.items()
+                                if k != "internal_v"} for r in CORE["pinout"]]}
+    p = _run(_ws(tmp_path / "n", base, {"C1": bare}, _dvdd_cap("2.5V")))
+    assert "/DVDD" not in p["net_volts"]

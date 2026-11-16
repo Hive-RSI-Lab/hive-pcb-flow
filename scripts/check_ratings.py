@@ -22,7 +22,12 @@ Inputs (pure Python, no KiCad run):
    (--power-tree, default <ws>/architecture/power_tree.md: a markdown table
    whose second header cell says V/volt), a fixed-output regulator's output
    pin (AMS1117-3.3, L78L33: the MPN's voltage on its VOUT/OUT power_out
-   pin), then the net name (+5V, 3V3, +12V, -5V, VBUS = 5 V; GND*/VSS* = 0).
+   pin), then the net name (+5V, 3V3, +12V, -5V, VBUS = 5 V; GND*/VSS* = 0),
+   then a power_out pin the part regulates itself (an internal LDO's DVDD)
+   whose extraction row gives `internal_v`, on a net that holds only that
+   pin and capacitors to ground: decoupling only, so the datasheet's
+   internal value is the rail (#843). Anything else on the net (an outside
+   supply, a load) leaves it unknown.
    A signal net with no voltage of its own takes the highest rail it is
    pulled up to through a 2-pad resistor.
    A net with no voltage of its own is bounded (#864) when everything on it
@@ -1386,6 +1391,21 @@ def unstated_net_bounds(board: list[dict], exts: dict, bom_by_lcsc: dict,
     return bounds, clamp_power
 
 
+def decoupling_only(board: list[dict], net: str, ref: str) -> bool:
+    """True when net holds pads of `ref` and at least one 2-pad capacitor
+    whose other pad is a ground net, and nothing else (#843)."""
+    caps = 0
+    for b in board:
+        if net not in b["pads"].values() or b["ref"] == ref:
+            continue
+        others = set(b["pads"].values()) - {net}
+        if not (re.match(r"^C\d", b["ref"]) and len(b["pads"]) == 2
+                and len(others) == 1 and is_ground(next(iter(others)))):
+            return False
+        caps += 1
+    return caps > 0
+
+
 def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
               power_tree: Path | None,
               cons_dir: Path | None = None,
@@ -1445,6 +1465,14 @@ def run_check(pcb: Path, parts_dir: Path, constraints: dict | None,
             continue
         for pin in reg_out_pins(b, ext):
             setv(b["pads"][pin], v, f"regulator {b['ref']}")
+    for b in board:
+        for p in (exts.get(b["lcsc"]) or {}).get("pinout") or []:
+            net = b["pads"].get(p["pin"])
+            if p["type"] == "power_out" and p.get("internal_v") is not None \
+                    and net and decoupling_only(board, net, b["ref"]):
+                setv(net, p["internal_v"], f"internal regulator {b['ref']}."
+                     f"{p['pin']} {p['name']}, datasheet value, decoupling "
+                     "only on the net")
     # pull-ups: a 2-pad resistor from an unknown net to a known rail. A net
     # that also has a resistor to ground or to another unknown net is a
     # divider or a series path - its voltage stays unknown.

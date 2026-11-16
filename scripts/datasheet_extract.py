@@ -223,6 +223,10 @@ DATASHEET_SCHEMA: dict = {
                     # (a reference or charge-pump node): check_ratings
                     # covers it by the part's supply rating (#835)
                     "self_driven": {"type": "boolean"},
+                    # a power_out pin the part regulates itself (an internal
+                    # LDO's core pin): the datasheet's typical volts, which
+                    # check_ratings puts on a net of decoupling only (#843)
+                    "internal_v": {"type": "number"},
                 },
             },
         },
