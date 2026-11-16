@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -96,8 +97,8 @@ def start(repo: Path, side: Path, tmp: Path, args: list[str], cwd: Path | None =
     e = {**os.environ, "TMPDIR": str(tmp), "FROZEN_SIDE": str(side), **env}
     e.pop("HWDE_FROZEN_FROM", None)
     return subprocess.Popen([sys.executable, str(repo / "bin" / "frozen.py"), *args],
-                            cwd=cwd or repo, env=e, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True)
+                            cwd=cwd or repo, env=e, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
 def wait_ready(p: subprocess.Popen, side: Path) -> None:
@@ -222,3 +223,108 @@ def test_a_linked_path_to_the_checkout_is_repointed_too(checkout, tmp_path):
     assert rc == 0, err
     assert seen["args"] == [f"{seen['here']}/a.txt"]
     assert seen["pwd"] == f"{seen['here']}/sub"
+
+
+def run_now(repo: Path, tmp: Path, script: str, **env: str) -> subprocess.CompletedProcess:
+    e = {**os.environ, "TMPDIR": str(tmp), **env}
+    return subprocess.run([sys.executable, str(repo / "bin" / "frozen.py"), "--", "sh", "-c",
+                           script], cwd=repo, env=e, stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_a_folder_swapped_for_a_link_out_of_the_tree_leaves_its_target_alone(checkout, tmp_path):
+    """A folder replaced by a link to a folder outside the checkout: status
+    lists the old files under the link's name, and a copy that followed the
+    link would delete or overwrite the files out there."""
+    repo, _side, tmp = checkout
+    (repo / "d").mkdir()
+    (repo / "d" / "f").write_text("committed")
+    git(repo, "add", "d")
+    git(repo, "commit", "-q", "-m", "d")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "f").write_text("outside")
+    shutil.rmtree(repo / "d")
+    (repo / "d").symlink_to(outside)
+    git(repo, "add", "-A", "d")
+    cp = run_now(repo, tmp, "readlink d")
+    assert cp.returncode == 0, cp.stderr
+    assert cp.stdout.strip() == str(outside)
+    assert (outside / "f").read_text() == "outside"
+    assert sorted(p.name for p in outside.iterdir()) == ["f"]
+    assert list(tmp.iterdir()) == []
+
+
+def test_a_file_swapped_for_a_folder_is_copied(checkout):
+    repo, _side, tmp = checkout
+    (repo / "a.txt").unlink()
+    (repo / "a.txt").mkdir()
+    (repo / "a.txt" / "in").write_text("in a folder")
+    cp = run_now(repo, tmp, "cat a.txt/in")
+    assert cp.returncode == 0, cp.stderr
+    assert cp.stdout == "in a folder"
+
+
+def test_a_folder_swapped_for_a_file_is_copied(checkout):
+    repo, _side, tmp = checkout
+    shutil.rmtree(repo / "sub")
+    (repo / "sub").write_text("now a file")
+    cp = run_now(repo, tmp, "cat sub")
+    assert cp.returncode == 0, cp.stderr
+    assert cp.stdout == "now a file"
+
+
+def test_an_untracked_repo_inside_and_hidden_edits_are_copied(checkout):
+    """`git status` shows an untracked repo inside only as its folder, and does
+    not show edits to files marked skip-worktree or assume-unchanged."""
+    repo, _side, tmp = checkout
+    inner = repo / "inner"
+    inner.mkdir()
+    (inner / "f").write_text("inner")
+    git(inner, "init", "-q")
+    git(repo, "update-index", "--skip-worktree", "sub/keep")
+    (repo / "sub" / "keep").write_text("edited, skip-worktree")
+    git(repo, "update-index", "--assume-unchanged", "bin/pcb-flow")
+    (repo / "bin" / "pcb-flow").write_text("#!/bin/sh\necho edited, assume-unchanged\n")
+    cp = run_now(repo, tmp, "cat inner/f; echo; cat sub/keep; echo; sh bin/pcb-flow")
+    assert cp.returncode == 0, cp.stderr
+    assert cp.stdout.split("\n")[:3] == ["inner", "edited, skip-worktree", "edited, assume-unchanged"]
+
+
+def test_git_variables_from_the_caller_do_not_aim_at_the_checkout(checkout):
+    """A run started from a git hook inherits GIT_DIR and GIT_WORK_TREE; the copy
+    and the run must still use the copy's repo, and the checkout stays as it is."""
+    repo, side, tmp = checkout
+    head = git(repo, "rev-parse", "HEAD")
+    p = start(repo, side, tmp, ["--", "bin/show"], GIT_DIR=str(repo / ".git"),
+              GIT_WORK_TREE=str(repo), GIT_INDEX_FILE=str(repo / ".git" / "index"))
+    wait_ready(p, side)
+    git(repo, "commit", "-q", "-m", "while waiting")
+    later = git(repo, "rev-parse", "HEAD")
+    rc, seen, err = finish(p, side)
+    assert rc == 0, err
+    assert seen["head"] == head and seen["branch"] == "work" and seen["remotes"] == ""
+    assert seen["a"] == "queued" and "staged.txt" not in seen["tracked"]
+    # The checkout itself is as the test left it: no checkout, no lost remote.
+    assert git(repo, "rev-parse", "HEAD") == later
+    assert git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "work"
+    assert git(repo, "remote") == "origin"
+    assert (repo / "a.txt").read_text() == "queued" and not (repo / "gone.txt").exists()
+
+
+def test_sigint_to_the_runner_alone_reaches_the_command(checkout):
+    """Not at a terminal (a queue, a script), a SIGINT goes to this process only;
+    it passes it on rather than waiting for a command that never heard it."""
+    repo, side, tmp = checkout
+    p = start(repo, side, tmp, ["--", "bin/show"])
+    wait_ready(p, side)
+    p.send_signal(signal.SIGINT)
+    try:
+        p.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        (side / "go").write_text("1")  # let the job end rather than leave it waiting
+        p.terminate()
+        p.communicate(timeout=60)
+        raise
+    assert p.returncode == 128 + signal.SIGINT
+    assert list(tmp.iterdir()) == []
