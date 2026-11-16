@@ -247,6 +247,11 @@ def test_norm_fn():
     assert sim_board.norm_fn("EN_3", "3") == ["EN"]
     assert sim_board.norm_fn("~{RESET}", "1") == ["RESET"]
     assert sim_board.norm_fn("CFG2/SCL_2", "2") == ["CFG2", "SCL"]
+    # STM32 port pin named with its alternate (#465)
+    assert sim_board.norm_fn("PC14-OSC32_IN", "3") == ["PC14", "OSC32_IN"]
+    assert sim_board.norm_fn("PB8-BOOT0", "60") == ["PB8", "BOOT0"]
+    assert sim_board.norm_fn("USB_D-", "4") == ["USB_D-"]
+    assert sim_board.norm_fn("IN-", "2") == ["IN-"]
 
 
 def test_vref_table_entries_are_well_formed():
@@ -1168,3 +1173,49 @@ def test_load_parts_matches_an_mpn_row_and_a_refdes_row_wins(tmp_path):
     assert [m["mpn"] for m in missed] == ["NOPE123"]
     # without the board, only refdes rows are known (old callers)
     assert set(sim_board.load_parts(parts)) == {"C3"}
+
+
+# An STM32 whose LED hangs off PC14-OSC32_IN, the way its KiCad symbol
+# names the pin (#465). Through 10 R the pin is asked for ~140 mA; through
+# 1k (the quiet twin) it lights the LED inside the pin's limit. PG10-NRST
+# is the reset pin: an LED there is not driven as a GPIO.
+def _stm32_alt(r_led):
+    return [
+        ("U9", "STM32G031K8T6", "LQFP-32", {
+            "4": ("+3V3", "VDD"), "5": ("GND", "VSS"),
+            "2": ("/LED", "PC14-OSC32_IN"), "6": ("/NRST", "PG10-NRST")}),
+        ("R40", r_led, "R_0402_1005Metric", {"1": ("/LED", ""),
+                                             "2": ("/LED_A", "")}),
+        ("D40", "red", "LED_0603_1608Metric", {"1": ("GND", "K"),
+                                               "2": ("/LED_A", "A")}),
+        ("R41", "1k", "R_0402_1005Metric", {"1": ("/NRST", ""),
+                                            "2": ("/RST_A", "")}),
+        ("D41", "red", "LED_0603_1608Metric", {"1": ("GND", "K"),
+                                               "2": ("/RST_A", "A")}),
+    ]
+
+
+def _run_sim(tmp_path, board):
+    (tmp_path / "kicad").mkdir()
+    write_net(tmp_path / "kicad" / "s.net", board)
+    out = tmp_path / "sim.json"
+    subprocess.run([sys.executable, str(SCRIPTS / "sim_board.py"),
+                    "--workspace", str(tmp_path), "--out", str(out)],
+                   capture_output=True, text=True, timeout=300)
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_stm32_alt_suffix_pin_driven_planted(tmp_path, need_engine):
+    rep = _run_sim(tmp_path, _stm32_alt("10"))
+    assert any(v["net"] == "/LED" for v in _kinds(rep, "gpio_overcurrent"))
+    assert not any(v["net"] == "/NRST"
+                   for v in _kinds(rep, "gpio_overcurrent"))
+
+
+def test_stm32_alt_suffix_pin_quiet_twin(tmp_path, need_engine):
+    rep = _run_sim(tmp_path, _stm32_alt("1k"))
+    assert _kinds(rep, "gpio_overcurrent") == []
+    led = next(x for x in rep["leds"] if x["ref"] == "D40")
+    assert led["current_a"]["io_high"] > 5e-4
+    rst = [x for x in rep["leds"] if x["ref"] == "D41"]
+    assert all(x["current_a"]["io_high"] < 1e-6 for x in rst)
