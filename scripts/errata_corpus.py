@@ -78,8 +78,12 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 MANIFEST = ROOT / "reference" / "errata_corpus.yaml"
 DOC = ROOT / "docs" / "errata-corpus.md"
-VERDICTS = {"caught", "caught_with_constraints", "missed", "not_static"}
+VERDICTS = {"caught", "caught_with_constraints", "missed", "not_static", "not_pinnable"}
 BLIND = {"caught", "missed", "not_static"}
+# A defect no commit of its repo holds (rev A's files carry the fix in every
+# one), so no check can ever be scored on it: out of the denominator, with the
+# count it would have made kept beside the new one (#1498).
+LEFT_OUT = "not_pinnable"
 
 
 def cache_root(arg: str | None) -> Path:
@@ -187,6 +191,13 @@ def load(path: Path = MANIFEST, section: str = "boards") -> list[dict]:
                 raise SystemExit(f"{d['id']}: caught with no catch")
             if d["verdict"] == "missed" and not d.get("follow_up"):
                 raise SystemExit(f"{d['id']}: a miss needs a follow_up")
+            if d["verdict"] == LEFT_OUT:
+                if section == "holdout":
+                    raise SystemExit(f"{d['id']}: {LEFT_OUT} is for the training "
+                                     "set; a holdout defect keeps its blind count")
+                if not d.get("note"):
+                    raise SystemExit(f"{d['id']}: {LEFT_OUT} needs a note with "
+                                     "the commits that hold the fix")
             if section == "holdout":
                 if d.get("blind") not in BLIND:
                     raise SystemExit(f"{d['id']}: blind not one of {sorted(BLIND)}")
@@ -1133,14 +1144,22 @@ def _board_rows(cache: Path, b: dict, blind: bool) -> list[str]:
 
 
 def _counts(boards: list[dict], field: str) -> tuple[str, int, int]:
+    """(summary, caught, denominator). A not_pinnable defect is left out of
+    the denominator and named after the summary's semicolon."""
     count: dict[str, int] = {}
+    left = 0
     for b in boards:
         for d in b["defects"]:
             v = d[field].replace("caught_with_constraints", "caught")
+            if v == LEFT_OUT:
+                left += 1
+                continue
             count[v] = count.get(v, 0) + 1
     total = sum(count.values())
-    return (", ".join(f"{v} {k}" for k, v in sorted(count.items())),
-            count.get("caught", 0), total)
+    summary = ", ".join(f"{v} {k}" for k, v in sorted(count.items()))
+    if left:
+        summary += f"; {left} {LEFT_OUT} left out"
+    return summary, count.get("caught", 0), total
 
 
 ROUNDS = """\
@@ -1240,7 +1259,10 @@ def table(cache: Path, boards: list[dict], holdout: list[dict] | None = None,
              "the number that says how the flow does on a board it has never seen, and",
              "only for the round's first reading: each round is swept once.", ""]
     tr, tc, tn = _counts(boards, "verdict")
-    lines += ["## Count", "", f"- Training: {tc} of {tn} caught ({tr})."]
+    left = sum(d["verdict"] == LEFT_OUT for b in boards for d in b["defects"])
+    lines += ["## Count", "", f"- Training: {tc} of {tn} caught ({tr})."
+              + (f" With the {LEFT_OUT} defect{'s' if left > 1 else ''} counted, "
+                 f"as before #1498: {tc} of {tn + left}." if left else "")]
     rounds = sorted({b["swept"]["round"] for b in holdout})
     for r in rounds:
         hr = [b for b in holdout if b["swept"]["round"] == r]
