@@ -360,12 +360,7 @@ class PlaceModel:
         side = "back" if (layer is not None and _strs(layer)
                           and _strs(layer)[0].startswith("B.")) else "front"
 
-        ref = None
-        for prop in _kids(fp, "property"):
-            s = _strs(prop)
-            if len(s) >= 2 and s[0] == "Reference":
-                ref = s[1]
-                break
+        ref = geom.fp_field(fp, "Reference")
         if not ref:
             return None
 

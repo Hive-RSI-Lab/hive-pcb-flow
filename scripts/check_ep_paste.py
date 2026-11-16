@@ -76,7 +76,7 @@ sys.path.insert(0, str(HERE / "lib"))
 import checklib  # noqa: E402
 import fpfix  # noqa: E402
 from geom import (_kid, _kids, _nums, _pad_polygon, _pts, _rot, _strs,  # noqa: E402
-                  _tok)
+                  _tok, fp_field)
 
 SCRIPT = "check_ep_paste"
 SOURCE = SCRIPT  # verify_all, gate and the scorecard match a finding to its check by source
@@ -199,11 +199,7 @@ def load(pcb: Path) -> tuple[list, list[dict]]:
     pads: list[Ap] = []
     fp_vias: list[dict] = []
     for fp in _kids(root, "footprint"):
-        ref = "?"
-        for prop in _kids(fp, "property"):
-            s = _strs(prop)
-            if len(s) >= 2 and s[0] == "Reference":
-                ref = s[1]
+        ref = fp_field(fp, "Reference", "?")
         # KiCad reads a footprint with no (at) at the origin (#1198)
         at = _nums(_kid(fp, "at")) if _kid(fp, "at") is not None else [0, 0]
         fx, fy = at[0], at[1]

@@ -124,7 +124,8 @@ def _tented_vias(pcb: Path, cu: list[str]) -> int:
 
 
 _FP = re.compile(r"\(footprint\s")
-_REF = re.compile(r'\(property\s+"Reference"\s+"([^"]*)"')
+# KiCad 8 (property "Reference" "U1"), KiCad 6 (fp_text reference "U1") (#1429)
+_REF = re.compile(r'\((?:property\s+"Reference"|fp_text\s+reference)\s+"?([^"\s)]*)')
 _MPN = re.compile(r'\(property\s+"(MPN|Manufacturer[ _]Part[ _]Number|'
                   r'Mfr[ _]Part[ _]?#?|MFN|Part[ _]Number)"\s+"([^"]+)"', re.I)
 

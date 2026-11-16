@@ -145,6 +145,18 @@ def _strs(n) -> list[str]:
             for x in n[1:] if isinstance(x, str)]
 
 
+def fp_field(fp, name: str, default=None):
+    """A footprint's Reference or Value: KiCad 8's (property "Reference" ..)
+    or KiCad 6's (fp_text reference ..); a property wins (#1429)."""
+    for prop in _kids(fp, "property"):
+        if len(pv := _strs(prop)) >= 2 and pv[0] == name:
+            return pv[1]
+    for txt in _kids(fp, "fp_text"):
+        if len(txt) > 2 and str(_tok(txt[1])) == name.lower():
+            return str(_tok(txt[2]))
+    return default
+
+
 def _num_of(n, *names):
     """The first number of n's first child named one of `names`, or None."""
     for name in names:
@@ -976,6 +988,14 @@ class BoardGeom:
                     value = pv[1]
                 elif len(pv) >= 2:
                     props[pv[0]] = pv[1]
+            # KiCad 6 and older keep the ref and value as (fp_text
+            # reference "U5" ..) / (fp_text value ..), not properties; read
+            # without this, every part on such a board shared ref "?" (#1429)
+            for txt in _kids(fp, "fp_text"):
+                if len(txt) > 2 and str(_tok(txt[1])) == "reference" and ref == "?":
+                    ref = str(_tok(txt[2]))
+                elif len(txt) > 2 and str(_tok(txt[1])) == "value" and value is None:
+                    value = str(_tok(txt[2]))
             lib = _strs(fp)[0] if _strs(fp) else ""
             # ref -> lib id + Value field (check_current bounds a resistor
             # branch's current from these; check_thermal knows a package by
