@@ -178,8 +178,14 @@ INTERNAL_RE = re.compile(r"\bFFC\b|\bFPC\b|B2B|BOARD.TO.BOARD", re.I)
 # block or a power-rated housing (JST VH/XH are left judged: they carry
 # field wiring as often as a harness). A judgement: constraints
 # esd.external lists a ref that is user-facing all the same.
+# EasyEDA/LCSC imports name the same parts differently: the flat-flex
+# family as FFC-/FPC- (aiee:FFC-SMD_12P-P0.50_FH34SRJ-12S-0.5SH, KiCad's
+# Connector_FFC-FPC library) and JST's housings by part number, SH as
+# SMxxB-SRSS, PH as SxB-PH/BxB-PH, ZH as SxB-ZR/SMxxB-ZESS
 INTERNAL_FP_RE = re.compile(
-    r"PinHeader_|PinSocket_|:HDR-|JST_(?:ZH|SH|PH)_", re.I)
+    r"PinHeader_|PinSocket_|:HDR-|JST_(?:ZH|SH|PH)_"
+    r"|(?:^|[^A-Z])F(?:FC|PC)(?:[^A-Z]|$)"
+    r"|SM\d\dB-(?:SRSS|ZESS)|[SB]\dB-(?:PH|ZR)\b", re.I)
 # a connector whose lines sit behind its own isolation transformer: an RJ45
 # with integrated magnetics (HanRun HR911105A, "magjack"); the cable side is
 # the transformer's, the board side never sees the strike's common mode.

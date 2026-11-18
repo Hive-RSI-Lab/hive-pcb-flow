@@ -652,6 +652,10 @@ J_PADS = [("1", 0, 0, "SIG"), ("2", 0, 2, "GND")]
     "Connector_JST:JST_SH_SM02B-SRSS-TB_1x02-1MP_P1.00mm_Horizontal",
     "Connector_JST:JST_ZH_B2B-ZR_1x02_P1.50mm_Vertical",
     "aiee:HDR-TH_2P-P2.54-V-M",
+    "aiee:FFC-SMD_12P-P0.50_FH34SRJ-12S-0.5SH",
+    "Connector_FFC-FPC:Hirose_FH12-12S-0.5SH_1x12-1MP_P0.50mm_Horizontal",
+    "aiee:CONN-SMD_2P-P1.00_SM02B-SRSS-TB-LF-SN",
+    "aiee:CONN-SMD_2P-P2.00_S2B-PH-SM4-TB-LF-SN",
 ])
 def test_header_footprint_is_internal_and_external_brings_it_back(tmp_path, lib):
     j = _fp_lib("J1", "Conn_01x02", "5 10", J_PADS, lib)
