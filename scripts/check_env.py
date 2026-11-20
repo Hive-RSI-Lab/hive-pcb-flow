@@ -438,6 +438,29 @@ def check_ngspice(resolved: dict) -> dict:
                  NGSPICE_HELP, warn=True)
 
 
+SOLVERS_HELP = (
+    "The simulators beyond KiCad's ngspice (Xyce, openEMS, Palace, gmsh, FastHenry2, "
+    "FasterCap, OpenVAF) come from an unpacked IIC-OSIC-TOOLS image: unpack "
+    "hpretl/iic-osic-tools (no docker daemon, no root; see the chip-flow module's "
+    ".github/actions/toolchain) into ~/.cc/toolchains/iic-osic-tools-<ver> or "
+    "/opt/eda-toolchain/iic-osic-tools-<ver>, or set HWDE_EDA_TOOLCHAIN. "
+    "Optional: only sim_solve and the EM stages need it. docs/tools.md."
+)
+
+
+def check_solvers(resolved: dict) -> dict:
+    """The IIC-OSIC-TOOLS tree with the open solvers (optional: a warning)."""
+    try:
+        from lib import solvers
+        root = solvers.toolchain_root()
+    except Exception as e:
+        return check("solvers", False, str(e), SOLVERS_HELP, warn=True)
+    resolved["eda_toolchain"] = str(root) if root else None
+    return check("solvers", root is not None,
+                 str(root) if root else "no IIC-OSIC-TOOLS tree found",
+                 SOLVERS_HELP, warn=True)
+
+
 def check_impedance_solver() -> dict:
     """lib/impedance.py's 2D field solver: numpy + scipy only, so it lives in
     the venv. A wrong answer here would mis-size every controlled-impedance
@@ -485,6 +508,7 @@ def main(argv: list[str] | None = None) -> int:
         checks.append(check_krt(resolved))
         checks.append(check_lualatex(resolved))
         checks.append(check_ngspice(resolved))
+        checks.append(check_solvers(resolved))
         checks.append(check_git())
         checks.append(check_impedance_solver())
         if args.full:

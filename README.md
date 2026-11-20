@@ -6,6 +6,7 @@ An agent designs a PCB from a written brief: research, architecture, parts, sche
 
 - [`docs/README.md`](docs/README.md): how an agent uses it in the Hive; [`docs/playbook.md`](docs/playbook.md): the phases, gates and fix loop
 - `agents/`: the role prompts the playbook spawns; `scripts/`: the checks and tools; `reference/`: their tables, recipes, checklists and knowledge records
+- [`docs/tools.md`](docs/tools.md): every tool pcb-flow uses, with licences and how to install it
 - `tests/`: unit tests for the scripts (`test_env_lookups.py`: the lookups for the Hive's shared tools folder), and `tests/workarounds/`, the probes
 - `bin/pcb-flow`: runs the scripts in a Hive sandbox with the Hive's KiCad 10 and freerouting (`pcb-flow check` first)
 - The first board made with it: [boards/hwde-led-test/](boards/hwde-led-test/)
@@ -14,6 +15,10 @@ An agent designs a PCB from a written brief: research, architecture, parts, sche
 - [docs/research/](docs/research/README.md): current research turned into checks: `bin/pcb-flow papers` scans the topics in `reference/research/watch.yaml`, reads legitimate open copies (the rest go on [the person's list](docs/research/paywalled.md)), and gives each claim pcb-flow's own verdict, with the test that reached it; only reproduced claims become [guidelines](docs/research/guidelines.md)
 - [docs/route-quality.md](docs/route-quality.md): a layout judged as good, not only legal: `route_quality` scores each net class against its shortest 45-degree routes, `route_improve` re-routes the worst nets in rounds and stops when a round stops gaining
 - `bin/pcb-flow part_repair`: move, rotate or re-pad parts on a routed board (place_edit's `swap_fp` puts a fixed library footprint in, `renumber` gives pads new numbers): it rips the copper the change spoils in a window round each part, makes the change, routes every net back to as few islands as it had, and keeps the result only if no net has more islands, DRC is no worse and no violation is new near the repair; it writes the op files that replay it (rip, place, route) and a REPORT.md
+
+## Tools and credits
+
+pcb-flow stands on other people's open-source tools: [KiCad](https://www.kicad.org/) for everything board-shaped, [KiCadRoutingTools](https://github.com/drandyhaas/KiCadRoutingTools) by Andy Haas (MIT) for escape and critical routing, [Freerouting](https://github.com/freerouting/freerouting) for bulk routing, [easyeda2kicad](https://github.com/uPesy/easyeda2kicad.py) for LCSC parts, and ngspice, Xyce, openEMS, Palace, gmsh, FastHenry2 and FasterCap (from the IIC-OSIC-TOOLS image) for simulation. [docs/tools.md](docs/tools.md) lists every tool with its version, licence, what it is for and how a fresh Hive gets it; `bin/pcb-flow check` shows what a machine has. [NOTICE](NOTICE) says what the MIT licence does not cover.
 
 ## Test and score
 
