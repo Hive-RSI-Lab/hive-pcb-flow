@@ -1,6 +1,6 @@
 # NOTICE - third-party material in this repository
 
-The MIT License in `LICENSE` covers the hwde module: its `agents/`, `scripts/`,
+The MIT License in `LICENSE` covers the pcb-flow module (once called hwde): its `agents/`, `scripts/`,
 `reference/`, `bin/` and `docs/`, the tests, the documentation and plans, and the design outputs
 this project produced itself (schematics, board files, fab packages, reports, and the
 knowledge records and learnings it wrote).
@@ -26,6 +26,16 @@ reproducible, and redistributed under their owners' own terms, not under MIT:
 - `scripts/lib/freerouting_2_2_4/`: one source file of Freerouting 2.2.4, changed by
   this project, and its compiled class - GPL-3.0, Freerouting's own licence
   (https://github.com/freerouting/freerouting). Its README says what changed.
+
+Tools this repository runs but does not contain (fetched or found at run time, each under
+its own licence; the list, versions and licences are in `docs/tools.md`):
+
+- KiCadRoutingTools by Andy Haas (https://github.com/drandyhaas/KiCadRoutingTools), MIT:
+  called through `scripts/lib/krt_launch.py`, which applies local patches at run time;
+  none of its source is copied here.
+- KiCad (GPL-3.0-or-later), Freerouting (GPL-3.0), easyeda2kicad (AGPL-3.0), and the
+  IIC-OSIC-TOOLS image's ngspice, Xyce, openEMS, Palace, gmsh, FastHenry2, FasterCap and
+  OpenVAF; the Python packages in `requirements.lock`.
 
 Rights holders: to have any of this material removed, open an issue on the repository;
 it will be taken down promptly.
