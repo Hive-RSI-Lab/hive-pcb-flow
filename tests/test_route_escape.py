@@ -43,7 +43,7 @@ def _krt_at_least(v: tuple) -> bool:
 # left, no clash list). The flow pins 0.19; these stay strict so a KRT that
 # fixes it shows up as XPASS. projects/tool-versions/BENCH.md has the rows.
 krt_024_fanout = pytest.mark.xfail(
-    _krt_at_least((0, 24)), strict=True,
+    _krt_at_least((0, 24)), strict=True, raises=AssertionError,
     reason="KRT 0.24 bga_fanout regression: fewer balls escape underpad")
 
 # JLC 6-layer 1 oz row (reference/jlc_capabilities.yaml)

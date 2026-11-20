@@ -122,12 +122,52 @@ def _patch_free_ends() -> None:
 
 
 def raise_hole_to_hole(mm: float) -> float:
-    """Set KRT's hole-to-hole constant to max(KRT's, mm); returns it."""
+    """Set KRT's hole-to-hole constant to max(KRT's, mm); returns it.
+
+    A KRT module imported later reads the new value. One already imported
+    may hold the old one: as its own HOLE_TO_HOLE_CLEARANCE (a `from
+    routing_defaults import`) or as a `hole_to_hole_clearance=` default bound
+    at definition (0.24 check_drc.run_drc, route.py, route_diff.py). Both
+    are rebound here, so the patch doesn't depend on import order."""
     import routing_defaults
 
-    v = max(float(routing_defaults.HOLE_TO_HOLE_CLEARANCE), float(mm))
+    old = float(routing_defaults.HOLE_TO_HOLE_CLEARANCE)
+    v = max(old, float(mm))
     routing_defaults.HOLE_TO_HOLE_CLEARANCE = v
+    if v != old:
+        _rebind_hole_to_hole(old, v)
     return v
+
+
+def _rebind_hole_to_hole(old: float, new: float) -> None:
+    for name, mod in list(sys.modules.items()):
+        d = getattr(mod, "__dict__", None)
+        if name == "routing_defaults" or not isinstance(d, dict):
+            continue
+        if name.split(".")[0] in sys.stdlib_module_names:
+            continue
+        if d.get("HOLE_TO_HOLE_CLEARANCE") == old:
+            d["HOLE_TO_HOLE_CLEARANCE"] = new
+        for obj in list(d.values()):
+            fns = ([obj] if callable(obj) and hasattr(obj, "__code__")
+                   else [f for f in vars(obj).values() if hasattr(f, "__code__")]
+                   if isinstance(obj, type) else [])
+            for fn in fns:
+                _rebind_default(fn, "hole_to_hole_clearance", old, new)
+
+
+def _rebind_default(fn, arg: str, old, new) -> None:
+    """Swap `arg`'s bound default old -> new in fn (positional or kw-only)."""
+    code = fn.__code__
+    dfl = fn.__defaults__
+    if dfl:
+        names = code.co_varnames[:code.co_argcount][-len(dfl):]
+        if arg in names and dfl[names.index(arg)] == old:
+            i = names.index(arg)
+            fn.__defaults__ = dfl[:i] + (new,) + dfl[i + 1:]
+    kw = fn.__kwdefaults__
+    if kw and kw.get(arg) == old:
+        fn.__kwdefaults__ = {**kw, arg: new}
 
 
 SIDES = ("left", "right", "up", "down")
@@ -218,8 +258,28 @@ ESCAPE_OPEN_EDITS = [
 ]
 
 
+# Escape-path markers in underpad.py and their counts on each KRT line the
+# edits were checked on. The edits are single anchors, so a new escape path
+# in a later KRT (0.24's file is 232 KB) would go unsteered with no error:
+# a count none of these match fails the launch until someone checks the
+# edits still cover every path and adds the new counts here.
+ESCAPE_SITES = ("astar(", "boundary_dist(", "cand_e", "in_bbox(", "occ.inside(")
+KNOWN_ESCAPE_SITES = {
+    "0.19": (5, 4, 2, 3, 1),
+    "0.24": (11, 4, 2, 1, 2),
+}
+
+
 def escape_open_source(src: str) -> str:
     """KRT's underpad.py source with the --escape-open edits applied."""
+    sites = tuple(src.count(m) for m in ESCAPE_SITES)
+    if sites not in KNOWN_ESCAPE_SITES.values():
+        raise SystemExit(
+            "krt_launch --escape-open: KRT underpad.py escape call sites "
+            f"{dict(zip(ESCAPE_SITES, sites))} match no checked KRT line "
+            f"({', '.join(KNOWN_ESCAPE_SITES)}); check ESCAPE_OPEN_EDITS "
+            "covers every escape path, then add the counts to "
+            "KNOWN_ESCAPE_SITES")
     for edit in ESCAPE_OPEN_EDITS:
         alts = edit if isinstance(edit, list) else [edit]
         hits = [(a, r) for a, r in alts if src.count(a) == 1]

@@ -1314,6 +1314,7 @@ def run(argv: list[str] | None = None):
             log_file=work / f"rung{i}.log")
         entry = {"rung": i, "options": rung,
                  "unrouted": facts.get("unrouted"),
+                 "violations": facts.get("violations"),
                  "started_unrouted": facts.get("started_unrouted"),
                  "final_score": facts.get("final_score"),
                  "passes": len(facts.get("passes", [])),
@@ -1330,9 +1331,12 @@ def run(argv: list[str] | None = None):
             break
         if facts.get("ses_written") and facts.get("unrouted") is not None:
             candidates.append(((facts["unrouted"],
+                                facts.get("violations") or 0,
                                 -(facts.get("final_score") or 0.0)), i, ses,
                                facts))
-            if facts["unrouted"] == 0:
+            # Freerouting 2.5 counts its own violations: a rung with 0
+            # unrouted but violations left is not done (2.2 prints none)
+            if facts["unrouted"] == 0 and not facts.get("violations"):
                 break
         if facts.get("timed_out") and not facts.get("passes"):
             # The DSN wedges Freerouting's reader (S11-verified: KRT guide
@@ -1373,6 +1377,7 @@ def run(argv: list[str] | None = None):
                 break
             if facts.get("ses_written") and facts.get("unrouted") is not None:
                 candidates.append(((facts["unrouted"],
+                                    facts.get("violations") or 0,
                                     -(facts.get("final_score") or 0.0)),
                                    f"try{t}", tses, facts))
 

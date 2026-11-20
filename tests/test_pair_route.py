@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -389,6 +390,40 @@ def test_escape_open_edits_match_pinned_krt():
     compile(out, "underpad.py", "exec")
     with pytest.raises(SystemExit):
         krt_launch.escape_open_source("def heur(): pass\n")
+    # a new escape path (one more A* call) fails loudly, not unsteered
+    with pytest.raises(SystemExit, match="escape call sites"):
+        krt_launch.escape_open_source(src + "\n_ = astar(0)\n")
+
+
+@pytest.mark.parametrize("pre_import", [False, True])
+def test_launcher_hole_to_hole_reaches_bound_defaults(tmp_path, pre_import):
+    """0.24's check_drc binds hole_to_hole_clearance=HOLE_TO_HOLE_CLEARANCE
+    as a default at definition: the patch must reach it even when the module
+    was imported before the patch ran (review of the 0.24 launcher)."""
+    (tmp_path / "routing_defaults.py").write_text(
+        "HOLE_TO_HOLE_CLEARANCE = 0.20\n", encoding="utf-8")
+    (tmp_path / "drc_x.py").write_text(
+        "import routing_defaults as defaults\n"
+        "from routing_defaults import HOLE_TO_HOLE_CLEARANCE\n"
+        "def run_drc(pcb, hole_to_hole_clearance: float = "
+        "defaults.HOLE_TO_HOLE_CLEARANCE, *, other=0.20):\n"
+        "    return hole_to_hole_clearance, other\n"
+        "class Checker:\n"
+        "    def check(self, *, hole_to_hole_clearance=HOLE_TO_HOLE_CLEARANCE):\n"
+        "        return hole_to_hole_clearance\n", encoding="utf-8")
+    (tmp_path / "route_x.py").write_text(
+        "import drc_x\n"
+        "print(drc_x.run_drc(None), drc_x.Checker().check(),"
+        " drc_x.HOLE_TO_HOLE_CLEARANCE)\n", encoding="utf-8")
+    code = ("import sys; sys.path.insert(0, '.'); "
+            + ("import drc_x; " if pre_import else "")
+            + "import krt_launch; "
+            "krt_launch.main(['--hole-to-hole', '0.3', 'route_x.py'])")
+    cp = subprocess.run([sys.executable, "-c", code], cwd=tmp_path,
+                        env={**os.environ, "PYTHONPATH": str(SCRIPTS / "lib")},
+                        capture_output=True, text=True, check=True)
+    # other=0.20 is not the hole-to-hole arg and stays
+    assert cp.stdout.strip() == "(0.3, 0.2) 0.3 0.3"
 
 
 def test_escape_open_helpers():

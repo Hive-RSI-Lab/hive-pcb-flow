@@ -117,14 +117,17 @@ DEFAULT_LADDER = [
 # 1000.00 (0 unrouted and 0 violations)", "Auto-routing stage completed:
 # started with 1 unrouted nets, ... final score: 1000.00 (0 unrouted and 0
 # violations)"); both spellings parse, so either jar can be picked
-# (HIVE_TOOL_FREEROUTING).
+# (HIVE_TOOL_FREEROUTING). 2.5's "N violations" is kept as `violations`
+# (None on 2.2, which doesn't print it): route_auto stops its ladder only on
+# 0 unrouted AND no violations.
 _PASS_RE = re.compile(
     r"Auto-rout(?:er|ing) pass #(\d+).*?score (?:of )?(\d+(?:\.\d+)?)"
-    r"(?: \((\d+) unrouted[^)]*\))?")
+    r"(?: \((\d+) unrouted(?: and (\d+) violations?)?[^)]*\))?")
 _SESSION_RE = re.compile(
     r"Auto-rout(?:er session|ing stage) completed( with timeout)?: started "
     r"with (\d+) unrouted nets"
-    r".*?final score: (\d+(?:\.\d+)?)(?: \((\d+) unrouted[^)]*\))?")
+    r".*?final score: (\d+(?:\.\d+)?)"
+    r"(?: \((\d+) unrouted(?: and (\d+) violations?)?[^)]*\))?")
 
 
 WORK_MARKER = ".aiee_route_work"
@@ -309,20 +312,25 @@ def parse_fr_log(text: str) -> dict:
     passes = []
     for m in _PASS_RE.finditer(text):
         passes.append({"pass": int(m.group(1)), "score": float(m.group(2)),
-                       "unrouted": int(m.group(3)) if m.group(3) else 0})
+                       "unrouted": int(m.group(3)) if m.group(3) else 0,
+                       "violations": (int(m.group(4)) if m.group(4)
+                                      else None)})
     session = _SESSION_RE.search(text)
     unrouted = None
+    violations = None
     started = None
     score = None
     if session:
         started = int(session.group(2))
         score = float(session.group(3))
         unrouted = int(session.group(4)) if session.group(4) else None
+        violations = int(session.group(5)) if session.group(5) else None
     if unrouted is None and passes:
         unrouted = passes[-1]["unrouted"]
+        violations = passes[-1]["violations"]
     if unrouted is None and session:
         unrouted = 0  # session completed, no pass lines captured
-    return {"passes": passes, "unrouted": unrouted,
+    return {"passes": passes, "unrouted": unrouted, "violations": violations,
             "started_unrouted": started, "final_score": score,
             "session_completed": bool(session),
             "job_timeout_hit": bool(session and session.group(1))}

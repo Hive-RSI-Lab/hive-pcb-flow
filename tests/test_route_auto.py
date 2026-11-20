@@ -83,6 +83,20 @@ def test_parse_fr_log_2_5_wording():
     assert facts["started_unrouted"] == 9
     assert facts["final_score"] == pytest.approx(990.0)
     assert facts["unrouted"] == 3
+    assert [p["violations"] for p in facts["passes"]] == [2, 0]
+    assert facts["violations"] == 0
+
+
+def test_parse_fr_log_2_5_violations_kept():
+    """A 2.5 run that ends with 0 unrouted but violations left must say so,
+    so route_auto doesn't stop its ladder on it (review of the 2.5 parse)."""
+    log = FR25_LOG_PARTIAL.replace("(3 unrouted and 0 violations)",
+                                   "(0 unrouted and 4 violations)")
+    facts = routelib.parse_fr_log(log)
+    assert facts["unrouted"] == 0
+    assert facts["violations"] == 4
+    # 2.2.4 wording has no violations count: None, not 0
+    assert routelib.parse_fr_log(FR_LOG_PARTIAL)["violations"] is None
 
 
 def test_parse_fr_log_empty_is_unknown():

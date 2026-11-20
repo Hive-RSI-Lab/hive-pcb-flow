@@ -600,9 +600,11 @@ def find_freerouting_jar() -> Path | None:
         p = Path(pin)
         if not p.exists():
             raise EnvError(f"{var} does not exist: {pin}")
+        _pin_agrees("FREEROUTING", var, parse_version(p.name))
         return p
     jars = sorted(tools_dir().glob("freerouting/freerouting-*.jar"))
-    side = list(tool_versions_dir().glob("freerouting/*/freerouting-*.jar"))
+    side = [j for j in tool_versions_dir().glob("freerouting/*/freerouting-*.jar")
+            if _vetted(j.parent)]
     return _pick_version("FREEROUTING", jars[-1:], jars + side,
                          lambda p: parse_version(p.name))
 
@@ -625,12 +627,15 @@ def find_krt() -> Path | None:
             down = sorted(p.glob("plugins")) + sorted(
                 p.glob("KiCadRoutingTools-*/plugins"))
             if down:
-                return krt_scripts(down[-1])
-        return krt_scripts(p)
+                p = down[-1]
+        got = krt_scripts(p)
+        _pin_agrees("KRT", var, krt_version(got))
+        return got
     dirs = [d for sub in ("krt", "kicad-routing-tools")
             for d in tools_dir().glob(f"{sub}/KiCadRoutingTools-*/plugins")]
     dirs.sort(key=lambda d: parse_version(d.parent.name))
-    side = list(tool_versions_dir().glob("krt/*/KiCadRoutingTools-*/plugins"))
+    side = [d for d in tool_versions_dir().glob("krt/*/KiCadRoutingTools-*/plugins")
+            if _vetted(d.parents[1])]
     got = _pick_version("KRT", dirs[-1:], dirs + side,
                         lambda d: parse_version(d.parent.name))
     return krt_scripts(got) if got else None
@@ -664,6 +669,26 @@ def tool_versions_dir() -> Path:
     return tools_dir().parent / "versions"
 
 
+def _vetted(version_dir: Path) -> bool:
+    """A side-by-side version counts only once `toolver install` has checked
+    its digest and written PROVENANCE.json (a half-copied or hand-dropped
+    folder is not picked)."""
+    return (version_dir / "PROVENANCE.json").is_file()
+
+
+def _pin_agrees(tool: str, var: str, version: tuple) -> None:
+    """A path pin (HWDE_*) set together with HIVE_TOOL_<tool> must name the
+    same version, else EnvError: one run must not quietly take the pin when
+    the caller asked for a version (or the newest) by HIVE_TOOL_<tool>."""
+    spec = (os.environ.get("HIVE_TOOL_" + tool) or "default").strip()
+    if spec == "default" or (spec != "newest" and version
+                             and parse_version(spec) == version):
+        return
+    have = ".".join(map(str, version)) or "unknown"
+    raise EnvError(f"{var} (version {have}) and HIVE_TOOL_{tool}={spec} "
+                   "disagree; unset one of them")
+
+
 def _pick_version(tool: str, default: list, every: list, key):
     """HIVE_TOOL_<tool>: unset/default -> `default`'s one entry; newest -> the
     highest of `every`; X.Y.Z -> the entry of exactly that version (else
@@ -680,7 +705,8 @@ def _pick_version(tool: str, default: list, every: list, key):
     if not hit:
         have = ", ".join(".".join(map(str, key(p))) for p in every) or "none"
         raise EnvError(f"{var}={spec} is not installed (have: {have}); "
-                       f"`toolver install {tool.lower()} {spec}` puts it side by side")
+                       f"`toolver install {tool.lower()} {spec}` puts it side by side "
+                       "(a side folder counts only with its PROVENANCE.json)")
     return hit[-1]
 
 
