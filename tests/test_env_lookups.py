@@ -46,7 +46,7 @@ def touch(p: Path, text: str = "") -> Path:
 def clean(monkeypatch, tmp_path):
     """No pins, no PATH kicad-cli, HOME in tmp (the symbol cache goes there)."""
     for k in list(os.environ):
-        if k.startswith(("HWDE_", "AIEE_")) or env._SYM_ENV_RE.match(k):
+        if k.startswith(("HWDE_", "AIEE_", "HIVE_TOOL_")) or env._SYM_ENV_RE.match(k):
             monkeypatch.delenv(k)
     monkeypatch.setattr(env.shutil, "which", lambda name: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -117,6 +117,77 @@ def test_find_krt_still_reads_vendored_krt_dir(clean):
     p = clean / "krt" / "KiCadRoutingTools-0.19.0" / "plugins"
     p.mkdir(parents=True)
     assert env.find_krt() == p
+
+
+def side_krt(tools: Path, v: str, py_router: bool = True) -> Path:
+    """A toolver side-by-side KRT: versions/krt/V/KiCadRoutingTools-V/plugins."""
+    plugins = tools.parent / "versions" / "krt" / v / f"KiCadRoutingTools-{v}" / "plugins"
+    if py_router:  # KRT 0.24 keeps its scripts in plugins/py_router
+        touch(plugins / "py_router" / "route.py")
+        return plugins / "py_router"
+    plugins.mkdir(parents=True)
+    return plugins
+
+
+def test_hive_tool_krt_default_keeps_the_pinned_install(clean, monkeypatch):
+    pinned = clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins"
+    pinned.mkdir(parents=True)
+    side_krt(clean, "0.24.1")
+    assert env.find_krt() == pinned
+    monkeypatch.setenv("HIVE_TOOL_KRT", "default")
+    assert env.find_krt() == pinned
+
+
+def test_hive_tool_krt_picks_a_version_or_the_newest(clean, monkeypatch):
+    pinned = clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins"
+    pinned.mkdir(parents=True)
+    new = side_krt(clean, "0.24.1")
+    side_krt(clean, "0.9.3", py_router=False)
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.24.1")
+    assert env.find_krt() == new          # the scripts dir of the 0.24 layout
+    assert env.krt_version(env.find_krt()) == (0, 24, 1)
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.19.0")
+    assert env.find_krt() == pinned
+    monkeypatch.setenv("HIVE_TOOL_KRT", "newest")
+    assert env.find_krt() == new          # 0.24.1 > 0.19.0 > 0.9.3, by number
+
+
+def test_hive_tool_krt_missing_version_is_loud(clean, monkeypatch):
+    (clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins").mkdir(parents=True)
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.30.0")
+    with pytest.raises(env.EnvError, match="0.30.0 is not installed.*0.19.0"):
+        env.find_krt()
+
+
+def test_hwde_krt_dir_pin_beats_hive_tool_krt(clean, monkeypatch):
+    new = side_krt(clean, "0.24.1")
+    side_krt(clean, "0.23.9", py_router=False)
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.23.9")
+    monkeypatch.setenv("HWDE_KRT_DIR", str(new.parent.parent))  # a release root
+    assert env.find_krt() == new
+
+
+def test_hive_tool_versions_moves_the_versions_dir(clean, monkeypatch, tmp_path):
+    v = tmp_path / "elsewhere" / "krt" / "0.24.1" / "KiCadRoutingTools-0.24.1" / "plugins"
+    v.mkdir(parents=True)
+    monkeypatch.setenv("HIVE_TOOL_VERSIONS", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("HIVE_TOOL_KRT", "newest")
+    assert env.find_krt() == v
+
+
+def test_hive_tool_freerouting_picks_a_side_jar(clean, monkeypatch):
+    pinned = touch(clean / "freerouting" / "freerouting-2.2.4.jar")
+    side = touch(clean.parent / "versions" / "freerouting" / "2.5.0" / "freerouting-2.5.0.jar")
+    assert env.find_freerouting_jar() == pinned
+    monkeypatch.setenv("HIVE_TOOL_FREEROUTING", "2.5.0")
+    assert env.find_freerouting_jar() == side
+    monkeypatch.setenv("HIVE_TOOL_FREEROUTING", "newest")
+    assert env.find_freerouting_jar() == side
+    monkeypatch.setenv("HIVE_TOOL_FREEROUTING", "2.4.1")
+    with pytest.raises(env.EnvError, match="HIVE_TOOL_FREEROUTING=2.4.1"):
+        env.find_freerouting_jar()
+    monkeypatch.setenv("HWDE_FREEROUTING_JAR", str(pinned))
+    assert env.find_freerouting_jar() == pinned
 
 
 # ------------------------------------------------------------ symdir libraries

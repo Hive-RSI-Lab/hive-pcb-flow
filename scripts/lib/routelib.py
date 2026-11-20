@@ -113,12 +113,18 @@ DEFAULT_LADDER = [
 # ("...score of 997.76."), which `[\d.]+` swallows -> float("997.76.") ValueError.
 # The bug fired ONLY on success, because the suffix otherwise terminated the match
 # at the space. Found on bb-buck P6 (route probe, completion 1.00).
+# Freerouting 2.5 renamed the lines ("Auto-routing pass #1 ... with score
+# 1000.00 (0 unrouted and 0 violations)", "Auto-routing stage completed:
+# started with 1 unrouted nets, ... final score: 1000.00 (0 unrouted and 0
+# violations)"); both spellings parse, so either jar can be picked
+# (HIVE_TOOL_FREEROUTING).
 _PASS_RE = re.compile(
-    r"Auto-router pass #(\d+).*?score of (\d+(?:\.\d+)?)(?: \((\d+) unrouted\))?")
+    r"Auto-rout(?:er|ing) pass #(\d+).*?score (?:of )?(\d+(?:\.\d+)?)"
+    r"(?: \((\d+) unrouted[^)]*\))?")
 _SESSION_RE = re.compile(
-    r"Auto-router session completed( with timeout)?: started with (\d+) "
-    r"unrouted nets"
-    r".*?final score: (\d+(?:\.\d+)?)(?: \((\d+) unrouted\))?")
+    r"Auto-rout(?:er session|ing stage) completed( with timeout)?: started "
+    r"with (\d+) unrouted nets"
+    r".*?final score: (\d+(?:\.\d+)?)(?: \((\d+) unrouted[^)]*\))?")
 
 
 WORK_MARKER = ".aiee_route_work"

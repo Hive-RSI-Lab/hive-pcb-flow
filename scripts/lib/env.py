@@ -35,6 +35,18 @@ never silently ignored - a wrong pin must fail loudly):
                         kicad-routing-tools/; both are discovered there.
   HWDE_KRT_DIR          KiCadRoutingTools plugins dir (pins find_krt)
 
+Version selection (the Hive's toolver keeps several versions of a tool side by
+side, ~/tools/versions/<tool>/<version>/, beside the pinned tools folder; a
+HWDE_* path pin above still wins over these):
+
+  HIVE_TOOL_KRT         unset or "default": the newest KRT in tools_dir() (as
+                        before); "newest": the highest version there or in the
+                        versions folder; "X.Y.Z": exactly that one (an error
+                        when it isn't installed)
+  HIVE_TOOL_FREEROUTING the same for the Freerouting jar
+  HIVE_TOOL_VERSIONS    the versions folder (default: tools_dir()'s parent's
+                        versions/, so ~/tools/versions for ~/tools/hive-tools)
+
 The skill was ai-ee before it was hwde, so the pre-rename AIEE_* spelling of
 every one of these is still read (HWDE_ wins when both are set) - an existing
 shell profile or CI job keeps working untouched. Errors name whichever
@@ -590,7 +602,9 @@ def find_freerouting_jar() -> Path | None:
             raise EnvError(f"{var} does not exist: {pin}")
         return p
     jars = sorted(tools_dir().glob("freerouting/freerouting-*.jar"))
-    return jars[-1] if jars else None
+    side = list(tool_versions_dir().glob("freerouting/*/freerouting-*.jar"))
+    return _pick_version("FREEROUTING", jars[-1:], jars + side,
+                         lambda p: parse_version(p.name))
 
 
 def find_krt() -> Path | None:
@@ -611,12 +625,63 @@ def find_krt() -> Path | None:
             down = sorted(p.glob("plugins")) + sorted(
                 p.glob("KiCadRoutingTools-*/plugins"))
             if down:
-                return down[-1]
-        return p
+                return krt_scripts(down[-1])
+        return krt_scripts(p)
     dirs = [d for sub in ("krt", "kicad-routing-tools")
             for d in tools_dir().glob(f"{sub}/KiCadRoutingTools-*/plugins")]
     dirs.sort(key=lambda d: parse_version(d.parent.name))
-    return dirs[-1] if dirs else None
+    side = list(tool_versions_dir().glob("krt/*/KiCadRoutingTools-*/plugins"))
+    got = _pick_version("KRT", dirs[-1:], dirs + side,
+                        lambda d: parse_version(d.parent.name))
+    return krt_scripts(got) if got else None
+
+
+def krt_scripts(plugins: Path) -> Path:
+    """The dir holding KRT's scripts (route.py, route_diff.py, bga_fanout/).
+
+    Up to 0.23 that is plugins/ itself; KRT 0.24 moved them into
+    plugins/py_router/ (they find rust_router/ at ../ from there), so callers
+    that run them with cwd=<this dir> work on both layouts.
+    """
+    sub = plugins / "py_router"
+    return sub if (sub / "route.py").exists() else plugins
+
+
+def krt_version(scripts: Path) -> tuple[int, ...]:
+    """The KRT version of a find_krt() dir, from its KiCadRoutingTools-<v> parent."""
+    for d in (scripts, *scripts.parents):
+        if d.name.startswith("KiCadRoutingTools-"):
+            return parse_version(d.name)
+    return ()
+
+
+def tool_versions_dir() -> Path:
+    """Where toolver keeps other versions side by side: HIVE_TOOL_VERSIONS,
+    else tools_dir()'s parent's versions/ (not validated: often absent)."""
+    val = os.environ.get("HIVE_TOOL_VERSIONS")
+    if val:
+        return Path(val).expanduser()
+    return tools_dir().parent / "versions"
+
+
+def _pick_version(tool: str, default: list, every: list, key):
+    """HIVE_TOOL_<tool>: unset/default -> `default`'s one entry; newest -> the
+    highest of `every`; X.Y.Z -> the entry of exactly that version (else
+    EnvError, naming what is installed)."""
+    var = "HIVE_TOOL_" + tool
+    spec = (os.environ.get(var) or "default").strip()
+    if spec == "default":
+        return default[0] if default else None
+    every = sorted(every, key=key)
+    if spec == "newest":
+        return every[-1] if every else None
+    want = parse_version(spec)
+    hit = [p for p in every if want and key(p) == want]
+    if not hit:
+        have = ", ".join(".".join(map(str, key(p))) for p in every) or "none"
+        raise EnvError(f"{var}={spec} is not installed (have: {have}); "
+                       f"`toolver install {tool.lower()} {spec}` puts it side by side")
+    return hit[-1]
 
 
 # ---------------------------------------------------------------- ngspice (optional)

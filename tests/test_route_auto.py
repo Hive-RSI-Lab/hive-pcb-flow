@@ -65,6 +65,26 @@ def test_parse_fr_log_partial_run_prefers_session_line():
     assert facts["started_unrouted"] == 40
 
 
+FR25_LOG_PARTIAL = """
+2026-11-19 INFO   [CC93E2\\B8CB39] Auto-routing stage started on board 'ea4b' with baseline score 0.00 for 9 unrouted item.
+2026-11-19 INFO   [CC93E2\\B8CB39] Auto-routing pass #1 on board 'ea4b' was completed in 0.02 seconds with score 800.00 (5 unrouted and 2 violations).
+2026-11-19 INFO   [CC93E2\\B8CB39] Auto-routing pass #2 on board 'ea4b' was completed in 0.02 seconds with score 1000.00 (0 unrouted and 0 violations).
+2026-11-19 INFO   [CC93E2\\B8CB39] Auto-routing stage completed with timeout: started with 9 unrouted nets, completed in 0.15 seconds, final score: 990.00 (3 unrouted and 0 violations), using 0.00 total CPU seconds, 0.00 GB total allocated, and 0.0 MB peak heap usage.
+"""
+
+
+def test_parse_fr_log_2_5_wording():
+    """Freerouting 2.5's 'Auto-routing pass/stage' lines (real lines from a
+    2.5.0 run, numbers changed) parse like 2.2.4's 'Auto-router' ones."""
+    facts = routelib.parse_fr_log(FR25_LOG_PARTIAL)
+    assert [p["unrouted"] for p in facts["passes"]] == [5, 0]
+    assert [p["score"] for p in facts["passes"]] == [800.0, 1000.0]
+    assert facts["session_completed"] and facts["job_timeout_hit"]
+    assert facts["started_unrouted"] == 9
+    assert facts["final_score"] == pytest.approx(990.0)
+    assert facts["unrouted"] == 3
+
+
 def test_parse_fr_log_empty_is_unknown():
     facts = routelib.parse_fr_log("JVM crashed before doing anything")
     assert facts["unrouted"] is None

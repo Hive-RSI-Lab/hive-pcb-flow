@@ -586,7 +586,11 @@ def test_live_route_critical_pair_l1_l3_drc_clean(tmp_path):
     _, facts = check_diffpair.check_pair(bg, {"p": "/CK_P", "n": "/CK_N",
                                               "impedance_ohm": 100})
     layers = facts["impedance"]["layers"]
-    assert {"F.Cu", "In2.Cu"} <= set(layers)
+    # KRT 0.19 runs the pair F.Cu -> In2 -> F.Cu; 0.24 vias at the pads and
+    # couples all 44 mm on In2 (DRC 0, same widths): both are right
+    krt = env.find_krt()
+    want = {"In2.Cu"} if env.krt_version(krt) >= (0, 24) else {"F.Cu", "In2.Cu"}
+    assert want <= set(layers)
     for lay, row in layers.items():
         assert row["zdiff_ohm"] == pytest.approx(100, rel=0.10), (lay, row)
 
