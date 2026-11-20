@@ -2529,6 +2529,92 @@ def _sidecar(pcb: Path, explicit: str | None, name: str) -> Path | None:
     return cand if cand.is_file() else None
 
 
+def _route_todo(ctx: dict, todo, constraints: dict, cli: Path, bg0,
+                before: dict, old_uuids, baseline: Path):
+    """Route every selected kind on ctx["staged"] with ctx["krt"], verify
+    by DRC and rip the nets whose new copper is in a new error. Returns
+    (routed facts, violations, DRC after, delta)."""
+    staged = ctx["staged"]
+    routed, violations = [], []
+    for kind, specs in todo:
+        if kind == "diff":
+            for spec in specs:
+                fact, v = route_diff_item(ctx, spec)
+                if fact:
+                    for k in ("max_skew_mm", "max_uncoupled_mm", "coupling_factor"):
+                        if k in spec:
+                            fact.setdefault("constraint", {})[k] = spec[k]
+                    routed.append(fact)
+                if v:
+                    violations.append(v)
+        elif kind == "power":
+            facts, vs = route_power_item(ctx, specs)
+            routed.extend(facts)
+            violations.extend(vs)
+        elif kind == "rf":
+            facts, vs = route_rf_item(ctx, specs)
+            routed.extend(facts)
+            violations.extend(vs)
+        elif kind == "bus":
+            z = {}
+            for h in constraints.get("high_speed") or []:
+                if h.get("net") and h.get("impedance_ohm"):
+                    z[h["net"]] = float(h["impedance_ohm"])
+            facts, vs = route_bus_item(ctx, specs, z)
+            routed.extend(facts)
+            violations.extend(vs)
+
+    # verification on the staged result, before the original is touched
+    if bg0.zones_of():
+        kc.run_drc(cli, staged, refill=True, save_board=True)
+    after = kc.run_drc(cli, staged, all_track_errors=True)
+    delta = drc_delta(before, after)
+    ripped = None
+    if delta["new"]:
+        # keep what routed clean: rip only the nets whose new copper is in a
+        # new error, and re-check once
+        # a net that failed part-way keeps its partial copper (route.py
+        # keeps partial successes) but has no fact: name it by its new
+        # copper (haos-voice pass 6: a failed +3V3 kept a 0.96 mm track
+        # across U202's 0.4 mm-pitch pins, 8 shorting_items, unrippable)
+        mine = {n for f in routed if not f.get("plane_carried")
+                for n in f["nets"]} | _new_copper_nets(staged, old_uuids)
+        bad = nets_in_new_errors(before, after, mine) | \
+            nets_starving_thermals(before, after, mine, staged, old_uuids)
+        if bad:
+            # half a pair is no use: a rolled-back net takes its partner
+            for f in routed:
+                if f["kind"] == "diff" and set(f["nets"]) & bad:
+                    bad |= set(f["nets"])
+            ripped = {"nets": sorted(bad), "new_errors": delta["new"],
+                      "items_removed": rip_new_copper(staged, old_uuids, bad)}
+            # a launched pair's old stubs are gone: put them back
+            back = sorted(bad & ctx.get("launched", set()))
+            if back:
+                route_edit.apply_ops(staged, [
+                    {"op": "rip", "net": back},
+                    {"op": "copy_from", "pcb": str(baseline), "net": back}])
+            if bg0.zones_of():
+                kc.run_drc(cli, staged, refill=True, save_board=True)
+            after = kc.run_drc(cli, staged, all_track_errors=True)
+            delta = drc_delta(before, after)
+            delta["ripped"] = ripped
+            routed = [f for f in routed if not set(f["nets"]) & bad]
+            for net in sorted(bad):
+                violations.append(violation(
+                    SCRIPT, "error", None, None, net, [],
+                    f"critical net {net} routed into new DRC errors "
+                    f"({', '.join(sorted(ripped['new_errors']))}); its new "
+                    "copper was removed and the rest kept", SCRIPT,
+                    kind="critical_route_rolled_back"))
+    return routed, violations, after, delta
+
+
+def _error_count(report: dict) -> int:
+    return sum(1 for v in report.get("violations", [])
+               if v.get("severity") == "error")
+
+
 def run(argv: list[str] | None = None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--pcb", required=True)
@@ -2549,6 +2635,14 @@ def run(argv: list[str] | None = None):
                          "corridors routable")
     ap.add_argument("--timeout-s", type=int, default=600,
                     help="per-KRT-invocation process timeout")
+    ap.add_argument("--krt-versions", default=None,
+                    help="KRT versions to route with as rungs, keeping the "
+                         "best (no new DRC errors, most nets, fewest "
+                         "errors): 'all', 'X.Y.Z,A.B.C' or 'off'; default "
+                         "HIVE_TOOL_KRT_RUNGS")
+    ap.add_argument("--krt-rungs-budget-s", type=float, default=1800,
+                    help="skip a further KRT version rung once routing has "
+                         "run this long (default 1800)")
     ap.add_argument("--work-dir", default=None)
     ap.add_argument("--out-report", default=None)
     args = ap.parse_args(argv)
@@ -2629,78 +2723,35 @@ def run(argv: list[str] | None = None):
     baseline = work / "baseline.kicad_pcb"
     shutil.copy2(staged, baseline)
 
-    routed, violations = [], []
-    for kind, specs in todo:
-        if kind == "diff":
-            for spec in specs:
-                fact, v = route_diff_item(ctx, spec)
-                if fact:
-                    for k in ("max_skew_mm", "max_uncoupled_mm", "coupling_factor"):
-                        if k in spec:
-                            fact.setdefault("constraint", {})[k] = spec[k]
-                    routed.append(fact)
-                if v:
-                    violations.append(v)
-        elif kind == "power":
-            facts, vs = route_power_item(ctx, specs)
-            routed.extend(facts)
-            violations.extend(vs)
-        elif kind == "rf":
-            facts, vs = route_rf_item(ctx, specs)
-            routed.extend(facts)
-            violations.extend(vs)
-        elif kind == "bus":
-            z = {}
-            for h in constraints.get("high_speed") or []:
-                if h.get("net") and h.get("impedance_ohm"):
-                    z[h["net"]] = float(h["impedance_ohm"])
-            facts, vs = route_bus_item(ctx, specs, z)
-            routed.extend(facts)
-            violations.extend(vs)
+    krts = env.find_krt_versions(args.krt_versions) or [krt]
 
-    # verification on the staged result, before the original is touched
-    if bg0.zones_of():
-        kc.run_drc(cli, staged, refill=True, save_board=True)
-    after = kc.run_drc(cli, staged, all_track_errors=True)
-    delta = drc_delta(before, after)
-    ripped = None
-    if delta["new"]:
-        # keep what routed clean: rip only the nets whose new copper is in a
-        # new error, and re-check once
-        # a net that failed part-way keeps its partial copper (route.py
-        # keeps partial successes) but has no fact: name it by its new
-        # copper (haos-voice pass 6: a failed +3V3 kept a 0.96 mm track
-        # across U202's 0.4 mm-pitch pins, 8 shorting_items, unrippable)
-        mine = {n for f in routed if not f.get("plane_carried")
-                for n in f["nets"]} | _new_copper_nets(staged, old_uuids)
-        bad = nets_in_new_errors(before, after, mine) | \
-            nets_starving_thermals(before, after, mine, staged, old_uuids)
-        if bad:
-            # half a pair is no use: a rolled-back net takes its partner
-            for f in routed:
-                if f["kind"] == "diff" and set(f["nets"]) & bad:
-                    bad |= set(f["nets"])
-            ripped = {"nets": sorted(bad), "new_errors": delta["new"],
-                      "items_removed": rip_new_copper(staged, old_uuids, bad)}
-            # a launched pair's old stubs are gone: put them back
-            back = sorted(bad & ctx.get("launched", set()))
-            if back:
-                route_edit.apply_ops(staged, [
-                    {"op": "rip", "net": back},
-                    {"op": "copy_from", "pcb": str(baseline), "net": back}])
-            if bg0.zones_of():
-                kc.run_drc(cli, staged, refill=True, save_board=True)
-            after = kc.run_drc(cli, staged, all_track_errors=True)
-            delta = drc_delta(before, after)
-            delta["ripped"] = ripped
-            routed = [f for f in routed if not set(f["nets"]) & bad]
-            for net in sorted(bad):
-                violations.append(violation(
-                    SCRIPT, "error", None, None, net, [],
-                    f"critical net {net} routed into new DRC errors "
-                    f"({', '.join(sorted(ripped['new_errors']))}); its new "
-                    "copper was removed and the rest kept", SCRIPT,
-                    kind="critical_route_rolled_back"))
+    def attempt(k: Path):
+        kctx = {**ctx, "krt": k, "seq": ctx.get("seq", 0)}
+        kctx.pop("launched", None)
+        res = _route_todo(kctx, todo, constraints, cli, bg0, before,
+                          old_uuids, baseline)
+        ctx["seq"] = kctx.get("seq", 0)
+        return res
+
+    rungs = None
+    if len(krts) == 1:
+        routed, violations, after, delta = attempt(krts[0])
+    else:
+        tried: dict[str, tuple] = {}
+
+        def rung(k: Path):
+            res = tried[env.krt_label(k)] = attempt(k)
+            routed_, _, after_, delta_ = res
+            if delta_["new"]:
+                return None, res
+            return ((-sum(len(f["nets"]) for f in routed_),
+                     _error_count(after_)), res)
+
+        best, res, rungs = routelib.version_rungs(
+            [(env.krt_label(k), k) for k in krts], rung, staged,
+            budget_s=args.krt_rungs_budget_s)
+        routed, violations, after, delta = \
+            res or tried[env.krt_label(krts[0])]
     if delta["new"]:
         raise CheckError(
             "routing introduced new DRC errors (rolled back, original board "
@@ -2725,6 +2776,9 @@ def run(argv: list[str] | None = None):
         "diffpair_facts": dp_facts,
         "floors": floors,
         "net_clearances": ncl,
+        "krt_version": env.krt_label(ctx["krt"]) if rungs is None
+        else next((r["version"] for r in rungs if r.get("kept")), None),
+        **({"krt_rungs": rungs} if rungs is not None else {}),
         "board_updated": board_updated,
         "work_dir": str(work),
     })

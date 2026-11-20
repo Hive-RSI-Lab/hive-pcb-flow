@@ -46,6 +46,12 @@ HWDE_* path pin above still wins over these):
   HIVE_TOOL_FREEROUTING the same for the Freerouting jar
   HIVE_TOOL_VERSIONS    the versions folder (default: tools_dir()'s parent's
                         versions/, so ~/tools/versions for ~/tools/hive-tools)
+  HIVE_TOOL_KRT_RUNGS   several KRT versions at once (find_krt_versions): unset,
+                        "" or "off": the one find_krt() picks; "all": every
+                        installed version, the default one first; "X.Y.Z,A.B.C":
+                        exactly those, in that order. A router stage that reads
+                        it (route_auto's KRT finish, route_critical) runs each
+                        as a rung from the same board and keeps the best
 
 The skill was ai-ee before it was hwde, so the pre-rename AIEE_* spelling of
 every one of these is still read (HWDE_ wins when both are set) - an existing
@@ -639,6 +645,54 @@ def find_krt() -> Path | None:
     got = _pick_version("KRT", dirs[-1:], dirs + side,
                         lambda d: parse_version(d.parent.name))
     return krt_scripts(got) if got else None
+
+
+def find_krt_versions(spec: str | None = None) -> list[Path]:
+    """The KRT script dirs a stage should try in turn (several versions
+    active at once, the Hive's toolver). spec (else HIVE_TOOL_KRT_RUNGS):
+    None/""/"off" -> [find_krt()] (one version, as before; [] when none);
+    "all" -> find_krt()'s pick first, then every other installed version,
+    newest first; "X.Y.Z,A.B.C" -> exactly those, in that order (EnvError
+    naming what is installed when one is missing). A HWDE_KRT_DIR pin
+    means one version: with a spec other than off that is an error."""
+    if spec is None:
+        spec = os.environ.get("HIVE_TOOL_KRT_RUNGS") or ""
+    spec = spec.strip()
+    if spec in ("", "off"):
+        one = find_krt()
+        return [one] if one else []
+    pin, var = skill_env("KRT_DIR")
+    if pin:
+        raise EnvError(f"{var} pins one KRT; it can't be combined with "
+                       f"several versions ({spec}); unset one of them")
+    dirs = [d for sub in ("krt", "kicad-routing-tools")
+            for d in tools_dir().glob(f"{sub}/KiCadRoutingTools-*/plugins")]
+    dirs += [d for d in tool_versions_dir().glob(
+        "krt/*/KiCadRoutingTools-*/plugins") if _vetted(d.parents[1])]
+    by_ver: dict[tuple, Path] = {}
+    for d in sorted(dirs, key=lambda d: parse_version(d.parent.name)):
+        by_ver.setdefault(parse_version(d.parent.name), krt_scripts(d))
+    if spec == "all":
+        first = find_krt()
+        rest = [by_ver[v] for v in sorted(by_ver, reverse=True)
+                if first is None or by_ver[v] != first]
+        return ([first] if first else []) + rest
+    out: list[Path] = []
+    for part in spec.split(","):
+        want = parse_version(part)
+        if not want or want not in by_ver:
+            have = ", ".join(".".join(map(str, v)) for v in sorted(by_ver)) \
+                or "none"
+            raise EnvError(f"HIVE_TOOL_KRT_RUNGS: KRT {part.strip()} is not "
+                           f"installed (have: {have})")
+        if by_ver[want] not in out:
+            out.append(by_ver[want])
+    return out
+
+
+def krt_label(scripts: Path) -> str:
+    """'0.24.1' for a find_krt() dir ('?' when its folder doesn't say)."""
+    return ".".join(map(str, krt_version(scripts))) or "?"
 
 
 def krt_scripts(plugins: Path) -> Path:

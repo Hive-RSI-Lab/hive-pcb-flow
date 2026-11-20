@@ -39,7 +39,9 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -2151,3 +2153,45 @@ def dsn_shuffle(dsn_text: str, seed: int) -> str:
         return text
     except CheckError:
         return dsn_text
+
+
+def version_rungs(versions: list[tuple[str, object]], attempt, board: Path,
+                  *, budget_s: float | None = None):
+    """Run one router version per rung from the same starting board and keep
+    the best (several versions active at once: no single KRT release wins
+    every board, projects/tool-versions/BENCH.md).
+
+    versions: [(label, tool)] in order, the default version first.
+    attempt(tool) edits `board` in place and returns (grade, facts): grade a
+    tuple, lower is better, or None when the attempt failed. Each rung starts
+    from a copy of the board as it came in; ties keep the earlier rung, so
+    the default wins a draw. A rung that would start after budget_s seconds
+    is skipped (the first always runs).
+
+    Leaves the best rung's board in place (the starting board when every
+    rung failed) and returns (best label or None, its facts, rung rows)."""
+    start = board.with_name(board.stem + ".rung_start" + board.suffix)
+    shutil.copy2(board, start)
+    best = None              # (grade, label, facts, saved board)
+    rows: list[dict] = []
+    t0 = time.monotonic()
+    for i, (label, tool) in enumerate(versions):
+        if i and budget_s is not None and time.monotonic() - t0 >= budget_s:
+            rows.append({"version": label, "skipped": "time cap",
+                         "budget_s": budget_s})
+            continue
+        if i:
+            shutil.copy2(start, board)
+        t = time.monotonic()
+        grade, facts = attempt(tool)
+        rows.append({"version": label,
+                     "grade": list(grade) if grade is not None else None,
+                     "wall_s": round(time.monotonic() - t, 1)})
+        if grade is not None and (best is None or tuple(grade) < best[0]):
+            saved = board.with_name(f"{board.stem}.rung{i}{board.suffix}")
+            shutil.copy2(board, saved)
+            best = (tuple(grade), label, facts, saved)
+    shutil.copy2(best[3] if best else start, board)
+    for r in rows:
+        r["kept"] = best is not None and r["version"] == best[1]
+    return (best[1], best[2], rows) if best else (None, None, rows)

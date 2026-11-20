@@ -1050,6 +1050,44 @@ def test_relative_work_dir_is_resolved(tmp_path, monkeypatch):
     assert seen["work"] == (tmp_path / "relwork").resolve()
 
 
+def test_krt_rungs_keep_the_version_that_routes_most(tmp_path, monkeypatch):
+    """Step 5 of the Hive's toolver: with --krt-versions naming two KRTs
+    each routes the critical nets from the same board, and the one that
+    routes more nets (no new DRC errors) is the one swapped in."""
+    pcb = _pair_board(tmp_path)
+    (tmp_path / "constraints.json").write_text(json.dumps(
+        {"power": [{"net": "+3V3", "current_a": 0.4}]}), encoding="utf-8")
+    krts = [Path(f"/k/KiCadRoutingTools-{v}/plugins") for v in
+            ("0.19.0", "0.24.1")]
+    monkeypatch.setattr(rc, "_tools", lambda: (Path("cli"), krts[0]))
+    monkeypatch.setattr(rc.env, "find_krt_versions",
+                        lambda spec=None: krts if spec else krts[:1])
+    drc = {"counts": {"total": 0, "by_severity": {}, "by_source": {}},
+           "violations": []}
+    monkeypatch.setattr(rc.kc, "run_drc", lambda *a, **k: dict(drc))
+    starts = []
+
+    def fake_power(ctx, specs):
+        v = ctx["krt"].parent.name.split("-")[1]
+        text = ctx["staged"].read_text(encoding="utf-8")
+        starts.append(";" not in text)
+        ctx["staged"].write_text(text + f";{v}\n", encoding="utf-8")
+        nets = ["+3V3"] if v == "0.19.0" else ["+3V3", "/USB_DP"]
+        return [{"kind": "power", "nets": nets}], []
+
+    monkeypatch.setattr(rc, "route_power_item", fake_power)
+    payload, _ = rc.run(["--pcb", str(pcb), "--krt-versions", "all"])
+    f = payload["facts"]
+    assert starts == [True, True]
+    assert f["krt_version"] == "0.24.1" and f["board_updated"]
+    assert pcb.read_text(encoding="utf-8").endswith(";0.24.1\n")
+    assert [(r["version"], r["grade"], r["kept"]) for r in f["krt_rungs"]] \
+        == [("0.19.0", [-1, 0], False), ("0.24.1", [-2, 0], True)]
+    payload, _ = rc.run(["--pcb", str(_pair_board(tmp_path))])
+    assert payload["facts"]["krt_version"] == "0.19.0"
+    assert "krt_rungs" not in payload["facts"]
+
+
 # ============================================================ pure: CLI/tools
 
 def test_missing_krt_is_a_check_error(monkeypatch):
@@ -1239,6 +1277,27 @@ def test_live_krt_rail_keeps_the_sense_pad_off_the_rail(sense, cli, krt_dir,
     lines = [f for f in r["facts"]["routed"] if f["kind"] == "sense"]
     assert [(f["sense"], f["tap"], f["reached"]) for f in lines] == \
         [("R911.1", "C911.1", True)]
+
+
+@pytest.mark.smoke
+def test_live_two_krt_versions_route_as_rungs(cli, krt_dir, tmp_path):
+    """Several versions active (toolver step 5), live: every installed KRT
+    routes rail KP from the same board, the best is kept, and the board
+    that comes out passes. Skipped with fewer than two KRTs installed
+    (~/tools/versions/krt/<v>, PROVENANCE.json)."""
+    if len(env.find_krt_versions("all")) < 2:
+        pytest.skip("needs two KRT versions installed side by side")
+    pcb = _kp_board(tmp_path, False)
+    rep = tmp_path / "report.json"
+    assert rc.main(["--pcb", str(pcb), "--only", "power",
+                    "--krt-versions", "all", "--out-report", str(rep)]) == 0
+    r = json.loads(rep.read_text(encoding="utf-8"))
+    assert r["status"] == "pass", r["violations"]
+    rows = r["facts"]["krt_rungs"]
+    assert len(rows) >= 2 and all(row.get("grade") for row in rows), rows
+    assert [row["version"] for row in rows if row["kept"]] == \
+        [r["facts"]["krt_version"]]
+    assert {"KP"} <= {n for f in r["facts"]["routed"] for n in f["nets"]}
 
 
 @pytest.mark.smoke
