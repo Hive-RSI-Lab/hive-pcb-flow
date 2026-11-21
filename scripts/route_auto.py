@@ -56,7 +56,7 @@ Contract:
       [--power-layers auto|"In1.Cu,In2.Cu"|none] [--max-rungs N]
       [--timeout-s S] [--work-dir DIR] [--out-report r.json] [--tries N]
       [--probe [--probe-passes N]] [--no-krt-finish] [--no-maze-finish]
-      [--keep-escapes]
+      [--keep-escapes] [--krt-versions all|X.Y.Z,...|off] [--krt-rungs-budget-s S]
   Freerouting runs single-threaded and sequential, so one board file routes
   the same way every time; a rebuilt board (fresh uuids, another DSN order)
   may not. --tries N also routes N-1 shuffled-order DSNs at the best rung,
@@ -483,7 +483,9 @@ def _placement_adjust_request(bg: geom.BoardGeom, unrouted: list[str],
 def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
                 power_layers: list[str] | None = None,
                 skip_nets: set[str] = frozenset(),
-                refill: bool, parity: bool, timeout_s: int) -> dict | None:
+                refill: bool, parity: bool, timeout_s: int,
+                krt_versions: str | None = None,
+                rungs_budget_s: float | None = None) -> dict | None:
     """Deterministic post-Freerouting mop-up via the vendored
     KiCadRoutingTools (S11 acceptance: FR leaves 0.5 mm-pitch LQFP GND pins
     unconnected - no fanout capability - and drops the odd via a few 10s of
@@ -497,8 +499,12 @@ def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
       3. refill + re-DRC; keep only if strictly better (fewer errors +
          no new error types), else restore the backup.
     Nets in skip_nets (plane-carried, see _plane_carried) are left out.
-    Returns facts (kept, nets, ripped_vias, drc) or None when KRT is absent
-    or there is nothing to fix."""
+    krt_versions (else HIVE_TOOL_KRT_RUNGS, env.find_krt_versions): with
+    several KRT versions each runs this pass as a rung from the same board,
+    and the kept rung with the best DRC grade (unrouted nets, errors) wins;
+    a rung that would start after rungs_budget_s is skipped (facts
+    krt_rungs). Returns facts (kept, nets, ripped_vias, drc, krt_version)
+    or None when KRT is absent or there is nothing to fix."""
     unrouted = _drc_unrouted(drc)
     via_re = re.compile(r"^Via \[([^\]]+)\]")
     rip = []            # (uuid, net)
@@ -516,8 +522,8 @@ def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
     if not nets:
         return {"kept": False, "nets": [], "plane_nets_left": left} \
             if left else None
-    krt = env.find_krt()
-    if krt is None:
+    krts = env.find_krt_versions(krt_versions)
+    if not krts:
         return {"kept": False, "nets": nets, "plane_nets_left": left,
                 "note": "KRT not vendored; finish pass skipped"}
     import route_critical as rc
@@ -529,7 +535,40 @@ def _krt_finish(cli: Path, staged: Path, work: Path, drc: dict, *,
     necks = necklib.read_necks(staged)
     before_uuids = {t.uuid for t in
                     geom.BoardGeom.from_file(staged).tracks_of()}
+
+    def attempt(krt: Path) -> dict:
+        facts = _krt_attempt(krt, cli, staged, work, drc, backup, nets, rip,
+                             left, dru_widths, necks, before_uuids,
+                             power_layers=power_layers, refill=refill,
+                             parity=parity, timeout_s=timeout_s, rc=rc)
+        facts["krt_version"] = env.krt_label(krt)
+        return facts
+
+    if len(krts) == 1:
+        return attempt(krts[0])
+    tried: dict[str, dict] = {}
+
+    def rung(krt: Path):
+        facts = tried[env.krt_label(krt)] = attempt(krt)
+        return (_grade(facts["drc"]) if facts.get("kept") else None), facts
+
+    best, facts, rows = routelib.version_rungs(
+        [(env.krt_label(k), k) for k in krts], rung, staged,
+        budget_s=rungs_budget_s)
+    if facts is None:          # no rung kept: report the default's attempt
+        facts = tried[env.krt_label(krts[0])]
+    facts["krt_rungs"] = rows
+    return facts
+
+
+def _krt_attempt(krt: Path, cli: Path, staged: Path, work: Path, drc: dict,
+                 backup: Path, nets: list[str], rip: list, left, dru_widths,
+                 necks, before_uuids, *, power_layers, refill: bool,
+                 parity: bool, timeout_s: int, rc) -> dict:
+    """One KRT version's finish on staged (see _krt_finish); restores
+    backup unless the result is kept."""
     narrow: list = []
+    shutil.copy2(backup, staged)
     try:
         if rip:
             route_edit.apply_ops(staged, [
@@ -1236,6 +1275,14 @@ def run(argv: list[str] | None = None):
                     help="HDI build: offer Freerouting each via span (#477)")
     ap.add_argument("--no-krt-finish", action="store_true",
                     help="skip the KRT mop-up pass after the ladder")
+    ap.add_argument("--krt-versions", default=None,
+                    help="KRT versions the finish tries as rungs, keeping "
+                         "the DRC-best: 'all' (the default version, then "
+                         "every other installed one), 'X.Y.Z,A.B.C', or "
+                         "'off' (one version); default HIVE_TOOL_KRT_RUNGS")
+    ap.add_argument("--krt-rungs-budget-s", type=float, default=1800,
+                    help="skip a further KRT version rung once the finish "
+                         "has run this long (default 1800)")
     ap.add_argument("--no-maze-finish", action="store_true",
                     help="skip route_finish's maze pass after KRT")
     ap.add_argument("--keep-escapes", action="store_true",
@@ -1314,6 +1361,7 @@ def run(argv: list[str] | None = None):
             log_file=work / f"rung{i}.log")
         entry = {"rung": i, "options": rung,
                  "unrouted": facts.get("unrouted"),
+                 "violations": facts.get("violations"),
                  "started_unrouted": facts.get("started_unrouted"),
                  "final_score": facts.get("final_score"),
                  "passes": len(facts.get("passes", [])),
@@ -1330,9 +1378,12 @@ def run(argv: list[str] | None = None):
             break
         if facts.get("ses_written") and facts.get("unrouted") is not None:
             candidates.append(((facts["unrouted"],
+                                facts.get("violations") or 0,
                                 -(facts.get("final_score") or 0.0)), i, ses,
                                facts))
-            if facts["unrouted"] == 0:
+            # Freerouting 2.5 counts its own violations: a rung with 0
+            # unrouted but violations left is not done (2.2 prints none)
+            if facts["unrouted"] == 0 and not facts.get("violations"):
                 break
         if facts.get("timed_out") and not facts.get("passes"):
             # The DSN wedges Freerouting's reader (S11-verified: KRT guide
@@ -1373,6 +1424,7 @@ def run(argv: list[str] | None = None):
                 break
             if facts.get("ses_written") and facts.get("unrouted") is not None:
                 candidates.append(((facts["unrouted"],
+                                    facts.get("violations") or 0,
                                     -(facts.get("final_score") or 0.0)),
                                    f"try{t}", tses, facts))
 
@@ -1458,7 +1510,8 @@ def run(argv: list[str] | None = None):
         shutil.copy2(best_trial, staged)
     if not fr_ok:
         shutil.copy2(pristine, staged)
-    if not fr_ok and (args.no_krt_finish or env.find_krt() is None):
+    if not fr_ok and (args.no_krt_finish
+                      or not env.find_krt_versions(args.krt_versions)):
         if _all_timed_out(rungs):
             return _timeout_report(pcb, rungs, args.timeout_s, work,
                                    "the KRT fallback is off"), args.out_report
@@ -1517,7 +1570,9 @@ def run(argv: list[str] | None = None):
                                        skip_nets=plane_skip,
                                        refill=has_zones,
                                        parity=sch.is_file(),
-                                       timeout_s=min(args.timeout_s, 600))
+                                       timeout_s=min(args.timeout_s, 600),
+                                       krt_versions=args.krt_versions,
+                                       rungs_budget_s=args.krt_rungs_budget_s)
             if finish_facts and finish_facts.get("kept"):
                 drc = finish_facts.pop("drc")
         # 5c. maze finish: what the ladder and KRT left unconnected (pads

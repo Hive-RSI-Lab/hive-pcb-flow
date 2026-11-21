@@ -282,22 +282,31 @@ def _through_krt(tmp_path, boards):
     return bare, kept
 
 
+def _bare_mover_opens_ties():
+    """KRT's own mover moves net-tie bridges to silk before 0.24 (#1008);
+    0.24 keeps them on copper itself, so the bare output must stay copper."""
+    krt = env.find_krt()
+    return krt is None or env.krt_version(krt) < (0, 24)
+
+
 def test_real_krt_mover_keeps_net_tie_bridges(tmp_path):
     jp2 = jumper("JP2", side="B", at="60 40")
     bare, kept = _through_krt(
         tmp_path, {"b": board(jumper("JP1"), LOGO, jp2, ART)})
     was = (bare / "b.kicad_pcb").read_text(encoding="utf-8")
     now = (kept / "b.kicad_pcb").read_text(encoding="utf-8")
-    assert layer_of(was, "JP1-12") == "F.SilkS"     # #1008
-    assert layer_of(was, "JP2-12") == "B.SilkS"
+    opens = _bare_mover_opens_ties()
+    assert layer_of(was, "JP1-12") == ("F.SilkS" if opens else "F.Cu")  # #1008
+    assert layer_of(was, "JP2-12") == ("B.SilkS" if opens else "B.Cu")
     assert layer_of(now, "JP1-12") == "F.Cu"
     assert layer_of(now, "JP2-12") == "B.Cu"
     for text in (was, now):
         assert layer_of(text, "LOGO1-art") == "F.SilkS"
         assert layer_of(text, "art") == "F.SilkS"
     viols = check_net_tie.check(bare / "b.kicad_pcb")[0]
-    assert [(v["refs"], v["layer"], v["moved_to"]) for v in viols] == [
+    assert [(v["refs"], v["layer"], v["moved_to"]) for v in viols] == ([
         (["JP1"], "F.Cu", "F.SilkS"), (["JP2"], "B.Cu", "B.SilkS")]
+        if opens else [])
     assert check_net_tie.check(kept / "b.kicad_pcb")[0] == []
 
 
@@ -339,7 +348,10 @@ def test_stock_net_tie_footprints_pass_and_keep_their_copper(tmp_path):
         for v in check_net_tie.check(bare / f"{name}.kicad_pcb")[0]:
             opened += 1
             assert (v["layer"], v["moved_to"]) == (f"{side}.Cu", f"{side}.SilkS"), name
-    assert opened, "KRT's bare mover opened no stock net tie"
+    if _bare_mover_opens_ties():
+        assert opened, "KRT's bare mover opened no stock net tie"
+    else:
+        assert not opened, "KRT 0.24+'s own mover opened a stock net tie"
 
 
 # ------------------------------------------------------------- check_net_tie

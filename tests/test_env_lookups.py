@@ -46,7 +46,7 @@ def touch(p: Path, text: str = "") -> Path:
 def clean(monkeypatch, tmp_path):
     """No pins, no PATH kicad-cli, HOME in tmp (the symbol cache goes there)."""
     for k in list(os.environ):
-        if k.startswith(("HWDE_", "AIEE_")) or env._SYM_ENV_RE.match(k):
+        if k.startswith(("HWDE_", "AIEE_", "HIVE_TOOL_")) or env._SYM_ENV_RE.match(k):
             monkeypatch.delenv(k)
     monkeypatch.setattr(env.shutil, "which", lambda name: None)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -117,6 +117,101 @@ def test_find_krt_still_reads_vendored_krt_dir(clean):
     p = clean / "krt" / "KiCadRoutingTools-0.19.0" / "plugins"
     p.mkdir(parents=True)
     assert env.find_krt() == p
+
+
+def side_krt(tools: Path, v: str, py_router: bool = True) -> Path:
+    """A toolver side-by-side KRT: versions/krt/V/KiCadRoutingTools-V/plugins."""
+    plugins = tools.parent / "versions" / "krt" / v / f"KiCadRoutingTools-{v}" / "plugins"
+    touch(tools.parent / "versions" / "krt" / v / "PROVENANCE.json", "{}")
+    if py_router:  # KRT 0.24 keeps its scripts in plugins/py_router
+        touch(plugins / "py_router" / "route.py")
+        return plugins / "py_router"
+    plugins.mkdir(parents=True)
+    return plugins
+
+
+def test_hive_tool_krt_default_keeps_the_pinned_install(clean, monkeypatch):
+    pinned = clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins"
+    pinned.mkdir(parents=True)
+    side_krt(clean, "0.24.1")
+    assert env.find_krt() == pinned
+    monkeypatch.setenv("HIVE_TOOL_KRT", "default")
+    assert env.find_krt() == pinned
+
+
+def test_hive_tool_krt_picks_a_version_or_the_newest(clean, monkeypatch):
+    pinned = clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins"
+    pinned.mkdir(parents=True)
+    new = side_krt(clean, "0.24.1")
+    side_krt(clean, "0.9.3", py_router=False)
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.24.1")
+    assert env.find_krt() == new          # the scripts dir of the 0.24 layout
+    assert env.krt_version(env.find_krt()) == (0, 24, 1)
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.19.0")
+    assert env.find_krt() == pinned
+    monkeypatch.setenv("HIVE_TOOL_KRT", "newest")
+    assert env.find_krt() == new          # 0.24.1 > 0.19.0 > 0.9.3, by number
+
+
+def test_hive_tool_krt_missing_version_is_loud(clean, monkeypatch):
+    (clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins").mkdir(parents=True)
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.30.0")
+    with pytest.raises(env.EnvError, match="0.30.0 is not installed.*0.19.0"):
+        env.find_krt()
+
+
+def test_hwde_krt_dir_pin_must_agree_with_hive_tool_krt(clean, monkeypatch):
+    new = side_krt(clean, "0.24.1")
+    side_krt(clean, "0.23.9", py_router=False)
+    monkeypatch.setenv("HWDE_KRT_DIR", str(new.parent.parent))  # a release root
+    assert env.find_krt() == new          # the pin alone
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.24.1")
+    assert env.find_krt() == new          # the pin and the same version
+    for spec in ("0.23.9", "newest"):
+        monkeypatch.setenv("HIVE_TOOL_KRT", spec)
+        with pytest.raises(env.EnvError, match="HWDE_KRT_DIR.*disagree"):
+            env.find_krt()
+
+
+def test_side_version_without_provenance_is_not_picked(clean, monkeypatch):
+    (clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins").mkdir(parents=True)
+    half = clean.parent / "versions" / "krt" / "0.24.1" / "KiCadRoutingTools-0.24.1" / "plugins"
+    half.mkdir(parents=True)              # no PROVENANCE.json: not vetted
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.24.1")
+    with pytest.raises(env.EnvError, match="PROVENANCE"):
+        env.find_krt()
+    monkeypatch.setenv("HIVE_TOOL_KRT", "newest")
+    assert env.krt_version(env.find_krt()) == (0, 19, 0)
+
+
+def test_hive_tool_versions_moves_the_versions_dir(clean, monkeypatch, tmp_path):
+    v = tmp_path / "elsewhere" / "krt" / "0.24.1" / "KiCadRoutingTools-0.24.1" / "plugins"
+    v.mkdir(parents=True)
+    touch(tmp_path / "elsewhere" / "krt" / "0.24.1" / "PROVENANCE.json", "{}")
+    monkeypatch.setenv("HIVE_TOOL_VERSIONS", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("HIVE_TOOL_KRT", "newest")
+    assert env.find_krt() == v
+
+
+def test_hive_tool_freerouting_picks_a_side_jar(clean, monkeypatch):
+    pinned = touch(clean / "freerouting" / "freerouting-2.2.4.jar")
+    side = touch(clean.parent / "versions" / "freerouting" / "2.5.0" / "freerouting-2.5.0.jar")
+    touch(side.parent / "PROVENANCE.json", "{}")
+    assert env.find_freerouting_jar() == pinned
+    monkeypatch.setenv("HIVE_TOOL_FREEROUTING", "2.5.0")
+    assert env.find_freerouting_jar() == side
+    monkeypatch.setenv("HIVE_TOOL_FREEROUTING", "newest")
+    assert env.find_freerouting_jar() == side
+    monkeypatch.setenv("HIVE_TOOL_FREEROUTING", "2.4.1")
+    with pytest.raises(env.EnvError, match="HIVE_TOOL_FREEROUTING=2.4.1"):
+        env.find_freerouting_jar()
+    monkeypatch.setenv("HWDE_FREEROUTING_JAR", str(pinned))
+    with pytest.raises(env.EnvError, match="HWDE_FREEROUTING_JAR.*disagree"):
+        env.find_freerouting_jar()        # pin 2.2.4 vs HIVE_TOOL 2.4.1
+    monkeypatch.setenv("HIVE_TOOL_FREEROUTING", "2.2.4")
+    assert env.find_freerouting_jar() == pinned
+    monkeypatch.delenv("HIVE_TOOL_FREEROUTING")
+    assert env.find_freerouting_jar() == pinned
 
 
 # ------------------------------------------------------------ symdir libraries
@@ -235,3 +330,58 @@ def test_hive_sheet_places_from_a_symdir_library_on_demand():
                        text=True, env=e, timeout=300)
     assert r.returncode == 0, r.stderr[-500:]
     assert r.stdout.split()[-1] == "3"
+
+
+# ------------------------------------------------------------ KRT rungs
+
+def _three_krts(clean):
+    pinned = clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins"
+    pinned.mkdir(parents=True)
+    return pinned, side_krt(clean, "0.24.1"), side_krt(clean, "0.23.9", py_router=False)
+
+
+def test_krt_rungs_off_is_one_version(clean, monkeypatch):
+    pinned, _, _ = _three_krts(clean)
+    assert env.find_krt_versions() == [pinned]
+    for spec in ("", "off"):
+        monkeypatch.setenv("HIVE_TOOL_KRT_RUNGS", spec)
+        assert env.find_krt_versions() == [pinned]
+
+
+def test_krt_rungs_all_is_the_default_then_newest_first(clean, monkeypatch):
+    pinned, v24, v23 = _three_krts(clean)
+    monkeypatch.setenv("HIVE_TOOL_KRT_RUNGS", "all")
+    assert env.find_krt_versions() == [pinned, v24, v23]
+    monkeypatch.setenv("HIVE_TOOL_KRT", "0.24.1")   # the pick leads
+    assert env.find_krt_versions() == [v24, v23, pinned]
+    assert [env.krt_label(d) for d in env.find_krt_versions()] == \
+        ["0.24.1", "0.23.9", "0.19.0"]
+
+
+def test_krt_rungs_list_keeps_its_order_and_is_loud_on_a_missing_one(clean):
+    pinned, v24, _ = _three_krts(clean)
+    assert env.find_krt_versions("0.24.1, 0.19.0") == [v24, pinned]
+    assert env.find_krt_versions("0.19.0,0.19.0") == [pinned]
+    with pytest.raises(env.EnvError, match=r"0\.30\.0 is not installed.*0\.19\.0, 0\.23\.9, 0\.24\.1"):
+        env.find_krt_versions("0.19.0,0.30.0")
+
+
+def test_krt_rungs_skip_an_unvetted_side_version(clean):
+    pinned = clean / "kicad-routing-tools" / "KiCadRoutingTools-0.19.0" / "plugins"
+    pinned.mkdir(parents=True)
+    (clean.parent / "versions" / "krt" / "0.24.1" / "KiCadRoutingTools-0.24.1"
+     / "plugins").mkdir(parents=True)                     # no PROVENANCE.json
+    assert env.find_krt_versions("all") == [pinned]
+
+
+def test_krt_rungs_refuse_a_krt_dir_pin(clean, monkeypatch):
+    _, v24, _ = _three_krts(clean)
+    monkeypatch.setenv("HWDE_KRT_DIR", str(v24.parent.parent))
+    assert env.find_krt_versions("off") == [v24]
+    with pytest.raises(env.EnvError, match="HWDE_KRT_DIR pins one KRT"):
+        env.find_krt_versions("all")
+
+
+def test_krt_rungs_none_installed(clean):
+    assert env.find_krt_versions() == []
+    assert env.find_krt_versions("all") == []

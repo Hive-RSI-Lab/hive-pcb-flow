@@ -764,7 +764,9 @@ def gate_trade_plan(bg, bga: bgalib.Bga, ep: dict, layers: list[str],
     for o, a, balls in groups:
         nets = [enclosed[k].net for k in balls]
         options = []
-        for s in ((1, -1),) if len(balls) == 1 else ((0, 1), (1, -1)):
+        # a lone ball is its own gate's first (balls[1] doesn't exist: an
+        # IndexError once KRT 0.24 left a single ring-2 ball unescaped)
+        for s in ((0, 1),) if len(balls) == 1 else ((0, 1), (1, -1)):
             # gate outward of balls[s[0]]; it jogs -s[1]*a toward its side
             first = balls[s[0]]
             g = (first[0] + o[0], first[1] + o[1])

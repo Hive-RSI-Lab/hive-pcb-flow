@@ -29,6 +29,23 @@ import route_escape as re_  # noqa: E402
 import rules_gen  # noqa: E402
 import teardroplib as tdl  # noqa: E402
 
+
+def _krt_at_least(v: tuple) -> bool:
+    try:
+        krt = env.find_krt()
+    except env.EnvError:
+        return False
+    return krt is not None and env.krt_version(krt) >= v
+
+
+# KRT 0.24's bga_fanout escapes fewer balls than 0.19 on the dense underpad
+# fields below (fine via 0.5 mm: 28/36 vs 32/36; pad via 0.8 mm: 4 balls
+# left, no clash list). The flow pins 0.19; these stay strict so a KRT that
+# fixes it shows up as XPASS. projects/tool-versions/BENCH.md has the rows.
+krt_024_fanout = pytest.mark.xfail(
+    _krt_at_least((0, 24)), strict=True, raises=AssertionError,
+    reason="KRT 0.24 bga_fanout regression: fewer balls escape underpad")
+
 # JLC 6-layer 1 oz row (reference/jlc_capabilities.yaml)
 JLC6 = {"track_width": 0.0889, "clearance": 0.0889, "via_diameter": 0.45,
         "via_drill": 0.2, "annular": 0.15, "hole_clearance": 0.25}
@@ -714,6 +731,7 @@ def _pad_via_run(tmp_path, monkeypatch=None):
     return pcb, rep["facts"], b
 
 
+@krt_024_fanout
 def test_live_pad_via_0_8mm_keeps_every_ball(tmp_path):
     """The quiet twin: an 8x8 0.8 mm field with 0.32 pads on 6 layers,
     underpad with --allow-via-in-pad. Every kept in-pad via is the filled
@@ -734,6 +752,7 @@ def test_live_pad_via_0_8mm_keeps_every_ball(tmp_path):
     assert vip["filled"] == vip["vias"]
 
 
+@krt_024_fanout
 def test_live_fault_unshrunk_pad_vias_clash(tmp_path, monkeypatch):
     """The planted fault: with the shrink taken out (main's path) the 0.45
     vias overhang the 0.32 pads onto KRT's stubs; balls clash and are left
@@ -1116,6 +1135,7 @@ def _fine_run(tmp_path, monkeypatch=None, text=None):
     return pcb, rep["facts"], b
 
 
+@krt_024_fanout
 def test_live_fine_via_escape_6_layer_quiet(tmp_path):
     """The quiet twin: a 0.5 mm field on 6 layers escapes through filled
     0.25/0.15 vias in its pads, DRC-clean against the board's own 0.45 mm
@@ -1157,6 +1177,7 @@ def test_breakout_vias_only_under_the_ring_limit():
     assert [x.uuid for x in re_.breakout_vias(v)] == ["u1"]
 
 
+@krt_024_fanout
 def test_live_fault_fine_via_outside_the_courtyard_is_ripped(tmp_path,
                                                              monkeypatch):
     """The planted fault: a 0.25/0.15 via of /S5_5 dropped outside U1's
@@ -1270,6 +1291,7 @@ def test_gate_trade_quiet_when_krt_escaped_them(tmp_path):
     assert pl["traded"] == {} and pl["ops"] == []
 
 
+@krt_024_fanout
 def test_live_gate_trade_escapes_the_enclosed_2x2(tmp_path):
     """The planted fault, live: KRT leaves the synthetic field's inner 2x2
     fenced by its ring-B vias. The gate trade lets all four out on an inner
