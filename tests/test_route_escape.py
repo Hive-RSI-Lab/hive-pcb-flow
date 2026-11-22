@@ -1270,6 +1270,29 @@ def test_gate_trade_quiet_when_krt_escaped_them(tmp_path):
     assert pl["traded"] == {} and pl["ops"] == []
 
 
+def test_gate_trade_one_enclosed_ball_out_an_empty_gate(tmp_path):
+    """A side with one enclosed ball (an odd count) is a group of one: with
+    its gate site depopulated it goes straight out on an inner layer, a
+    filled via in its own pad, and nothing is traded."""
+    bg, b, ep, layers = _fenced(tmp_path, skip=((2, 1),))
+    pl = re_.gate_trade_plan(bg, b, ep, layers, {"/S2_2"}, set(), set())
+    assert pl["escaped"] == ["/S2_2"] and pl["traded"] == {}
+    assert pl["layer"]["/S2_2"] not in ("F.Cu", "B.Cu")
+    vias = [o for o in pl["ops"] if o["op"] == "add_via"]
+    assert len(vias) == 1 and (vias[0]["size"], vias[0]["drill"]) == \
+        (0.25, 0.15)
+
+
+def test_gate_trade_one_for_one_is_not_made(tmp_path):
+    """The group of one beside a populated, escaped gate ball: one ball out
+    for one traded gains nothing, so the plan is empty and the ball keeps
+    its reason (no crash on the single ball)."""
+    bg, b, ep, layers = _fenced(tmp_path)
+    pl = re_.gate_trade_plan(bg, b, ep, layers, {"/S2_2"}, set(), set())
+    assert pl["traded"] == {} and pl["ops"] == [] and pl["escaped"] == []
+    assert set(pl["not_escaped"]) == {"/S2_2"}
+
+
 def test_live_gate_trade_escapes_the_enclosed_2x2(tmp_path):
     """The planted fault, live: KRT leaves the synthetic field's inner 2x2
     fenced by its ring-B vias. The gate trade lets all four out on an inner
